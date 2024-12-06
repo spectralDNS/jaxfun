@@ -1,0 +1,11 @@
+[project]
+name = "jaxfun"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "jax>=0.4.36",
+    "matplotlib>=3.9.3",
+    "sympy>=1.13.3",
+]

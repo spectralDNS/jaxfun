@@ -31,15 +31,18 @@ def chebval(x: float, c: Array) -> Array:
     # return jnp.sum(jax.vmap(lambda k: c[k]*jnp.cos(k*jnp.acos(x)))(jnp.arange(len(c))), axis=0) # noqa
 
     if len(c) == 1:
+        # Multiply by 0 * x for shape
         return c[0] + 0 * x
     if len(c) == 2:
         return c[0] + c[1] * x
 
     def body_fun(i: int, val: tuple[Array, Array]) -> tuple[Array, Array]:
         c0, c1 = val
+
         tmp = c0
         c0 = c[-i] - c1
         c1 = tmp + c1 * 2 * x
+
         return c0, c1
 
     c0 = jnp.ones_like(x) * c[-2]

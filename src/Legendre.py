@@ -29,22 +29,27 @@ def legval(x: float, c: Array) -> float:
     The evaluation uses Clenshaw recursion, aka synthetic division.
 
     """
-
     if len(c) == 1:
-        c0 = c[0]
-        c1 = 0
-    elif len(c) == 2:
-        c0 = c[0]
-        c1 = c[1]
-    else:
-        nd = len(c)
-        c0 = c[-2]
-        c1 = c[-1]
-        for i in range(3, len(c) + 1):
-            tmp = c0
-            nd = nd - 1
-            c0 = c[-i] - (c1 * (nd - 1)) / nd
-            c1 = tmp + (c1 * x * (2 * nd - 1)) / nd
+        # Multiply by 0 * x for shape
+        return c[0] + 0 * x
+    if len(c) == 2:
+        return c[0] + c[1] * x
+
+    def body_fun(i: int, val: tuple[int, Array, Array]) -> tuple[int, Array, Array]:
+        nd, c0, c1 = val
+
+        tmp = c0
+        nd = nd - 1
+        c0 = c[-i] - (c1 * (nd - 1)) / nd
+        c1 = tmp + (c1 * x * (2 * nd - 1)) / nd
+
+        return nd, c0, c1
+
+    nd = len(c)
+    c0 = jnp.ones_like(x) * c[-2]
+    c1 = jnp.ones_like(x) * c[-1]
+
+    _, c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (nd, c0, c1))
     return c0 + c1 * x
 
 
@@ -76,13 +81,19 @@ def evaluate(x: Array, c: Array, axes: tuple[int] = (0,)) -> Array:
 
 @partial(jax.jit, static_argnums=1)
 def legvander(x: Array, deg: int) -> Array:
-    f = [x * 0 + 1]
-    if deg > 0:
-        f.append(x)
-        for i in range(2, deg):
-            f.append((f[i - 1] * x * (2 * i - 1) - f[i - 2] * (i - 1)) / i)
-    f = jnp.array(f)
-    return jnp.moveaxis(f, 0, -1)
+    x0 = jnp.ones_like(x)
+
+    def inner_loop(
+        carry: tuple[Array, Array], i: int
+    ) -> tuple[tuple[Array, Array], Array]:
+        x0, x1 = carry
+        x2 = (x1 * x * (2 * i - 1) - x0 * (i - 1)) / i
+        return (x1, x2), x1
+
+    _, xs = jax.lax.scan(inner_loop, (x0, x), jnp.arange(2, deg + 1))
+
+    xs = jnp.concatenate((x0[None, :], xs), axis=0)
+    return jnp.moveaxis(xs, 0, -1)
 
 
 def bilinear(N: int, i: int, j: int) -> Array:

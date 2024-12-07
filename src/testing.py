@@ -10,7 +10,7 @@ import Legendre
 jnp.set_printoptions(4)
 jax.config.update("jax_enable_x64", True)
 
-N = 1000
+N = 100
 M = 1000
 C = 1000
 x = jnp.linspace(-1, 1, N)

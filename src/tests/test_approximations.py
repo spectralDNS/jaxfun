@@ -73,3 +73,32 @@ def test_chebval(
     jax_res = Chebyshev.chebval(x, c)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < 1e-8
+
+
+@pytest.mark.parametrize('k', (0, 1, 2, 3))
+def test_cheb_evaluate_basis_derivative(
+    x: jnp.ndarray, xn: np.ndarray, N :int, k: int
+) -> None:
+    np_res = np.polynomial.chebyshev.chebvander(xn, N - 1)
+    P = np_res.shape[-1]
+    if k > 0:
+        D = np.zeros((P, P))
+        D[:-k] = np.polynomial.chebyshev.chebder(np.eye(P, P), k)
+        np_res = np.dot(np_res, D)
+    jax_res = Chebyshev.evaluate_basis_derivative(x, N, k=k)
+    diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
+    assert diff < 1e-8
+
+@pytest.mark.parametrize('k', (0, 1, 2, 3))
+def test_leg_evaluate_basis_derivative(
+    x: jnp.ndarray, xn: np.ndarray, N :int, k: int
+) -> None:
+    np_res = np.polynomial.legendre.legvander(xn, N - 1)
+    P = np_res.shape[-1]
+    if k > 0:
+        D = np.zeros((P, P))
+        D[:-k] = np.polynomial.legendre.legder(np.eye(P, P), k)
+        np_res = np.dot(np_res, D)
+    jax_res = Legendre.evaluate_basis_derivative(x, N, k=k)
+    diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
+    assert diff < 1e-8

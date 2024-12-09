@@ -3,8 +3,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 from jax import Array
-
-from utils.common import diff
+from utils.common import jacn
 from utils.fastgl import leggauss
 
 
@@ -57,17 +56,15 @@ def quad_points_and_weights(N: int) -> Array:
     return leggauss(N)
 
 
-@partial(jax.jit, static_argnums=(1, 2))  # Very slow without this
+@partial(jax.jit, static_argnums=(1, 2))
 def evaluate_basis_derivative(x: Array, deg: int, k: int = 0) -> Array:
-    c = jnp.eye(deg)
-    f = jax.vmap(lambda i: diff(legval, k=k)(x, c[i]))(jnp.arange(deg))
-    return jnp.moveaxis(f, 0, -1)
-
+    return jacn(eval_basis_functions, k)(x, deg)
+    
 
 @partial(jax.jit, static_argnums=1)
 def eval_basis_function(x: float, i: int) -> float:
     return legval(x, (0,) * i + (1,))
-
+    
 
 @partial(jax.jit, static_argnums=2)
 def evaluate(x: Array, c: Array, axes: tuple[int] = (0,)) -> Array:
@@ -94,6 +91,22 @@ def legvander(x: Array, deg: int) -> Array:
 
     xs = jnp.concatenate((x0[None, :], xs), axis=0)
     return jnp.moveaxis(xs, 0, -1)
+
+
+@partial(jax.jit, static_argnums=1)
+def eval_basis_functions(x: float, deg: int) -> Array:
+    x0 = x * 0 + 1
+
+    def inner_loop(
+        carry: tuple[float, float], i: int
+    ) -> tuple[tuple[float, float], Array]:
+        x0, x1 = carry
+        x2 = (x1 * x * (2 * i - 1) - x0 * (i - 1)) / i
+        return (x1, x2), x1
+
+    _, xs = jax.lax.scan(inner_loop, (x0, x), jnp.arange(2, deg + 1))
+
+    return jnp.hstack((x0, xs))
 
 
 def bilinear(N: int, i: int, j: int) -> Array:

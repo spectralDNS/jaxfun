@@ -13,6 +13,7 @@ jax.config.update("jax_enable_x64", True)
 N = 100
 M = 1000
 C = 1000
+k = 2
 x = jnp.linspace(-1, 1, N)
 xn = np.array(x)
 c = jnp.ones(C)
@@ -109,8 +110,58 @@ def run_chebval() -> None:
     print(f'{"np.chebval":20s} {time_np:.4e}')
 
 
+def run_cheb_evaluate_basis_derivative() -> None:
+    print("Chebyshev - evaluate_basis_derivative")
+    Chebyshev.evaluate_basis_derivative(x, N, k)
+    time_jax = timeit.timeit(
+        f"Chebyshev.evaluate_basis_derivative(x, {N}, {k})",
+        number=M,
+        setup="from __main__ import Chebyshev, x",
+    )
+    print(f'{"evaluate_basis_derivative":30s} {time_jax:.4e}')
+
+    time_np = timeit.timeit(
+        f"""
+np_res = np.polynomial.chebyshev.chebvander(xn, {N} - 1)
+P = np_res.shape[-1]
+D = np.zeros((P, P))
+D[:-{k}] = np.polynomial.chebyshev.chebder(np.eye(P, P), {k})
+np_res = np.dot(np_res, D)    
+        """,
+        number=M,
+        setup="from __main__ import np, xn",
+    )
+    print(f'{"np.evaluate_basis_derivative":30s} {time_np:.4e}')
+
+
+def run_leg_evaluate_basis_derivative() -> None:
+    print("Legendre - evaluate_basis_derivative")
+    Legendre.evaluate_basis_derivative(x, N, k)
+    time_jax = timeit.timeit(
+        f"Legendre.evaluate_basis_derivative(x, {N}, {k})",
+        number=M,
+        setup="from __main__ import Legendre, x",
+    )
+    print(f'{"evaluate_basis_derivative":30s} {time_jax:.4e}')
+
+    time_np = timeit.timeit(
+        f"""
+np_res = np.polynomial.legendre.legvander(xn, {N} - 1)
+P = np_res.shape[-1]
+D = np.zeros((P, P))
+D[:-{k}] = np.polynomial.legendre.legder(np.eye(P, P), {k})
+np_res = np.dot(np_res, D)    
+        """,
+        number=M,
+        setup="from __main__ import np, xn",
+    )
+    print(f'{"np.evaluate_basis_derivative":30s} {time_np:.4e}')
+
+
 if __name__ == "__main__":
     run_legvander()
     run_legval()
     run_chebvander()
     run_chebval()
+    run_cheb_evaluate_basis_derivative()
+    run_leg_evaluate_basis_derivative() 

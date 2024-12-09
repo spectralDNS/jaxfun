@@ -12,6 +12,13 @@ def diff(
         fun = jax.grad(fun)
     return jax.jit(jax.vmap(fun, in_axes=(0, None)))
 
+def diffx(
+    fun: Callable[[float, int], Array], k: int = 1
+) -> Callable[[float, int], Array]:
+    for _ in range(k):
+        fun = jax.grad(fun)
+    return fun
+
 
 def eval_fun(
     fun: Callable[[float, Array], Array],

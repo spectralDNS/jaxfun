@@ -3,8 +3,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 from jax import Array
-
-from utils.common import diff
+from utils.common import jacn
 
 
 @jax.jit
@@ -28,8 +27,6 @@ def chebval(x: float, c: Array) -> Array:
     The evaluation uses Clenshaw recursion, aka synthetic division.
 
     """
-    # return jnp.sum(jax.vmap(lambda k: c[k]*jnp.cos(k*jnp.acos(x)))(jnp.arange(len(c))), axis=0) # noqa
-
     if len(c) == 1:
         # Multiply by 0 * x for shape
         return c[0] + 0 * x
@@ -63,15 +60,22 @@ def quad_points_and_weights(N: int) -> Array:
 
 @partial(jax.jit, static_argnums=(1, 2))
 def evaluate_basis_derivative(x: Array, deg: int, k: int = 0) -> Array:
-    c = jnp.eye(deg)
-    f = jax.vmap(lambda i: diff(chebval, k=k)(x, c[i]))(jnp.arange(deg))
-    return jnp.moveaxis(f, 0, -1)
+    return jacn(eval_basis_functions, k)(x, deg)
 
 
-@jax.jit
+@partial(jax.jit, static_argnums=1)
 def eval_basis_function(x: float, i: int) -> Array:
-    return jnp.cos(i * jnp.acos(x))
-    # return chebval(x, (0,)*i+(1,))
+    # return jnp.cos(i * jnp.acos(x))
+    x0 = x * 0 + 1
+    if i == 0:
+        return x0
+
+    def body_fun(i: int, val: tuple[Array, Array]) -> tuple[Array, Array]:
+        x0, x1 = val
+        x2 = 2 * x * x1 - x0
+        return x1, x2
+
+    return jax.lax.fori_loop(1, i, body_fun, (x0, x))[-1]
 
 
 @partial(jax.jit, static_argnums=2)
@@ -97,6 +101,20 @@ def chebvander(x: Array, deg: int) -> Array:
 
     xs = jnp.concatenate((x0[None, :], xs), axis=0)
     return jnp.moveaxis(xs, 0, -1)
+
+
+@partial(jax.jit, static_argnums=1)
+def eval_basis_functions(x: float, deg: int) -> Array:
+    x0 = x * 0 + 1
+
+    def inner_loop(carry: tuple[float, float], _) -> tuple[tuple[float, float], Array]:
+        x0, x1 = carry
+        x2 = 2 * x * x1 - x0
+        return (x1, x2), x1
+
+    _, xs = jax.lax.scan(inner_loop, init=(x0, x), xs=None, length=deg - 1)
+
+    return jnp.hstack((x0, xs))
 
 
 def bilinear(N: int, i: int, j: int) -> Array:

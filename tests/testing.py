@@ -4,8 +4,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-import Chebyshev
-import Legendre
+from jaxfun import Chebyshev
+from jaxfun import Legendre
 
 jnp.set_printoptions(4)
 jax.config.update("jax_enable_x64", True)
@@ -22,7 +22,7 @@ cn = np.array(c)
 
 
 def run_vandermonde(space) -> None:
-    family = space.__name__
+    family = space.__name__.split('.')[-1]
     print(f"{family} - Vandermonde")
     space.vandermonde(x, N)
 
@@ -53,7 +53,7 @@ def run_vandermonde(space) -> None:
 
 
 def run_evaluate(space) -> None:
-    family = space.__name__
+    family = space.__name__.split('.')[-1]
     print(f"{family} - evaluate")
 
     space.evaluate(x, c)
@@ -77,7 +77,7 @@ def run_evaluate(space) -> None:
 
 
 def run_evaluate_basis_derivative(space) -> None:
-    family = space.__name__
+    family = space.__name__.split('.')[-1]
     print(f"{family} - evaluate_basis_derivative")
     space.evaluate_basis_derivative(x, N, k)
     time_jax = timeit.timeit(

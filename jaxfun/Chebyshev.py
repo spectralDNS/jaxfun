@@ -3,7 +3,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 from jax import Array
-from utils.common import jacn
+from jaxfun.utils.common import jacn
 import sympy as sp
 
 n = sp.Symbol('n', integer=True, positive=True)

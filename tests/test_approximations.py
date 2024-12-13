@@ -3,9 +3,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import Chebyshev
-import Legendre
-from src.utils.common import evaluate
+from jaxfun import Chebyshev
+from jaxfun import Legendre
+from jaxfun.utils.common import evaluate
 
 jax.config.update("jax_enable_x64", True)
 
@@ -51,7 +51,7 @@ def test_vandermonde(space, x: jnp.ndarray, xn: np.ndarray, N: int) -> None:
     np_res = {
         'legendre': np.polynomial.legendre.legvander(xn, N - 1),
         'chebyshev': np.polynomial.chebyshev.chebvander(xn, N - 1),
-    }[space.__name__.lower()]
+    }[space.__name__.split('.')[-1].lower()]
     jax_res = space.vandermonde(x, N)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < 1e-8
@@ -62,7 +62,7 @@ def test_evaluate(space, x: jnp.ndarray, xn: np.ndarray, c: jnp.ndarray, cn: np.
     np_res = {
         'legendre': np.polynomial.legendre.legval(xn, cn),
         'chebyshev': np.polynomial.chebyshev.chebval(xn, cn)
-    }[space.__name__.lower()]
+    }[space.__name__.split('.')[-1].lower()]
     jax_res = space.evaluate(x, c)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < 1e-8
@@ -76,11 +76,11 @@ def test_evaluate_basis_derivative(
     np_res = {
         'legendre': np.polynomial.legendre.legvander(xn, N - 1),
         'chebyshev': np.polynomial.chebyshev.chebvander(xn, N - 1)
-    }[space.__name__.lower()]
+    }[space.__name__.split('.')[-1].lower()]
     der = {
         'legendre': np.polynomial.legendre.legder,
         'chebyshev': np.polynomial.chebyshev.chebder 
-    }[space.__name__.lower()]
+    }[space.__name__.split('.')[-1].lower()]
     P = np_res.shape[-1]
     if k > 0:
         D = np.zeros((P, P))

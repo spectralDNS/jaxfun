@@ -3,8 +3,8 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 from jax import Array
-from utils.common import jacn
-from utils.fastgl import leggauss
+from jaxfun.utils.common import jacn
+from jaxfun.utils.fastgl import leggauss
 import sympy as sp
 
 n = sp.Symbol("n", integer=True, positive=True)

@@ -15,18 +15,23 @@ n = sp.Symbol("n", integer=True, positive=True)
 
 
 @jax.jit
-def apply_stencil_galerkin(a: BCOO, b: Array) -> Array:
-    return a @ b @ a.T
+def apply_stencil_galerkin(S: BCOO, b: Array) -> Array:
+    return S @ b @ S.T
 
 
 @jax.jit
-def apply_stencil_petrovgalerkin(a: BCOO, b: Array, c: BCOO) -> Array:
-    return a @ b @ c.T
+def apply_stencil_petrovgalerkin(S: BCOO, b: Array, P: BCOO) -> Array:
+    return S @ b @ P.T
 
 
 @jax.jit
-def apply_stencil_linear(a: BCOO, b: Array) -> Array:
-    return a @ b
+def apply_stencil_linear(S: BCOO, b: Array) -> Array:
+    return S @ b
+
+
+@jax.jit
+def apply_stencil_linearT(a: Array, S: BCOO) -> Array:
+    return a @ S
 
 
 @jax.jit
@@ -37,6 +42,11 @@ def matmat(a: Array, b: Array) -> Array:
 def from_dense(a: Array, tol: float = 1e-10) -> BCOO:
     z = jnp.where(jnp.abs(a) < tol, jnp.zeros(a.shape), a)
     return BCOO.from_scipy_sparse(scipy_sparse.csr_matrix(z))
+
+
+@jax.jit
+def to_orthogonal(a: Array, S: BCOO):
+    return a @ S
 
 
 class PN:
@@ -62,7 +72,7 @@ class Composite(PN):
         self.bcs = BoundaryConditions(bcs, domain=domain)
         if stencil is None:
             stencil = get_stencil_matrix(
-                self.bcs, family.__name__, family.alpha, family.beta, family.gn
+                self.bcs, family.__name__.split('.')[-1], family.alpha, family.beta, family.gn
             )
             assert len(stencil) == self.bcs.num_bcs()
         self.stencil = {(si[0]): si[1] for si in sorted(stencil.items())}
@@ -108,10 +118,11 @@ def innerlinear(test: tuple[PN, int], u: Callable) -> Array:
     """
     v, i = test
     N = v.N
+    s = u.free_symbols.pop()
     x, w = v.family.quad_points_and_weights(N)
     Pi = v.family.evaluate_basis_derivative(x, N, k=i)
     uj = sp.lambdify(s, u, modules=["jax"])(x)
-    return apply_stencil_linear(uj * w, Pi)
+    return apply_stencil_linear(v.S, matmat(uj * w, Pi))
 
 
 if __name__ == "__main__":

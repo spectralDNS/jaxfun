@@ -30,6 +30,21 @@ def jacn(
     return jax.vmap(fun, in_axes=(0, None), out_axes=0)
 
 
+@partial(jax.jit, static_argnums=(0, 3))
+def evaluate(
+    fun: Callable[[tuple[float], Array, tuple[int]], Array],
+    x: tuple[float],
+    c: Array,
+    axes: tuple[int] = (0,),
+) -> Array:
+    assert len(x) == len(axes)
+    dim: int = len(c.shape)
+    for xi, ax in zip(x, axes):
+        axi: int = dim - 1 - ax
+        c = jax.vmap(fun, in_axes=(None, axi), out_axes=axi)(xi, c)
+    return c
+
+
 def to_sparse(a: Array, tol: float) -> sparse.BCOO:
     b: float = jnp.linalg.norm(a)
     a = jnp.choose(jnp.array(jnp.abs(a) > tol * b, dtype=int), (jnp.zeros_like(a), a))

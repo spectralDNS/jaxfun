@@ -4,10 +4,19 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 from utils.common import jacn
+import sympy as sp
 
+n = sp.Symbol('n', integer=True, positive=True)
+
+# Jacobi constants
+alpha, beta = -sp.S.Half, -sp.S.Half
+
+# Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
+def gn(alpha, beta, n):
+    return sp.S(1)/sp.jacobi(n, alpha, beta, 1)
 
 @jax.jit
-def chebval(x: float, c: Array) -> Array:
+def evaluate(x: float, c: Array) -> float:
     """
     Evaluate a Chebyshev series at points x.
 
@@ -64,6 +73,11 @@ def evaluate_basis_derivative(x: Array, deg: int, k: int = 0) -> Array:
 
 
 @partial(jax.jit, static_argnums=1)
+def vandermonde(x: Array, deg: int) -> Array:
+    return evaluate_basis_derivative(x, deg, 0)
+
+
+@partial(jax.jit, static_argnums=1)
 def eval_basis_function(x: float, i: int) -> Array:
     # return jnp.cos(i * jnp.acos(x))
     x0 = x * 0 + 1
@@ -78,31 +92,6 @@ def eval_basis_function(x: float, i: int) -> Array:
     return jax.lax.fori_loop(1, i, body_fun, (x0, x))[-1]
 
 
-@partial(jax.jit, static_argnums=2)
-def evaluate(x: Array, c: Array, axes: tuple[int] = (0,)) -> Array:
-    """Evaluate along one or more axes"""
-    dim: int = len(c.shape)
-    for ax in axes:
-        axi: int = dim - 1 - ax
-        c = jax.vmap(chebval, in_axes=(None, axi))(x, c)
-    return c
-
-
-@partial(jax.jit, static_argnums=1)
-def chebvander(x: Array, deg: int) -> Array:
-    x0 = x * 0 + 1
-
-    def inner_loop(carry: tuple[Array, Array], _) -> tuple[tuple[Array, Array], Array]:
-        x0, x1 = carry
-        x2 = 2 * x * x1 - x0
-        return (x1, x2), x1
-
-    _, xs = jax.lax.scan(inner_loop, init=(x0, x), xs=None, length=deg - 1)
-
-    xs = jnp.concatenate((x0[None, :], xs), axis=0)
-    return jnp.moveaxis(xs, 0, -1)
-
-
 @partial(jax.jit, static_argnums=1)
 def eval_basis_functions(x: float, deg: int) -> Array:
     x0 = x * 0 + 1
@@ -115,38 +104,3 @@ def eval_basis_functions(x: float, deg: int) -> Array:
     _, xs = jax.lax.scan(inner_loop, init=(x0, x), xs=None, length=deg - 1)
 
     return jnp.hstack((x0, xs))
-
-
-def bilinear(N: int, i: int, j: int) -> Array:
-    x, w = quad_points_and_weights(N)
-    Pi = evaluate_basis_derivative(x, N, k=i)
-    Pj = evaluate_basis_derivative(x, N, k=j)
-    return (Pi.T * w[None, :]) @ Pj
-
-
-def linear(u, N: int) -> Array:
-    x, w = quad_points_and_weights(N)
-    Pi = chebvander(x, N)
-    uj = sp.lambdify(s, u, modules=["jax"])(x)
-    return (uj * w) @ Pi
-
-
-if __name__ == "__main__":
-    # Solve Poisson's equation
-    import matplotlib.pyplot as plt
-    import sympy as sp
-    from jax.experimental import sparse
-
-    s = sp.Symbol("s")
-
-    ue = (1 - s**2) * sp.exp(sp.cos(2 * sp.pi * s))
-    f = ue.diff(s, 2)
-    N = 50
-    S = sparse.eye(N, N + 2) - sparse.eye(N, N + 2, 2)  # Dirichlet
-    A = S @ bilinear(N + 2, 0, 2) @ S.T
-    b = S @ linear(f, N + 2)
-    u = jnp.linalg.solve(A, b)
-    x = jnp.linspace(-1, 1, 100)
-    plt.plot(x, sp.lambdify(s, ue)(x), "r")
-    plt.plot(x, chebval(x, u @ S), "b")
-    plt.show()

@@ -3,7 +3,8 @@ import matplotlib.pyplot as plt
 import sympy as sp
 import jax.numpy as jnp 
 from jaxfun import Chebyshev
-from jaxfun.composite import Composite, inner, innerlinear
+from jaxfun.composite import Composite
+from jaxfun.inner import inner
 
 s = sp.Symbol("s")
 
@@ -16,7 +17,7 @@ C = Composite(Chebyshev, N, bcs)
 v = (C, 0)
 u = (C, 2)
 A = inner(v, u, sparse=True)
-b = innerlinear(v, f)
+b = inner(v, f)
 u = jnp.linalg.solve(A.todense(), b)
 x = jnp.linspace(-1, 1, 100)
 plt.plot(x, sp.lambdify(s, ue)(x), "r")

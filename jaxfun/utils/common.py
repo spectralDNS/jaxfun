@@ -4,6 +4,7 @@ import jax
 from jax import Array
 import jax.numpy as jnp
 from jax.experimental import sparse
+from scipy import sparse as scipy_sparse
 
 
 def diff(
@@ -45,7 +46,17 @@ def evaluate(
     return c
 
 
+@jax.jit
+def matmat(a: Array, b: Array) -> Array:
+    return a @ b
+
+
 def to_sparse(a: Array, tol: float) -> sparse.BCOO:
     b: float = jnp.linalg.norm(a)
     a = jnp.choose(jnp.array(jnp.abs(a) > tol * b, dtype=int), (jnp.zeros_like(a), a))
     return sparse.BCOO.fromdense(a)
+
+
+def from_dense(a: Array, tol: float = 1e-10) -> sparse.BCOO:
+    z = jnp.where(jnp.abs(a) < tol, jnp.zeros(a.shape), a)
+    return sparse.BCOO.from_scipy_sparse(scipy_sparse.csr_matrix(z))

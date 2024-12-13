@@ -1,9 +1,9 @@
-from typing import Callable
+from typing import  NamedTuple
 import sympy as sp
 from scipy import sparse as scipy_sparse
 import jax
-from jax import Array
 import jax.numpy as jnp
+from jax import Array
 from jax.experimental.sparse import BCOO
 
 # Some functions are borrowed from shenfun for getting a stencil matrix
@@ -35,16 +35,6 @@ def apply_stencil_linearT(a: Array, S: BCOO) -> Array:
 
 
 @jax.jit
-def matmat(a: Array, b: Array) -> Array:
-    return a @ b
-
-
-def from_dense(a: Array, tol: float = 1e-10) -> BCOO:
-    z = jnp.where(jnp.abs(a) < tol, jnp.zeros(a.shape), a)
-    return BCOO.from_scipy_sparse(scipy_sparse.csr_matrix(z))
-
-
-@jax.jit
 def to_orthogonal(a: Array, S: BCOO):
     return a @ S
 
@@ -52,7 +42,7 @@ def to_orthogonal(a: Array, S: BCOO):
 class PN:
     """Space of all polynomials of order less than or equal to N"""
 
-    def __init__(self, family, N: int, domain: tuple = Domain(-1, 1)):
+    def __init__(self, family, N: int, domain: NamedTuple = Domain(-1, 1)):
         self.family = family
         self.N = N
         self.bcs = None
@@ -67,12 +57,23 @@ class Composite(PN):
     may also be given explicitly.
     """
 
-    def __init__(self, family, N, bcs, domain=Domain(-1, 1), stencil=None):
+    def __init__(
+        self,
+        family,
+        N: int,
+        bcs: dict,
+        domain: NamedTuple = Domain(-1, 1),
+        stencil: dict = None,
+    ):
         PN.__init__(self, family=family, N=N, domain=domain)
         self.bcs = BoundaryConditions(bcs, domain=domain)
         if stencil is None:
             stencil = get_stencil_matrix(
-                self.bcs, family.__name__.split('.')[-1], family.alpha, family.beta, family.gn
+                self.bcs,
+                family.__name__.split(".")[-1],
+                family.alpha,
+                family.beta,
+                family.gn,
             )
             assert len(stencil) == self.bcs.num_bcs()
         self.stencil = {(si[0]): si[1] for si in sorted(stencil.items())}
@@ -88,41 +89,6 @@ class Composite(PN):
             [key for key in self.stencil.keys()],
             shape=(self.N - self.bcs.num_bcs(), self.N),
         )
-
-
-def inner(test: tuple[PN, int], trial: tuple[PN, int], sparse: bool = False) -> Array:
-    r"""Compute coefficient matrix
-
-    .. math::
-        (\frac{\partial^{i}\psi_m}{\partialx^{i}}, \frac{\partial^{j}\phi_n}{\partialx^{j}})
-
-    where :math:`\psi_j` is the j'th basis function of the trial space and
-    :math:`\phi_i` is the j'th basis function of the test space
-    """
-    u, j = trial
-    v, i = test
-    N = v.N
-    x, w = v.family.quad_points_and_weights(N)
-    Pi = v.family.evaluate_basis_derivative(x, N, k=i)
-    Pj = u.family.evaluate_basis_derivative(x, u.N, k=j)
-    z = matmat(Pi.T * w[None, :], Pj)
-    if u == v:
-        z = apply_stencil_galerkin(v.S, z)
-    else:
-        z = apply_stencil_petrovgalerkin(v.S, z, u.S)
-    return from_dense(z) if sparse else z
-
-def innerlinear(test: tuple[PN, int], u: Callable) -> Array:
-    r"""Compute inner product (v, u(x))
-
-    """
-    v, i = test
-    N = v.N
-    s = u.free_symbols.pop()
-    x, w = v.family.quad_points_and_weights(N)
-    Pi = v.family.evaluate_basis_derivative(x, N, k=i)
-    uj = sp.lambdify(s, u, modules=["jax"])(x)
-    return apply_stencil_linear(v.S, matmat(uj * w, Pi))
 
 
 if __name__ == "__main__":

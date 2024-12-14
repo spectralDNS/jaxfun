@@ -39,18 +39,7 @@ def to_orthogonal(a: Array, S: BCOO):
     return a @ S
 
 
-class PN:
-    """Space of all polynomials of order less than or equal to N"""
-
-    def __init__(self, family, N: int, domain: NamedTuple = Domain(-1, 1)):
-        self.family = family
-        self.N = N
-        self.bcs = None
-        self.stencil = {0: 1}
-        self.S = BCOO.from_scipy_sparse(scipy_sparse.diags((1,), 0, (N, N)))
-
-
-class Composite(PN):
+class Composite:
     """Space created by combining basis functions
 
     The stencil matrix is computed from the given boundary conditions, but
@@ -59,21 +48,25 @@ class Composite(PN):
 
     def __init__(
         self,
-        family,
+        orthogonal,
         N: int,
         bcs: dict,
         domain: NamedTuple = Domain(-1, 1),
         stencil: dict = None,
+        alpha: float = 0,
+        beta: float = 0
     ):
-        PN.__init__(self, family=family, N=N, domain=domain)
+        self.orthogonal = orthogonal(N, domain=domain, alpha=alpha, beta=beta)
         self.bcs = BoundaryConditions(bcs, domain=domain)
+        self.N = N
+        self.domain = domain
         if stencil is None:
             stencil = get_stencil_matrix(
                 self.bcs,
-                family.__name__.split(".")[-1],
-                family.alpha,
-                family.beta,
-                family.gn,
+                self.orthogonal.__class__.__name__,
+                self.orthogonal.alpha,
+                self.orthogonal.beta,
+                self.orthogonal.gn,
             )
             assert len(stencil) == self.bcs.num_bcs()
         self.stencil = {(si[0]): si[1] for si in sorted(stencil.items())}
@@ -94,9 +87,10 @@ class Composite(PN):
 if __name__ == "__main__":
     jax.config.update("jax_enable_x64", True)
 
-    import Chebyshev
-    import Legendre
+    from Chebyshev import Chebyshev
+    from Legendre import Legendre
     import matplotlib.pyplot as plt
+    from jaxfun.inner import inner
 
     n = sp.Symbol("n", positive=True, integer=True)
     N = 14

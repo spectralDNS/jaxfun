@@ -8,10 +8,6 @@ from jax import Array
 from jax.experimental.sparse import BCOO
 from jaxfun.utils.common import matmat, Domain, BoundaryConditions, get_stencil_matrix
 
-# Some functions are borrowed from shenfun for getting a stencil matrix
-# for any combination of boundary conditions
-#from shenfun import BoundaryConditions, get_stencil_matrix, Domain
-
 
 n = sp.Symbol("n", integer=True, positive=True)
 

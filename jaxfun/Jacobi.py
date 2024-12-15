@@ -8,7 +8,7 @@ import sympy as sp
 from scipy.special import roots_jacobi
 from scipy import sparse as scipy_sparse
 from jax.experimental.sparse import BCOO
-from shenfun import Domain
+from jaxfun.utils.common import Domain 
 
 n = sp.Symbol("n", integer=True, positive=True)
 

@@ -3,8 +3,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from jaxfun import Chebyshev
-from jaxfun import Legendre
+from jaxfun.Chebyshev import Chebyshev
+from jaxfun.Legendre import Legendre
 from jaxfun.utils.common import evaluate
 
 jax.config.update("jax_enable_x64", True)
@@ -48,21 +48,23 @@ def cn(c: jnp.ndarray) -> np.ndarray:
 
 @pytest.mark.parametrize('space', (Legendre, Chebyshev))
 def test_vandermonde(space, x: jnp.ndarray, xn: np.ndarray, N: int) -> None:
+    space = space(N)
     np_res = {
-        'legendre': np.polynomial.legendre.legvander(xn, N - 1),
-        'chebyshev': np.polynomial.chebyshev.chebvander(xn, N - 1),
-    }[space.__name__.split('.')[-1].lower()]
-    jax_res = space.vandermonde(x, N)
+        'Legendre': np.polynomial.legendre.legvander(xn, N - 1),
+        'Chebyshev': np.polynomial.chebyshev.chebvander(xn, N - 1),
+    }[space.__class__.__name__]
+    jax_res = space.vandermonde(x)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < 1e-8
 
 
 @pytest.mark.parametrize('space', (Legendre, Chebyshev))
-def test_evaluate(space, x: jnp.ndarray, xn: np.ndarray, c: jnp.ndarray, cn: np.ndarray) -> None:
+def test_evaluate(space, x: jnp.ndarray, xn: np.ndarray, c: jnp.ndarray, cn: np.ndarray, N: int) -> None:
+    space = space(N)
     np_res = {
-        'legendre': np.polynomial.legendre.legval(xn, cn),
-        'chebyshev': np.polynomial.chebyshev.chebval(xn, cn)
-    }[space.__name__.split('.')[-1].lower()]
+        'Legendre': np.polynomial.legendre.legval(xn, cn),
+        'Chebyshev': np.polynomial.chebyshev.chebval(xn, cn)
+    }[space.__class__.__name__]
     jax_res = space.evaluate(x, c)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < 1e-8
@@ -73,32 +75,37 @@ def test_evaluate(space, x: jnp.ndarray, xn: np.ndarray, c: jnp.ndarray, cn: np.
 def test_evaluate_basis_derivative(
     space, x: jnp.ndarray, xn: np.ndarray, N :int, k: int
 ) -> None:
+    space = space(N)
     np_res = {
-        'legendre': np.polynomial.legendre.legvander(xn, N - 1),
-        'chebyshev': np.polynomial.chebyshev.chebvander(xn, N - 1)
-    }[space.__name__.split('.')[-1].lower()]
+        'Legendre': np.polynomial.legendre.legvander(xn, N - 1),
+        'Chebyshev': np.polynomial.chebyshev.chebvander(xn, N - 1)
+    }[space.__class__.__name__]
     der = {
-        'legendre': np.polynomial.legendre.legder,
-        'chebyshev': np.polynomial.chebyshev.chebder 
-    }[space.__name__.split('.')[-1].lower()]
+        'Legendre': np.polynomial.legendre.legder,
+        'Chebyshev': np.polynomial.chebyshev.chebder 
+    }[space.__class__.__name__]
     P = np_res.shape[-1]
     if k > 0:
         D = np.zeros((P, P))
         D[:-k] = der(np.eye(P, P), k)
         np_res = np.dot(np_res, D)
-    jax_res = space.evaluate_basis_derivative(x, N, k=k)
+    jax_res = space.evaluate_basis_derivative(x, k=k)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < 1e-8
 
 @pytest.mark.parametrize('space', (Legendre, Chebyshev))
 def test_evaluate_multidimensional(
-    space
+    space, N: int
 ) -> None:
     x = jnp.array([-1., 1.])
     c = jnp.ones((2, 2))
+    space = space(N)
     y = evaluate(space.evaluate, (x,), c, (1,))
     assert jnp.allclose(y, jnp.array([[0., 2.,], [0., 2.]]))
     y = evaluate(space.evaluate, (x,), c, (0,))
     assert jnp.allclose(y, jnp.array([[0., 0.,], [2., 2.]])) 
     y = evaluate(space.evaluate, (x, x), c, (0, 1))
     assert jnp.allclose(y, jnp.array([[0., 0.,], [0., 4.]]))
+
+if __name__ == '__main__':
+    test_evaluate(Legendre, x, xn, c, cn)

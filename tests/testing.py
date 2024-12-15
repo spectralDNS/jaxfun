@@ -4,8 +4,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxfun import Chebyshev
-from jaxfun import Legendre
+from jaxfun.Chebyshev import Chebyshev
+from jaxfun.Legendre import Legendre
 
 jnp.set_printoptions(4)
 jax.config.update("jax_enable_x64", True)
@@ -22,14 +22,15 @@ cn = np.array(c)
 
 
 def run_vandermonde(space) -> None:
-    family = space.__name__.split('.')[-1]
+    space = space(N)
+    family = space.__class__.__name__
     print(f"{family} - Vandermonde")
-    space.vandermonde(x, N)
+    space.vandermonde(x)
 
     time_jax = timeit.timeit(
-        f"{family}.vandermonde(x, {N})",
+        "space.vandermonde(x)",
         number=M,
-        setup=f"from __main__ import {family}, x",
+        globals={**globals(), **locals()}
     )
     print(f'{"Jax":20s} {time_jax:.4e}')
     npfun = {
@@ -46,14 +47,15 @@ def run_vandermonde(space) -> None:
     assert (
         jnp.linalg.norm(
             jnp.array(npfun(xn, N - 1))
-            - space.vandermonde(x, N)
+            - space.vandermonde(x)
         )
         < 1e-8
     )
 
 
 def run_evaluate(space) -> None:
-    family = space.__name__.split('.')[-1]
+    space = space(N)
+    family = space.__class__.__name__
     print(f"{family} - evaluate")
 
     space.evaluate(x, c)
@@ -77,13 +79,14 @@ def run_evaluate(space) -> None:
 
 
 def run_evaluate_basis_derivative(space) -> None:
-    family = space.__name__.split('.')[-1]
+    space = space(N)
+    family = space.__class__.__name__
     print(f"{family} - evaluate_basis_derivative")
-    space.evaluate_basis_derivative(x, N, k)
+    space.evaluate_basis_derivative(x, k)
     time_jax = timeit.timeit(
-        f"{family}.evaluate_basis_derivative(x, {N}, {k})",
+        f"space.evaluate_basis_derivative(x, {k})",
         number=M,
-        setup=f"from __main__ import {family}, x",
+        globals={**globals(), **locals()}
     )
     print(f'{"Jax":20s} {time_jax:.4e}')
 

@@ -24,11 +24,11 @@ def diffx(
 
 
 def jacn(
-    fun: Callable[[float, int], Array], k: int = 1
-) -> Callable[[Array, int], Array]:
+    fun: Callable[[float], Array], k: int = 1
+) -> Callable[[Array], Array]:
     for _ in range(k):
         fun = jax.jacfwd(fun)
-    return jax.vmap(fun, in_axes=(0, None), out_axes=0)
+    return jax.vmap(fun, in_axes=0, out_axes=0)
 
 
 @partial(jax.jit, static_argnums=(0, 3))

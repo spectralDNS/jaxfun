@@ -11,7 +11,7 @@ s = sp.Symbol("s")
 # Method of manufactured solution
 ue = (1 - s**2) * sp.exp(sp.cos(2 * sp.pi * s))
 f = ue.diff(s, 2)
-N = 50
+N = 100
 bcs = {'left': {'D': 0}, 'right': {'D': 0}}
 C = Composite(space, N, bcs)
 v = (C, 0)
@@ -21,5 +21,5 @@ b = inner(v, f)
 u = jnp.linalg.solve(A.todense(), b)
 x = jnp.linspace(-1, 1, 100)
 plt.plot(x, sp.lambdify(s, ue)(x), "r")
-plt.plot(x, C.orthogonal.evaluate(x, u @ C.S), "b") # u @ C.S return coefficients in the orthogonal basis
+plt.plot(x, C.evaluate(x, u), "b")
 plt.show()

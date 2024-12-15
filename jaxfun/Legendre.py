@@ -61,12 +61,27 @@ class Legendre(Jacobi):
         return c0 + c1 * x
 
 
-    def quad_points_and_weights(self, N: int) -> Array:
+    def quad_points_and_weights(self, N: int = 0) -> Array:
+        N = self.N if N == 0 else N
         return leggauss(N)
 
-
+    
     @partial(jax.jit, static_argnums=(0, 2))
-    def eval_basis_functions(self, x: float, deg: int) -> Array:
+    def eval_basis_function(self, x: float, i: int) -> float:
+        x0 = x * 0 + 1
+        if i == 0:
+            return x0
+
+        def body_fun(i: int, val: tuple[Array, Array]) -> tuple[Array, Array]:
+            x0, x1 = val
+            x2 = (x1 * x * (2 * i - 1) - x0 * (i - 1)) / i
+            return x1, x2
+
+        return jax.lax.fori_loop(1, i, body_fun, (x0, x))[-1]
+
+
+    @partial(jax.jit, static_argnums=0)
+    def eval_basis_functions(self, x: float) -> Array:
         x0 = x * 0 + 1
 
         def inner_loop(
@@ -76,6 +91,6 @@ class Legendre(Jacobi):
             x2 = (x1 * x * (2 * i - 1) - x0 * (i - 1)) / i
             return (x1, x2), x1
 
-        _, xs = jax.lax.scan(inner_loop, (x0, x), jnp.arange(2, deg + 1))
+        _, xs = jax.lax.scan(inner_loop, (x0, x), jnp.arange(2, self.N + 1))
 
         return jnp.hstack((x0, xs))

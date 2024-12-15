@@ -1,10 +1,12 @@
-from typing import  NamedTuple
+from typing import NamedTuple
+from functools import partial
 import sympy as sp
 from scipy import sparse as scipy_sparse
 import jax
 import jax.numpy as jnp
 from jax import Array
 from jax.experimental.sparse import BCOO
+from jaxfun.utils.common import matmat
 
 # Some functions are borrowed from shenfun for getting a stencil matrix
 # for any combination of boundary conditions
@@ -35,7 +37,7 @@ def apply_stencil_linearT(a: Array, S: BCOO) -> Array:
 
 
 @jax.jit
-def to_orthogonal(a: Array, S: BCOO):
+def to_orthogonal(a: Array, S: BCOO) -> Array:
     return a @ S
 
 
@@ -54,7 +56,7 @@ class Composite:
         domain: NamedTuple = Domain(-1, 1),
         stencil: dict = None,
         alpha: float = 0,
-        beta: float = 0
+        beta: float = 0,
     ):
         self.orthogonal = orthogonal(N, domain=domain, alpha=alpha, beta=beta)
         self.bcs = BoundaryConditions(bcs, domain=domain)
@@ -71,6 +73,32 @@ class Composite:
             assert len(stencil) == self.bcs.num_bcs()
         self.stencil = {(si[0]): si[1] for si in sorted(stencil.items())}
         self.S = BCOO.from_scipy_sparse(self.stencil_to_scipy_sparse())
+
+    @partial(jax.jit, static_argnums=0)
+    def evaluate(self, x: float, c: Array) -> float:
+        return self.orthogonal.evaluate(x, to_orthogonal(c, self.S))
+
+    def evaluate_basis_derivative(self, x: Array, k: int = 0) -> Array:
+        P: Array = self.orthogonal.evaluate_basis_derivative(x, k)
+        return apply_stencil_linear(self.S, P)
+
+    def vandermonde(self, x: Array) -> Array:
+        P: Array = self.orthogonal.evaluate_basis_derivative(x, 0)
+        return apply_stencil_linear(self.S, P)
+
+    def eval_basis_function(self, x: float, i: int) -> float:
+        row: Array = self.get_stencil_row(i)
+        psi: Array = jnp.array(
+            [self.orthogonal.eval_basis_function(x, i + j) for j in self.stencil.keys()]
+        )
+        return matmat(row, psi)
+
+    def eval_basis_functions(self, x: float) -> Array:
+        P: Array = self.orthogonal.eval_basis_functions(x)
+        return apply_stencil_linear(self.S, P)
+
+    def get_stencil_row(self, i: int):
+        return jnp.array([self.S[i, i + k].data.item() for k in self.stencil.keys()])
 
     def stencil_to_scipy_sparse(self):
         k = jnp.arange(self.N)
@@ -145,4 +173,4 @@ if __name__ == "__main__":
     ax1.set_title("PG Chebyshev")
     ax2.spy(A1.todense())
     ax2.set_title("PG Legendre")
-    plt.show()
+    # plt.show()

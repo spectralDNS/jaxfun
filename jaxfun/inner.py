@@ -22,12 +22,11 @@ def inner(
     :math:`\phi_i` is the j'th basis function of the test space
     """
     v, i = test
-    N = v.N
     if isinstance(trial, tuple):  # Bilinear form
         u, j = trial
-        x, w = v.orthogonal.quad_points_and_weights(N)
-        Pi = v.orthogonal.evaluate_basis_derivative(x, N, k=i)
-        Pj = u.orthogonal.evaluate_basis_derivative(x, u.N, k=j)
+        x, w = v.orthogonal.quad_points_and_weights()
+        Pi = v.orthogonal.evaluate_basis_derivative(x, k=i)
+        Pj = u.orthogonal.evaluate_basis_derivative(x, k=j)
         z = matmat(Pi.T * w[None, :], Pj)
         if u == v:
             z = apply_stencil_galerkin(v.S, z)
@@ -36,8 +35,8 @@ def inner(
         return from_dense(z) if sparse else z
 
     # Linear form
-    x, w = v.orthogonal.quad_points_and_weights(N)
-    Pi = v.orthogonal.evaluate_basis_derivative(x, N, k=i)
+    x, w = v.orthogonal.quad_points_and_weights()
+    Pi = v.orthogonal.evaluate_basis_derivative(x, k=i)
     try:
         s = trial.free_symbols.pop()
         uj = sp.lambdify(s, trial, modules=["jax"])(x)

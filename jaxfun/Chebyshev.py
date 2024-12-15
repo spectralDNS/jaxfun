@@ -63,7 +63,8 @@ class Chebyshev(Jacobi):
         c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (c0, c1))
         return c0 + c1 * x
 
-    def quad_points_and_weights(self, N: int) -> Array:
+    def quad_points_and_weights(self, N: int = 0) -> Array:
+        N = self.N if N == 0 else N
         return jnp.array(
             (
                 jnp.cos(jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)),
@@ -85,8 +86,8 @@ class Chebyshev(Jacobi):
 
         return jax.lax.fori_loop(1, i, body_fun, (x0, x))[-1]
 
-    @partial(jax.jit, static_argnums=(0, 2))
-    def eval_basis_functions(self, x: float, deg: int) -> Array:
+    @partial(jax.jit, static_argnums=0)
+    def eval_basis_functions(self, x: float) -> Array:
         x0 = x * 0 + 1
 
         def inner_loop(
@@ -96,6 +97,6 @@ class Chebyshev(Jacobi):
             x2 = 2 * x * x1 - x0
             return (x1, x2), x1
 
-        _, xs = jax.lax.scan(inner_loop, init=(x0, x), xs=None, length=deg - 1)
+        _, xs = jax.lax.scan(inner_loop, init=(x0, x), xs=None, length=self.N - 1)
 
         return jnp.hstack((x0, xs))

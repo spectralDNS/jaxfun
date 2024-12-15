@@ -6,11 +6,11 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 from jax.experimental.sparse import BCOO
-from jaxfun.utils.common import matmat
+from jaxfun.utils.common import matmat, Domain, BoundaryConditions, get_stencil_matrix
 
 # Some functions are borrowed from shenfun for getting a stencil matrix
 # for any combination of boundary conditions
-from shenfun import BoundaryConditions, get_stencil_matrix, Domain
+#from shenfun import BoundaryConditions, get_stencil_matrix, Domain
 
 
 n = sp.Symbol("n", integer=True, positive=True)
@@ -122,9 +122,9 @@ if __name__ == "__main__":
 
     n = sp.Symbol("n", positive=True, integer=True)
     N = 14
-    bcB = "u(-1)=0&&u'(-1)=0&&u(1)=0&&u'(1)=0"
-    bc = "u(-1)=0&&u(1)=0"
-    C = Composite(Chebyshev, N, bc)
+    biharmonic = {'left': {'D': 0, 'N': 0}, 'right': {'D': 0, 'N': 0}}
+    dirichlet = {'left': {'D': 0}, 'right': {'D': 0}}
+    C = Composite(Chebyshev, N, dirichlet)
 
     v = jax.random.normal(jax.random.PRNGKey(1), shape=(N, N))
     g = C.S @ v @ C.S.T
@@ -141,22 +141,22 @@ if __name__ == "__main__":
     D = inner((C, 0), (C, 2), sparse=True)
 
     # Petrov-Galerkin method (https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
-    G = Composite(Chebyshev, N, "u(-1)=0&&u(1)=0")
+    G = Composite(Chebyshev, N, dirichlet)
     PG = Composite(
         Chebyshev,
         N + 2,
-        bcB,
+        biharmonic,
         stencil={
             0: 1 / (2 * sp.pi * (n + 1) * (n + 2)),
             2: -1 / (sp.pi * (n**2 + 4 * n + 3)),
             4: 1 / (2 * sp.pi * (n + 2) * (n + 3)),
         },
     )
-    L = Composite(Legendre, N, "u(-1)=0&&u(1)=0")
+    L = Composite(Legendre, N, dirichlet)
     LG = Composite(
         Legendre,
         N + 2,
-        bcB,
+        biharmonic,
         stencil={
             0: 1 / (2 * (2 * n + 3)),
             2: -(2 * n + 5) / (2 * n + 7) / (2 * n + 3),

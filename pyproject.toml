@@ -9,4 +9,5 @@ dependencies = [
     "matplotlib>=3.9.3",
     "pytest>=8.3.4",
     "sympy>=1.13.3",
+    "shenfun>=4.2.2"
 ]

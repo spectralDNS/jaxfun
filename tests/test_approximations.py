@@ -28,7 +28,7 @@ def C() -> int:
 
 @pytest.fixture
 def x(N: int) -> jnp.ndarray:
-    return jnp.linspace(-1, 1, N)
+    return jnp.linspace(-1, 1, N + 1)
 
 
 @pytest.fixture
@@ -46,43 +46,45 @@ def cn(c: jnp.ndarray) -> np.ndarray:
     return np.array(c)
 
 
-@pytest.mark.parametrize('space', (Legendre, Chebyshev))
+@pytest.mark.parametrize("space", (Legendre, Chebyshev))
 def test_vandermonde(space, x: jnp.ndarray, xn: np.ndarray, N: int) -> None:
     space = space(N)
     np_res = {
-        'Legendre': np.polynomial.legendre.legvander(xn, N - 1),
-        'Chebyshev': np.polynomial.chebyshev.chebvander(xn, N - 1),
+        "Legendre": np.polynomial.legendre.legvander(xn, N),
+        "Chebyshev": np.polynomial.chebyshev.chebvander(xn, N),
     }[space.__class__.__name__]
     jax_res = space.vandermonde(x)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < 1e-8
 
 
-@pytest.mark.parametrize('space', (Legendre, Chebyshev))
-def test_evaluate(space, x: jnp.ndarray, xn: np.ndarray, c: jnp.ndarray, cn: np.ndarray, N: int) -> None:
+@pytest.mark.parametrize("space", (Legendre, Chebyshev))
+def test_evaluate(
+    space, x: jnp.ndarray, xn: np.ndarray, c: jnp.ndarray, cn: np.ndarray, N: int
+) -> None:
     space = space(N)
     np_res = {
-        'Legendre': np.polynomial.legendre.legval(xn, cn),
-        'Chebyshev': np.polynomial.chebyshev.chebval(xn, cn)
+        "Legendre": np.polynomial.legendre.legval(xn, cn),
+        "Chebyshev": np.polynomial.chebyshev.chebval(xn, cn),
     }[space.__class__.__name__]
     jax_res = space.evaluate(x, c)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < 1e-8
 
 
-@pytest.mark.parametrize('k', (1, 2, 3))
-@pytest.mark.parametrize('space', (Legendre, Chebyshev))
+@pytest.mark.parametrize("k", (1, 2, 3))
+@pytest.mark.parametrize("space", (Legendre, Chebyshev))
 def test_evaluate_basis_derivative(
-    space, x: jnp.ndarray, xn: np.ndarray, N :int, k: int
+    space, x: jnp.ndarray, xn: np.ndarray, N: int, k: int
 ) -> None:
     space = space(N)
     np_res = {
-        'Legendre': np.polynomial.legendre.legvander(xn, N - 1),
-        'Chebyshev': np.polynomial.chebyshev.chebvander(xn, N - 1)
+        "Legendre": np.polynomial.legendre.legvander(xn, N),
+        "Chebyshev": np.polynomial.chebyshev.chebvander(xn, N),
     }[space.__class__.__name__]
     der = {
-        'Legendre': np.polynomial.legendre.legder,
-        'Chebyshev': np.polynomial.chebyshev.chebder 
+        "Legendre": np.polynomial.legendre.legder,
+        "Chebyshev": np.polynomial.chebyshev.chebder,
     }[space.__class__.__name__]
     P = np_res.shape[-1]
     if k > 0:
@@ -93,19 +95,52 @@ def test_evaluate_basis_derivative(
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < 1e-8
 
-@pytest.mark.parametrize('space', (Legendre, Chebyshev))
-def test_evaluate_multidimensional(
-    space, N: int
-) -> None:
-    x = jnp.array([-1., 1.])
+
+@pytest.mark.parametrize("space", (Legendre, Chebyshev))
+def test_evaluate_multidimensional(space, N: int) -> None:
+    x = jnp.array([-1.0, 1.0])
     c = jnp.ones((2, 2))
     space = space(N)
     y = evaluate(space.evaluate, (x,), c, (1,))
-    assert jnp.allclose(y, jnp.array([[0., 2.,], [0., 2.]]))
+    assert jnp.allclose(
+        y,
+        jnp.array(
+            [
+                [
+                    0.0,
+                    2.0,
+                ],
+                [0.0, 2.0],
+            ]
+        ),
+    )
     y = evaluate(space.evaluate, (x,), c, (0,))
-    assert jnp.allclose(y, jnp.array([[0., 0.,], [2., 2.]])) 
+    assert jnp.allclose(
+        y,
+        jnp.array(
+            [
+                [
+                    0.0,
+                    0.0,
+                ],
+                [2.0, 2.0],
+            ]
+        ),
+    )
     y = evaluate(space.evaluate, (x, x), c, (0, 1))
-    assert jnp.allclose(y, jnp.array([[0., 0.,], [0., 4.]]))
+    assert jnp.allclose(
+        y,
+        jnp.array(
+            [
+                [
+                    0.0,
+                    0.0,
+                ],
+                [0.0, 4.0],
+            ]
+        ),
+    )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     test_evaluate(Legendre, x, xn, c, cn)

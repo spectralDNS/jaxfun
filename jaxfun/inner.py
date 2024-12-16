@@ -1,17 +1,14 @@
 from typing import Union
 from jax import Array
-from jaxfun.composite import (
-    Composite,
-    apply_stencil_galerkin,
-    apply_stencil_petrovgalerkin,
-    apply_stencil_linear,
-)
+from jaxfun.Basespace import BaseSpace
 from jaxfun.utils.common import matmat, from_dense
 import sympy as sp
 
 
 def inner(
-    test: tuple[Composite, int], trial: Union[tuple[Composite, int], sp.Expr], sparse: bool = False
+    test: tuple[BaseSpace, int],
+    trial: Union[tuple[BaseSpace, int], sp.Expr],
+    sparse: bool = False,
 ) -> Array:
     r"""Compute coefficient matrix
 
@@ -29,9 +26,9 @@ def inner(
         Pj = u.orthogonal.evaluate_basis_derivative(x, k=j)
         z = matmat(Pi.T * w[None, :], Pj)
         if u == v:
-            z = apply_stencil_galerkin(v.S, z)
+            z = v.apply_stencil_galerkin(z)
         else:
-            z = apply_stencil_petrovgalerkin(v.S, z, u.S)
+            z = v.apply_stencils_petrovgalerkin(z, u.S)
         return from_dense(z) if sparse else z
 
     # Linear form
@@ -43,5 +40,5 @@ def inner(
     except AttributeError:
         # constant function
         uj = trial
-    
-    return apply_stencil_linear(v.S, matmat(uj * w, Pi))
+
+    return v.apply_stencil_left(matmat(uj * w, Pi))

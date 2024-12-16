@@ -10,16 +10,13 @@ n = sp.Symbol("n", integer=True, positive=True)
 
 
 class Chebyshev(Jacobi):
-
     def __init__(self, N: int, domain: NamedTuple = Domain(-1, 1), **kw):
         Jacobi.__init__(self, N, domain, -sp.S.Half, -sp.S.Half)
-
 
     # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
     @staticmethod
     def gn(alpha, beta, n):
         return sp.S(1) / sp.jacobi(n, alpha, beta, 1)
-
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, x: float, c: Array) -> float:
@@ -64,7 +61,7 @@ class Chebyshev(Jacobi):
         return c0 + c1 * x
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.N if N == 0 else N
+        N = self.N+1 if N == 0 else N+1
         return jnp.array(
             (
                 jnp.cos(jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)),
@@ -97,6 +94,9 @@ class Chebyshev(Jacobi):
             x2 = 2 * x * x1 - x0
             return (x1, x2), x1
 
-        _, xs = jax.lax.scan(inner_loop, init=(x0, x), xs=None, length=self.N - 1)
+        _, xs = jax.lax.scan(inner_loop, init=(x0, x), xs=None, length=self.N)
 
         return jnp.hstack((x0, xs))
+
+    def norm_squared(self) -> Array:
+        return jnp.hstack((jnp.array([jnp.pi]), jnp.full(self.N, jnp.pi / 2)))

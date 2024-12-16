@@ -15,7 +15,7 @@ N = 100
 M = 1000
 C = 1000
 k = 2
-x = jnp.linspace(-1, 1, N)
+x = jnp.linspace(-1, 1, N+1)
 xn = np.array(x)
 c = jnp.ones(C)
 cn = np.array(c)
@@ -38,7 +38,7 @@ def run_vandermonde(space) -> None:
         'Chebyshev': np.polynomial.chebyshev.chebvander
     }[family]
     time_np = timeit.timeit(
-        f"npfun(xn, {N - 1})",
+        f"npfun(xn, {N})",
         number=M,
         globals={**globals(), **locals()}
     )
@@ -46,7 +46,7 @@ def run_vandermonde(space) -> None:
 
     assert (
         jnp.linalg.norm(
-            jnp.array(npfun(xn, N - 1))
+            jnp.array(npfun(xn, N))
             - space.vandermonde(x)
         )
         < 1e-8
@@ -96,7 +96,7 @@ def run_evaluate_basis_derivative(space) -> None:
     }[family]
     time_np = timeit.timeit(
         f"""
-np_res = npfuns[0](xn, {N} - 1)
+np_res = npfuns[0](xn, {N})
 P = np_res.shape[-1]
 D = np.zeros((P, P))
 D[:-{k}] = npfuns[1](np.eye(P, P), {k})

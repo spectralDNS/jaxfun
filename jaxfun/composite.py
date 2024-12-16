@@ -5,40 +5,23 @@ from scipy import sparse as scipy_sparse
 import jax
 import jax.numpy as jnp
 from jax import Array
+from jax.experimental import sparse
 from jax.experimental.sparse import BCOO
-from jaxfun.utils.common import matmat, Domain, BoundaryConditions, get_stencil_matrix
+from jaxfun.utils.common import (
+    matmat,
+    Domain,
+    BoundaryConditions,
+    get_stencil_matrix,
+    matmat_bcoo,
+)
+from jaxfun.Basespace import BaseSpace
 
 
 n = sp.Symbol("n", integer=True, positive=True)
 
 
-@jax.jit
-def apply_stencil_galerkin(S: BCOO, b: Array) -> Array:
-    return S @ b @ S.T
-
-
-@jax.jit
-def apply_stencil_petrovgalerkin(S: BCOO, b: Array, P: BCOO) -> Array:
-    return S @ b @ P.T
-
-
-@jax.jit
-def apply_stencil_linear(S: BCOO, b: Array) -> Array:
-    return S @ b
-
-
-@jax.jit
-def apply_stencil_linearT(a: Array, S: BCOO) -> Array:
-    return a @ S
-
-
-@jax.jit
-def to_orthogonal(a: Array, S: BCOO) -> Array:
-    return a @ S
-
-
-class Composite:
-    """Space created by combining basis functions
+class Composite(BaseSpace):
+    """Space created by combining orthogonal basis functions
 
     The stencil matrix is computed from the given boundary conditions, but
     may also be given explicitly.
@@ -54,10 +37,9 @@ class Composite:
         alpha: float = 0,
         beta: float = 0,
     ):
+        BaseSpace.__init__(self, N, domain)
         self.orthogonal = orthogonal(N, domain=domain, alpha=alpha, beta=beta)
         self.bcs = BoundaryConditions(bcs, domain=domain)
-        self.N = N
-        self.domain = domain
         if stencil is None:
             stencil = get_stencil_matrix(
                 self.bcs,
@@ -72,15 +54,15 @@ class Composite:
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, x: float, c: Array) -> float:
-        return self.orthogonal.evaluate(x, to_orthogonal(c, self.S))
+        return self.orthogonal.evaluate(x, self.to_orthogonal(c))
 
     def evaluate_basis_derivative(self, x: Array, k: int = 0) -> Array:
         P: Array = self.orthogonal.evaluate_basis_derivative(x, k)
-        return apply_stencil_linear(self.S, P)
+        return self.apply_stencil_left(P)
 
     def vandermonde(self, x: Array) -> Array:
         P: Array = self.orthogonal.evaluate_basis_derivative(x, 0)
-        return apply_stencil_linear(self.S, P)
+        return self.apply_stencil_left(P)
 
     def eval_basis_function(self, x: float, i: int) -> float:
         row: Array = self.get_stencil_row(i)
@@ -91,10 +73,10 @@ class Composite:
 
     def eval_basis_functions(self, x: float) -> Array:
         P: Array = self.orthogonal.eval_basis_functions(x)
-        return apply_stencil_linear(self.S, P)
+        return self.apply_stencil_left(P)
 
     def get_stencil_row(self, i: int):
-        return jnp.array([self.S[i, i + k].data.item() for k in self.stencil.keys()])
+        return self.S[i].data[: len(self.stencil)]
 
     def stencil_to_scipy_sparse(self):
         k = jnp.arange(self.N)
@@ -104,8 +86,37 @@ class Composite:
                 for val in self.stencil.values()
             ],
             [key for key in self.stencil.keys()],
-            shape=(self.N - self.bcs.num_bcs(), self.N),
+            shape=(self.N + 1 - self.bcs.num_bcs(), self.N + 1),
         )
+
+    @partial(jax.jit, static_argnums=0)
+    def to_orthogonal(self, a: Array) -> Array:
+        return a @ self.S
+
+    @partial(jax.jit, static_argnums=0)
+    def apply_stencil_galerkin(self, b: Array) -> Array:
+        return self.S @ b @ self.S.T
+
+    @partial(jax.jit, static_argnums=0)
+    def apply_stencils_petrovgalerkin(self, b: Array, P: BCOO) -> Array:
+        return self.S @ b @ P.T
+
+    @partial(jax.jit, static_argnums=0)
+    def apply_stencil_left(self, b: Array) -> Array:
+        return self.S @ b
+
+    @partial(jax.jit, static_argnums=0)
+    def apply_stencil_right(self, a: Array) -> Array:
+        return a @ self.S
+
+    def mass_matrix(self):
+        P: BCOO = self.orthogonal.mass_matrix()
+        T = matmat_bcoo(
+            (self.S * P.data[None, :]), self.S.T
+        ).data.reshape(
+            (self.N +1 - self.bcs.num_bcs(), -1)
+        )  # sparse @ sparse -> dense (yet sparse format), so need to pull it back to sparse
+        return sparse.BCOO.from_scipy_sparse(scipy_sparse.csr_matrix(T))
 
 
 if __name__ == "__main__":
@@ -118,13 +129,13 @@ if __name__ == "__main__":
 
     n = sp.Symbol("n", positive=True, integer=True)
     N = 14
-    biharmonic = {'left': {'D': 0, 'N': 0}, 'right': {'D': 0, 'N': 0}}
-    dirichlet = {'left': {'D': 0}, 'right': {'D': 0}}
+    biharmonic = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
+    dirichlet = {"left": {"D": 0}, "right": {"D": 0}}
     C = Composite(Chebyshev, N, dirichlet)
 
-    v = jax.random.normal(jax.random.PRNGKey(1), shape=(N, N))
+    v = jax.random.normal(jax.random.PRNGKey(1), shape=(N+1, N+1))
     g = C.S @ v @ C.S.T
-    g1 = apply_stencil_galerkin(C.S, v)
+    g1 = C.apply_stencil_galerkin(v)
 
     D = C.stencil_to_scipy_sparse()
     vn = v.__array__()

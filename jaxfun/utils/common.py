@@ -6,6 +6,7 @@ import jax
 from jax import Array
 import jax.numpy as jnp
 from jax.experimental import sparse
+from jax.experimental.sparse import BCOO
 from scipy import sparse as scipy_sparse
 import sympy as sp
 
@@ -51,7 +52,12 @@ def evaluate(
 
 
 @jax.jit
-def matmat(a: Array, b: Array) -> Array:
+def matmat(a: Union[Array, BCOO], b: Union[Array, BCOO]) -> Array:
+    return a @ b
+
+
+@jax.jit
+def matmat_bcoo(a: BCOO, b: BCOO) -> BCOO:
     return a @ b
 
 

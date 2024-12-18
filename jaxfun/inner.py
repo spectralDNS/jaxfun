@@ -4,6 +4,7 @@ import jax.numpy as jnp
 from jaxfun.arguments import TestFunction
 from jaxfun.forms import get_basisfunctions, inspect_form
 from jaxfun.utils.common import matmat, from_dense
+from jaxfun.composite import Composite
 import sympy as sp
 
 
@@ -60,9 +61,9 @@ def inner(
         Pi = vo.evaluate_basis_derivative(xj, k=i)
         Pj = uo.evaluate_basis_derivative(xj, k=j)
         z = matmat(Pi.T * w[None, :], Pj)
-        if u.functionspace == v.functionspace:
+        if u.functionspace == v.functionspace and isinstance(u.functionspace, Composite):
             z = v.functionspace.apply_stencil_galerkin(z)
-        else:
+        elif isinstance(u.functionspace, Composite):
             z = v.functionspace.apply_stencils_petrovgalerkin(z, u.functionspace.S)
         A.append(z)
 

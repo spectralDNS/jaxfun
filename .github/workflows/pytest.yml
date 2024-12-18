@@ -26,4 +26,6 @@ jobs:
         python-version-file: "pyproject.toml"
 
     - name: Test with pytest
-      run: uv run pytest
+      run: |
+        uv run pytest
+        uv run pytest --float64

@@ -8,7 +8,7 @@ from jaxfun.Chebyshev import Chebyshev
 from jaxfun.Legendre import Legendre
 
 jnp.set_printoptions(4)
-jax.config.update("jax_enable_x64", True)
+#jax.config.update("jax_enable_x64", True)
 print("JAX running on", jax.devices()[0].platform.upper())
 
 N = 100

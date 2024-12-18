@@ -1,25 +1,61 @@
 from typing import NamedTuple
 from functools import partial
-import jax 
+from numbers import Number
+import copy
+import sympy as sp
+import jax
 from jax import Array
-from jaxfun.utils.common import Domain, jacn
+import jax.numpy as jnp
+from jaxfun.utils.common import jacn
+
+n = sp.Symbol("n", integer=True, positive=True)
+
+
+class Domain(NamedTuple):
+    lower: Number
+    upper: Number
+
+
+class BoundaryConditions(dict):
+    """Boundary conditions as a dictionary"""
+
+    def __init__(self, bc: dict, domain: Domain = None):
+        bcs = {"left": {}, "right": {}}
+        bcs.update(copy.deepcopy(bc))
+        dict.__init__(self, bcs)
+
+    def orderednames(self) -> list[str]:
+        return ["L" + bci for bci in sorted(self["left"].keys())] + [
+            "R" + bci for bci in sorted(self["right"].keys())
+        ]
+
+    def orderedvals(self) -> list[Number]:
+        ls = []
+        for lr in ("left", "right"):
+            for key in sorted(self[lr].keys()):
+                val = self[lr][key]
+                ls.append(val[1] if isinstance(val, (tuple, list)) else val)
+        return ls
+
+    def num_bcs(self) -> int:
+        return len(self.orderedvals())
 
 
 class BaseSpace:
-
     def __init__(
         self,
         N: int,
-        domain: NamedTuple = Domain(-1, 1),
+        domain: Domain = Domain(-1, 1),
     ):
         self.N = N
+        self.domain = domain
         self.bcs = None
         self.stencil = None
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, x: float, c: Array) -> float:
         raise NotImplementedError
-        
+
     def quad_points_and_weights(self, N: int = 0) -> Array:
         raise NotImplementedError
 
@@ -38,3 +74,4 @@ class BaseSpace:
     @partial(jax.jit, static_argnums=0)
     def eval_basis_functions(self, x: float) -> Array:
         raise NotImplementedError
+    

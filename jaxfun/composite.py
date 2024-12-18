@@ -1,4 +1,3 @@
-from typing import NamedTuple
 from functools import partial
 import sympy as sp
 from scipy import sparse as scipy_sparse
@@ -7,17 +6,9 @@ import jax.numpy as jnp
 from jax import Array
 from jax.experimental import sparse
 from jax.experimental.sparse import BCOO
-from jaxfun.utils.common import (
-    matmat,
-    Domain,
-    BoundaryConditions,
-    get_stencil_matrix,
-    matmat_bcoo,
-)
-from jaxfun.Basespace import BaseSpace
-
-
-n = sp.Symbol("n", integer=True, positive=True)
+from jaxfun.Basespace import BaseSpace, n, Domain, BoundaryConditions
+from jaxfun.Jacobi import Jacobi
+from jaxfun.utils.common import matmat
 
 
 class Composite(BaseSpace):
@@ -32,24 +23,18 @@ class Composite(BaseSpace):
         orthogonal,
         N: int,
         bcs: dict,
-        domain: NamedTuple = Domain(-1, 1),
+        domain: Domain = Domain(-1, 1),
         stencil: dict = None,
         alpha: float = 0,
         beta: float = 0,
+        scaling: sp.Expr = sp.S(1),
     ):
         BaseSpace.__init__(self, N, domain)
         self.orthogonal = orthogonal(N, domain=domain, alpha=alpha, beta=beta)
         self.bcs = BoundaryConditions(bcs, domain=domain)
         if stencil is None:
-            stencil = get_stencil_matrix(
-                self.bcs,
-                self.orthogonal.__class__.__name__,
-                self.orthogonal.alpha,
-                self.orthogonal.beta,
-                self.orthogonal.gn,
-            )
-            assert len(stencil) == self.bcs.num_bcs()
-        self.stencil = {(si[0]): si[1] for si in sorted(stencil.items())}
+            stencil = get_stencil_matrix(self.bcs, self.orthogonal)
+        self.stencil = {(si[0]): si[1] / scaling for si in sorted(stencil.items())}
         self.S = BCOO.from_scipy_sparse(self.stencil_to_scipy_sparse())
 
     @partial(jax.jit, static_argnums=0)
@@ -82,7 +67,11 @@ class Composite(BaseSpace):
         k = jnp.arange(self.N)
         return scipy_sparse.diags(
             [
-                jnp.atleast_1d(sp.lambdify(n, val, modules="jax")(k)).astype(float)
+                jnp.atleast_1d(
+                    sp.lambdify(
+                        n, val, modules=["jax", {"gamma": jax.scipy.special.gamma}]
+                    )(k)
+                ).astype(float)
                 for val in self.stencil.values()
             ],
             [key for key in self.stencil.keys()],
@@ -111,29 +100,79 @@ class Composite(BaseSpace):
 
     def mass_matrix(self):
         P: BCOO = self.orthogonal.mass_matrix()
-        T = matmat_bcoo(
-            (self.S * P.data[None, :]), self.S.T
-        ).data.reshape(
-            (self.N +1 - self.bcs.num_bcs(), -1)
-        )  # sparse @ sparse -> dense (yet sparse format), so need to pull it back to sparse
+        T = matmat((self.S * P.data[None, :]), self.S.T).data.reshape(
+            (self.N + 1 - self.bcs.num_bcs(), -1)
+        )  # sparse @ sparse -> dense (yet sparse format), so need to remove zeros
         return sparse.BCOO.from_scipy_sparse(scipy_sparse.csr_matrix(T))
 
 
-if __name__ == "__main__":
-    jax.config.update("jax_enable_x64", True)
+def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
+    r"""Return stencil matrix as dictionary of keys, values being diagonals
+    and sympy expressions.
 
+    For example, the Neumann basis functions for Chebyshev polynomials are
+
+    .. math::
+        \psi_i = T_i - \frac{i^2}{i^2+4i+4}T_{i+2}
+
+    Hence, we get
+
+    Example
+    -------
+    >>> from jaxfun import Chebyshev, Composite
+    >>> C = Composite(Chebyshev.Chebyshev, 10, {'left': {'N': 0}, 'right': {'N': 0}})
+    >>> C.stencil
+    {0: 1, 2: -n**2/(n**2 + 4*n + 4)}
+    """
+    bc = {"D": 0, "N": 1, "N2": 2, "N3": 3, "N4": 4}
+    lr = {"L": 0, "R": 1}
+    lra = {"L": "left", "R": "right"}
+    s = []
+    r = []
+    for key in bcs.orderednames():
+        k, v = key[0], key[1:]
+        if v in "WR":  # Robin conditions
+            k0 = 0 if v == "R" else 1
+            alfa = bcs[lra[k]][v][0]
+            f = [
+                orthogonal.bnd_values(k=k0)[lr[k]],
+                orthogonal.bnd_values(k=k0 + 1)[lr[k]],
+            ]
+            s.append(
+                [
+                    sp.simplify(f[0](n + j) + alfa * f[1](n + j))
+                    for j in range(1, 1 + bcs.num_bcs())
+                ]
+            )
+            r.append(-sp.simplify(f[0](n) + alfa * f[1](n)))
+        else:
+            f = orthogonal.bnd_values(k=bc[v])[lr[k]]
+            s.append([sp.simplify(f(n + j)) for j in range(1, 1 + bcs.num_bcs())])
+            r.append(-sp.simplify(f(n)))
+    A = sp.Matrix(s)
+    b = sp.Matrix(r)
+    M = sp.simplify(A.solve(b))
+    d = {0: 1}
+    for i, s in enumerate(M):
+        if not s == 0:
+            d[i + 1] = s
+    return d
+
+
+if __name__ == "__main__":
     from Chebyshev import Chebyshev
     from Legendre import Legendre
     import matplotlib.pyplot as plt
     from jaxfun.inner import inner
+    from jaxfun.arguments import TestFunction, TrialFunction, x
 
     n = sp.Symbol("n", positive=True, integer=True)
-    N = 14
+    N = 50
     biharmonic = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
     dirichlet = {"left": {"D": 0}, "right": {"D": 0}}
     C = Composite(Chebyshev, N, dirichlet)
 
-    v = jax.random.normal(jax.random.PRNGKey(1), shape=(N+1, N+1))
+    v = jax.random.normal(jax.random.PRNGKey(1), shape=(N + 1, N + 1))
     g = C.S @ v @ C.S.T
     g1 = C.apply_stencil_galerkin(v)
 
@@ -145,10 +184,12 @@ if __name__ == "__main__":
     assert jnp.linalg.norm(gn - g1) < 1e-7
 
     # Galerkin (dense)
-    D = inner((C, 0), (C, 2), sparse=True)
+    u = TrialFunction(x, C)
+    v = TestFunction(x, C)
+    D = inner(v * sp.diff(u, x, 2), sparse=True, sparse_tol=100)
 
     # Petrov-Galerkin method (https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
-    G = Composite(Chebyshev, N, dirichlet)
+    G = Composite(Chebyshev, N, dirichlet, scaling=n + 1)
     PG = Composite(
         Chebyshev,
         N + 2,
@@ -159,7 +200,7 @@ if __name__ == "__main__":
             4: 1 / (2 * sp.pi * (n + 2) * (n + 3)),
         },
     )
-    L = Composite(Legendre, N, dirichlet)
+    L = Composite(Legendre, N, dirichlet, scaling=n + 1)
     LG = Composite(
         Legendre,
         N + 2,
@@ -170,9 +211,16 @@ if __name__ == "__main__":
             4: 1 / (2 * (2 * n + 7)),
         },
     )
-    A0 = inner((PG, 0), (G, 2), sparse=True)  # bidiagonal
-    A1 = inner((LG, 0), (L, 2), sparse=True)  # bidiagonal
-
+    A0 = inner(
+        TestFunction(x, PG) * sp.diff(TrialFunction(x, G), x, 2),
+        sparse=True,
+        sparse_tol=1000,
+    )  # bidiagonal
+    A1 = inner(
+        TestFunction(x, LG) * sp.diff(TrialFunction(x, L), x, 2),
+        sparse=True,
+        sparse_tol=1000,
+    )  # bidiagonal
     fig, (ax0, ax1, ax2) = plt.subplots(1, 3, sharey=True)
     ax0.spy(D.todense())
     ax0.set_title("Galerkin Cheb")

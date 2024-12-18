@@ -1,17 +1,14 @@
 from functools import partial
-
 import jax
 import jax.numpy as jnp
 from jax import Array
-from jaxfun.utils.fastgl import leggauss
-from jaxfun.Jacobi import Jacobi, Domain, NamedTuple
 import sympy as sp
-
-n = sp.Symbol("n", integer=True, positive=True)
+from jaxfun.utils.fastgl import leggauss
+from jaxfun.Jacobi import Jacobi, Domain, n
 
 
 class Legendre(Jacobi):
-    def __init__(self, N: int, domain: NamedTuple = Domain(-1, 1), **kw):
+    def __init__(self, N: int, domain: Domain = Domain(-1, 1), **kw):
         Jacobi.__init__(self, N, domain, 0, 0)
 
     @partial(jax.jit, static_argnums=0)

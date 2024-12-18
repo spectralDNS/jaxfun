@@ -1,5 +1,6 @@
+from typing import Callable, Union
 from functools import partial
-from typing import NamedTuple
+from numbers import Number
 import sympy as sp
 from scipy.special import roots_jacobi
 from scipy import sparse as scipy_sparse
@@ -7,11 +8,12 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 from jax.experimental.sparse import BCOO
-from jaxfun.utils.common import Domain
-from jaxfun.Basespace import BaseSpace
+from jaxfun.Basespace import BaseSpace, Domain, n
 
-n = sp.Symbol("n", integer=True, positive=True)
+
 alf, bet = sp.symbols("a,b", real=True)
+
+# ruff: noqa: F706
 
 
 class Jacobi(BaseSpace):
@@ -20,7 +22,7 @@ class Jacobi(BaseSpace):
     def __init__(
         self,
         N: int,
-        domain: NamedTuple = Domain(-1, 1),
+        domain: Domain = Domain(-1, 1),
         alpha: float = 0,
         beta: float = 0,
     ):
@@ -30,8 +32,7 @@ class Jacobi(BaseSpace):
         self.orthogonal = self
 
     # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
-    @staticmethod
-    def gn(alpha, beta, n):
+    def gn(self, n):
         return 1
 
     @partial(jax.jit, static_argnums=0)
@@ -85,7 +86,7 @@ class Jacobi(BaseSpace):
         return c0 + c1 * ((a + 1) + (a + b + 2) * (x - 1) / 2)
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.N+1 if N == 0 else N+1
+        N = self.N + 1 if N == 0 else N + 1
         return jnp.array(roots_jacobi(N, self.alpha, self.beta))
 
     @partial(jax.jit, static_argnums=(0, 2))
@@ -131,79 +132,101 @@ class Jacobi(BaseSpace):
         return jnp.hstack((x0, xs))
 
     def norm_squared(self) -> Array:
-        return sp.lambdify(n, h(self.alpha, self.beta, n, 0, self.gn), modules="jax")(
-            jnp.arange(self.N+1)
+        return sp.lambdify(n, self.h(n, 0, self.gn), modules="jax")(
+            jnp.arange(self.N + 1)
         )
 
     def mass_matrix(self):
         return BCOO.from_scipy_sparse(
-            scipy_sparse.diags((self.norm_squared(),), (0,), shape=(self.N+1, self.N+1))
+            scipy_sparse.diags(
+                (self.norm_squared(),), (0,), shape=(self.N + 1, self.N + 1)
+            )
+        )
+
+    def bnd_values(
+        self,
+        k: int = 0
+    ) -> tuple[
+        Callable[[Union[int, sp.Symbol]], sp.Expr],
+        Callable[[Union[int, sp.Symbol]], sp.Expr],
+    ]:
+        """Return lambda function for computing boundary values"""
+        alpha, beta = self.alpha, self.beta
+        
+        def gam(i: int) -> sp.Expr:
+            if k > 0:
+                return sp.rf(i + alpha + beta + 1, k) * sp.Rational(1, 2 ** (k))
+            return 1
+
+        return (
+            lambda i: self.gn(i)
+            * (-1) ** (k + i)
+            * gam(i)
+            * sp.binomial(i + beta, i - k),
+            lambda i: self.gn(i) * gam(i) * sp.binomial(i + alpha, i - k),
         )
 
 
-def psi(alpha, beta, n, k):
-    r"""Normalization factor for
+    def psi(self, n, k):
+        r"""Normalization factor for
 
-    .. math::
+        .. math::
 
-        \partial^k P^{(\alpha, \beta)}_n = \psi^{(k,\alpha,\beta)}_{n} P^{(\alpha+k,\beta+k)}_{n-k}, \quad n \ge k, \quad (*)
+            \partial^k P^{(\alpha, \beta)}_n = \psi^{(k,\alpha,\beta)}_{n} P^{(\alpha+k,\beta+k)}_{n-k}, \quad n \ge k, \quad (*)
 
-    where :math:`\partial^k` represents the :math:`k`'th derivative
+        where :math:`\partial^k` represents the :math:`k`'th derivative
 
-    Parameters
-    ----------
-    alpha, beta : numbers
-        Jacobi parameters
-    n, k : int
-        Parameters in (*)
-    """
-    return sp.rf(n + alpha + beta + 1, k) / 2**k
+        Parameters
+        ----------
+        n, k : int
+            Parameters in (*)
+        """
+        return sp.rf(n + self.alpha + self.beta + 1, k) / 2**k
 
 
-def gamma(alpha, beta, n):
-    r"""Return normalization factor :math:`h_n` for inner product of Jacobi polynomials
+    @staticmethod
+    def gamma(alpha, beta, n):
+        r"""Return normalization factor :math:`h_n` for inner product of Jacobi polynomials
 
-    .. math::
+        .. math::
 
-        h_n = (P^{(\alpha,\beta)}_n, P^{(\alpha,\beta)}_n)_{\omega^{(\alpha,\beta)}}
+            h_n = (P^{(\alpha,\beta)}_n, P^{(\alpha,\beta)}_n)_{\omega^{(\alpha,\beta)}}
 
-    Parameters
-    ----------
-    alpha, beta : numbers
-        Jacobi parameters
-    n : int
-        Index
-    """
-    f = (
-        sp.rf(n + 1, alf)
-        / sp.rf(n + bet + 1, alf)
-        * 2 ** (alf + bet + 1)
-        / (2 * n + alf + bet + 1)
-    )
-    return sp.simplify(f.subs([(alf, alpha), (bet, beta)]))
+        Parameters
+        ----------
+        alpha, beta : numbers
+            Jacobi parameters
+        n : int
+            Index
+        """
+        f = (
+            sp.rf(n + 1, alf)
+            / sp.rf(n + bet + 1, alf)
+            * 2 ** (alf + bet + 1)
+            / (2 * n + alf + bet + 1)
+        )
+        return sp.simplify(f.subs([(alf, alpha), (bet, beta)]))
 
 
-def h(alpha, beta, n, k, gn=1):
-    r"""Return normalization factor :math:`h^{(k)}_n` for inner product of derivatives of Jacobi polynomials
+    def h(self, n, k, gn=1):
+        r"""Return normalization factor :math:`h^{(k)}_n` for inner product of derivatives of Jacobi polynomials
 
-    .. math::
+        .. math::
 
-        Q_n(x) = g_n(x)P^{(\alpha,\beta)}_n(x) \\
-        h_n^{(k)} = (\partial^k Q_n, \partial^k Q_n)_{\omega^{(\alpha+k,\beta+k)}} \quad (*)
+            Q_n(x) = g_n(x)P^{(\alpha,\beta)}_n(x) \\
+            h_n^{(k)} = (\partial^k Q_n, \partial^k Q_n)_{\omega^{(\alpha+k,\beta+k)}} \quad (*)
 
-    where :math:`\partial^k` represents the :math:`k`'th derivative.
+        where :math:`\partial^k` represents the :math:`k`'th derivative.
 
-    Parameters
-    ----------
-    alpha, beta : numbers
-        Jacobi parameters
-    n : int
-        Index
-    k : int
-        For derivative of k'th order, see (*)
-    gn : scaling function, optional
-        Chebyshev of first and second kind use cn and un, respectively.
-        Legendre uses gn=1.
-    """
-    f = gamma(alpha + k, beta + k, n - k) * (psi(alpha, beta, n, k)) ** 2
-    return f if gn == 1 else sp.simplify(gn(alpha, beta, n) ** 2 * f)
+        Parameters
+        ----------
+        n : int
+            Index
+        k : int
+            For derivative of k'th order, see (*)
+        gn : scaling function, optional
+            Chebyshev of first and second kind use cn and un, respectively.
+            Legendre uses gn=1.
+        """
+        f = self.gamma(self.alpha + k, self.beta + k, n - k) * (self.psi(n, k)) ** 2
+        return sp.simplify(self.gn(n) ** 2 * f)

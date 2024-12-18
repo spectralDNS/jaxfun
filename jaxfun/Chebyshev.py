@@ -1,22 +1,18 @@
 from functools import partial
-from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 from jax import Array
 from jaxfun.Jacobi import Jacobi, Domain
 import sympy as sp
 
-n = sp.Symbol("n", integer=True, positive=True)
-
 
 class Chebyshev(Jacobi):
-    def __init__(self, N: int, domain: NamedTuple = Domain(-1, 1), **kw):
+    def __init__(self, N: int, domain: Domain = Domain(-1, 1), **kw):
         Jacobi.__init__(self, N, domain, -sp.S.Half, -sp.S.Half)
 
     # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
-    @staticmethod
-    def gn(alpha, beta, n):
-        return sp.S(1) / sp.jacobi(n, alpha, beta, 1)
+    def gn(self, n):
+        return sp.S(1) / sp.jacobi(n, self.alpha, self.beta, 1)
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, x: float, c: Array) -> float:
@@ -59,6 +55,7 @@ class Chebyshev(Jacobi):
 
         c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (c0, c1))
         return c0 + c1 * x
+
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
         N = self.N+1 if N == 0 else N+1

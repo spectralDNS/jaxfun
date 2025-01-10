@@ -5,6 +5,7 @@ from sympy.printing.pretty.stringpict import prettyForm
 from jaxfun.Basespace import BaseSpace
 from jaxfun.tensorproductspace import TensorProductSpace, VectorTensorProductSpace
 from jaxfun.coordinates import CoordSys
+from jaxfun.coordinates import latex_symbols
 
 x, y, z = sp.symbols("x,y,z", real=True)
 
@@ -34,6 +35,11 @@ class BasisFunction(Function):
 
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
+
+    def _latex(self, printer: Any = None) -> str:
+        return "".join(
+            (latex_symbols[self.fun_str], "(", latex_symbols[self.args[0].name], ")")
+        )
 
 
 class trial(BasisFunction):
@@ -84,10 +90,17 @@ def _get_computational_function(
 
 
 class TestFunction(Function):
-    def __init__(self, V: BaseSpace | TensorProductSpace | VectorTensorProductSpace) -> None:
+    def __init__(
+        self,
+        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace,
+        name: str = None,
+    ) -> None:
         self.functionspace = V
+        self.name = name
 
-    def __new__(cls, V: BaseSpace | TensorProductSpace | VectorTensorProductSpace) -> Function:
+    def __new__(
+        cls, V: BaseSpace | TensorProductSpace | VectorTensorProductSpace
+    ) -> Function:
         coors = V.system
         obj = Function.__new__(cls, *(coors._cartesian_xyz + [sp.Symbol(V.name)]))
         return obj
@@ -96,15 +109,19 @@ class TestFunction(Function):
         return _get_computational_function("test", self.functionspace)
 
     def __str__(self) -> str:
+        name = self.name if self.name is not None else "TestFunction"
         return "".join(
             (
-                "TestFunction(",
+                name,
                 ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
                 "; ",
                 self.functionspace.name,
                 ")",
             )
         )
+
+    def _latex(self, printer: Any = None) -> str:
+        return self.__str__()
 
     def _pretty(self, printer: Any = None) -> str:
         return prettyForm(self.__str__())
@@ -114,10 +131,19 @@ class TestFunction(Function):
 
 
 class TrialFunction(Function):
-    def __init__(self, V: BaseSpace | TensorProductSpace | VectorTensorProductSpace) -> None:
+    def __init__(
+        self,
+        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace,
+        name: str = None,
+    ) -> None:
         self.functionspace = V
+        self.name = name
 
-    def __new__(cls, V: BaseSpace | TensorProductSpace | VectorTensorProductSpace) -> Function:
+    def __new__(
+        cls,
+        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace,
+        name: str = None,
+    ) -> Function:
         coors = V.system
         obj = Function.__new__(cls, *(coors._cartesian_xyz + [sp.Symbol(V.name)]))
         return obj
@@ -126,15 +152,20 @@ class TrialFunction(Function):
         return _get_computational_function("trial", self.functionspace)
 
     def __str__(self) -> str:
+        name = self.name if self.name is not None else "TrialFunction"
         return "".join(
             (
-                "TrialFunction(",
+                name,
+                "(",
                 ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
                 "; ",
                 self.functionspace.name,
                 ")",
             )
         )
+
+    def _latex(self, printer: Any = None) -> str:
+        return self.__str__()
 
     def _pretty(self, printer: Any = None) -> str:
         return prettyForm(self.__str__())
@@ -162,3 +193,6 @@ class SpatialFunction(Function):
 
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
+
+    def _latex(self, printer: Any = None) -> str:
+        return latex_symbols[self.name] + str(tuple(self.args))

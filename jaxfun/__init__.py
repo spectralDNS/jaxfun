@@ -5,3 +5,7 @@ from jaxfun.composite import Composite
 from jaxfun.utils import common, fastgl
 from jaxfun.arguments import TestFunction, TrialFunction
 from jaxfun.inner import inner
+from jaxfun.Basespace import BaseSpace
+from jaxfun.tensorproductspace import TensorProductSpace, VectorTensorProductSpace
+from jaxfun.operators import curl, divergence, gradient, Curl, Div, Grad, Dot
+from jaxfun.coordinates import get_CoordSys, CoordSys

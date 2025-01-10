@@ -3,15 +3,34 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 from jaxfun.Jacobi import Jacobi, Domain
+from jaxfun.coordinates import CoordSys
 import sympy as sp
+from sympy import Symbol, Expr 
 
 
 class Chebyshev(Jacobi):
-    def __init__(self, N: int, domain: Domain = Domain(-1, 1), **kw):
-        Jacobi.__init__(self, N, domain, -sp.S.Half, -sp.S.Half)
+    def __init__(
+        self,
+        N: int,
+        domain: Domain = Domain(-1, 1),
+        coordinates: CoordSys = None,
+        name: str = "Chebyshev",
+        fun_str: str = "T",
+        **kw,
+    ) -> None:
+        Jacobi.__init__(
+            self,
+            N,
+            domain,
+            coordinates,
+            name,
+            fun_str,
+            -sp.S.Half,
+            -sp.S.Half,
+        )
 
     # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
-    def gn(self, n):
+    def gn(self, n: Symbol) -> Expr:
         return sp.S(1) / sp.jacobi(n, self.alpha, self.beta, 1)
 
     @partial(jax.jit, static_argnums=0)
@@ -19,7 +38,7 @@ class Chebyshev(Jacobi):
         """
         Evaluate a Chebyshev series at points x.
 
-        .. math:: p(x) = c_0 * L_0(x) + c_1 * L_1(x) + ... + c_n * L_n(x)
+        .. math:: p(x) = c_0 * T_0(x) + T_1 * T_1(x) + ... + c_n * T_n(x)
 
         Parameters
         ----------
@@ -56,9 +75,8 @@ class Chebyshev(Jacobi):
         c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (c0, c1))
         return c0 + c1 * x
 
-
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.N+1 if N == 0 else N+1
+        N = self.N + 1 if N == 0 else N + 1
         return jnp.array(
             (
                 jnp.cos(jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)),

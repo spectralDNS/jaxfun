@@ -6,6 +6,7 @@ import numpy as np
 
 from jaxfun.Chebyshev import Chebyshev
 from jaxfun.Legendre import Legendre
+from jaxfun.utils.common import ulp 
 
 jnp.set_printoptions(4)
 #jax.config.update("jax_enable_x64", True)
@@ -49,7 +50,7 @@ def run_vandermonde(space) -> None:
             jnp.array(npfun(xn, N))
             - space.vandermonde(x)
         )
-        < 1e-8
+        < 100*ulp(1.)
     )
 
 

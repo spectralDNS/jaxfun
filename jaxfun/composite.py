@@ -1,5 +1,6 @@
 from functools import partial
 import sympy as sp
+from sympy import Number
 from scipy import sparse as scipy_sparse
 import jax
 import jax.numpy as jnp
@@ -9,6 +10,7 @@ from jax.experimental.sparse import BCOO
 from jaxfun.Basespace import BaseSpace, n, Domain, BoundaryConditions
 from jaxfun.Jacobi import Jacobi
 from jaxfun.utils.common import matmat
+from jaxfun.coordinates import CoordSys
 
 
 class Composite(BaseSpace):
@@ -20,16 +22,21 @@ class Composite(BaseSpace):
 
     def __init__(
         self,
-        orthogonal,
+        orthogonal: BaseSpace,
         N: int,
         bcs: dict,
         domain: Domain = Domain(-1, 1),
+        name: str = "Composite",
+        fun_str: str = "phi",
+        coordinates: CoordSys = None,
         stencil: dict = None,
-        alpha: float = 0,
-        beta: float = 0,
+        alpha: Number = 0,
+        beta: Number = 0,
         scaling: sp.Expr = sp.S(1),
-    ):
-        BaseSpace.__init__(self, N, domain)
+    ) -> None:
+        BaseSpace.__init__(
+            self, N, domain, coordinates=coordinates, name=name, fun_str=fun_str
+        )
         self.orthogonal = orthogonal(N, domain=domain, alpha=alpha, beta=beta)
         self.bcs = BoundaryConditions(bcs, domain=domain)
         if stencil is None:
@@ -60,10 +67,10 @@ class Composite(BaseSpace):
         P: Array = self.orthogonal.eval_basis_functions(x)
         return self.apply_stencil_left(P)
 
-    def get_stencil_row(self, i: int):
+    def get_stencil_row(self, i: int) -> Array:
         return self.S[i].data[: len(self.stencil)]
 
-    def stencil_to_scipy_sparse(self):
+    def stencil_to_scipy_sparse(self) -> scipy_sparse.spmatrix:
         k = jnp.arange(self.N)
         return scipy_sparse.diags(
             [
@@ -77,6 +84,10 @@ class Composite(BaseSpace):
             [key for key in self.stencil.keys()],
             shape=(self.N + 1 - self.bcs.num_bcs(), self.N + 1),
         )
+
+    @property
+    def reference_domain(self) -> Domain:
+        return self.orthogonal.reference_domain
 
     @partial(jax.jit, static_argnums=0)
     def to_orthogonal(self, a: Array) -> Array:
@@ -96,9 +107,9 @@ class Composite(BaseSpace):
 
     @partial(jax.jit, static_argnums=0)
     def apply_stencil_right(self, a: Array) -> Array:
-        return a @ self.S
+        return a @ self.S.T
 
-    def mass_matrix(self):
+    def mass_matrix(self) -> BCOO:
         P: BCOO = self.orthogonal.mass_matrix()
         T = matmat((self.S * P.data[None, :]), self.S.T).data.reshape(
             (self.N + 1 - self.bcs.num_bcs(), -1)

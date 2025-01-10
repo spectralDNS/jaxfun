@@ -1,4 +1,3 @@
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -6,8 +5,6 @@ import pytest
 from jaxfun.Chebyshev import Chebyshev
 from jaxfun.Legendre import Legendre
 from jaxfun.utils.common import evaluate, ulp
-
-#jax.config.update("jax_enable_x64", True)
 
 
 # Add pytest fixtures for constants
@@ -55,7 +52,7 @@ def test_vandermonde(space, x: jnp.ndarray, xn: np.ndarray, N: int) -> None:
     }[space.__class__.__name__]
     jax_res = space.vandermonde(x)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
-    assert diff < 10*ulp(1.)
+    assert diff < 10 * ulp(1.0)
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
@@ -69,7 +66,7 @@ def test_evaluate(
     }[space.__class__.__name__]
     jax_res = space.evaluate(x, c)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
-    assert diff < 10*ulp(1.)
+    assert diff < 10 * ulp(1.0)
 
 
 @pytest.mark.parametrize("k", (1, 2, 3))
@@ -93,7 +90,7 @@ def test_evaluate_basis_derivative(
         np_res = np.dot(np_res, D)
     jax_res = space.evaluate_basis_derivative(x, k=k)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
-    assert diff < 10**(k+2)*ulp(1.)
+    assert diff < 10 ** (k + 2) * ulp(1.0)
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))

@@ -5,11 +5,20 @@ from jax import Array
 import sympy as sp
 from jaxfun.utils.fastgl import leggauss
 from jaxfun.Jacobi import Jacobi, Domain, n
+from jaxfun.coordinates import CoordSys
 
 
 class Legendre(Jacobi):
-    def __init__(self, N: int, domain: Domain = Domain(-1, 1), **kw):
-        Jacobi.__init__(self, N, domain, 0, 0)
+    def __init__(
+        self,
+        N: int,
+        domain: Domain = Domain(-1, 1),
+        coordinates: CoordSys = None,
+        name: str = "Legendre",
+        fun_str: str = "P",
+        **kw,
+    ) -> None:
+        Jacobi.__init__(self, N, domain, coordinates, name, fun_str, 0, 0)
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, x: float, c: Array) -> float:
@@ -56,7 +65,7 @@ class Legendre(Jacobi):
         return c0 + c1 * x
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.N+1 if N == 0 else N+1
+        N = self.N + 1 if N == 0 else N + 1
         return leggauss(N)
 
     @partial(jax.jit, static_argnums=(0, 2))
@@ -88,4 +97,4 @@ class Legendre(Jacobi):
         return jnp.hstack((x0, xs))
 
     def norm_squared(self) -> Array:
-        return sp.lambdify(n, 2 / (2*n+1), modules='jax')(jnp.arange(self.N+1))
+        return sp.lambdify(n, 2 / (2 * n + 1), modules="jax")(jnp.arange(self.N + 1))

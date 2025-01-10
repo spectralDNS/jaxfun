@@ -1,6 +1,7 @@
 from typing import Union
 import sympy as sp
-from jaxfun.arguments import TestFunction, TrialFunction
+from jaxfun.arguments import TestFunction
+from jaxfun.arguments import TrialFunction
 
 
 def get_basisfunctions(
@@ -18,6 +19,7 @@ def get_basisfunctions(
 def inspect_form(a: sp.Expr) -> list[list[sp.Expr], list[sp.Expr]]:
     num_test = a.count(TestFunction)
     num_trial = a.count(TrialFunction)
+    a = a.doit()
     aforms = []
     bforms = []
     if num_test > 0 and num_trial > 0:

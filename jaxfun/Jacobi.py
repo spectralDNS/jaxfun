@@ -1,7 +1,7 @@
 from typing import Callable, Union
 from functools import partial
-from numbers import Number
 import sympy as sp
+from sympy import Number, Symbol, Expr
 from scipy.special import roots_jacobi
 from scipy import sparse as scipy_sparse
 import jax
@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from jax import Array
 from jax.experimental.sparse import BCOO
 from jaxfun.Basespace import BaseSpace, Domain, n
-
+from jaxfun.coordinates import CoordSys
 
 alf, bet = sp.symbols("a,b", real=True)
 
@@ -23,16 +23,22 @@ class Jacobi(BaseSpace):
         self,
         N: int,
         domain: Domain = Domain(-1, 1),
-        alpha: float = 0,
-        beta: float = 0,
-    ):
-        BaseSpace.__init__(self, N, domain)
+        coordinates: CoordSys = None,
+        name: str = "Jacobi",
+        fun_str: str = "J",
+        alpha: Number = 0,
+        beta: Number = 0,
+    ) -> None:
+        BaseSpace.__init__(self, N, domain, coordinates, name, fun_str)
         self.alpha = alpha
         self.beta = beta
         self.orthogonal = self
+        self.stencil = {0: 1}
+        self.name = name
+        self.S = BCOO.from_scipy_sparse(scipy_sparse.diags((1,), (0,), (N + 1, N + 1)))
 
     # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
-    def gn(self, n):
+    def gn(self, n: Symbol | Number):
         return 1
 
     @partial(jax.jit, static_argnums=0)
@@ -136,24 +142,43 @@ class Jacobi(BaseSpace):
             jnp.arange(self.N + 1)
         )
 
-    def mass_matrix(self):
+    def mass_matrix(self) -> BCOO:
         return BCOO.from_scipy_sparse(
             scipy_sparse.diags(
                 (self.norm_squared(),), (0,), shape=(self.N + 1, self.N + 1)
             )
         )
 
+    @partial(jax.jit, static_argnums=0)
+    def apply_stencil_galerkin(self, b: Array) -> Array:
+        return b
+
+    @partial(jax.jit, static_argnums=0)
+    def apply_stencils_petrovgalerkin(self, b: Array, P: BCOO) -> Array:
+        return b @ P.T
+
+    @partial(jax.jit, static_argnums=0)
+    def apply_stencil_left(self, b: Array) -> Array:
+        return b
+
+    @partial(jax.jit, static_argnums=0)
+    def apply_stencil_right(self, a: Array) -> Array:
+        return a
+
+    @property
+    def reference_domain(self) -> Domain:
+        return Domain(-1, 1)
+
     def bnd_values(
-        self,
-        k: int = 0
+        self, k: int = 0
     ) -> tuple[
-        Callable[[Union[int, sp.Symbol]], sp.Expr],
-        Callable[[Union[int, sp.Symbol]], sp.Expr],
+        Callable[[Union[int, sp.Symbol]], Expr],
+        Callable[[Union[int, sp.Symbol]], Expr],
     ]:
         """Return lambda function for computing boundary values"""
         alpha, beta = self.alpha, self.beta
-        
-        def gam(i: int) -> sp.Expr:
+
+        def gam(i: int) -> Expr:
             if k > 0:
                 return sp.rf(i + alpha + beta + 1, k) * sp.Rational(1, 2 ** (k))
             return 1
@@ -166,8 +191,7 @@ class Jacobi(BaseSpace):
             lambda i: self.gn(i) * gam(i) * sp.binomial(i + alpha, i - k),
         )
 
-
-    def psi(self, n, k):
+    def psi(self, n: int, k: int) -> Expr:
         r"""Normalization factor for
 
         .. math::
@@ -183,9 +207,8 @@ class Jacobi(BaseSpace):
         """
         return sp.rf(n + self.alpha + self.beta + 1, k) / 2**k
 
-
     @staticmethod
-    def gamma(alpha, beta, n):
+    def gamma(alpha: Number, beta: Number, n: int) -> Expr:
         r"""Return normalization factor :math:`h_n` for inner product of Jacobi polynomials
 
         .. math::
@@ -207,8 +230,7 @@ class Jacobi(BaseSpace):
         )
         return sp.simplify(f.subs([(alf, alpha), (bet, beta)]))
 
-
-    def h(self, n, k, gn=1):
+    def h(self, n: Number, k: int) -> Expr:
         r"""Return normalization factor :math:`h^{(k)}_n` for inner product of derivatives of Jacobi polynomials
 
         .. math::
@@ -224,9 +246,6 @@ class Jacobi(BaseSpace):
             Index
         k : int
             For derivative of k'th order, see (*)
-        gn : scaling function, optional
-            Chebyshev of first and second kind use cn and un, respectively.
-            Legendre uses gn=1.
         """
         f = self.gamma(self.alpha + k, self.beta + k, n - k) * (self.psi(n, k)) ** 2
         return sp.simplify(self.gn(n) ** 2 * f)

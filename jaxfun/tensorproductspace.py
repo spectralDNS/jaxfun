@@ -14,7 +14,6 @@ class TensorProductSpace:
     ) -> None:
         from jaxfun.arguments import CartCoordSys
         self.spaces = spaces
-        self.system = coordinates
         self.name = name
         self.system = CartCoordSys[len(spaces)] if coordinates is None else coordinates
         self.tensorname = tensor_product_symbol.join([b.name for b in spaces])
@@ -27,6 +26,10 @@ class TensorProductSpace:
     
     def __getitem__(self, i: int) -> BaseSpace:
         return self.spaces[i]
+    
+    @property
+    def rank(self):
+        return 0
 
 
 class VectorTensorProductSpace:
@@ -51,3 +54,7 @@ class VectorTensorProductSpace:
 
     def __getitem__(self, i: int) -> TensorProductSpace:
         return self.tensorspaces[i]
+
+    @property
+    def rank(self):
+        return 1

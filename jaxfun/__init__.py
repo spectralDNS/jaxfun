@@ -7,5 +7,5 @@ from jaxfun.arguments import TestFunction, TrialFunction
 from jaxfun.inner import inner
 from jaxfun.Basespace import BaseSpace
 from jaxfun.tensorproductspace import TensorProductSpace, VectorTensorProductSpace
-from jaxfun.operators import curl, divergence, gradient, Curl, Div, Grad, Dot
+from jaxfun.operators import curl, divergence, gradient, cross, dot, Curl, Div, Grad, Dot, Cross
 from jaxfun.coordinates import get_CoordSys, CoordSys

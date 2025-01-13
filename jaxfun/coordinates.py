@@ -255,7 +255,10 @@ class CoordSys(Basic):
         obj._name = name
 
         vector_names = list(vector_names)
-        latex_vects = [r"\mathbf{b_{%s}}" % (latex_symbols[x],) for x in variable_names]
+        if is_cartesian:
+            latex_vects = [r"\mathbf{{%s}}" %(x,) for x in vector_names]
+        else:
+            latex_vects = [r"\mathbf{b_{%s}}" % (latex_symbols[x],) for x in variable_names]
         pretty_vects = vector_names
 
         obj._vector_names = vector_names

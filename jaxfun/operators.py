@@ -4,13 +4,14 @@ import numpy as np
 from sympy import Expr
 from sympy.core import preorder_traversal
 from sympy.vector.vector import Vector
-from sympy.vector import Cross, VectorAdd, VectorMul, VectorZero
+from sympy.vector import VectorAdd, VectorMul, VectorZero
 from sympy.vector.operators import (
     Divergence,
     Gradient,
     _split_mul_args_wrt_coordsys,
 )
 from sympy.vector.operators import Curl as sympy_Curl
+from sympy.vector.vector import Cross as sympy_Cross
 from sympy.vector import Dot as sympy_Dot
 from sympy.core.add import Add
 from sympy.core.mul import Mul
@@ -69,9 +70,9 @@ def cross(vect1: Vector, vect2: Vector) -> Vector:
                 sign = 1 if ((n1 + 1) % 3 == n2) else -1
                 return sign * vect1._sys.base_vectors()[n3]
             else:
-                assert (
-                    len(vect1._sys.base_scalars()) == 3
-                ), "Can only compute cross product in 3D"
+                assert len(vect1._sys.base_scalars()) == 3, (
+                    "Can only compute cross product in 3D"
+                )
                 gt = vect1._sys.get_contravariant_metric_tensor()
                 sg = vect1._sys.sg
                 p = np.setxor1d(range(3), (vect1._id[0], vect2._id[0]))[0]
@@ -374,9 +375,51 @@ class Dot(sympy_Dot):
     def doit(self, **hints: dict[Any]) -> Expr:
         return dot(self._expr1.doit(), self._expr2.doit())
 
+    
+class Cross(sympy_Cross):
+    """
+    Represents unevaluated Cross product.
+
+    Examples
+    ========
+
+    >>> from sympy.vector import CoordSys3D, Cross
+    >>> R = CoordSys('R')
+    >>> v1 = R.i + R.j + R.k
+    >>> v2 = R.x * R.i + R.y * R.j + R.z * R.k
+    >>> Cross(v1, v2)
+    Cross(R.i + R.j + R.k, R.x*R.i + R.y*R.j + R.z*R.k)
+    >>> Cross(v1, v2).doit()
+    (-R.y + R.z)*R.i + (R.x - R.z)*R.j + (-R.x + R.y)*R.k
+
+    """
+
+    #def __new__(cls, expr1, expr2):
+    #    expr1 = sp.sympify(expr1)
+    #    expr2 = sp.sympify(expr2)
+    #    obj = Expr.__new__(cls, expr1, expr2)
+    #    obj._expr1 = expr1
+    #    obj._expr2 = expr2
+    #    return obj
+
+    def doit(self, **hints: dict[Any]) -> Expr:
+        return cross(self._expr1.doit(), self._expr2.doit())
+
+
 
 sp.vector.vector.dot = dot
 sp.vector.vector.cross = cross
 sp.vector.operators.gradient = gradient
 sp.vector.operators.curl = curl
 sp.vector.operators.divergence = divergence
+sp.vector.vector.Cross = Cross
+sp.vector.vector.Dot = Dot 
+sp.vector.operators.Curl = Curl 
+sp.vector.operators.Gradient = Grad
+sp.vector.operators.Divergence = Div
+
+sp.vector.Cross = Cross
+sp.vector.Dot = Dot 
+sp.vector.Curl = Curl 
+sp.vector.Gradient = Grad
+sp.vector.Divergence = Div

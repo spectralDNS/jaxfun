@@ -34,7 +34,6 @@ class Jacobi(BaseSpace):
         self.beta = beta
         self.orthogonal = self
         self.stencil = {0: 1}
-        self.name = name
         self.S = BCOO.from_scipy_sparse(scipy_sparse.diags((1,), (0,), (N + 1, N + 1)))
 
     # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)

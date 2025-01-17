@@ -37,12 +37,15 @@ class Composite(BaseSpace):
         BaseSpace.__init__(
             self, N, domain, coordinates=coordinates, name=name, fun_str=fun_str
         )
-        self.orthogonal = orthogonal(N, domain=domain, alpha=alpha, beta=beta)
+        self.orthogonal = orthogonal(N, domain=domain, alpha=alpha, beta=beta, coordinates=coordinates)
         self.bcs = BoundaryConditions(bcs, domain=domain)
         if stencil is None:
             stencil = get_stencil_matrix(self.bcs, self.orthogonal)
         self.stencil = {(si[0]): si[1] / scaling for si in sorted(stencil.items())}
         self.S = BCOO.from_scipy_sparse(self.stencil_to_scipy_sparse())
+
+    def quad_points_and_weights(self, N: int = 0) -> Array:
+        return self.orthogonal.quad_points_and_weights()
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, x: float, c: Array) -> float:

@@ -16,14 +16,13 @@ Solve::
 using curvilinear coordinates.
 
 """
-# ruff: noqa: E402
-import jax 
-jax.config.update('jax_enable_x64', True)
+import sys
+import os
 import sympy as sp
 import numpy as np
 from sympy.plotting import plot3d_parametric_line
 import jax.numpy as jnp 
-from jaxfun.utils.common import lambdify
+from jaxfun.utils.common import lambdify, ulp
 from jaxfun.Legendre import Legendre as space
 from jaxfun.composite import Composite
 from jaxfun.inner import inner
@@ -47,7 +46,7 @@ t = D.system.t # use the same coordinate as u and v
 
 ue = sp.sin(4*sp.pi*t)
 b = inner(-v*Div(Grad(ue)))
-#b = inner(-v*sg*sp.Derivative(ue, t, 2))
+#b = inner(-v*sp.Derivative(ue, t, 2))
 A = inner(-v*Div(Grad(u)), sparse=True)
 
 u_hat = jnp.linalg.solve(A.todense(), b)
@@ -56,9 +55,14 @@ xj = D.orthogonal.quad_points_and_weights()[0]
 uj = D.evaluate(xj, u_hat)
 uq = lambdify(t, ue)(xj)
 error = np.linalg.norm(uj-uq)
-print(f'curvilinear_poisson1D l2 error = {error:2.6e}')
+if 'pytest' in os.environ:
+    assert error < 1000*ulp(1)
+    sys.exit(1)
 
-x, y, z = D.system.expr_base_scalar_to_psi(D.system.rv)
+print(f'poisson1D_curv l2 error = {error:2.6e}')
+
+# For plotting, transform base_scalars to pure sympy symbols
+x, y, z = D.system.expr_base_scalar_to_psi(coors.rv)
 t = t.to_symbol()
 ue = D.system.expr_base_scalar_to_psi(ue)
 ax = plot3d_parametric_line((x, y, z, (t, -1, 1)), (x, y, z+ue, (t, -1, 1)))

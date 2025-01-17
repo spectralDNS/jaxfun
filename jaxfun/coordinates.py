@@ -282,14 +282,19 @@ class CoordSys(Basic):
             base_scalars.append(BaseScalar(i, obj, pretty_scalars[i], latex_scalars[i]))
         obj._psi = psi
         obj._cartesian_xyz = base_scalars if parent is None else parent._cartesian_xyz
-
+        
         obj._map_base_scalar_to_symbol = {k: v for k, v in zip(base_scalars, obj._psi)}
         obj._map_symbol_to_base_scalar = {k: v for k, v in zip(obj._psi, base_scalars)}
 
         position_vector = position_vector.xreplace(obj._map_symbol_to_base_scalar)
-        obj._map_xyz_to_psi = {
+        obj._map_xyz_to_base_scalar = {
             k: v for k, v in zip(obj._cartesian_xyz, position_vector)
         }
+
+        # Add doit to Cartesian coordinates, such that x, y, x are evaluated in computational space as x(psi), y(psi), z(psi)
+        if not is_cartesian:
+            for s in obj._cartesian_xyz:
+                s.doit = MethodType(lambda self, **hints: obj._map_xyz_to_base_scalar[self], s)
 
         obj._base_scalars = Tuple(*base_scalars)
         obj._position_vector = position_vector
@@ -318,11 +323,6 @@ class CoordSys(Basic):
 
         for k in obj._cartesian_xyz:
             setattr(obj, k.name, k)
-
-        # Add doit to Cartesian coordinates, such that x, y, x are evaluates in computational space as x(psi), y(psi), z(psi)
-        if not obj._is_cartesian:
-            for s in obj._cartesian_xyz:
-                s.doit = MethodType(lambda self, **hints: obj._map_xyz_to_psi[self], s)
 
         # Assign params
         obj._parent = parent
@@ -646,6 +646,7 @@ def get_CoordSys(
     assumptions: AssumptionKeys = True,
     replace: list[tuple] | tuple[tuple] = (),
     measure: Function = sp.count_ops,
+    cartesian_name: str = "R"
 ) -> CoordSys:
     """Return a curvilinear coordinate system.
 
@@ -687,7 +688,7 @@ def get_CoordSys(
         name,
         transformation,
         vector_names=vector_names,
-        parent=CartCoordSys[len(transformation.args[1])],
+        parent=CartCoordSys(cartesian_name)[len(transformation.args[1])],
         assumptions=assumptions,
         replace=replace,
         measure=measure,

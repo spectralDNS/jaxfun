@@ -1,12 +1,14 @@
 from typing import NamedTuple, Union
 from functools import partial
-from numbers import Number
+from sympy import Number
 import copy
 import sympy as sp
 import jax
 from jax import Array
+import jax.numpy as jnp
 from jaxfun.utils.common import jacn
 from jaxfun.coordinates import CoordSys
+from jaxfun.utils.common import lambdify
 
 n = sp.Symbol("n", integer=True, positive=True)  # index
 
@@ -48,17 +50,18 @@ class BaseSpace:
         domain: Domain = Domain(-1, 1),
         coordinates: CoordSys = None,
         name: str = None,
-        fun_str: str = 'psi'
+        fun_str: str = "psi",
     ) -> None:
         from jaxfun.arguments import CartCoordSys1D
+
         self.N = N
         self._domain = Domain(*domain)
         self.name = name
         self.fun_str = fun_str
-        self.system = CartCoordSys1D if coordinates is None else coordinates
+        self.system = CartCoordSys1D("N") if coordinates is None else coordinates
         self.bcs = None
         self.stencil = None
-        
+
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, x: float, c: Array) -> float:
         raise RuntimeError
@@ -96,10 +99,35 @@ class BaseSpace:
         c, d = self.reference_domain
         L = b - a
         R = d - c
-        return float(R / L) if abs(L - R) > 1e-12 else 1
+        return R / L if abs(L - R) > 1e-12 else 1
+
+    def map_expr_reference_domain(self, u: sp.Expr) -> sp.Expr:
+        """Return`u(x)` mapped to reference domain"""
+        x = u.free_symbols
+        if len(x) == 0:
+            return u
+        assert len(x) == 1
+        a = self.domain.lower
+        c = self.reference_domain.lower
+        d = self.domain_factor
+        x = x.pop()
+        return u.xreplace({x: c + (x - a) * d})
+
+    def map_expr_true_domain(self, u: sp.Expr) -> sp.Expr:
+        """Return reference point `x` mapped to true domain"""
+        x = u.free_symbols
+        if len(x) == 0:
+            return u
+        assert len(x) == 1
+        a = self.domain.lower
+        c = self.reference_domain.lower
+        d = self.domain_factor
+        x = x.pop()
+        return u.xreplace({x: a + (x - c) / d})
 
     def map_reference_domain(self, x: Union[sp.Symbol, Array]) -> Union[sp.Expr, Array]:
         """Return true point `x` mapped to reference domain"""
+
         if not self.domain == self.reference_domain:
             a = self.domain.lower
             c = self.reference_domain.lower
@@ -119,6 +147,24 @@ class BaseSpace:
             else:
                 x = a + (x - c) / self.domain_factor
         return x
+    
+    def mesh(self, kind: str = 'quadrature', N: int = 0) -> Array:
+        """Return mesh in the domain of self"""
+        if kind == 'quadrature':
+            return self.map_true_domain(self.quad_points_and_weights()[0])
+        elif kind == 'uniform':
+            a, b = self.domain
+            M = N if N != 0 else self.N
+            return jnp.linspace(float(a), float(b), M)
+
+    def cartesian_mesh(self, kind: str = 'quadrature', N: int = 0):
+        rv = self.system._position_vector
+        t = self.system.base_scalars()[0]
+        xj = self.mesh(kind, N)
+        mesh = []
+        for r in rv:
+            mesh.append(lambdify(t, r, modules="jax")(xj))
+        return tuple(mesh)            
 
     def __len__(self) -> int:
         return 1

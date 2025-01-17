@@ -59,9 +59,15 @@ def evaluate(
 ) -> Array:
     assert len(x) == len(axes)
     dim: int = len(c.shape)
-    for xi, ax in zip(x, axes):
-        axi: int = dim - 1 - ax
-        c = jax.vmap(fun, in_axes=(None, axi), out_axes=axi)(xi, c)
+    if dim == 2:
+        for xi, ax in zip(x, axes):
+            axi: int = dim - 1 - ax
+            c = jax.vmap(fun, in_axes=(None, axi), out_axes=axi)(xi, c)
+    else:
+        for i, (xi, ax) in enumerate(zip(x, axes)):
+            ax0, ax1 = jnp.setxor1d(jnp.arange(3), ax)
+            c = jax.vmap(jax.vmap(fun, in_axes=(None, ax0), out_axes=ax0), in_axes=(None, ax1), out_axes=ax1)(xi, c)
+    
     return c
 
 

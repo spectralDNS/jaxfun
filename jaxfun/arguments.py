@@ -2,7 +2,6 @@ from typing import Any
 import sympy as sp
 from sympy import Function, Symbol, Expr
 from sympy.printing.pretty.stringpict import prettyForm
-from sympy.core.function import UndefinedFunction, AppliedUndef
 from jaxfun.Basespace import BaseSpace
 from jaxfun.tensorproductspace import TensorProductSpace, VectorTensorProductSpace
 from jaxfun.coordinates import CoordSys
@@ -10,10 +9,10 @@ from jaxfun.coordinates import latex_symbols
 
 x, y, z = sp.symbols("x,y,z", real=True)
 
-CartCoordSys1D = CoordSys("N", sp.Lambda((x,), (x,)))
-CartCoordSys2D = CoordSys("N", sp.Lambda((x, y), (x, y)))
-CartCoordSys3D = CoordSys("N", sp.Lambda((x, y, z), (x, y, z)))
-CartCoordSys = {1: CartCoordSys1D, 2: CartCoordSys2D, 3: CartCoordSys3D}
+CartCoordSys1D = lambda name: CoordSys(name, sp.Lambda((x,), (x,)))
+CartCoordSys2D = lambda name: CoordSys(name, sp.Lambda((x, y), (x, y)))
+CartCoordSys3D = lambda name: CoordSys(name, sp.Lambda((x, y, z), (x, y, z)))
+CartCoordSys = lambda name: {1: CartCoordSys1D(name), 2: CartCoordSys2D(name), 3: CartCoordSys3D(name)}
 
 
 class BasisFunction(Function):

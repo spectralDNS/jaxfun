@@ -22,8 +22,8 @@ M = 20
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
 r, theta = sp.symbols('r,theta', real=True, positive=True)
 C = get_CoordSys('C', sp.Lambda((r, theta), (r*sp.cos(theta), r*sp.sin(theta))))
-D0 = Composite(Legendre, M, bcs, scaling=n + 1, domain=(sp.S.Half, 1), name="D", fun_str="psi")
-D1 = Composite(Legendre, M, bcs, scaling=n + 1, domain=(0, sp.pi/2), name="D", fun_str="psi")
+D0 = Composite(Legendre, M, bcs, scaling=n + 1, domain=(sp.S.Half, 1), name="D0", fun_str="psi")
+D1 = Composite(Legendre, M, bcs, scaling=n + 1, domain=(0, sp.pi/2), name="D1", fun_str="psi")
 T = TensorProductSpace((D0, D1), coordinates=C, name="T")
 v = TestFunction(T)
 u = TrialFunction(T)

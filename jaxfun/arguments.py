@@ -12,7 +12,11 @@ x, y, z = sp.symbols("x,y,z", real=True)
 CartCoordSys1D = lambda name: CoordSys(name, sp.Lambda((x,), (x,)))
 CartCoordSys2D = lambda name: CoordSys(name, sp.Lambda((x, y), (x, y)))
 CartCoordSys3D = lambda name: CoordSys(name, sp.Lambda((x, y, z), (x, y, z)))
-CartCoordSys = lambda name: {1: CartCoordSys1D(name), 2: CartCoordSys2D(name), 3: CartCoordSys3D(name)}
+CartCoordSys = lambda name: {
+    1: CartCoordSys1D(name),
+    2: CartCoordSys2D(name),
+    3: CartCoordSys3D(name),
+}
 
 
 class BasisFunction(Function):
@@ -90,6 +94,8 @@ def _get_computational_function(
 
 
 class TestFunction(Function):
+    __test__ = False  # prevent pytest from considering this class as a test case.
+
     def __init__(
         self,
         V: BaseSpace | TensorProductSpace | VectorTensorProductSpace,
@@ -125,10 +131,10 @@ class TestFunction(Function):
 
     def _latex(self, printer: Any = None) -> str:
         name = self.name if self.name is not None else "TestFunction"
-        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" %(name,)
+        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)
         return "".join(
             (
-                name,   
+                name,
                 "(",
                 ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
                 "; ",
@@ -180,10 +186,10 @@ class TrialFunction(Function):
 
     def _latex(self, printer: Any = None) -> str:
         name = self.name if self.name is not None else "TrialFunction"
-        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" %(name,)
+        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)
         return "".join(
             (
-                name,   
+                name,
                 "(",
                 ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
                 "; ",
@@ -201,7 +207,7 @@ class TrialFunction(Function):
 
 class ScalarFunction(Function):
     def __new__(cls, name: str, system: CoordSys) -> Function:
-        obj = Function.__new__(cls, *(system._cartesian_xyz), sp.Dummy())
+        obj = Function.__new__(cls, *(system._cartesian_xyz + [sp.Dummy()]))
         obj.system = system
         obj.name = name.lower()
         return obj
@@ -211,7 +217,11 @@ class ScalarFunction(Function):
         return Function(self.name.upper())(*self.system.base_scalars())
 
     def __str__(self) -> str:
-        return self.name + str(self.args[:-1])
+        return (
+            self.name + f"({self.args[0]})"
+            if len(self.args) == 2
+            else str(self.args[:-1])
+        )
 
     def _pretty(self, printer: Any = None) -> str:
         return prettyForm(self.__str__())
@@ -220,25 +230,32 @@ class ScalarFunction(Function):
         return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
-        return latex_symbols[self.name] + str(self.args[:-1])
+        return (
+            latex_symbols[self.name] + f"({self.args[0]})"
+            if len(self.args) == 2
+            else str(self.args[:-1])
+        )
 
 
 class VectorFunction(Function):
     def __new__(cls, name: str, system: CoordSys) -> Function:
-        obj = Function.__new__(cls, *(system._cartesian_xyz))
+        obj = Function.__new__(cls, *(system._cartesian_xyz + [sp.Dummy()]))
         obj.system = system
         obj.name = name.lower()
         return obj
 
     def __str__(self) -> str:
-        return self.name + str(self.args)
+        return self.name + str(self.args[:-1])
 
     def doit(self, **hints: dict) -> Function:
         """Return function in computational domain"""
         vn = self.system._variable_names
         return sp.vector.VectorAdd(
             *[
-                Function(self.name.upper() + f"_{latex_symbols[vn[i]]}")(*self.system.base_scalars()) * bi
+                Function(self.name.upper() + f"_{latex_symbols[vn[i]]}")(
+                    *self.system.base_scalars()
+                )
+                * bi
                 for i, bi in enumerate(self.system.base_vectors())
             ]
         )
@@ -250,4 +267,4 @@ class VectorFunction(Function):
         return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
-        return r"\mathbf{{%s}}" %(latex_symbols[self.name],) + str(self.args)
+        return r"\mathbf{{%s}}" % (latex_symbols[self.name],) + str(self.args[:-1])

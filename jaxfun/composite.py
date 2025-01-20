@@ -178,13 +178,14 @@ if __name__ == "__main__":
     from Legendre import Legendre
     import matplotlib.pyplot as plt
     from jaxfun.inner import inner
-    from jaxfun.arguments import TestFunction, TrialFunction, x
+    from jaxfun.arguments import TestFunction, TrialFunction
+    from jaxfun.composite import Composite
 
     n = sp.Symbol("n", positive=True, integer=True)
     N = 50
     biharmonic = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
     dirichlet = {"left": {"D": 0}, "right": {"D": 0}}
-    C = Composite(Chebyshev, N, dirichlet)
+    C = Composite(Chebyshev, N, dirichlet, name='C')
 
     v = jax.random.normal(jax.random.PRNGKey(1), shape=(N + 1, N + 1))
     g = C.S @ v @ C.S.T
@@ -198,12 +199,13 @@ if __name__ == "__main__":
     assert jnp.linalg.norm(gn - g1) < 1e-7
 
     # Galerkin (dense)
-    u = TrialFunction(x, C)
-    v = TestFunction(x, C)
-    D = inner(v * sp.diff(u, x, 2), sparse=True, sparse_tol=100)
+    u = TrialFunction(C, name='u')
+    v = TestFunction(C, name='v')
+    x = C.system.x
+    D = inner(v * sp.diff(u, x, 2), sparse=True, sparse_tol=1000)
 
     # Petrov-Galerkin method (https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
-    G = Composite(Chebyshev, N, dirichlet, scaling=n + 1)
+    G = Composite(Chebyshev, N, dirichlet, scaling=n + 1, name='G')
     PG = Composite(
         Chebyshev,
         N + 2,
@@ -213,8 +215,9 @@ if __name__ == "__main__":
             2: -1 / (sp.pi * (n**2 + 4 * n + 3)),
             4: 1 / (2 * sp.pi * (n + 2) * (n + 3)),
         },
+        name='PG'
     )
-    L = Composite(Legendre, N, dirichlet, scaling=n + 1)
+    L = Composite(Legendre, N, dirichlet, scaling=n + 1, name='L')
     LG = Composite(
         Legendre,
         N + 2,
@@ -224,14 +227,15 @@ if __name__ == "__main__":
             2: -(2 * n + 5) / (2 * n + 7) / (2 * n + 3),
             4: 1 / (2 * (2 * n + 7)),
         },
+        name='LG'
     )
     A0 = inner(
-        TestFunction(x, PG) * sp.diff(TrialFunction(x, G), x, 2),
+        TestFunction(PG) * sp.diff(TrialFunction(G), x, 2),
         sparse=True,
         sparse_tol=1000,
     )  # bidiagonal
     A1 = inner(
-        TestFunction(x, LG) * sp.diff(TrialFunction(x, L), x, 2),
+        TestFunction(LG) * sp.diff(TrialFunction(L), x, 2),
         sparse=True,
         sparse_tol=1000,
     )  # bidiagonal
@@ -242,4 +246,4 @@ if __name__ == "__main__":
     ax1.set_title("PG Chebyshev")
     ax2.spy(A1.todense())
     ax2.set_title("PG Legendre")
-    # plt.show()
+    plt.show()

@@ -29,10 +29,6 @@ class Chebyshev(Jacobi):
             -sp.S.Half,
         )
 
-    # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
-    def gn(self, n: Symbol) -> Expr:
-        return sp.S(1) / sp.jacobi(n, self.alpha, self.beta, 1)
-
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, x: float, c: Array) -> float:
         """
@@ -115,3 +111,7 @@ class Chebyshev(Jacobi):
 
     def norm_squared(self) -> Array:
         return jnp.hstack((jnp.array([jnp.pi]), jnp.full(self.N, jnp.pi / 2)))
+
+    # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
+    def gn(self, n: Symbol) -> Expr:
+        return sp.S(1) / sp.jacobi(n, self.alpha, self.beta, 1)

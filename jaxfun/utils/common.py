@@ -78,7 +78,7 @@ def matmat(a: Union[Array, BCOO], b: Union[Array, BCOO]) -> Union[Array, BCOO]:
 
 @partial(jax.jit, static_argnums=1)
 def eliminate_near_zeros(a: Array, tol: int = 100) -> Array:
-    atol: float = ulp(1.0) * tol
+    atol: float = ulp(jnp.abs(a).max()) * tol
     return jnp.where(jnp.abs(a) < atol, jnp.zeros(a.shape), a)
 
 

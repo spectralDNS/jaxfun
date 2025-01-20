@@ -9,7 +9,8 @@ from jaxfun.coordinates import CoordSys
 from jaxfun.utils.common import lambdify, eliminate_near_zeros
 
 tensor_product_symbol = "\u2297"
-multiplication_sign = "\u00D7"
+multiplication_sign = "\u00d7"
+
 
 class TensorProductSpace:
     def __init__(
@@ -19,26 +20,33 @@ class TensorProductSpace:
         name: str = None,
     ) -> None:
         from jaxfun.arguments import CartCoordSys
+
         self.spaces = spaces
         self.name = name
-        self.system = CartCoordSys("N")[len(spaces)] if coordinates is None else coordinates
+        self.system = (
+            CartCoordSys("N")[len(spaces)] if coordinates is None else coordinates
+        )
         self.tensorname = tensor_product_symbol.join([b.name for b in spaces])
-        self.spacemap = {key: val for key, val in zip(self.system._base_scalars, spaces)}
+        self.spacemap = {
+            key: val for key, val in zip(self.system._base_scalars, spaces)
+        }
 
     def __len__(self) -> int:
         return len(self.spaces)
 
     def __iter__(self) -> Iterable[BaseSpace]:
         return iter(self.spaces)
-    
+
     def __getitem__(self, i: int) -> BaseSpace:
         return self.spaces[i]
-    
+
     @property
     def rank(self):
         return 0
 
-    def mesh(self, kind: str = 'quadrature', N: int = 0, broadcast: bool = True) -> Array:
+    def mesh(
+        self, kind: str = "quadrature", N: int = 0, broadcast: bool = True
+    ) -> Array:
         """Return mesh in the domain of self"""
         mesh = []
         for ax, space in enumerate(self.spaces):
@@ -46,7 +54,7 @@ class TensorProductSpace:
             mesh.append(self.broadcast_to_ndims(X, ax) if broadcast else X)
         return tuple(mesh)
 
-    def cartesian_mesh(self, kind: str = 'quadrature', N: int = 0):
+    def cartesian_mesh(self, kind: str = "quadrature", N: int = 0):
         rv = self.system._position_vector
         x = self.system.base_scalars()
         xj = self.mesh(kind, N, True)
@@ -56,32 +64,39 @@ class TensorProductSpace:
         return tuple(mesh)
 
     def broadcast_to_ndims(self, x: Array, axis: int = 0):
-        """Return 1D array ``x`` as an array of shape according to self
-        """
-        s = [jnp.newaxis]*len(self)
+        """Return 1D array ``x`` as an array of shape according to self"""
+        s = [jnp.newaxis] * len(self)
         s[axis] = slice(None)
         return x[tuple(s)]
 
     @partial(jax.jit, static_argnums=(0, 2, 3))
-    def evaluate(
-        self, 
-        c: Array,
-        kind: str = 'quadrature',
-        N: int = 0
-) ->     Array:
-        if kind == 'quadrature':
+    def evaluate(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+        if kind == "quadrature":
             mesh = [s.quad_points_and_weights()[0] for s in self]
         else:
-            mesh = [jnp.linspace(float(d.reference_domain.lower), float(d.reference_domain.upper), N) for d in self]
+            mesh = [
+                jnp.linspace(
+                    float(d.reference_domain.lower), float(d.reference_domain.upper), N
+                )
+                for d in self
+            ]
         dim: int = len(self)
         if dim == 2:
             for i, (xi, ax) in enumerate(zip(mesh, range(dim))):
                 axi: int = dim - 1 - ax
-                c = jax.vmap(self.spaces[i].evaluate, in_axes=(None, axi), out_axes=axi)(xi, c)
+                c = jax.vmap(
+                    self.spaces[i].evaluate, in_axes=(None, axi), out_axes=axi
+                )(xi, c)
         else:
             for i, (xi, ax) in enumerate(zip(mesh, range(dim))):
                 ax0, ax1 = set(range(dim)) - set((ax,))
-                c = jax.vmap(jax.vmap(self.spaces[i].evaluate, in_axes=(None, ax0), out_axes=ax0), in_axes=(None, ax1), out_axes=ax1)(xi, c)
+                c = jax.vmap(
+                    jax.vmap(
+                        self.spaces[i].evaluate, in_axes=(None, ax0), out_axes=ax0
+                    ),
+                    in_axes=(None, ax1),
+                    out_axes=ax1,
+                )(xi, c)
         return c
 
 

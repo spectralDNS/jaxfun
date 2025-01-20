@@ -141,6 +141,7 @@ def inner_bilinear(ai: sp.Expr, v: BaseSpace, u: BaseSpace, sc: float) -> Array:
             scale *= lambdify(s, uo.map_expr_true_domain(aii), modules="jax")(xj)
         else:
             scale *= float(aii)
+    
     w = wj * df ** (i + j - 1) * scale  # Account for domain different from reference
     Pi = vo.evaluate_basis_derivative(xj, k=i)
     Pj = uo.evaluate_basis_derivative(xj, k=j)

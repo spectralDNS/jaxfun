@@ -36,10 +36,6 @@ class Jacobi(BaseSpace):
         self.stencil = {0: 1}
         self.S = BCOO.from_scipy_sparse(scipy_sparse.diags((1,), (0,), (N + 1, N + 1)))
 
-    # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
-    def gn(self, n: Symbol | Number):
-        return 1
-
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, x: float, c: Array) -> float:
         """
@@ -248,3 +244,7 @@ class Jacobi(BaseSpace):
         """
         f = self.gamma(self.alpha + k, self.beta + k, n - k) * (self.psi(n, k)) ** 2
         return sp.simplify(self.gn(n) ** 2 * f)
+
+    # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
+    def gn(self, n: Symbol | Number):
+        return 1

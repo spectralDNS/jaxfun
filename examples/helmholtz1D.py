@@ -1,4 +1,4 @@
-# Solve Poisson's equation
+# Solve Helmholtz' equation
 import sys
 import os
 import matplotlib.pyplot as plt
@@ -8,32 +8,35 @@ from jaxfun.utils.common import lambdify, ulp
 from jaxfun.Legendre import Legendre as space
 
 # from jaxfun.Jacobi import Jacobi as space
+from jaxfun.composite import Composite
 from jaxfun.inner import inner
 from jaxfun.arguments import TestFunction, TrialFunction
 from jaxfun.operators import Grad, Div, Dot
 from jaxfun.Basespace import n
 from jaxfun.functionspace import FunctionSpace
 
-M = 30
-bcs = {"left": {"D": 0}, "right": {"D": 0}}
+x = sp.Symbol("x", real=True)
+M = 50
+ue = sp.exp(sp.cos(2 * sp.pi * x))
+
+bcs = {"left": {"D": float(ue.subs(x, -1))}, "right": {"D": float(ue.subs(x, 1))}}
 D = FunctionSpace(M, space, bcs=bcs, name="D", fun_str="psi", scaling=n + 1)
-v = TestFunction(D)
-u = TrialFunction(D)
+v = TestFunction(D, name="v")
+u = TrialFunction(D, name="u")
 
 # Method of manufactured solution
 x = D.system.x  # use the same coordinate as u and v
-ue = 1 - x**2  # * sp.exp(sp.cos(2 * sp.pi * x))
+ue = D.system.expr_psi_to_base_scalar(ue)
 
-# A = inner(v*sp.Derivative(u, x, 2), sparse=True)
-# A = inner(-Dot(Grad(v), Grad(u)), sparse=True)
-# A = inner(v*Div(Grad(u)), sparse=True)
-# b = inner(v*sp.Derivative(ue, x, 2))
-A, b = inner(
-    v * Div(Grad(u)) + v * sp.Derivative(ue, x, 2), sparse=True, sparse_tol=1000
+A, L = inner(
+    v * (Div(Grad(u)) + u) + v * (Div(Grad(ue)) + ue),
+    sparse=True,
+    sparse_tol=1000,
+    return_all_items=False,
 )
 
 xj = D.mesh(kind="uniform", N=100)
-uh = jnp.linalg.solve(A.todense(), b)
+uh = jnp.linalg.solve(A.todense(), L)
 uj = D.evaluate(xj, uh)
 uej = lambdify(x, ue)(xj)
 error = jnp.linalg.norm(uj - uej)

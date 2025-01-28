@@ -9,8 +9,8 @@ import jax.numpy as jnp
 from jaxfun.utils.common import lambdify, ulp
 from jaxfun.Legendre import Legendre
 from jaxfun.Chebyshev import Chebyshev
-from jaxfun.composite import Composite
 from jaxfun.inner import inner
+from jaxfun.functionspace import FunctionSpace
 from jaxfun.arguments import TestFunction, TrialFunction
 from jaxfun.operators import Grad, Div, Dot
 from jaxfun.Basespace import n
@@ -19,16 +19,16 @@ from jaxfun.tensorproductspace import TensorProductSpace, tpmats_to_scipy_sparse
 
 M = 20
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
-D = Composite(Legendre, M, bcs, scaling=n + 1, name="D", fun_str="psi")
+D = FunctionSpace(M, Chebyshev, bcs, scaling=n + 1, name="D", fun_str="psi")
 T = TensorProductSpace((D, D), name="T")
-v = TestFunction(T)
-u = TrialFunction(T)
+v = TestFunction(T, name="v")
+u = TrialFunction(T, name="u")
 
 # Method of manufactured solution
-x, y = T.system.base_scalars()  
-ue = (1 - x**2) * (1 - y**2) #* sp.exp(sp.cos(sp.pi * x)) * sp.exp(sp.sin(sp.pi * y))
+x, y = T.system.base_scalars()
+ue = (1 - x**2) * (1 - y**2)  # * sp.exp(sp.cos(sp.pi * x)) * sp.exp(sp.sin(sp.pi * y))
 
-#A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
+# A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
 A, b = inner(v * Div(Grad(u)) + v * Div(Grad(ue)), sparse=False)
 
 # jax can only do kron for dense matrices
@@ -40,19 +40,20 @@ a = tpmats_to_scipy_sparse_list(A)
 A0 = scipy_sparse.kron(a[0], a[1]) + scipy_sparse.kron(a[2], a[3])
 un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 
-xj = T.mesh(kind='uniform', N=100)
-uj = T.evaluate(uh, kind='uniform', N=100)
+N = 100
+xj = T.mesh(kind="uniform", N=N)
+uj = T.evaluate(uh, kind="uniform", N=N)
 uej = lambdify((x, y), ue)(*xj)
 
-error = jnp.linalg.norm(uj - uej)
-if 'pytest' in os.environ:
+error = jnp.linalg.norm(uj - uej) / N
+if "pytest" in os.environ:
     assert error < ulp(1000), error
     sys.exit(1)
 
 print("Error =", error)
 
 f, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4))
-xj = T.mesh(kind='uniform', N=100, broadcast=False)
+xj = T.mesh(kind="uniform", N=100, broadcast=False)
 ax1.contourf(xj[0], xj[1], uj)
 ax2.contourf(xj[0], xj[1], uej)
 ax2.set_autoscalex_on(False)

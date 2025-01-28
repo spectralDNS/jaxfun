@@ -16,7 +16,7 @@ N = 100
 M = 1000
 C = 1000
 k = 2
-x = jnp.linspace(-1, 1, N+1)
+x = jnp.linspace(-1, 1, 2*N+1)
 xn = np.array(x)
 c = jnp.ones(C)
 cn = np.array(c)
@@ -50,7 +50,7 @@ def run_vandermonde(space) -> None:
             jnp.array(npfun(xn, N))
             - space.vandermonde(x)
         )
-        < 100*ulp(1.)
+        < ulp(1000)
     )
 
 

@@ -334,6 +334,13 @@ class CoordSys(Basic):
         # Return the instance
         return obj
 
+    def sub_system(self, index: int=0):
+        return SubCoordSys(self, index)
+
+    @property
+    def dims(self):
+        return len(self._base_scalars)
+
     def _sympystr(self, printer: Any) -> str:
         return self._name
 
@@ -638,6 +645,38 @@ class CoordSys(Basic):
         self._psi = tuple([p.subs(s0, s1) for p in self._psi])
         self._rv = tuple([r.subs(s0, s1) for r in self._rv])
 
+class SubCoordSys:
+
+    def __init__(self, system: CoordSys, index: int = 0):
+        assert system.dims > 1 
+        self._base_scalars = (system._base_scalars[index],)
+        self._base_vectors = (system._base_vectors[index],)
+        self._psi = (system._psi[index],)
+        self._cartesian_xyz = [system._cartesian_xyz[index]]
+        self._variable_names = [system._variable_names[index]]
+        self._position_vector = (system._position_vector[index])
+        self._parent = system
+        self.sg = 1
+        for k in self._cartesian_xyz:
+            setattr(self, k.name, k)
+
+    def __iter__(self) -> Iterable[BaseVector]:
+        return iter(self.base_vectors())
+
+    def base_vectors(self) -> tuple[BaseVector]:
+        return self._base_vectors
+
+    def base_scalars(self) -> tuple[BaseScalar]:
+        return self._base_scalars
+
+    @property
+    def rv(self) -> tuple[Expr]:
+        return self._position_vector
+
+    @property
+    def psi(self) -> tuple[Symbol]:
+        return self._base_scalars
+
 
 def get_CoordSys(
     name: str,
@@ -682,13 +721,13 @@ def get_CoordSys(
             return count
 
     """
-    from jaxfun.arguments import CartCoordSys
+    from jaxfun.arguments import CartCoordSys, x, y, z
 
     return CoordSys(
         name,
         transformation,
         vector_names=vector_names,
-        parent=CartCoordSys(cartesian_name)[len(transformation.args[1])],
+        parent=CartCoordSys(cartesian_name, {1: (x,), 2: (x, y), 3: (x, y, z)}[len(transformation.args[1])]),
         assumptions=assumptions,
         replace=replace,
         measure=measure,

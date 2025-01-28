@@ -1,14 +1,14 @@
 from typing import Union, Any
 from jax import Array
 import jax.numpy as jnp
-from jaxfun.arguments import test, trial, BasisFunction
+from jaxfun.arguments import test, trial, BasisFunction, TrialFunction, TestFunction
 from jaxfun.coordinates import CoordSys
 from jaxfun.forms import get_basisfunctions, split
 from jaxfun.utils.common import matmat, tosparse
-from jaxfun.composite import Composite
+from jaxfun.composite import Composite, BCGeneric, DirectSum
 from jaxfun.Basespace import BaseSpace
 from jaxfun.utils.common import lambdify
-from jaxfun.tensorproductspace import TensorProductSpace, TPMatrix
+from jaxfun.tensorproductspace import TensorProductSpace, DirectSumTPS, TPMatrix
 import sympy as sp
 
 
@@ -32,7 +32,7 @@ def inner(
     return_all_items : bool
         Whether to return just one matrix/vector, or whether to return all computed matrices/vectors.
         Note that one expr may maintain any number of terms leading to many matrices/vectors.
-        This parameter is only relevant for bilinear 1D problems. Multidimensional problems always 
+        This parameter is only relevant for 1D problems. Multidimensional problems always
         returns all matrices.
 
     """
@@ -45,52 +45,65 @@ def inner(
     b_forms = forms["linear"]
     aresults = []
     bresults = []
-    bilinear_return_all_items = True if isinstance(test_space, TensorProductSpace) else return_all_items
 
     for a0 in a_forms:  # Bilinear form
         # There is one tensor product matrix or just matrix (1D) for each a0
         mats = []
-        sc: float = float(a0["coeff"])  # one scalar coefficient to all the matrices
+        sc = float(a0["coeff"])  # one scalar coefficient to all the matrices
+        trial = []
+        has_bcs = False
         for key, ai in a0.items():
             if key == "coeff":
                 continue
 
-            if isinstance(test_space, TensorProductSpace):
-                v, u = test_space.spacemap[key], trial_space.spacemap[key]
-            else:
-                v, u = test_space, trial_space
+            v, u = get_basisfunctions(ai)
+            vf = v.functionspace
+            uf = u.functionspace
+            trial.append(uf)
 
-            z = inner_bilinear(ai, v, u, float(sc))
+            z = inner_bilinear(ai, vf, uf, sc)
+
+            if z.size == 0:
+                continue
+            if isinstance(uf, BCGeneric) and test_space.dims == 1:
+                bresults.append(-(z @ jnp.array(uf.bcs.orderedvals())))
+                continue
+            if isinstance(uf, BCGeneric):
+                has_bcs = True
             sc = 1
-            if sparse and bilinear_return_all_items:
-                z = tosparse(z, tol=sparse_tol)
             mats.append(z)
 
-        if isinstance(test_space, TensorProductSpace):
-            aresults.append(TPMatrix(mats, 1.0, test_space, trial_space))
-        else:
+        if len(mats) == 0:
+            pass
+        elif test_space.dims == 1:
             aresults.append(mats[0])
+        else:
+            if has_bcs:
+                bresults.append(
+                    -(mats[0] @ trial_space.bndvals[tuple(trial)] @ mats[1].T)
+                )
+            else:
+                aresults.append(
+                    TPMatrix(
+                        mats,
+                        1.0,
+                        test_space,
+                        trial_space.tpspaces[tuple(trial)]
+                        if isinstance(trial_space, DirectSumTPS)
+                        else trial_space,
+                    )
+                )
 
-    if len(aresults) > 0:
-        if (not bilinear_return_all_items) and isinstance(test_space, BaseSpace):
-            aresults = jnp.sum(jnp.array(aresults), axis=0)
-            if sparse:
-                aresults = tosparse(aresults, tol=sparse_tol)
-        
     # Linear form
     for b0 in b_forms:
         bs = []
-        sc: float = float(b0["coeff"])  # one scalar coefficient to all the vectors
+        sc = float(b0["coeff"])  # one scalar coefficient to all the vectors
         for key, bi in b0.items():
             if key == "coeff":
                 continue
 
-            v = (
-                test_space.spacemap[key]
-                if isinstance(test_space, TensorProductSpace)
-                else test_space
-            )
-            z = inner_linear(bi, v, sc)
+            v, _ = get_basisfunctions(bi)
+            z = inner_linear(bi, v.functionspace, sc)
             sc = 1
             bs.append(z)
         if isinstance(test_space, BaseSpace):
@@ -98,18 +111,32 @@ def inner(
         elif len(test_space) == 2:
             bresults.append(jnp.multiply.outer(bs[0], bs[1]))
         elif len(test_space) == 3:
-            bresults.append(jnp.multiply.outer(jnp.multiply.outer(bs[0], bs[1]), bs[2])) 
-            
-    if (not return_all_items) and len(bresults) > 0:
+            bresults.append(jnp.multiply.outer(jnp.multiply.outer(bs[0], bs[1]), bs[2]))
+
+    return process_results(
+        aresults, bresults, return_all_items, test_space.dims, sparse, sparse_tol
+    )
+
+
+def process_results(aresults, bresults, return_all_items, dims, sparse, sparse_tol):
+    if return_all_items:
+        return aresults, bresults
+
+    if len(aresults) > 0 and dims == 1:
+        aresults = jnp.sum(jnp.array(aresults), axis=0)
+        if sparse:
+            aresults = tosparse(aresults, tol=sparse_tol)
+
+    if len(bresults) > 0:
         bresults = jnp.sum(jnp.array(bresults), axis=0)
 
     # Return just the one matrix/vector if 1D and only bilinear or linear forms
     if len(aresults) > 0 and len(bresults) == 0:
         return aresults
+
     if len(aresults) == 0 and len(bresults) > 0:
         return bresults
-    if len(aresults) > 0 and len(bresults) > 0:
-        return aresults, bresults
+
     return aresults, bresults
 
 
@@ -141,7 +168,7 @@ def inner_bilinear(ai: sp.Expr, v: BaseSpace, u: BaseSpace, sc: float) -> Array:
             scale *= lambdify(s, uo.map_expr_true_domain(aii), modules="jax")(xj)
         else:
             scale *= float(aii)
-    
+
     w = wj * df ** (i + j - 1) * scale  # Account for domain different from reference
     Pi = vo.evaluate_basis_derivative(xj, k=i)
     Pj = uo.evaluate_basis_derivative(xj, k=j)
@@ -181,7 +208,7 @@ def inner_linear(bi: sp.Expr, v: BaseSpace, sc: float) -> Array:
                     i = int(bii.derivative_count)
                 continue
             # bii contains coordinates in the domain of v, e.g., (r, theta) for polar
-            # Need to map bii to reference domains since we use quadrature points
+            # Need to compute bii as bii(x(X)), since we use quadrature points
             if len(bii.free_symbols) > 0:
                 s = bii.free_symbols.pop()
                 uj *= lambdify(s, vo.map_expr_true_domain(bii), modules="jax")(xj)
@@ -195,6 +222,15 @@ def inner_linear(bi: sp.Expr, v: BaseSpace, sc: float) -> Array:
     return z
 
 
+def project1D(ue, V):
+    u = TrialFunction(V)
+    v = TestFunction(V)
+    M, b = inner(v * u + v * ue)
+    uh = jnp.linalg.solve(M, b)
+    return uh
+
+
+# Experimental measure
 class Measure:
     sparse = True
     return_all_items = False

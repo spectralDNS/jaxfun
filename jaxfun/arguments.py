@@ -1,27 +1,25 @@
 from typing import Any
 import sympy as sp
+import itertools
 from sympy import Function, Symbol, Expr
 from sympy.printing.pretty.stringpict import prettyForm
+import jax.numpy as jnp
 from jaxfun.Basespace import BaseSpace
+from jaxfun.composite import DirectSum
 from jaxfun.tensorproductspace import TensorProductSpace, VectorTensorProductSpace
 from jaxfun.coordinates import CoordSys
 from jaxfun.coordinates import latex_symbols
 
 x, y, z = sp.symbols("x,y,z", real=True)
 
-CartCoordSys1D = lambda name: CoordSys(name, sp.Lambda((x,), (x,)))
-CartCoordSys2D = lambda name: CoordSys(name, sp.Lambda((x, y), (x, y)))
-CartCoordSys3D = lambda name: CoordSys(name, sp.Lambda((x, y, z), (x, y, z)))
-CartCoordSys = lambda name: {
-    1: CartCoordSys1D(name),
-    2: CartCoordSys2D(name),
-    3: CartCoordSys3D(name),
-}
+CartCoordSys = lambda name, t: CoordSys(name, sp.Lambda(t, t))
+
+functionspacedict = {}
 
 
 class BasisFunction(Function):
     def __init__(self, coordinate: Symbol, dummy: Symbol) -> None:
-        f, s, j = dummy.name.split("_")
+        f, s, j = dummy.name.split("-")
         self.global_index = int(j)
         self.local_index = coordinate._id[0]
         self.fun_str = s
@@ -45,6 +43,10 @@ class BasisFunction(Function):
             (latex_symbols[self.fun_str], "(", latex_symbols[self.args[0].name], ")")
         )
 
+    @property
+    def functionspace(self):
+        return functionspacedict[self.functionspace_name]
+
 
 class trial(BasisFunction):
     pass
@@ -59,25 +61,31 @@ def _get_computational_function(
 ) -> Expr:
     func = test if arg == "test" else trial
     args = V.system.base_scalars()
+    functionspacedict[V.name] = V
     if isinstance(V, BaseSpace):
         assert args[0].is_Symbol
-        return func(args[0], sp.Symbol(V.name + "_" + V.fun_str + "_0"))
+        return func(args[0], sp.Symbol(V.name + "-" + V.fun_str + "-0"))
 
     elif isinstance(V, TensorProductSpace):
+        for space in V.spaces:
+            functionspacedict[space.name] = space
         return sp.Mul(
             *[
-                func(a, sp.Symbol(v.name + "_" + v.fun_str + "_0"))
+                func(a, sp.Symbol(v.name + "-" + v.fun_str + "-0"))
                 for a, v in zip(args, V)
             ]
         )
 
     elif isinstance(V, VectorTensorProductSpace):
         b = V.system.base_vectors()
+        for i, Vi in enumerate(V):
+            for v in Vi:
+                functionspacedict[v.name] = v
         return sp.vector.VectorAdd(
             *[
                 sp.Mul(
                     *[
-                        func(a, sp.Symbol(v.name + "_" + v.fun_str + "_" + str(i)))
+                        func(a, sp.Symbol(v.name + "-" + v.fun_str + "-" + str(i)))
                         for a, v in zip(args, Vi)
                     ]
                 )
@@ -94,19 +102,31 @@ def _get_computational_function(
 
 
 class TestFunction(Function):
-    __test__ = False  # prevent pytest from considering this class as a test case.
+    __test__ = False  # prevent pytest from considering this a test.
 
     def __init__(
         self,
-        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace,
+        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
     ) -> None:
         self.functionspace = V
+        if isinstance(V, DirectSum):
+            self.functionspace = V[0].get_homogeneous()
+        elif isinstance(V, TensorProductSpace):
+            f = []
+            for space in V.spaces:
+                if isinstance(space, DirectSum):
+                    f.append(space[0].get_homogeneous())
+                else:
+                    f.append(space)
+            self.functionspace = TensorProductSpace(
+                f, name=V.name + "0", system=V.system
+            )
         self.name = name
 
     def __new__(
         cls,
-        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace,
+        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
     ) -> Function:
         coors = V.system
@@ -153,7 +173,7 @@ class TestFunction(Function):
 class TrialFunction(Function):
     def __init__(
         self,
-        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace,
+        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
     ) -> None:
         self.functionspace = V
@@ -161,7 +181,7 @@ class TrialFunction(Function):
 
     def __new__(
         cls,
-        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace,
+        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
     ) -> Function:
         coors = V.system
@@ -169,6 +189,36 @@ class TrialFunction(Function):
         return obj
 
     def doit(self, **hints: dict) -> Expr:
+        if isinstance(self.functionspace, DirectSum):
+            return sp.Add(
+                *[
+                    _get_computational_function("trial", f)
+                    for f in self.functionspace.spaces
+                ]
+            )
+        elif isinstance(self.functionspace, TensorProductSpace):
+            spaces = self.functionspace.spaces
+            f = []
+            for space in spaces:
+                if isinstance(space, DirectSum):
+                    f.append(space)
+                else:
+                    f.append([space])
+            tensorspaces = itertools.product(*f)
+            return sp.Add(
+                *[
+                    _get_computational_function(
+                        "trial",
+                        TensorProductSpace(
+                            s,
+                            name=self.functionspace.name + f"{i}",
+                            system=self.functionspace.system,
+                        ),
+                    )
+                    for i, s in enumerate(tensorspaces)
+                ]
+            )
+
         return _get_computational_function("trial", self.functionspace)
 
     def __str__(self) -> str:

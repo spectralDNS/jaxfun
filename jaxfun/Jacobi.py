@@ -3,11 +3,9 @@ from functools import partial
 import sympy as sp
 from sympy import Number, Symbol, Expr
 from scipy.special import roots_jacobi
-from scipy import sparse as scipy_sparse
 import jax
 import jax.numpy as jnp
 from jax import Array
-from jax.experimental.sparse import BCOO
 from jaxfun.Basespace import BaseSpace, Domain, n
 from jaxfun.coordinates import CoordSys
 
@@ -23,18 +21,17 @@ class Jacobi(BaseSpace):
         self,
         N: int,
         domain: Domain = Domain(-1, 1),
-        coordinates: CoordSys = None,
+        system: CoordSys = None,
         name: str = "Jacobi",
         fun_str: str = "J",
         alpha: Number = 0,
         beta: Number = 0,
     ) -> None:
-        BaseSpace.__init__(self, N, domain, coordinates, name, fun_str)
+        BaseSpace.__init__(
+            self, N, domain=domain, system=system, name=name, fun_str=fun_str
+        )
         self.alpha = alpha
         self.beta = beta
-        self.orthogonal = self
-        self.stencil = {0: 1}
-        self.S = BCOO.from_scipy_sparse(scipy_sparse.diags((1,), (0,), (N + 1, N + 1)))
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, x: float, c: Array) -> float:
@@ -57,7 +54,8 @@ class Jacobi(BaseSpace):
         The evaluation uses Clenshaw recursion, aka synthetic division.
 
         """
-        a, b = self.alpha, self.beta
+        a, b = float(self.alpha), float(self.beta)
+
         if len(c) == 1:
             # Multiply by 0 * x for shape
             return c[0] + 0 * x
@@ -88,7 +86,7 @@ class Jacobi(BaseSpace):
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
         N = self.N + 1 if N == 0 else N + 1
-        return jnp.array(roots_jacobi(N, self.alpha, self.beta))
+        return jnp.array(roots_jacobi(N, float(self.alpha), float(self.beta)))
 
     @partial(jax.jit, static_argnums=(0, 2))
     def eval_basis_function(self, x: float, i: int) -> float:
@@ -96,7 +94,7 @@ class Jacobi(BaseSpace):
         if i == 0:
             return x0
 
-        a, b = self.alpha, self.beta
+        a, b = float(self.alpha), float(self.beta)
 
         def body_fun(n: int, val: tuple[Array, Array]) -> tuple[Array, Array]:
             x0, x1 = val
@@ -105,16 +103,16 @@ class Jacobi(BaseSpace):
             )
             bet = 2 * (n + a - 1) * (n + b - 1) * (2 * n + a + b)
             cn = 2 * n * (n + a + b) * (2 * n + a + b - 2)
-            x2 = (x1 * x * alf - x0 * bet) / cn
+            x2 = (x1 * alf - x0 * bet) / cn
             return x1, x2
 
-        return jax.lax.fori_loop(1, i, body_fun, (x0, x))[-1]
+        return jax.lax.fori_loop(2, i + 1, body_fun, (x0, x))[-1]
 
     @partial(jax.jit, static_argnums=0)
     def eval_basis_functions(self, x: float) -> Array:
         x0 = x * 0 + 1
 
-        a, b = self.alpha, self.beta
+        a, b = float(self.alpha), float(self.beta)
 
         def inner_loop(
             carry: tuple[float, float], n: int
@@ -125,40 +123,19 @@ class Jacobi(BaseSpace):
             )
             bet = 2 * (n + a - 1) * (n + b - 1) * (2 * n + a + b)
             cn = 2 * n * (n + a + b) * (2 * n + a + b - 2)
-            x2 = (x1 * x * alf - x0 * bet) / cn
+            x2 = (x1 * alf - x0 * bet) / cn
             return (x1, x2), x1
 
-        _, xs = jax.lax.scan(inner_loop, (x0, x), jnp.arange(2, self.N + 2))
+        _, xs = jax.lax.scan(
+            inner_loop,
+            (x0, a + 1 + (a + b + 2) * (x - 1) / 2),
+            jnp.arange(2, self.N + 2),
+        )
 
         return jnp.hstack((x0, xs))
 
     def norm_squared(self) -> Array:
-        return sp.lambdify(n, self.h(n, 0, self.gn), modules="jax")(
-            jnp.arange(self.N + 1)
-        )
-
-    def mass_matrix(self) -> BCOO:
-        return BCOO.from_scipy_sparse(
-            scipy_sparse.diags(
-                (self.norm_squared(),), (0,), shape=(self.N + 1, self.N + 1)
-            )
-        )
-
-    @partial(jax.jit, static_argnums=0)
-    def apply_stencil_galerkin(self, b: Array) -> Array:
-        return b
-
-    @partial(jax.jit, static_argnums=0)
-    def apply_stencils_petrovgalerkin(self, b: Array, P: BCOO) -> Array:
-        return b @ P.T
-
-    @partial(jax.jit, static_argnums=0)
-    def apply_stencil_left(self, b: Array) -> Array:
-        return b
-
-    @partial(jax.jit, static_argnums=0)
-    def apply_stencil_right(self, a: Array) -> Array:
-        return a
+        return sp.lambdify(n, self.h(n, 0), modules="jax")(jnp.arange(self.N + 1))
 
     @property
     def reference_domain(self) -> Domain:

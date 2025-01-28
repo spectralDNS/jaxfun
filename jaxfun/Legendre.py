@@ -13,12 +13,21 @@ class Legendre(Jacobi):
         self,
         N: int,
         domain: Domain = Domain(-1, 1),
-        coordinates: CoordSys = None,
+        system: CoordSys = None,
         name: str = "Legendre",
         fun_str: str = "P",
         **kw,
     ) -> None:
-        Jacobi.__init__(self, N, domain, coordinates, name, fun_str, 0, 0)
+        Jacobi.__init__(
+            self,
+            N,
+            domain=domain,
+            system=system,
+            name=name,
+            fun_str=fun_str,
+            alpha=0,
+            beta=0,
+        )
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, x: float, c: Array) -> float:
@@ -79,7 +88,7 @@ class Legendre(Jacobi):
             x2 = (x1 * x * (2 * i - 1) - x0 * (i - 1)) / i
             return x1, x2
 
-        return jax.lax.fori_loop(1, i, body_fun, (x0, x))[-1]
+        return jax.lax.fori_loop(2, i + 1, body_fun, (x0, x))[-1]
 
     @partial(jax.jit, static_argnums=0)
     def eval_basis_functions(self, x: float) -> Array:

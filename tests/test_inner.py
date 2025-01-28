@@ -26,7 +26,7 @@ def test_inner(space) -> None:
     M = inner(x * v * u + sp.diff(u, x) * v, sparse=True)
 
     N = 10
-    C = Composite(space, N, {"left": {"D": 0}, "right": {"D": 0}})
+    C = Composite(N, space, {"left": {"D": 0}, "right": {"D": 0}})
     u = TrialFunction(C)
     v = TestFunction(C)
     M = inner(x * v * u + sp.diff(u, x) * v, sparse=False)

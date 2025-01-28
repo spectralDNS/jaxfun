@@ -24,7 +24,7 @@ from sympy.plotting import plot3d_parametric_line
 import jax.numpy as jnp 
 from jaxfun.utils.common import lambdify, ulp
 from jaxfun.Legendre import Legendre as space
-from jaxfun.composite import Composite
+from jaxfun.functionspace import FunctionSpace
 from jaxfun.inner import inner
 from jaxfun.arguments import TestFunction, TrialFunction
 from jaxfun.operators import Grad, Div, Dot
@@ -37,7 +37,7 @@ rv = (sp.sin(2*sp.pi*t), sp.cos(2*sp.pi*t), 2*t)
 N = 50
 bcs = {'left': {'D': 0}, 'right': {'D': 0}}
 coors = get_CoordSys("C", sp.Lambda((t,), rv))
-D = Composite(space, N, bcs, scaling=n+1, coordinates=coors, name='D', fun_str='phi')
+D = FunctionSpace(N, space, bcs, scaling=n+1, system=coors, name='D', fun_str='phi')
 v = TestFunction(D)
 u = TrialFunction(D)
 

@@ -6,18 +6,18 @@ import jax.numpy as jnp
 from jaxfun.utils.common import lambdify
 from jaxfun.Legendre import Legendre
 from jaxfun.Chebyshev import Chebyshev
-from jaxfun.composite import Composite
 from jaxfun.inner import inner
 from jaxfun.arguments import TestFunction, TrialFunction
 from jaxfun.operators import Grad, Div, Dot
 from jaxfun.Basespace import n
 from jaxfun.utils.common import ulp
+from jaxfun.functionspace import FunctionSpace
 from jaxfun.tensorproductspace import TensorProductSpace, tpmats_to_scipy_sparse_list
 
 
 M = 20
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
-D = Composite(Legendre, M, bcs, scaling=n + 1, name="D", fun_str="psi")
+D = FunctionSpace(M, Legendre, bcs, scaling=n + 1, name="D", fun_str="psi")
 T = TensorProductSpace((D, D, D), name="T")
 v = TestFunction(T)
 u = TrialFunction(T)

@@ -14,17 +14,18 @@ from jaxfun.inner import inner
 from jaxfun.arguments import TestFunction, TrialFunction
 from jaxfun.operators import Grad, Div, Dot
 from jaxfun.Basespace import n
-from jaxfun.tensorproductspace import TensorProductSpace, tpmats_to_scipy_sparse_list
+from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_sparse_list
 from jaxfun.coordinates import get_CoordSys
+from jaxfun.functionspace import FunctionSpace
 
 
 M = 20
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
 r, theta = sp.symbols('r,theta', real=True, positive=True)
 C = get_CoordSys('C', sp.Lambda((r, theta), (r*sp.cos(theta), r*sp.sin(theta))))
-D0 = Composite(Legendre, M, bcs, scaling=n + 1, domain=(sp.S.Half, 1), name="D0", fun_str="psi")
-D1 = Composite(Legendre, M, bcs, scaling=n + 1, domain=(0, sp.pi/2), name="D1", fun_str="psi")
-T = TensorProductSpace((D0, D1), coordinates=C, name="T")
+D0 = FunctionSpace(M, Legendre, bcs, scaling=n + 1, domain=(sp.S.Half, 1), name="D0", fun_str="psi")
+D1 = FunctionSpace(M, Legendre, bcs, scaling=n + 1, domain=(0, sp.pi/2), name="D1", fun_str="psi")
+T = TensorProduct((D0, D1), system=C, name="T")
 v = TestFunction(T)
 u = TrialFunction(T)
 

@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from jaxfun import BaseSpace
 from jaxfun.Chebyshev import Chebyshev
 from jaxfun.Legendre import Legendre
 from jaxfun.utils.common import evaluate, ulp
@@ -44,7 +45,7 @@ def cn(c: jnp.ndarray) -> np.ndarray:
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
-def test_vandermonde(space, x: jnp.ndarray, xn: np.ndarray, N: int) -> None:
+def test_vandermonde(space: BaseSpace, x: jnp.ndarray, xn: np.ndarray, N: int) -> None:
     space = space(N)
     np_res = {
         "Legendre": np.polynomial.legendre.legvander(xn, N),
@@ -72,7 +73,7 @@ def test_evaluate(
 @pytest.mark.parametrize("k", (1, 2, 3))
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
 def test_evaluate_basis_derivative(
-    space, x: jnp.ndarray, xn: np.ndarray, N: int, k: int
+    space: BaseSpace, x: jnp.ndarray, xn: np.ndarray, N: int, k: int
 ) -> None:
     space = space(N)
     np_res = {

@@ -357,21 +357,82 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
 
 
 class Grad(Gradient):
+
+    #def __new__(cls, expr):
+    #    expr = sp.sympify(expr)
+    #    if isinstance(expr, sp.Add):
+    #        return sp.Add(*[Grad(e) for e in expr.args])
+    #    if isinstance(expr, sp.Mul):
+    #        u = expr.args[0]
+    #        v = sp.Mul(*expr.args[1:])
+    #        if u.is_Number:
+    #            return u*Grad(v)
+    #        return v*Grad(u) + u*Grad(v)
+    #    obj = Expr.__new__(cls, expr)
+    #    obj._expr = expr
+    #    return obj
+
     def doit(self, **hints: dict[Any]) -> Expr:
         return gradient(self._expr.doit(**hints), doit=True)
 
 
 class Div(Divergence):
+
+    #def __new__(cls, expr):
+    #    expr = sp.sympify(expr)
+    #    if isinstance(expr, sp.Add):
+    #        return sp.Add(*[Div(e) for e in expr.args])
+    #    if isinstance(expr, sp.Mul):
+    #        expr = expr.expand()
+    #        if isinstance(expr, sp.Add):
+    #            return sp.Add(*[Div(e) for e in expr.args])    
+    #        vector = [i for i in expr.args if isinstance(i, (Vector, Cross, Grad))][0]
+    #        scalar = Mul.fromiter(i for i in expr.args if not isinstance(i, (Vector, Cross, Grad)))
+    #        if scalar.is_Number:
+    #            return scalar*Div(vector) 
+    #        return Dot(vector, Grad(scalar)) + scalar*Div(vector)
+    #                 
+    #    obj = Expr.__new__(cls, expr)
+    #    obj._expr = expr
+    #    return obj
+
     def doit(self, **hints: dict[Any]) -> Expr:
         return divergence(self._expr.doit(**hints), doit=True)
 
 
 class Curl(sympy_Curl):
+
+    #def __new__(cls, expr):
+    #    expr = sp.sympify(expr)
+    #    if isinstance(expr, sp.Add):
+    #        return sp.Add(*[Curl(e) for e in expr.args])
+    #    if isinstance(expr, sp.Mul):
+    #        expr = expr.expand()
+    #        if isinstance(expr, sp.Add):
+    #            return sp.Add(*[Curl(e) for e in expr.args])    
+    #        vector = [i for i in expr.args if isinstance(i, (Vector, Cross, Grad))][0]
+    #        scalar = Mul.fromiter(i for i in expr.args if not isinstance(i, (Vector, Cross, Grad)))
+    #        return Cross(Grad(scalar), vector) + scalar*Curl(vector)
+
     def doit(self, **hints: dict[Any]) -> Expr:
         return curl(self._expr.doit(**hints), doit=True)
 
 
 class Dot(sympy_Dot):
+
+    #def __new__(cls, expr1, expr2):
+    #    expr1 = sp.sympify(expr1)
+    #    expr2 = sp.sympify(expr2)
+    #    expr1, expr2 = sorted([expr1, expr2], key=sp.core.sorting.default_sort_key)
+    #    if isinstance(expr1, sp.Add):
+    #        return sp.Add(*[Dot(e, expr2) for e in expr1.args])
+    #    if isinstance(expr2, sp.Add):
+    #        return sp.Add(*[Dot(expr1, e) for e in expr2.args]) 
+    #    obj = Expr.__new__(cls, expr1, expr2)
+    #    obj._expr1 = expr1
+    #    obj._expr2 = expr2
+    #    return obj
+
     def doit(self, **hints: dict[Any]) -> Expr:
         return dot(self._expr1.doit(), self._expr2.doit())
 
@@ -394,13 +455,17 @@ class Cross(sympy_Cross):
 
     """
 
-    #def __new__(cls, expr1, expr2):
-    #    expr1 = sp.sympify(expr1)
-    #    expr2 = sp.sympify(expr2)
-    #    obj = Expr.__new__(cls, expr1, expr2)
-    #    obj._expr1 = expr1
-    #    obj._expr2 = expr2
-    #    return obj
+    def __new__(cls, expr1, expr2):
+        expr1 = sp.sympify(expr1)
+        expr2 = sp.sympify(expr2)
+        if isinstance(expr1, sp.Add):
+            return sp.Add(*[Cross(e, expr2) for e in expr1.args])
+        if isinstance(expr2, sp.Add):
+            return sp.Add(*[Cross(expr1, e) for e in expr2.args]) 
+        obj = Expr.__new__(cls, expr1, expr2)
+        obj._expr1 = expr1
+        obj._expr2 = expr2
+        return obj
 
     def doit(self, **hints: dict[Any]) -> Expr:
         return cross(self._expr1.doit(), self._expr2.doit())

@@ -13,7 +13,7 @@ class Chebyshev(Jacobi):
         self,
         N: int,
         domain: Domain = Domain(-1, 1),
-        coordinates: CoordSys = None,
+        system: CoordSys = None,
         name: str = "Chebyshev",
         fun_str: str = "T",
         **kw,
@@ -21,12 +21,12 @@ class Chebyshev(Jacobi):
         Jacobi.__init__(
             self,
             N,
-            domain,
-            coordinates,
-            name,
-            fun_str,
-            -sp.S.Half,
-            -sp.S.Half,
+            domain=domain,
+            system=system,
+            name=name,
+            fun_str=fun_str,
+            alpha=-sp.S.Half,
+            beta=-sp.S.Half,
         )
 
     @partial(jax.jit, static_argnums=0)

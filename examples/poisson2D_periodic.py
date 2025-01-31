@@ -18,12 +18,12 @@ from jaxfun.Basespace import n
 from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_sparse_list
 
 
-ue = (sp.cos(2*x)) * sp.exp(sp.cos(3*sp.pi*y))
+ue = (sp.cos(2*x)) * sp.exp(sp.cos(2*sp.pi*y))
 
-M = 50
+M, N = 80, 20
 bcs = {"left": {"D": ue.subs(y, -1)}, "right": {"D": ue.subs(y, 1)}}
 D = FunctionSpace(M, Chebyshev, bcs, scaling=n + 1, name="D", fun_str="psi")
-F = FunctionSpace(M, Fourier, name="F", fun_str="E")
+F = FunctionSpace(N, Fourier, name="F", fun_str="E")
 T = TensorProduct((F, D), name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")

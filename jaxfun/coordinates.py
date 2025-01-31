@@ -45,7 +45,7 @@ latex_sym_dict = {
 
 
 class defaultdict(UserDict):
-    def __missing__(self, key):
+    def __missing__(self, key) -> str:
         return key
 
 
@@ -334,11 +334,11 @@ class CoordSys(Basic):
         # Return the instance
         return obj
 
-    def sub_system(self, index: int=0):
+    def sub_system(self, index: int=0) -> SubCoordSys:
         return SubCoordSys(self, index)
 
     @property
-    def dims(self):
+    def dims(self) -> int:
         return len(self._base_scalars)
 
     def _sympystr(self, printer: Any) -> str:
@@ -647,7 +647,7 @@ class CoordSys(Basic):
 
 class SubCoordSys:
 
-    def __init__(self, system: CoordSys, index: int = 0):
+    def __init__(self, system: CoordSys, index: int = 0) -> None:
         assert system.dims > 1 
         self._base_scalars = (system._base_scalars[index],)
         self._base_vectors = (system._base_vectors[index],)

@@ -52,29 +52,29 @@ C = (
 )
 uh = jnp.linalg.solve(C, b.flatten()).reshape(b.shape)
 
-# Alternative scipy sparse implementation
-a = tpmats_to_scipy_sparse_list(A, tol=1000)
-A0 = (
-    scipy_sparse.kron(a[0], a[1], 'csc')
-    + scipy_sparse.kron(a[2], a[3], 'csc')
-    + scipy_sparse.kron(a[4], a[5], 'csc')
-)
-un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
+## Alternative scipy sparse implementation
+#a = tpmats_to_scipy_sparse_list(A, tol=1000)
+#A0 = (
+#    scipy_sparse.kron(a[0], a[1], 'csc')
+#    + scipy_sparse.kron(a[2], a[3], 'csc')
+#    + scipy_sparse.kron(a[4], a[5], 'csc')
+#)
+#un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 
 N = 100
-xj = T.mesh(kind="uniform", N=N)
-uj = T.evaluate(un, kind="uniform", N=N)
+xj = T.mesh(kind="uniform", N=(N, N))
+uj = T.backward(uh, kind="uniform", N=(N, N))
 uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
 if "pytest" in os.environ:
-    assert error < ulp(A0.data.max()), error
+    assert error < ulp(C.max()), error
     sys.exit(1)
 
 print("Error =", error)
 
 f, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4))
-xj = T.mesh(kind="uniform", N=100, broadcast=False)
+xj = T.mesh(kind="uniform", N=(100, 100), broadcast=False)
 ax1.contourf(xj[0], xj[1], uj)
 ax2.contourf(xj[0], xj[1], uej)
 ax2.set_autoscalex_on(False)

@@ -23,7 +23,7 @@ def get_basisfunctions(
     return None, None
 
 
-def split(forms):
+def split(forms) -> dict:
     v, u = get_basisfunctions(forms)
     assert v is not None, 'A test function is required'
     V = v.functionspace

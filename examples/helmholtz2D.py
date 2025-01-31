@@ -48,8 +48,8 @@ A0 = (
 )
 un = jnp.array(scipy_sparse.linalg.spsolve(A0, L.flatten()).reshape(L.shape))
 
-xj = T.mesh(kind="uniform", N=100)
-uj = T.evaluate(un, kind="uniform", N=100)
+uj = T.backward(un, kind="uniform", N=(100, 100))
+xj = T.mesh(kind="uniform", N=(100, 100))
 uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej)
@@ -60,7 +60,7 @@ if "pytest" in os.environ:
 print("Error =", error)
 
 f, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4))
-xj = T.mesh(kind="uniform", N=100, broadcast=False)
+xj = T.mesh(kind="uniform", N=(100, 100), broadcast=False)
 ax1.contourf(xj[0], xj[1], uj)
 ax2.contourf(xj[0], xj[1], uej)
 ax2.set_autoscalex_on(False)

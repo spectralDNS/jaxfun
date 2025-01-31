@@ -20,13 +20,14 @@ class Jacobi(BaseSpace):
     def __init__(
         self,
         N: int,
-        domain: Domain = Domain(-1, 1),
+        domain: Domain = None,
         system: CoordSys = None,
         name: str = "Jacobi",
         fun_str: str = "J",
         alpha: Number = 0,
         beta: Number = 0,
     ) -> None:
+        domain = Domain(-1, 1) if domain is None else domain
         BaseSpace.__init__(
             self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
@@ -34,7 +35,7 @@ class Jacobi(BaseSpace):
         self.beta = beta
 
     @partial(jax.jit, static_argnums=0)
-    def evaluate(self, x: float, c: Array) -> float:
+    def evaluate(self, X: float, c: Array) -> float:
         """
         Evaluate a Jacobi series at points x.
 
@@ -58,9 +59,9 @@ class Jacobi(BaseSpace):
 
         if len(c) == 1:
             # Multiply by 0 * x for shape
-            return c[0] + 0 * x
+            return c[0] + 0 * X
         if len(c) == 2:
-            return c[0] + c[1] * ((a + 1) + (a + b + 2) * (x - 1) / 2)
+            return c[0] + c[1] * ((a + 1) + (a + b + 2) * (X - 1) / 2)
 
         def body_fun(i: int, val: tuple[int, Array, Array]) -> tuple[int, Array, Array]:
             n, c0, c1 = val
@@ -68,7 +69,7 @@ class Jacobi(BaseSpace):
             tmp = c0
             n = n - 1
             alf = (2 * n + a + b - 1) * (
-                (2 * n + a + b) * (2 * n + a + b - 2) * x + a**2 - b**2
+                (2 * n + a + b) * (2 * n + a + b - 2) * X + a**2 - b**2
             )
             bet = 2 * (n + a - 1) * (n + b - 1) * (2 * n + a + b)
             cn = 2 * n * (n + a + b) * (2 * n + a + b - 2)
@@ -78,19 +79,19 @@ class Jacobi(BaseSpace):
             return n, c0, c1
 
         n = len(c)
-        c0 = jnp.ones_like(x) * c[-2]
-        c1 = jnp.ones_like(x) * c[-1]
+        c0 = jnp.ones_like(X) * c[-2]
+        c1 = jnp.ones_like(X) * c[-1]
 
         _, c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (n, c0, c1))
-        return c0 + c1 * ((a + 1) + (a + b + 2) * (x - 1) / 2)
+        return c0 + c1 * ((a + 1) + (a + b + 2) * (X - 1) / 2)
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.N + 1 if N == 0 else N + 1
+        N = self.N if N == 0 else N 
         return jnp.array(roots_jacobi(N, float(self.alpha), float(self.beta)))
 
     @partial(jax.jit, static_argnums=(0, 2))
-    def eval_basis_function(self, x: float, i: int) -> float:
-        x0 = x * 0 + 1
+    def eval_basis_function(self, X: float, i: int) -> float:
+        x0 = X * 0 + 1
         if i == 0:
             return x0
 
@@ -99,18 +100,18 @@ class Jacobi(BaseSpace):
         def body_fun(n: int, val: tuple[Array, Array]) -> tuple[Array, Array]:
             x0, x1 = val
             alf = (2 * n + a + b - 1) * (
-                (2 * n + a + b) * (2 * n + a + b - 2) * x + a**2 - b**2
+                (2 * n + a + b) * (2 * n + a + b - 2) * X + a**2 - b**2
             )
             bet = 2 * (n + a - 1) * (n + b - 1) * (2 * n + a + b)
             cn = 2 * n * (n + a + b) * (2 * n + a + b - 2)
             x2 = (x1 * alf - x0 * bet) / cn
             return x1, x2
 
-        return jax.lax.fori_loop(2, i + 1, body_fun, (x0, x))[-1]
+        return jax.lax.fori_loop(2, i + 1, body_fun, (x0, X))[-1]
 
     @partial(jax.jit, static_argnums=0)
-    def eval_basis_functions(self, x: float) -> Array:
-        x0 = x * 0 + 1
+    def eval_basis_functions(self, X: float) -> Array:
+        x0 = X * 0 + 1
 
         a, b = float(self.alpha), float(self.beta)
 
@@ -119,7 +120,7 @@ class Jacobi(BaseSpace):
         ) -> tuple[tuple[float, float], Array]:
             x0, x1 = carry
             alf = (2 * n + a + b - 1) * (
-                (2 * n + a + b) * (2 * n + a + b - 2) * x + a**2 - b**2
+                (2 * n + a + b) * (2 * n + a + b - 2) * X + a**2 - b**2
             )
             bet = 2 * (n + a - 1) * (n + b - 1) * (2 * n + a + b)
             cn = 2 * n * (n + a + b) * (2 * n + a + b - 2)
@@ -128,14 +129,14 @@ class Jacobi(BaseSpace):
 
         _, xs = jax.lax.scan(
             inner_loop,
-            (x0, a + 1 + (a + b + 2) * (x - 1) / 2),
-            jnp.arange(2, self.N + 2),
+            (x0, a + 1 + (a + b + 2) * (X - 1) / 2),
+            jnp.arange(2, self.N + 1),
         )
 
         return jnp.hstack((x0, xs))
 
     def norm_squared(self) -> Array:
-        return sp.lambdify(n, self.h(n, 0), modules="jax")(jnp.arange(self.N + 1))
+        return sp.lambdify(n, self.h(n, 0), modules="jax")(jnp.arange(self.N))
 
     @property
     def reference_domain(self) -> Domain:
@@ -223,5 +224,17 @@ class Jacobi(BaseSpace):
         return sp.simplify(self.gn(n) ** 2 * f)
 
     # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
-    def gn(self, n: Symbol | Number):
+    def gn(self, n: Symbol | Number) -> sp.Expr | Number:
         return 1
+
+def matrices(test: tuple[Jacobi, int], trial: tuple[Jacobi, int]) -> Array:
+    from jax.experimental import sparse
+    from scipy import sparse as scipy_sparse
+
+    v, i = test
+    u, j = trial
+    if i == 0 and j == 0:
+        return sparse.BCOO.from_scipy_sparse(
+            scipy_sparse.diags((v.norm_squared(),), (0,), (v.N, u.N), "csr")
+        )
+    return None

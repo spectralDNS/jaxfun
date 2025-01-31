@@ -1,14 +1,15 @@
 from typing import Union, Any
+import importlib
 from jax import Array
 import jax.numpy as jnp
 from jaxfun.arguments import test, trial, BasisFunction, TrialFunction, TestFunction
 from jaxfun.coordinates import CoordSys
 from jaxfun.forms import get_basisfunctions, split
 from jaxfun.utils.common import matmat, tosparse
-from jaxfun.composite import Composite, BCGeneric, DirectSum
+from jaxfun.composite import Composite, BCGeneric
 from jaxfun.Basespace import BaseSpace
 from jaxfun.utils.common import lambdify
-from jaxfun.tensorproductspace import TensorProductSpace, DirectSumTPS, TPMatrix
+from jaxfun.tensorproductspace import DirectSumTPS, TPMatrix
 import sympy as sp
 
 
@@ -49,7 +50,9 @@ def inner(
     for a0 in a_forms:  # Bilinear form
         # There is one tensor product matrix or just matrix (1D) for each a0
         mats = []
-        sc = float(a0["coeff"])  # one scalar coefficient to all the matrices
+        # one scalar coefficient to all the matrices
+        sc = sp.sympify(a0['coeff'])
+        sc = float(sc) if sc.is_real else complex(sc) 
         trial = []
         has_bcs = False
         for key, ai in a0.items():
@@ -97,7 +100,8 @@ def inner(
     # Linear form
     for b0 in b_forms:
         bs = []
-        sc = float(b0["coeff"])  # one scalar coefficient to all the vectors
+        sc = sp.sympify(b0['coeff'])
+        sc = float(sc) if sc.is_real else complex(sc) 
         for key, bi in b0.items():
             if key == "coeff":
                 continue
@@ -118,7 +122,9 @@ def inner(
     )
 
 
-def process_results(aresults, bresults, return_all_items, dims, sparse, sparse_tol):
+def process_results(
+    aresults, bresults, return_all_items, dims, sparse, sparse_tol
+) -> Union[Array, list[Array]]:
     if return_all_items:
         return aresults, bresults
 
@@ -140,7 +146,7 @@ def process_results(aresults, bresults, return_all_items, dims, sparse, sparse_t
     return aresults, bresults
 
 
-def inner_bilinear(ai: sp.Expr, v: BaseSpace, u: BaseSpace, sc: float) -> Array:
+def inner_bilinear(ai: sp.Expr, v: BaseSpace, u: BaseSpace, sc: float | complex) -> Array:
     vo = v.orthogonal
     uo = u.orthogonal
     xj, wj = vo.quad_points_and_weights()
@@ -169,10 +175,25 @@ def inner_bilinear(ai: sp.Expr, v: BaseSpace, u: BaseSpace, sc: float) -> Array:
         else:
             scale *= float(aii)
 
-    w = wj * df ** (i + j - 1) * scale  # Account for domain different from reference
-    Pi = vo.evaluate_basis_derivative(xj, k=i)
-    Pj = uo.evaluate_basis_derivative(xj, k=j)
-    z = matmat(Pi.T * w[None, :], Pj)
+    z = None
+    if len(scale) == 1:
+        # Look up matrix
+        mod = importlib.import_module(vo.__class__.__module__)
+        z = mod.matrices((vo, i), (uo, j))
+        if z is None:
+            pass
+        else:
+            s = scale*df**(i+j-1)
+            if s.item() != 1:
+                z.data = z.data*s
+            z = z.todense()
+        
+    if z is None:
+        w = wj * df ** (i + j - 1) * scale
+        Pi = vo.evaluate_basis_derivative(xj, k=i)
+        Pj = uo.evaluate_basis_derivative(xj, k=j)
+        z = matmat(Pi.T * w[None, :], jnp.conj(Pj))
+
     if u == v and isinstance(u, Composite):
         z = v.apply_stencil_galerkin(z)
     elif isinstance(v, Composite) and isinstance(u, Composite):
@@ -184,7 +205,7 @@ def inner_bilinear(ai: sp.Expr, v: BaseSpace, u: BaseSpace, sc: float) -> Array:
     return z
 
 
-def inner_linear(bi: sp.Expr, v: BaseSpace, sc: float) -> Array:
+def inner_linear(bi: sp.Expr, v: BaseSpace, sc: float | complex) -> Array:
     vo = v.orthogonal
     xj, wj = vo.quad_points_and_weights()
     df = float(vo.domain_factor)
@@ -216,13 +237,13 @@ def inner_linear(bi: sp.Expr, v: BaseSpace, sc: float) -> Array:
                 uj *= float(bii)
     Pi = vo.evaluate_basis_derivative(xj, k=i)
     w = wj * df ** (i - 1) * sc  # Account for domain different from reference
-    z = matmat(uj * w, Pi)
+    z = matmat(uj * w, jnp.conj(Pi))
     if isinstance(v, Composite):
         z = v.apply_stencil_left(z)
     return z
 
 
-def project1D(ue, V):
+def project1D(ue: sp.Expr, V: BaseSpace) -> Array:
     u = TrialFunction(V)
     v = TestFunction(V)
     M, b = inner(v * u + v * ue)
@@ -240,7 +261,7 @@ class Measure:
         self.system = system
         self.__dict__.update(kwargs)
 
-    def __rmul__(self, expr: sp.Expr):
+    def __rmul__(self, expr: sp.Expr) -> Union[Array, list[Array]]:
         return inner(
             expr * self.system.sg,
             sparse=self.sparse,

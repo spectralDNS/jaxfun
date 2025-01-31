@@ -11,7 +11,7 @@ from jaxfun.inner import inner
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
 def test_inner(space) -> None:
-    N = 10
+    N = 11
     V = space(N)
     x = V.system.x
     u = TrialFunction(V)
@@ -25,7 +25,7 @@ def test_inner(space) -> None:
     assert jnp.allclose(M.todense().diagonal(-1), a0)
     M = inner(x * v * u + sp.diff(u, x) * v, sparse=True)
 
-    N = 10
+    N = 11
     C = Composite(N, space, {"left": {"D": 0}, "right": {"D": 0}})
     u = TrialFunction(C)
     v = TestFunction(C)

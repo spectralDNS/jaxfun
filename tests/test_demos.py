@@ -6,6 +6,8 @@ demos = [
     'poisson2D',
     'poisson2D_curv',
     'poisson3D',
+    'poisson1D_periodic',
+    'poisson2D_periodic',
     'biharmonic2D'
 ]
 

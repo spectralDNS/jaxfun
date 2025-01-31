@@ -9,6 +9,8 @@ import jax
 from jax import Array
 import jax.numpy as jnp
 from jaxfun.Basespace import BaseSpace
+from jaxfun.Fourier import Fourier
+from jaxfun.Chebyshev import Chebyshev
 from jaxfun.composite import Composite, DirectSum, BCGeneric
 from jaxfun.coordinates import CoordSys
 from jaxfun.utils.common import lambdify, eliminate_near_zeros
@@ -36,7 +38,7 @@ class TensorProductSpace:
         self.name = name
         self.system = system
         self.tensorname = tensor_product_symbol.join([b.name for b in spaces])
-        
+
     def __len__(self) -> int:
         return len(self.spaces)
 
@@ -47,27 +49,34 @@ class TensorProductSpace:
         return self.spaces[i]
 
     @property
-    def dims(self):
+    def dims(self) -> int:
         return len(self)
 
     @property
-    def rank(self):
+    def rank(self) -> int:
         return 0
 
-    def shape(self):
+    def shape(self) -> tuple[int]:
         return tuple([n.N + 1 for n in self.spaces])
 
     def mesh(
-        self, kind: str = "quadrature", N: int = 0, broadcast: bool = True
+        self,
+        kind: str = "quadrature",
+        N: tuple[int] | None = None,
+        broadcast: bool = True,
     ) -> Array:
         """Return mesh in the domain of self"""
         mesh = []
+        if N is None:
+            N = tuple([s.N for s in self.spaces])
         for ax, space in enumerate(self.spaces):
-            X = space.mesh(kind, N)
+            X = space.mesh(kind, N[ax])
             mesh.append(self.broadcast_to_ndims(X, ax) if broadcast else X)
         return tuple(mesh)
 
-    def cartesian_mesh(self, kind: str = "quadrature", N: int = 0):
+    def cartesian_mesh(
+        self, kind: str = "quadrature", N: tuple[int] | None = None
+    ) -> tuple[Array]:
         rv = self.system._position_vector
         x = self.system.base_scalars()
         xj = self.mesh(kind, N, True)
@@ -76,32 +85,24 @@ class TensorProductSpace:
             mesh.append(lambdify(x, r, modules="jax")(*xj))
         return tuple(mesh)
 
-    def broadcast_to_ndims(self, x: Array, axis: int = 0):
+    def broadcast_to_ndims(self, x: Array, axis: int = 0) -> Array:
         """Return 1D array ``x`` as an array of shape according to self"""
         s = [jnp.newaxis] * len(self)
         s[axis] = slice(None)
         return x[tuple(s)]
 
-    @partial(jax.jit, static_argnums=(0, 2, 3))
-    def evaluate(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
-        if kind == "quadrature":
-            mesh = [s.quad_points_and_weights(N=N)[0] for s in self]
-        else:
-            mesh = [
-                jnp.linspace(
-                    float(d.reference_domain.lower), float(d.reference_domain.upper), N
-                )
-                for d in self
-            ]
+    @partial(jax.jit, static_argnums=0)
+    def evaluate(self, x: list[Array], c: Array) -> Array:
+        """Evaluate on a given tensor product mesh"""
         dim: int = len(self)
         if dim == 2:
-            for i, (xi, ax) in enumerate(zip(mesh, range(dim))):
+            for i, (xi, ax) in enumerate(zip(x, range(dim))):
                 axi: int = dim - 1 - ax
                 c = jax.vmap(
                     self.spaces[i].evaluate, in_axes=(None, axi), out_axes=axi
-                )(xi, c)
+                )(self.spaces[i].map_reference_domain(xi), c)
         else:
-            for i, (xi, ax) in enumerate(zip(mesh, range(dim))):
+            for i, (xi, ax) in enumerate(zip(x, range(dim))):
                 ax0, ax1 = set(range(dim)) - set((ax,))
                 c = jax.vmap(
                     jax.vmap(
@@ -109,7 +110,71 @@ class TensorProductSpace:
                     ),
                     in_axes=(None, ax1),
                     out_axes=ax1,
-                )(xi, c)
+                )(self.spaces[i].map_reference_domain(xi), c)
+        return c
+
+    def get_padded(self, N: tuple[int]):
+        paddedspaces = [s.get_padded(n) for s, n in zip(self.spaces, N)]
+        return TensorProductSpace(
+            paddedspaces, system=self.system, name=self.name + "p"
+        )
+
+    def backward(
+        self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
+    ) -> Array:
+        dim: int = len(self)
+        has_fft = jnp.any(
+            jnp.array([isinstance(space.orthogonal, Fourier) for space in self.spaces])
+        )
+
+        # padding in Fourier requires additional effort because we are using the FFT
+        # and padding with jnp.fft is not padding the highest wavenumbers, but simply the
+        # end of the array.
+        if N is not None and has_fft:
+            if jnp.any(jnp.array([n > space.N for n, space in zip(N, self.spaces)])).item():
+                shape = list(c.shape)
+                for ax, space in enumerate(self.spaces):
+                    if isinstance(space, Fourier):
+                        if N[ax] > space.N: # padding
+                            shape[ax] = N[ax]
+                c0 = np.zeros(shape, dtype=c.dtype)
+                sl = [slice(0, c.shape[ax]) for ax in range(dim)]
+                for ax, space in enumerate(self.spaces):
+                    if isinstance(space, Fourier):
+                        sl[ax] = space.wavenumbers()
+                    c0[tuple(sl)] = c
+                c = jnp.array(c0)
+
+        return self._backward(c, kind, N)
+
+    @partial(jax.jit, static_argnums=(0, 2, 3))
+    def _backward(
+        self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
+    ) -> Array:
+        dim: int = len(self)
+
+        if dim == 2:
+            for ax in range(dim):
+                axi: int = dim - 1 - ax
+                backward = partial(
+                    self.spaces[ax].backward,
+                    kind=kind,
+                    N=self.spaces[ax].N if N is None else N[ax],
+                )
+                c = jax.vmap(backward, in_axes=axi, out_axes=axi)(c)
+        else:
+            for ax in range(dim):
+                backward = partial(
+                    self.spaces[ax].backward,
+                    kind=kind,
+                    N=self.spaces[ax] if N is None else N[ax],
+                )
+                ax0, ax1 = set(range(dim)) - set((ax,))
+                c = jax.vmap(
+                    jax.vmap(backward, in_axes=ax0, out_axes=ax0),
+                    in_axes=ax1,
+                    out_axes=ax1,
+                )(c)
         return c
 
 
@@ -137,7 +202,7 @@ class VectorTensorProductSpace:
         return self.tensorspaces[i]
 
     @property
-    def rank(self):
+    def rank(self) -> int:
         return 1
 
 
@@ -273,7 +338,7 @@ class DirectSumTPS(TensorProductSpace):
                 else:
                     self.bndvals[tensorspace] = jnp.array(uh).T
 
-    def split(self, spaces: list[BaseSpace | DirectSum]):
+    def split(self, spaces: list[BaseSpace | DirectSum]) -> dict:
         f = []
         for space in spaces:
             if isinstance(space, DirectSum):
@@ -286,13 +351,13 @@ class DirectSumTPS(TensorProductSpace):
             for i, s in enumerate(tensorspaces)
         }
 
-    def evaluate(self, c: Array, kind: str = "quadrature", N: int = 0):
+    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         a = []
         for f, v in self.tpspaces.items():
             if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.spaces])):
-                a.append(v.evaluate(self.bndvals[f], kind=kind, N=N))
+                a.append(v.backward(self.bndvals[f], kind=kind, N=N))
             else:
-                a.append(v.evaluate(c, kind=kind, N=N))
+                a.append(v.backward(c, kind=kind, N=N))
         return jnp.sum(jnp.array(a), axis=0)
 
 
@@ -310,7 +375,9 @@ class TPMatrix:
         self.trial_space = trial_space
 
 
-def tpmats_to_scipy_sparse_list(A: list[TPMatrix], tol: int = 100) -> list[scipy_sparse.csc_array]:
+def tpmats_to_scipy_sparse_list(
+    A: list[TPMatrix], tol: int = 100
+) -> list[scipy_sparse.csc_array]:
     return [
         scipy_sparse.csc_array(eliminate_near_zeros(mat, tol))
         for a in A

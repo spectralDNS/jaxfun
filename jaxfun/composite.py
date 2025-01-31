@@ -1,4 +1,7 @@
+from __future__ import annotations
 from functools import partial
+from typing import Any
+import copy
 import sympy as sp
 from sympy import Number
 from scipy import sparse as scipy_sparse
@@ -8,13 +11,61 @@ import jax.numpy as jnp
 from jax import Array
 from jax.experimental import sparse
 from jax.experimental.sparse import BCOO
-from jaxfun.Basespace import BaseSpace, n, Domain, BoundaryConditions
+from jaxfun.Basespace import BaseSpace, n, Domain
 from jaxfun.Jacobi import Jacobi
 from jaxfun.utils.common import matmat
 from jaxfun.coordinates import CoordSys
 
 direct_sum_symbol = "\u2295"
 
+
+class BoundaryConditions(dict):
+    """Boundary conditions as a dictionary"""
+
+    def __init__(self, bc: dict, domain: Domain = Domain(-1, 1)) -> None:
+        bcs = {"left": {}, "right": {}}
+        bcs.update(copy.deepcopy(bc))
+        dict.__init__(self, bcs)
+
+    def orderednames(self) -> list[str]:
+        return ["L" + bci for bci in sorted(self["left"].keys())] + [
+            "R" + bci for bci in sorted(self["right"].keys())
+        ]
+
+    def orderedvals(self) -> list[Number]:
+        ls = []
+        for lr in ("left", "right"):
+            for key in sorted(self[lr].keys()):
+                val = self[lr][key]
+                ls.append(val[1] if isinstance(val, (tuple, list)) else val)
+        return ls
+
+    def num_bcs(self) -> int:
+        return len(self.orderedvals())
+
+    def num_derivatives(self) -> int:
+        n = {"D": 0, "R": 0, "N": 1, "N2": 2, "N3": 3, "N4": 4}
+        num_diff = 0
+        for val in self.values():
+            for k in val:
+                num_diff += n[k]
+        return num_diff
+
+    def is_homogeneous(self) -> bool:
+        for val in self.values():
+            for v in val.values():
+                if v != 0:
+                    return False
+        return True
+
+    def get_homogeneous(self) -> BoundaryConditions:
+        bc = {}
+        for k, v in self.items():
+            bc[k] = {}
+            for s in v:
+                bc[k][s] = 0
+        return BoundaryConditions(bc)
+    
 
 class Composite(BaseSpace):
     """Space created by combining orthogonal basis functions
@@ -28,7 +79,7 @@ class Composite(BaseSpace):
         N: int,
         orthogonal: BaseSpace,
         bcs: BoundaryConditions,
-        domain: Domain = Domain(-1, 1),
+        domain: Domain = None,
         name: str = "Composite",
         fun_str: str = "phi",
         system: CoordSys = None,
@@ -37,6 +88,7 @@ class Composite(BaseSpace):
         beta: Number = 0,
         scaling: sp.Expr = sp.S(1),
     ) -> None:
+        domain = Domain(-1, 1) if domain is None else domain
         BaseSpace.__init__(self, N, domain, system=system, name=name, fun_str=fun_str)
         self.orthogonal = orthogonal(
             N, domain=domain, alpha=alpha, beta=beta, system=system
@@ -49,40 +101,44 @@ class Composite(BaseSpace):
         self.S = BCOO.from_scipy_sparse(self.stencil_to_scipy_sparse())
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        return self.orthogonal.quad_points_and_weights()
+        return self.orthogonal.quad_points_and_weights(N=N)
 
     @partial(jax.jit, static_argnums=0)
-    def evaluate(self, x: float, c: Array) -> float:
-        return self.orthogonal.evaluate(x, self.to_orthogonal(c))
+    def evaluate(self, X: float, c: Array) -> float:
+        return self.orthogonal.evaluate(X, self.to_orthogonal(c))
+
+    @partial(jax.jit, static_argnums=(0, 2, 3))
+    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> float:
+        return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
 
     @partial(jax.jit, static_argnums=(0, 2))
-    def evaluate_basis_derivative(self, x: Array, k: int = 0) -> Array:
-        P: Array = self.orthogonal.evaluate_basis_derivative(x, k)
+    def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
+        P: Array = self.orthogonal.evaluate_basis_derivative(X, k)
         return self.apply_stencil_right(P)
 
     @partial(jax.jit, static_argnums=0)
-    def vandermonde(self, x: Array) -> Array:
-        P: Array = self.orthogonal.evaluate_basis_derivative(x, 0)
+    def vandermonde(self, X: Array) -> Array:
+        P: Array = self.orthogonal.evaluate_basis_derivative(X, 0)
         return self.apply_stencil_right(P)
 
     @partial(jax.jit, static_argnums=(0, 2))
-    def eval_basis_function(self, x: float, i: int) -> float:
+    def eval_basis_function(self, X: float, i: int) -> float:
         row: Array = self.get_stencil_row(i)
         psi: Array = jnp.array(
-            [self.orthogonal.eval_basis_function(x, i + j) for j in self.stencil.keys()]
+            [self.orthogonal.eval_basis_function(X, i + j) for j in self.stencil.keys()]
         )
         return matmat(row, psi)
 
     @partial(jax.jit, static_argnums=0)
-    def eval_basis_functions(self, x: float) -> Array:
-        P: Array = self.orthogonal.eval_basis_functions(x)
+    def eval_basis_functions(self, X: float) -> Array:
+        P: Array = self.orthogonal.eval_basis_functions(X)
         return self.apply_stencil_right(P)
 
     def get_stencil_row(self, i: int) -> Array:
         return self.S[i].data[: len(self.stencil)]
 
     def stencil_to_scipy_sparse(self) -> scipy_sparse.spmatrix:
-        k = jnp.arange(self.N)
+        k = jnp.arange(self.N - 1)
         return scipy_sparse.diags(
             [
                 jnp.atleast_1d(
@@ -93,7 +149,7 @@ class Composite(BaseSpace):
                 for val in self.stencil.values()
             ],
             [key for key in self.stencil.keys()],
-            shape=(self.N + 1 - self.bcs.num_bcs(), self.N + 1),
+            shape=(self.N - self.bcs.num_bcs(), self.N),
         )
 
     @property
@@ -128,10 +184,10 @@ class Composite(BaseSpace):
         return sparse.BCOO.from_scipy_sparse(scipy_sparse.csr_matrix(T))
 
     @property
-    def dim(self):
-        return self.N + 1 - self.bcs.num_bcs()
+    def dim(self) -> int:
+        return self.N - self.bcs.num_bcs()
 
-    def get_homogeneous(self):
+    def get_homogeneous(self) -> Composite:
         bc = self.bcs.get_homogeneous()
         return Composite(
             N=self.N,
@@ -140,6 +196,21 @@ class Composite(BaseSpace):
             domain=self.domain,
             name=self.name + "0",
             fun_str=self.fun_str,
+            system=self.system,
+            stencil=self.stencil,
+            alpha=self.orthogonal.alpha,
+            beta=self.orthogonal.beta,
+        )
+    
+    def get_padded(self, N: int) -> Composite:
+        bc = self.bcs.get_homogeneous()
+        return Composite(
+            N=N,
+            orthogonal=self.orthogonal.__class__,
+            bcs=bc,
+            domain=self.domain,
+            name=self.name + "p",
+            fun_str=self.fun_str + "p",
             system=self.system,
             stencil=self.stencil,
             alpha=self.orthogonal.alpha,
@@ -155,7 +226,7 @@ class BCGeneric(Composite):
         N: int,
         orthogonal: BaseSpace,
         bcs: dict,
-        domain: Domain = Domain(-1, 1),
+        domain: Domain = None,
         name: str = "BCGeneric",
         fun_str: str = "B",
         system: CoordSys = None,
@@ -164,57 +235,58 @@ class BCGeneric(Composite):
         beta: Number = 0,
         M: int = 0,
     ) -> None:
+        domain = Domain(-1, 1) if domain is None else domain
         bcs = BoundaryConditions(bcs, domain=domain)
         BaseSpace.__init__(self, N, domain, system=system, name=name, fun_str=fun_str)
         self.bcs = bcs
         self.stencil = None
         self.M = M
         self.orthogonal = orthogonal(
-            bcs.num_bcs() + bcs.num_derivatives() - 1,
+            bcs.num_bcs() + bcs.num_derivatives(),
             domain=domain,
             alpha=alpha,
             beta=beta,
             system=system,
         )
         S = get_bc_basis(bcs, self.orthogonal)
-        self.orthogonal.N = S.shape[1] - 1
+        self.orthogonal.N = S.shape[1]
         self.S = BCOO.fromdense(S.__array__().astype(float))
 
     @property
-    def dim(self):
-        return self.N + 1
+    def dim(self) -> int:
+        return self.N
 
-    def bnd_vals(self):
+    def bnd_vals(self) -> Array:
         return jnp.array(self.bcs.orderedvals())
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.M + 1 if N == 0 else N + 1
+        N = self.M if N == 0 else N
         return self.orthogonal.quad_points_and_weights(N)
 
 
 class DirectSum:
-    def __init__(self, a: BaseSpace, b: BaseSpace):
+    def __init__(self, a: BaseSpace, b: BaseSpace) -> None:
         assert isinstance(b, BCGeneric)
         self.spaces = [a, b]
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
-        
-    def __getitem__(self, i):
+
+    def __getitem__(self, i: int) -> BaseSpace:
         return self.spaces[i]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.spaces)
 
-    def __getattr__(self, name):
+    def __getattr__(self, name) -> Any:
         return getattr(self.spaces[0], name)
 
-    def bnd_vals(self):
+    def bnd_vals(self) -> Array:
         return self.spaces[1].bnd_vals()
 
     @partial(jax.jit, static_argnums=0)
-    def evaluate(self, x: float, c: Array) -> float:
-        return self.spaces[0].evaluate(x, c) + self.spaces[1].evaluate(
-            x, self.bnd_vals()
+    def evaluate(self, X: float, c: Array) -> float:
+        return self.spaces[0].evaluate(X, c) + self.spaces[1].evaluate(
+            X, self.bnd_vals()
         )
 
 
@@ -271,7 +343,7 @@ def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
     return d
 
 
-def get_bc_basis(bcs: BoundaryConditions, orthogonal: Jacobi):
+def get_bc_basis(bcs: BoundaryConditions, orthogonal: Jacobi) -> sp.Matrix:
     """Return boundary basis satisfying `bcs`.
 
     Parameters
@@ -356,9 +428,9 @@ if __name__ == "__main__":
     N = 50
     biharmonic = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
     dirichlet = {"left": {"D": 0}, "right": {"D": 0}}
-    C = Composite(Chebyshev, N, dirichlet, name="C")
+    C = Composite(N, Chebyshev, dirichlet, name="C")
 
-    v = jax.random.normal(jax.random.PRNGKey(1), shape=(N + 1, N + 1))
+    v = jax.random.normal(jax.random.PRNGKey(1), shape=(N, N))
     g = C.S @ v @ C.S.T
     g1 = C.apply_stencil_galerkin(v)
 
@@ -376,10 +448,10 @@ if __name__ == "__main__":
     D = inner(v * sp.diff(u, x, 2), sparse=True, sparse_tol=1000)
 
     # Petrov-Galerkin method (https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
-    G = Composite(Chebyshev, N, dirichlet, scaling=n + 1, name="G")
+    G = Composite(N, Chebyshev, dirichlet, scaling=n + 1, name="G")
     PG = Composite(
-        Chebyshev,
         N + 2,
+        Chebyshev,
         biharmonic,
         stencil={
             0: 1 / (2 * sp.pi * (n + 1) * (n + 2)),
@@ -388,10 +460,10 @@ if __name__ == "__main__":
         },
         name="PG",
     )
-    L = Composite(Legendre, N, dirichlet, scaling=n + 1, name="L")
+    L = Composite(N, Legendre, dirichlet, scaling=n + 1, name="L")
     LG = Composite(
-        Legendre,
         N + 2,
+        Legendre,
         biharmonic,
         stencil={
             0: 1 / (2 * (2 * n + 3)),

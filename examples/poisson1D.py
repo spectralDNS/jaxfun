@@ -5,7 +5,8 @@ import matplotlib.pyplot as plt
 import sympy as sp
 import jax.numpy as jnp
 from jaxfun.utils.common import lambdify, ulp
-from jaxfun.Legendre import Legendre as space
+#from jaxfun.Legendre import Legendre as space
+from jaxfun.Chebyshev import Chebyshev as space
 
 # from jaxfun.Jacobi import Jacobi as space
 from jaxfun.inner import inner
@@ -32,9 +33,9 @@ A, b = inner(
     v * Div(Grad(u)) + v * sp.Derivative(ue, x, 2), sparse=True, sparse_tol=1000
 )
 
-xj = D.mesh(kind="uniform", N=100)
+xj = D.mesh()
 uh = jnp.linalg.solve(A.todense(), b)
-uj = D.evaluate(xj, uh)
+uj = D.backward(uh)
 uej = lambdify(x, ue)(xj)
 error = jnp.linalg.norm(uj - uej)
 if "pytest" in os.environ:

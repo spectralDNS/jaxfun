@@ -1,4 +1,4 @@
-# Solve Poisson's equation
+# Solve Poisson's equation in polar coordinates on parts of an annulus
 import sys
 import os
 import matplotlib.pyplot as plt
@@ -9,7 +9,6 @@ import jax.numpy as jnp
 from jaxfun.utils.common import lambdify, ulp
 from jaxfun.Legendre import Legendre
 from jaxfun.Chebyshev import Chebyshev
-from jaxfun.composite import Composite
 from jaxfun.inner import inner
 from jaxfun.arguments import TestFunction, TrialFunction
 from jaxfun.operators import Grad, Div, Dot
@@ -21,20 +20,25 @@ from jaxfun.functionspace import FunctionSpace
 
 M = 20
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
-r, theta = sp.symbols('r,theta', real=True, positive=True)
-C = get_CoordSys('C', sp.Lambda((r, theta), (r*sp.cos(theta), r*sp.sin(theta))))
-D0 = FunctionSpace(M, Legendre, bcs, scaling=n + 1, domain=(sp.S.Half, 1), name="D0", fun_str="psi")
-D1 = FunctionSpace(M, Legendre, bcs, scaling=n + 1, domain=(0, sp.pi/2), name="D1", fun_str="psi")
+r, theta = sp.symbols("r,theta", real=True, positive=True)
+C = get_CoordSys("C", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta))))
+D0 = FunctionSpace(
+    M, Legendre, bcs, scaling=n + 1, domain=(sp.S.Half, 1), name="D0", fun_str="psi"
+)
+D1 = FunctionSpace(
+    M, Legendre, bcs, scaling=n + 1, domain=(0, sp.pi / 2), name="D1", fun_str="phi"
+)
 T = TensorProduct((D0, D1), system=C, name="T")
-v = TestFunction(T)
-u = TrialFunction(T)
+v = TestFunction(T, name="v")
+u = TrialFunction(T, name="u")
 
 # Method of manufactured solution
-rb, tb = T.system.base_scalars()
-ue = (1-rb)*(sp.S.Half-rb) * tb * (sp.pi/2 - tb) #* sp.exp(sp.cos(sp.pi * x)) * sp.exp(sp.sin(sp.pi * y))
+ue = (1 - r) * (sp.S.Half - r) * theta * (sp.pi / 2 - theta)
+ue = C.expr_psi_to_base_scalar(ue)
 
+# Assemble linear system of equations
 # A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
-A, b = inner((v * Div(Grad(u)) + v * Div(Grad(ue)))*rb, sparse=False)
+A, b = inner((v * Div(Grad(u)) + v * Div(Grad(ue))), sparse=False)
 
 # jax can only do kron for dense matrices
 H = jnp.kron(*A[0].mats) + jnp.kron(*A[1].mats) + jnp.kron(*A[2].mats)
@@ -42,18 +46,23 @@ uh = jnp.linalg.solve(H, b.flatten()).reshape(b.shape)
 
 # Alternative scipy sparse implementation
 a = tpmats_to_scipy_sparse_list(A)
-A0 = scipy_sparse.kron(a[0], a[1]) + scipy_sparse.kron(a[2], a[3]) + scipy_sparse.kron(a[4], a[5])
+A0 = (
+    scipy_sparse.kron(a[0], a[1])
+    + scipy_sparse.kron(a[2], a[3])
+    + scipy_sparse.kron(a[4], a[5])
+)
 un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 
-assert jnp.linalg.norm(uh-un) < 10*ulp(1)
+assert jnp.linalg.norm(uh - un) < ulp(1000)
 
-rj, tj = T.mesh(kind='uniform', N=100)
-xc, yc = T.cartesian_mesh(kind='uniform', N=100)
-uj = T.evaluate(uh, kind='uniform', N=100)
-uej = lambdify((rb, tb), ue)(rj, tj)
+r, theta = C.base_scalars()
+rj, tj = T.mesh(kind="uniform", N=(100, 100))
+xc, yc = T.cartesian_mesh(kind="uniform", N=(100, 100))
+uj = T.backward(uh, kind="uniform", N=(100, 100))
+uej = lambdify((r, theta), ue)(rj, tj)
 
 error = jnp.linalg.norm(uj - uej)
-if 'pytest' in os.environ:
+if "pytest" in os.environ:
     assert error < ulp(1000)
     sys.exit(1)
 

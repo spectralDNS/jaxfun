@@ -9,24 +9,28 @@ import jax.numpy as jnp
 from jaxfun.utils.common import lambdify, ulp
 from jaxfun.Legendre import Legendre
 from jaxfun.Chebyshev import Chebyshev
+from jaxfun.Fourier import Fourier
 from jaxfun.inner import inner
 from jaxfun.functionspace import FunctionSpace
-from jaxfun.arguments import TestFunction, TrialFunction
+from jaxfun.arguments import TestFunction, TrialFunction, x, y
 from jaxfun.operators import Grad, Div, Dot
 from jaxfun.Basespace import n
-from jaxfun.tensorproductspace import TensorProductSpace, tpmats_to_scipy_sparse_list
+from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_sparse_list
 
 
-M = 20
-bcs = {"left": {"D": 0}, "right": {"D": 0}}
+ue = (sp.cos(2*x)) * sp.exp(sp.cos(3*sp.pi*y))
+
+M = 50
+bcs = {"left": {"D": ue.subs(y, -1)}, "right": {"D": ue.subs(y, 1)}}
 D = FunctionSpace(M, Chebyshev, bcs, scaling=n + 1, name="D", fun_str="psi")
-T = TensorProductSpace((D, D), name="T")
+F = FunctionSpace(M, Fourier, name="F", fun_str="E")
+T = TensorProduct((F, D), name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 
 # Method of manufactured solution
 x, y = T.system.base_scalars()
-ue = (1 - x**2) * (1 - y**2)  # * sp.exp(sp.cos(sp.pi * x)) * sp.exp(sp.sin(sp.pi * y))
+ue = T.system.expr_psi_to_base_scalar(ue)
 
 # A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
 A, b = inner(v * Div(Grad(u)) + v * Div(Grad(ue)), sparse=False)
@@ -41,8 +45,8 @@ A0 = scipy_sparse.kron(a[0], a[1]) + scipy_sparse.kron(a[2], a[3])
 un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 
 N = 100
-uj = T.backward(uh, kind="uniform", N=(N, N))
-xj = T.mesh(kind="uniform", N=(N, N), broadcast=True)
+uj = T.backward(uh, N=(N, N))
+xj = T.mesh(N=(N, N), broadcast=True)
 uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
@@ -53,11 +57,11 @@ if "pytest" in os.environ:
 print("Error =", error)
 
 f, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4))
-xj = T.mesh(kind="uniform", N=(N, N), broadcast=False)
-ax1.contourf(xj[0], xj[1], uj)
-ax2.contourf(xj[0], xj[1], uej)
+xj = T.mesh(N=(N, N), broadcast=False)
+ax1.contourf(xj[0], xj[1], uj.real)
+ax2.contourf(xj[0], xj[1], uej.real)
 ax2.set_autoscalex_on(False)
-c3 = ax3.contourf(xj[0], xj[1], uej - uj)
+c3 = ax3.contourf(xj[0], xj[1], (uej - uj).real)
 axins = inset_axes(
     ax3,
     width="5%",  # width = 10% of parent_bbox width

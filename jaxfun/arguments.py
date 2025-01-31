@@ -100,7 +100,6 @@ def _get_computational_function(
 # Without it all TestFunctions/TrialFunctions created with the same Cartesian coordinates
 # will be the same object.
 
-
 class TestFunction(Function):
     __test__ = False  # prevent pytest from considering this a test.
 

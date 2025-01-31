@@ -482,7 +482,6 @@ sp.vector.vector.Dot = Dot
 sp.vector.operators.Curl = Curl 
 sp.vector.operators.Gradient = Grad
 sp.vector.operators.Divergence = Div
-
 sp.vector.Cross = Cross
 sp.vector.Dot = Dot 
 sp.vector.Curl = Curl 

@@ -37,8 +37,8 @@ A0 = (
 )
 un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 
-xj = T.mesh(kind="uniform", N=20)
-uj = T.evaluate(un, kind="uniform", N=20)
+uj = T.backward(un, kind="uniform", N=(20, 20, 20))
+xj = T.mesh(kind="uniform", N=(20, 20, 20))
 uej = lambdify((x, y, z), ue)(*xj)
 error = jnp.linalg.norm(uj - uej)
 if 'pytest' in os.environ:

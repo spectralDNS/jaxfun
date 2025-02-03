@@ -12,6 +12,7 @@ def get_basisfunctions(
             trial_found.add(p)
         if isinstance(p, TestFunction | test):
             test_found.add(p)
+
     match (len(test_found), len(trial_found)):
         case (1, 1):
             return test_found.pop(), trial_found.pop()

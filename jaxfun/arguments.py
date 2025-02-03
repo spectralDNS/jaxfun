@@ -78,7 +78,7 @@ def _get_computational_function(
 
     elif isinstance(V, VectorTensorProductSpace):
         b = V.system.base_vectors()
-        for i, Vi in enumerate(V):
+        for Vi in V:
             for v in Vi:
                 functionspacedict[v.name] = v
         return sp.vector.VectorAdd(
@@ -95,10 +95,10 @@ def _get_computational_function(
         )
 
 
-# Note
-# Need a unique Symbol in order to create a new TestFunction/TrialFunction for a new space.
-# Without it all TestFunctions/TrialFunctions created with the same Cartesian coordinates
-# will be the same object.
+# NOTE
+# Need a unique Symbol in order to create a new TestFunction/TrialFunction for a new
+# space. Without it all TestFunctions/TrialFunctions created with the same Cartesian
+# coordinates will be the same object.
 
 
 class TestFunction(Function):
@@ -151,7 +151,7 @@ class TestFunction(Function):
 
     def _latex(self, printer: Any = None) -> str:
         name = self.name if self.name is not None else "TestFunction"
-        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)
+        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return "".join(
             (
                 name,
@@ -236,7 +236,7 @@ class TrialFunction(Function):
 
     def _latex(self, printer: Any = None) -> str:
         name = self.name if self.name is not None else "TrialFunction"
-        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)
+        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return "".join(
             (
                 name,
@@ -317,4 +317,4 @@ class VectorFunction(Function):
         return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
-        return r"\mathbf{{%s}}" % (latex_symbols[self.name],) + str(self.args[:-1])
+        return r"\mathbf{{%s}}" % (latex_symbols[self.name],) + str(self.args[:-1])  # noqa: UP031

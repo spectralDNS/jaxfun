@@ -113,7 +113,7 @@ class TensorProductSpace:
                 )(self.spaces[i].map_reference_domain(xi), c)
         return c
 
-    def get_padded(self, N: tuple[int]):
+    def get_padded(self, N: tuple[int]) -> "TensorProductSpace":
         paddedspaces = [s.get_padded(n) for s, n in zip(self.spaces, N, strict=False)]
         return TensorProductSpace(
             paddedspaces, system=self.system, name=self.name + "p"
@@ -128,24 +128,28 @@ class TensorProductSpace:
         )
 
         # padding in Fourier requires additional effort because we are using the FFT
-        # and padding with jnp.fft is not padding the highest wavenumbers, but simply the
-        # end of the array.
-        if N is not None and has_fft:
-            if jnp.any(
-                jnp.array([n > space.N for n, space in zip(N, self.spaces, strict=False)])
-            ).item():
-                shape = list(c.shape)
-                for ax, space in enumerate(self.spaces):
-                    if isinstance(space, Fourier):
-                        if N[ax] > space.N:  # padding
-                            shape[ax] = N[ax]
-                c0 = np.zeros(shape, dtype=c.dtype)
-                sl = [slice(0, c.shape[ax]) for ax in range(dim)]
-                for ax, space in enumerate(self.spaces):
-                    if isinstance(space, Fourier):
-                        sl[ax] = space.wavenumbers()
-                    c0[tuple(sl)] = c
-                c = jnp.array(c0)
+        # and padding with jnp.fft is not padding the highest wavenumbers, but simply
+        # the end of the array.
+        if (
+            N is not None
+            and has_fft
+            and jnp.any(
+                jnp.array(
+                    [n > space.N for n, space in zip(N, self.spaces, strict=False)]
+                )
+            ).item()
+        ):
+            shape = list(c.shape)
+            for ax, space in enumerate(self.spaces):
+                if isinstance(space, Fourier) and N[ax] > space.N:  # padding
+                    shape[ax] = N[ax]
+            c0 = np.zeros(shape, dtype=c.dtype)
+            sl = [slice(0, c.shape[ax]) for ax in range(dim)]
+            for ax, space in enumerate(self.spaces):
+                if isinstance(space, Fourier):
+                    sl[ax] = space.wavenumbers()
+                c0[tuple(sl)] = c
+            c = jnp.array(c0)
 
         return self._backward(c, kind, N)
 
@@ -264,7 +268,7 @@ class DirectSumTPS(TensorProductSpace):
                 continue
             if isinstance(space, DirectSum):
                 s0 = space.spaces[1]
-                for k, val in s0.bcs.items():
+                for val in s0.bcs.values():
                     for key, v in val.items():
                         if len(sp.sympify(v).free_symbols) > 0:
                             val[key] = system.expr_psi_to_base_scalar(v)
@@ -289,7 +293,7 @@ class DirectSumTPS(TensorProductSpace):
                     bcs = copy.deepcopy(bcother)
                     for lr_other, bco in bcs.items():
                         z = lr(zother, lr_other)
-                        for key, val in bco.items():
+                        for key in bco:
                             if key == "D":
                                 bco[key] = float(
                                     system.expr_base_scalar_to_psi(bcval).subs(
@@ -313,7 +317,7 @@ class DirectSumTPS(TensorProductSpace):
 
         self.tpspaces = self.split(spaces)
         # Compute all the known coefficients of all spaces
-        for tensorspace in self.tpspaces.keys():
+        for tensorspace in self.tpspaces:
             otherspaces = [p for p in tensorspace if not isinstance(p, BCGeneric)]
             bcspaces = [p for p in tensorspace if isinstance(p, BCGeneric)]
             bcsindex = [
@@ -363,7 +367,8 @@ class DirectSumTPS(TensorProductSpace):
         return jnp.sum(jnp.array(a), axis=0)
 
 
-class TPMatrix:
+# NOTE: Could this be a DataClass / NamedTuple?
+class TPMatrix:  # noqa: B903
     def __init__(
         self,
         mats: list[Array],

@@ -167,10 +167,10 @@ class BaseSpace:
     def map_reference_domain(self, x: sp.Symbol | Array) -> sp.Expr | Array:
         """Return true point `x` mapped to reference domain"""
 
-        if not self.domain == self.reference_domain:
+        if self.domain != self.reference_domain:
             a = self.domain.lower
             c = self.reference_domain.lower
-            if isinstance(x, (Array, float)):
+            if isinstance(x, Array | float):
                 x = float(c) + (x - float(a)) * float(self.domain_factor)
             else:
                 x = c + (x - a) * self.domain_factor
@@ -178,10 +178,10 @@ class BaseSpace:
 
     def map_true_domain(self, X: sp.Symbol | Array) -> sp.Expr | Array:
         """Return reference point `x` mapped to true domain"""
-        if not self.domain == self.reference_domain:
+        if self.domain != self.reference_domain:
             a = self.domain.lower
             c = self.reference_domain.lower
-            if isinstance(X, (Array, float)):
+            if isinstance(X, Array | float):
                 X = float(a) + (X - float(c)) / float(self.domain_factor)
             else:
                 X = a + (X - c) / self.domain_factor
@@ -196,7 +196,7 @@ class BaseSpace:
             M = N if N != 0 else self.N
             return jnp.linspace(float(a), float(b), M)
 
-    def cartesian_mesh(self, kind: str = "quadrature", N: int = 0):
+    def cartesian_mesh(self, kind: str = "quadrature", N: int = 0) -> tuple[Array, ...]:
         rv = self.system._position_vector
         t = self.system.base_scalars()[0]
         xj = self.mesh(kind, N)

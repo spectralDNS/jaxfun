@@ -258,10 +258,11 @@ class CoordSys(Basic):
 
         vector_names = list(vector_names)
         if is_cartesian:
-            latex_vects = [r"\mathbf{{%s}}" % (x,) for x in vector_names]
+            latex_vects = [r"\mathbf{{%s}}" % (x,) for x in vector_names]  # noqa: UP031
         else:
             latex_vects = [
-                r"\mathbf{b_{%s}}" % (latex_symbols[x],) for x in variable_names
+                r"\mathbf{b_{%s}}" % (latex_symbols[x],)  # noqa: UP031
+                for x in variable_names
             ]
         pretty_vects = vector_names
 
@@ -287,15 +288,20 @@ class CoordSys(Basic):
         obj._psi = psi
         obj._cartesian_xyz = base_scalars if parent is None else parent._cartesian_xyz
 
-        obj._map_base_scalar_to_symbol = {k: v for k, v in zip(base_scalars, obj._psi, strict=False)}
-        obj._map_symbol_to_base_scalar = {k: v for k, v in zip(obj._psi, base_scalars, strict=False)}
+        obj._map_base_scalar_to_symbol = {
+            k: v for k, v in zip(base_scalars, obj._psi, strict=False)
+        }
+        obj._map_symbol_to_base_scalar = {
+            k: v for k, v in zip(obj._psi, base_scalars, strict=False)
+        }
 
         position_vector = position_vector.xreplace(obj._map_symbol_to_base_scalar)
         obj._map_xyz_to_base_scalar = {
             k: v for k, v in zip(obj._cartesian_xyz, position_vector, strict=False)
         }
 
-        # Add doit to Cartesian coordinates, such that x, y, x are evaluated in computational space as x(psi), y(psi), z(psi)
+        # Add doit to Cartesian coordinates, such that x, y, x are evaluated in
+        # computational space as x(psi), y(psi), z(psi)
         if not is_cartesian:
             for s in obj._cartesian_xyz:
                 s.doit = MethodType(
@@ -320,7 +326,10 @@ class CoordSys(Basic):
         obj._det_g = {True: None, False: None}
         obj._sqrt_det_g = {True: None, False: None}
         obj._covariant_basis_map = {
-            k: v for k, v in zip(range(len(obj._base_vectors)), obj._base_vectors, strict=False)
+            k: v
+            for k, v in zip(
+                range(len(obj._base_vectors)), obj._base_vectors, strict=False
+            )
         }
 
         for i in range(len(base_scalars)):
@@ -403,7 +412,10 @@ class CoordSys(Basic):
             return v
 
         cart_map = {
-            k: v for k, v in zip(self.base_vectors(), self.get_covariant_basis(True), strict=False)
+            k: v
+            for k, v in zip(
+                self.base_vectors(), self.get_covariant_basis(True), strict=False
+            )
         }
         return v.xreplace(cart_map)
 
@@ -490,9 +502,9 @@ class CoordSys(Basic):
         b = self.b
         e = np.zeros_like(b)
         for i, bi in enumerate(b):
-            l = sp.sqrt(self.simplify(np.dot(bi, bi)))
-            l = self.refine(l)
-            e[i] = bi / l
+            length = sp.sqrt(self.simplify(np.dot(bi, bi)))
+            length = self.refine(length)
+            e[i] = bi / length
         self._e = e
         if as_coordsys3d:
             return e @ self._parent.base_vectors()[: e.shape[1]]

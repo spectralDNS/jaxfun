@@ -25,19 +25,20 @@ def inner(
     Parameters
     ----------
     expr : Sympy Expr
-        An expression containing :class:`.TestFunction` and optionally :class:`.TrialFunction`.
+        An expression containing :class:`.TestFunction` and optionally:class:`.TrialFunction`.
     sparse : bool
         if True, then sparsify the matrices before returning
     sparse_tol : int
-        An integer multiple of one ulp. The tolereance for something being zero is determined based
-        on the absolute value of the number being less than sparse_tol*ulp.
+        An integer multiple of one ulp. The tolereance for something being zero is
+        determined based on the absolute value of the number being less than
+        sparse_tol*ulp.
     return_all_items : bool
-        Whether to return just one matrix/vector, or whether to return all computed matrices/vectors.
-        Note that one expr may maintain any number of terms leading to many matrices/vectors.
-        This parameter is only relevant for 1D problems. Multidimensional problems always
-        returns all matrices.
+        Whether to return just one matrix/vector, or whether to return all computed
+        matrices/vectors. Note that one expr may maintain any number of terms leading to
+        many matrices/vectors. This parameter is only relevant for 1D problems.
+        Multidimensional problems always returns all matrices.
 
-    """
+    """  # noqa: E501
     V, U = get_basisfunctions(expr)
     test_space = V.functionspace
     trial_space = U.functionspace if U is not None else None

@@ -186,7 +186,7 @@ def divergence(vect: Vector, doit: bool = True) -> Expr:
     if len(coord_sys) == 0:
         return sp.S.Zero
     elif len(coord_sys) == 1:
-        if isinstance(vect, (Cross, Curl, Gradient)):
+        if isinstance(vect, Cross | Curl | Gradient):
             return Divergence(vect)
         # vect should be a vector with Cartesian or covariant basis vectors
         coord_sys = next(iter(coord_sys))
@@ -201,20 +201,20 @@ def divergence(vect: Vector, doit: bool = True) -> Expr:
             return res.doit()
         return res
     else:
-        if isinstance(vect, (Add, VectorAdd)):
+        if isinstance(vect, Add | VectorAdd):
             return Add.fromiter(divergence(i, doit=doit) for i in vect.args)
-        elif isinstance(vect, (Mul, VectorMul)):
-            vector = [i for i in vect.args if isinstance(i, (Vector, Cross, Gradient))][
+        elif isinstance(vect, Mul | VectorMul):
+            vector = [i for i in vect.args if isinstance(i, Vector | Cross | Gradient)][
                 0
             ]
             scalar = Mul.fromiter(
-                i for i in vect.args if not isinstance(i, (Vector, Cross, Gradient))
+                i for i in vect.args if not isinstance(i, Vector | Cross | Gradient)
             )
             res = Dot(vector, gradient(scalar)) + scalar * divergence(vector, doit=doit)
             if doit:
                 return res.doit()
             return res
-        elif isinstance(vect, (Cross, Curl, Gradient)):
+        elif isinstance(vect, Cross | Curl | Gradient):
             return Divergence(vect)
         else:
             raise Divergence(vect)
@@ -281,9 +281,9 @@ def gradient(scalar_field: Expr, doit: bool = True) -> Vector:
             return vi
 
     else:
-        if isinstance(scalar_field, (Add, VectorAdd)):
+        if isinstance(scalar_field, Add | VectorAdd):
             return VectorAdd.fromiter(gradient(i) for i in scalar_field.args)
-        if isinstance(scalar_field, (Mul, VectorMul)):
+        if isinstance(scalar_field, Mul | VectorMul):
             s = _split_mul_args_wrt_coordsys(scalar_field)
             return VectorAdd.fromiter(scalar_field / i * gradient(i) for i in s)
         return Gradient(scalar_field)
@@ -339,7 +339,7 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
             return outvec.doit()
         return outvec
     else:
-        if isinstance(vect, (Add, VectorAdd)):
+        if isinstance(vect, Add | VectorAdd):
             from sympy.vector import express
 
             try:
@@ -348,12 +348,12 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
             except ValueError:
                 args = vect.args
             return VectorAdd.fromiter(curl(i, doit=doit) for i in args)
-        elif isinstance(vect, (Mul, VectorMul)):
-            vector = [i for i in vect.args if isinstance(i, (Vector, Cross, Gradient))][
+        elif isinstance(vect, Mul | VectorMul):
+            vector = [i for i in vect.args if isinstance(i, Vector | Cross | Gradient)][
                 0
             ]
             scalar = Mul.fromiter(
-                i for i in vect.args if not isinstance(i, (Vector, Cross, Gradient))
+                i for i in vect.args if not isinstance(i, Vector | Cross | Gradient)
             )
             res = Cross(gradient(scalar), vector).doit() + scalar * curl(
                 vector, doit=doit
@@ -361,7 +361,7 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
             if doit:
                 return res.doit()
             return res
-        elif isinstance(vect, (Cross, Curl, Gradient)):
+        elif isinstance(vect, Cross | Curl | Gradient):
             return Curl(vect)
         else:
             raise Curl(vect)
@@ -396,7 +396,7 @@ class Div(Divergence):
     #        if isinstance(expr, sp.Add):
     #            return sp.Add(*[Div(e) for e in expr.args])
     #        vector = [i for i in expr.args if isinstance(i, (Vector, Cross, Grad))][0]
-    #        scalar = Mul.fromiter(i for i in expr.args if not isinstance(i, (Vector, Cross, Grad)))
+    #        scalar = Mul.fromiter(i for i in expr.args if not isinstance(i, (Vector, Cross, Grad))) # noqa: E501
     #        if scalar.is_Number:
     #            return scalar*Div(vector)
     #        return Dot(vector, Grad(scalar)) + scalar*Div(vector)
@@ -419,7 +419,7 @@ class Curl(sympy_Curl):
     #        if isinstance(expr, sp.Add):
     #            return sp.Add(*[Curl(e) for e in expr.args])
     #        vector = [i for i in expr.args if isinstance(i, (Vector, Cross, Grad))][0]
-    #        scalar = Mul.fromiter(i for i in expr.args if not isinstance(i, (Vector, Cross, Grad)))
+    #        scalar = Mul.fromiter(i for i in expr.args if not isinstance(i, (Vector, Cross, Grad))) # noqa: E501
     #        return Cross(Grad(scalar), vector) + scalar*Curl(vector)
 
     def doit(self, **hints: dict[Any]) -> Expr:

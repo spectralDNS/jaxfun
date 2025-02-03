@@ -25,7 +25,9 @@ direct_sum_symbol = "\u2295"
 class BoundaryConditions(dict):
     """Boundary conditions as a dictionary"""
 
-    def __init__(self, bc: dict, domain: Domain = Domain(-1, 1)) -> None:
+    def __init__(self, bc: dict, domain: Domain | None = None) -> None:
+        if domain is None:
+            domain = Domain(-1, 1)
         bcs = {"left": {}, "right": {}}
         bcs.update(copy.deepcopy(bc))
         dict.__init__(self, bcs)
@@ -40,7 +42,7 @@ class BoundaryConditions(dict):
         for lr in ("left", "right"):
             for key in sorted(self[lr].keys()):
                 val = self[lr][key]
-                ls.append(val[1] if isinstance(val, (tuple, list)) else val)
+                ls.append(val[1] if isinstance(val, tuple | list) else val)
         return ls
 
     def num_bcs(self) -> int:
@@ -89,7 +91,7 @@ class Composite(BaseSpace):
         stencil: dict = None,
         alpha: Number = 0,
         beta: Number = 0,
-        scaling: sp.Expr = sp.S(1),
+        scaling: sp.Expr = sp.S.One,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
         BaseSpace.__init__(self, N, domain, system=system, name=name, fun_str=fun_str)
@@ -128,7 +130,7 @@ class Composite(BaseSpace):
     def eval_basis_function(self, X: float, i: int) -> float:
         row: Array = self.get_stencil_row(i)
         psi: Array = jnp.array(
-            [self.orthogonal.eval_basis_function(X, i + j) for j in self.stencil.keys()]
+            [self.orthogonal.eval_basis_function(X, i + j) for j in self.stencil]
         )
         return matmat(row, psi)
 
@@ -151,7 +153,7 @@ class Composite(BaseSpace):
                 ).astype(float)
                 for val in self.stencil.values()
             ],
-            [key for key in self.stencil.keys()],
+            [key for key in self.stencil],
             shape=(self.N - self.bcs.num_bcs(), self.N),
         )
 
@@ -270,7 +272,7 @@ class BCGeneric(Composite):
 class DirectSum:
     def __init__(self, a: BaseSpace, b: BaseSpace) -> None:
         assert isinstance(b, BCGeneric)
-        self.spaces = [a, b]
+        self.spaces: list[BaseSpace] = [a, b]
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
 
@@ -280,7 +282,7 @@ class DirectSum:
     def __len__(self) -> int:
         return len(self.spaces)
 
-    def __getattr__(self, name) -> Any:
+    def __getattr__(self, name) -> Any:  # The 'Any' type messes with autocomplete
         return getattr(self.spaces[0], name)
 
     def bnd_vals(self) -> Array:
@@ -341,7 +343,7 @@ def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
     M = sp.simplify(A.solve(b))
     d = {0: 1}
     for i, s in enumerate(M):
-        if not s == 0:
+        if s != 0:
             d[i + 1] = s
     return d
 

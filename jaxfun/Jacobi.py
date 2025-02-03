@@ -179,7 +179,7 @@ class Jacobi(BaseSpace):
         ----------
         n, k : int
             Parameters in (*)
-        """
+        """  # noqa: E501
         return sp.rf(n + self.alpha + self.beta + 1, k) / 2**k
 
     @staticmethod
@@ -196,7 +196,7 @@ class Jacobi(BaseSpace):
             Jacobi parameters
         n : int
             Index
-        """
+        """  # noqa: E501
         f = (
             sp.rf(n + 1, alf)
             / sp.rf(n + bet + 1, alf)
@@ -221,7 +221,7 @@ class Jacobi(BaseSpace):
             Index
         k : int
             For derivative of k'th order, see (*)
-        """
+        """  # noqa: E501
         f = self.gamma(self.alpha + k, self.beta + k, n - k) * (self.psi(n, k)) ** 2
         return sp.simplify(self.gn(n) ** 2 * f)
 

@@ -1,23 +1,24 @@
-from typing import Set, Any
-import sympy as sp
+from typing import Any
+
 import numpy as np
+import sympy as sp
 from sympy import Expr
 from sympy.core import preorder_traversal
-from sympy.vector.vector import Vector
+from sympy.core.add import Add
+from sympy.core.function import Derivative
+from sympy.core.mul import Mul
+from sympy.vector import Dot as sympy_Dot
 from sympy.vector import VectorAdd, VectorMul, VectorZero
+from sympy.vector.operators import Curl as sympy_Curl
 from sympy.vector.operators import (
     Divergence,
     Gradient,
     _split_mul_args_wrt_coordsys,
 )
-from sympy.vector.operators import Curl as sympy_Curl
 from sympy.vector.vector import Cross as sympy_Cross
-from sympy.vector import Dot as sympy_Dot
-from sympy.core.add import Add
-from sympy.core.mul import Mul
-from sympy.core.function import Derivative
-from jaxfun.coordinates import BaseVector
-from jaxfun.coordinates import CoordSys
+from sympy.vector.vector import Vector
+
+from jaxfun.coordinates import BaseVector, CoordSys
 
 
 def eijk(i: int, j: int, k: int) -> int:
@@ -28,7 +29,7 @@ def eijk(i: int, j: int, k: int) -> int:
     return 0
 
 
-def _get_coord_systems(expr: Expr) -> Set:
+def _get_coord_systems(expr: Expr) -> set:
     g = preorder_traversal(expr)
     ret = set()
     for i in g:
@@ -48,8 +49,10 @@ def cross(vect1: Vector, vect2: Vector) -> Vector:
     >>> from jaxfun import get_CoordSys
     >>> from jaxfun.operators import dot
     >>> import sympy as sp
-    >>> r, theta = sp.symbols('r,theta', real=True)
-    >>> C = get_CoordSys('C', sp.Lambda((r, theta, z), (r*sp.cos(theta), r*sp.sin(theta), z)))
+    >>> r, theta = sp.symbols("r,theta", real=True)
+    >>> C = get_CoordSys(
+    ...     "C", sp.Lambda((r, theta, z), (r * sp.cos(theta), r * sp.sin(theta), z))
+    ... )
     >>> cross(C.b_r, C.b_theta)
     r*C.b_z
 
@@ -110,8 +113,10 @@ def dot(vect1: Vector, vect2: Vector) -> Expr:
     >>> from jaxfun import get_CoordSys
     >>> from jaxfun.operators import dot
     >>> import sympy as sp
-    >>> r, theta = sp.symbols('r,theta', real=True)
-    >>> P = get_CoordSys('P', sp.Lambda((r, theta), (r*sp.cos(theta), r*sp.sin(theta))))
+    >>> r, theta = sp.symbols("r,theta", real=True)
+    >>> P = get_CoordSys(
+    ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
+    ... )
     >>> v1 = P.b_r + P.b_theta
     >>> v2 = P.r * P.b_r + P.theta * P.b_theta
     >>> dot(v1, v2)
@@ -168,9 +173,11 @@ def divergence(vect: Vector, doit: bool = True) -> Expr:
     >>> from jaxfun import get_CoordSys
     >>> from jaxfun.operators import divergence
     >>> import sympy as sp
-    >>> r, theta = sp.symbols('r,theta', real=True)
-    >>> P = get_CoordSys('P', sp.Lambda((r, theta), (r*sp.cos(theta), r*sp.sin(theta))))
-    >>> v = P.r*P.b_r + P.theta*P.b_theta
+    >>> r, theta = sp.symbols("r,theta", real=True)
+    >>> P = get_CoordSys(
+    ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
+    ... )
+    >>> v = P.r * P.b_r + P.theta * P.b_theta
     >>> divergence(v)
     3
 
@@ -235,9 +242,11 @@ def gradient(scalar_field: Expr, doit: bool = True) -> Vector:
     >>> from jaxfun import get_CoordSys
     >>> from jaxfun.operators import gradient
     >>> import sympy as sp
-    >>> r, theta = sp.symbols('r,theta', real=True)
-    >>> P = get_CoordSys('P', sp.Lambda((r, theta), (r*sp.cos(theta), r*sp.sin(theta))))
-    >>> s = P.r*P.theta
+    >>> r, theta = sp.symbols("r,theta", real=True)
+    >>> P = get_CoordSys(
+    ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
+    ... )
+    >>> s = P.r * P.theta
     >>> gradient(s)
     theta*C.b_r + 1/r*C.b_theta
 
@@ -301,8 +310,10 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
     >>> from jaxfun import get_CoordSys
     >>> from jaxfun.operators import curl
     >>> import sympy as sp
-    >>> r, theta, z = sp.symbols('r,theta,z', real=True)
-    >>> P = get_CoordSys('P', sp.Lambda((r, theta, z), (r*sp.cos(theta), r*sp.sin(theta), z)))
+    >>> r, theta, z = sp.symbols("r,theta,z", real=True)
+    >>> P = get_CoordSys(
+    ...     "P", sp.Lambda((r, theta, z), (r * sp.cos(theta), r * sp.sin(theta), z))
+    ... )
     >>> v = P.b_r + P.b_theta
     >>> curl(v)
     2*C.b_z
@@ -357,8 +368,7 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
 
 
 class Grad(Gradient):
-
-    #def __new__(cls, expr):
+    # def __new__(cls, expr):
     #    expr = sp.sympify(expr)
     #    if isinstance(expr, sp.Add):
     #        return sp.Add(*[Grad(e) for e in expr.args])
@@ -377,21 +387,20 @@ class Grad(Gradient):
 
 
 class Div(Divergence):
-
-    #def __new__(cls, expr):
+    # def __new__(cls, expr):
     #    expr = sp.sympify(expr)
     #    if isinstance(expr, sp.Add):
     #        return sp.Add(*[Div(e) for e in expr.args])
     #    if isinstance(expr, sp.Mul):
     #        expr = expr.expand()
     #        if isinstance(expr, sp.Add):
-    #            return sp.Add(*[Div(e) for e in expr.args])    
+    #            return sp.Add(*[Div(e) for e in expr.args])
     #        vector = [i for i in expr.args if isinstance(i, (Vector, Cross, Grad))][0]
     #        scalar = Mul.fromiter(i for i in expr.args if not isinstance(i, (Vector, Cross, Grad)))
     #        if scalar.is_Number:
-    #            return scalar*Div(vector) 
+    #            return scalar*Div(vector)
     #        return Dot(vector, Grad(scalar)) + scalar*Div(vector)
-    #                 
+    #
     #    obj = Expr.__new__(cls, expr)
     #    obj._expr = expr
     #    return obj
@@ -401,15 +410,14 @@ class Div(Divergence):
 
 
 class Curl(sympy_Curl):
-
-    #def __new__(cls, expr):
+    # def __new__(cls, expr):
     #    expr = sp.sympify(expr)
     #    if isinstance(expr, sp.Add):
     #        return sp.Add(*[Curl(e) for e in expr.args])
     #    if isinstance(expr, sp.Mul):
     #        expr = expr.expand()
     #        if isinstance(expr, sp.Add):
-    #            return sp.Add(*[Curl(e) for e in expr.args])    
+    #            return sp.Add(*[Curl(e) for e in expr.args])
     #        vector = [i for i in expr.args if isinstance(i, (Vector, Cross, Grad))][0]
     #        scalar = Mul.fromiter(i for i in expr.args if not isinstance(i, (Vector, Cross, Grad)))
     #        return Cross(Grad(scalar), vector) + scalar*Curl(vector)
@@ -419,15 +427,14 @@ class Curl(sympy_Curl):
 
 
 class Dot(sympy_Dot):
-
-    #def __new__(cls, expr1, expr2):
+    # def __new__(cls, expr1, expr2):
     #    expr1 = sp.sympify(expr1)
     #    expr2 = sp.sympify(expr2)
     #    expr1, expr2 = sorted([expr1, expr2], key=sp.core.sorting.default_sort_key)
     #    if isinstance(expr1, sp.Add):
     #        return sp.Add(*[Dot(e, expr2) for e in expr1.args])
     #    if isinstance(expr2, sp.Add):
-    #        return sp.Add(*[Dot(expr1, e) for e in expr2.args]) 
+    #        return sp.Add(*[Dot(expr1, e) for e in expr2.args])
     #    obj = Expr.__new__(cls, expr1, expr2)
     #    obj._expr1 = expr1
     #    obj._expr2 = expr2
@@ -436,7 +443,7 @@ class Dot(sympy_Dot):
     def doit(self, **hints: dict[Any]) -> Expr:
         return dot(self._expr1.doit(), self._expr2.doit())
 
-    
+
 class Cross(sympy_Cross):
     """
     Represents unevaluated Cross product.
@@ -445,7 +452,7 @@ class Cross(sympy_Cross):
     ========
 
     >>> from sympy.vector import CoordSys3D, Cross
-    >>> R = CoordSys('R')
+    >>> R = CoordSys("R")
     >>> v1 = R.i + R.j + R.k
     >>> v2 = R.x * R.i + R.y * R.j + R.z * R.k
     >>> Cross(v1, v2)
@@ -461,7 +468,7 @@ class Cross(sympy_Cross):
         if isinstance(expr1, sp.Add):
             return sp.Add(*[Cross(e, expr2) for e in expr1.args])
         if isinstance(expr2, sp.Add):
-            return sp.Add(*[Cross(expr1, e) for e in expr2.args]) 
+            return sp.Add(*[Cross(expr1, e) for e in expr2.args])
         obj = Expr.__new__(cls, expr1, expr2)
         obj._expr1 = expr1
         obj._expr2 = expr2
@@ -471,19 +478,18 @@ class Cross(sympy_Cross):
         return cross(self._expr1.doit(), self._expr2.doit())
 
 
-
 sp.vector.vector.dot = dot
 sp.vector.vector.cross = cross
 sp.vector.operators.gradient = gradient
 sp.vector.operators.curl = curl
 sp.vector.operators.divergence = divergence
 sp.vector.vector.Cross = Cross
-sp.vector.vector.Dot = Dot 
-sp.vector.operators.Curl = Curl 
+sp.vector.vector.Dot = Dot
+sp.vector.operators.Curl = Curl
 sp.vector.operators.Gradient = Grad
 sp.vector.operators.Divergence = Div
 sp.vector.Cross = Cross
-sp.vector.Dot = Dot 
-sp.vector.Curl = Curl 
+sp.vector.Dot = Dot
+sp.vector.Curl = Curl
 sp.vector.Gradient = Grad
 sp.vector.Divergence = Div

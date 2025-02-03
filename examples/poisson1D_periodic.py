@@ -1,15 +1,17 @@
 # Solve Poisson's equation
-import sys
 import os
+import sys
+
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
-import jax.numpy as jnp
-from jaxfun.utils.common import lambdify, ulp
-from jaxfun.Fourier import Fourier
-from jaxfun.inner import inner
+
 from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.operators import Grad, Div
+from jaxfun.Fourier import Fourier
 from jaxfun.functionspace import FunctionSpace
+from jaxfun.inner import inner
+from jaxfun.operators import Div, Grad
+from jaxfun.utils.common import lambdify, ulp
 
 M = 10
 D = FunctionSpace(M, Fourier, name="D", fun_str="psi", domain=(-2 * sp.pi, 2 * sp.pi))
@@ -20,7 +22,7 @@ u = TrialFunction(D)
 x = D.system.x  # use the same coordinate as u and v
 ue = sp.cos(2 * x) + sp.I * sp.sin(1 * x)
 
-A, b = inner(v * Div(Grad(u)) + v * Div(Grad((ue))), sparse=True)
+A, b = inner(v * Div(Grad(u)) + v * Div(Grad(ue)), sparse=True)
 
 uh = jnp.hstack((jnp.array([0.0]), b[1:] / A.todense().diagonal()[1:]))
 

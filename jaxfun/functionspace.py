@@ -1,5 +1,5 @@
-from jaxfun.composite import Composite, DirectSum, BCGeneric, BoundaryConditions
 from jaxfun.Basespace import BaseSpace, Domain
+from jaxfun.composite import BCGeneric, BoundaryConditions, Composite, DirectSum
 from jaxfun.coordinates import CoordSys
 
 
@@ -13,7 +13,6 @@ def FunctionSpace(
     fun_str: str = "psi",
     **kw,
 ) -> BaseSpace | DirectSum | Composite:
-    
     if bcs is not None:
         bcs = BoundaryConditions(bcs, domain=domain)
         C = Composite(
@@ -34,7 +33,7 @@ def FunctionSpace(
             bcs=bcs,
             domain=domain,
             system=system,
-            M = N,
+            M=N,
             name=name + "_b",
             fun_str=fun_str + "_b",
         )

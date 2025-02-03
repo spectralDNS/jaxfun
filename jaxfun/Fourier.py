@@ -1,12 +1,14 @@
 from functools import partial
-import sympy as sp
+
 import jax
 import jax.numpy as jnp
+import sympy as sp
 from jax import Array
 from jax.experimental.sparse import BCOO
+from scipy import sparse as scipy_sparse
+
 from jaxfun.Basespace import BaseSpace, Domain
 from jaxfun.coordinates import CoordSys
-from scipy import sparse as scipy_sparse
 
 # ruff: noqa: F706
 
@@ -70,7 +72,7 @@ class Fourier(BaseSpace):
             k = self.wavenumbers(n)
             return jnp.fft.ifft(c[k], norm="forward")
         return jnp.fft.ifft(c, norm="forward")
-        
+
     @partial(jax.jit, static_argnums=0)
     def eval_basis_functions(self, x: float) -> Array:
         return jax.lax.exp(1j * self.wavenumbers() * x)

@@ -1,20 +1,23 @@
 from __future__ import annotations
+
+import copy
 from functools import partial
 from typing import Any
-import copy
-import sympy as sp
-from sympy import Number
-from scipy import sparse as scipy_sparse
-import numpy as np
+
 import jax
 import jax.numpy as jnp
+import numpy as np
+import sympy as sp
 from jax import Array
 from jax.experimental import sparse
 from jax.experimental.sparse import BCOO
-from jaxfun.Basespace import BaseSpace, n, Domain
+from scipy import sparse as scipy_sparse
+from sympy import Number
+
+from jaxfun.Basespace import BaseSpace, Domain, n
+from jaxfun.coordinates import CoordSys
 from jaxfun.Jacobi import Jacobi
 from jaxfun.utils.common import matmat
-from jaxfun.coordinates import CoordSys
 
 direct_sum_symbol = "\u2295"
 
@@ -65,7 +68,7 @@ class BoundaryConditions(dict):
             for s in v:
                 bc[k][s] = 0
         return BoundaryConditions(bc)
-    
+
 
 class Composite(BaseSpace):
     """Space created by combining orthogonal basis functions
@@ -201,7 +204,7 @@ class Composite(BaseSpace):
             alpha=self.orthogonal.alpha,
             beta=self.orthogonal.beta,
         )
-    
+
     def get_padded(self, N: int) -> Composite:
         bc = self.bcs.get_homogeneous()
         return Composite(
@@ -304,7 +307,7 @@ def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
     Example
     -------
     >>> from jaxfun import Chebyshev, Composite
-    >>> C = Composite(Chebyshev.Chebyshev, 10, {'left': {'N': 0}, 'right': {'N': 0}})
+    >>> C = Composite(Chebyshev.Chebyshev, 10, {"left": {"N": 0}, "right": {"N": 0}})
     >>> C.stencil
     {0: 1, 2: -n**2/(n**2 + 4*n + 4)}
     """
@@ -417,12 +420,13 @@ def get_bc_basis(bcs: BoundaryConditions, orthogonal: Jacobi) -> sp.Matrix:
 
 
 if __name__ == "__main__":
+    import matplotlib.pyplot as plt
     from Chebyshev import Chebyshev
     from Legendre import Legendre
-    import matplotlib.pyplot as plt
-    from jaxfun.inner import inner
+
     from jaxfun.arguments import TestFunction, TrialFunction
     from jaxfun.composite import Composite
+    from jaxfun.inner import inner
 
     n = sp.Symbol("n", positive=True, integer=True)
     N = 50

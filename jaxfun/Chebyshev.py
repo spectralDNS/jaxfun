@@ -1,11 +1,13 @@
 from functools import partial
+
 import jax
 import jax.numpy as jnp
-from jax import Array
-from jaxfun.Jacobi import Jacobi, Domain
-from jaxfun.coordinates import CoordSys
 import sympy as sp
-from sympy import Symbol, Expr
+from jax import Array
+from sympy import Expr, Symbol
+
+from jaxfun.coordinates import CoordSys
+from jaxfun.Jacobi import Domain, Jacobi
 
 
 class Chebyshev(Jacobi):
@@ -116,7 +118,7 @@ class Chebyshev(Jacobi):
     def gn(self, n: Symbol) -> Expr:
         return sp.S(1) / sp.jacobi(n, self.alpha, self.beta, 1)
 
-    
+
 def matrices(test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]) -> Array:
     import numpy as np
     from jax.experimental import sparse
@@ -136,7 +138,7 @@ def matrices(test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]) -> Array
             return np.pi * k[j : (Q + j)]
 
         d = dict.fromkeys(np.arange(1, u.N + 1, 2), _getkey)
-        
+
         if len(d) == 0:
             return None
 
@@ -161,7 +163,7 @@ def matrices(test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]) -> Array
 
         d = dict.fromkeys(np.arange(2, u.N, 2), _getkey)
         if len(d) == 0:
-            return None 
+            return None
 
         return sparse.BCOO.from_scipy_sparse(
             scipy_sparse.diags(

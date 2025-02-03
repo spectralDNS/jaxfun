@@ -1,21 +1,23 @@
 from __future__ import annotations
-from collections import UserDict
-from types import MethodType
-from typing import Iterable, Any, Set
-import sympy as sp
-import numpy as np
-from sympy.core.basic import Basic
-from sympy.vector.vector import Vector
-from sympy.core.assumptions import StdFactKB
-from sympy.core.sympify import _sympify
-from sympy.core.symbol import Str
-from sympy.core import AtomicExpr, Tuple, Lambda, Symbol, Expr
-from sympy.core.function import Function
-from sympy.assumptions.ask import AssumptionKeys
-from sympy.printing.pretty.stringpict import prettyForm
-from sympy.printing.precedence import PRECEDENCE
-import numbers
 
+import numbers
+from collections import UserDict
+from collections.abc import Iterable
+from types import MethodType
+from typing import Any
+
+import numpy as np
+import sympy as sp
+from sympy.assumptions.ask import AssumptionKeys
+from sympy.core import AtomicExpr, Expr, Lambda, Symbol, Tuple
+from sympy.core.assumptions import StdFactKB
+from sympy.core.basic import Basic
+from sympy.core.function import Function
+from sympy.core.symbol import Str
+from sympy.core.sympify import _sympify
+from sympy.printing.precedence import PRECEDENCE
+from sympy.printing.pretty.stringpict import prettyForm
+from sympy.vector.vector import Vector
 
 latex_sym_dict = {
     "alpha": r"\alpha",
@@ -62,11 +64,11 @@ class BaseScalar(AtomicExpr):
         cls, index: int, system: CoordSys, pretty_str: str = None, latex_str: str = None
     ) -> BaseScalar:
         if pretty_str is None:
-            pretty_str = "x{}".format(index)
+            pretty_str = f"x{index}"
         elif isinstance(pretty_str, sp.Symbol):
             pretty_str = pretty_str.name
         if latex_str is None:
-            latex_str = "x_{}".format(index)
+            latex_str = f"x_{index}"
         elif isinstance(latex_str, sp.Symbol):
             latex_str = latex_str.name
 
@@ -91,7 +93,7 @@ class BaseScalar(AtomicExpr):
     is_positive = True
 
     @property
-    def free_symbols(self) -> Set:
+    def free_symbols(self) -> set:
         return {self}
 
     _diff_wrt = True
@@ -133,9 +135,9 @@ class BaseVector(Vector, AtomicExpr):
         cls, index: int, system: CoordSys, pretty_str: str = None, latex_str: str = None
     ) -> BaseVector:
         if pretty_str is None:
-            pretty_str = "x{}".format(index)
+            pretty_str = f"x{index}"
         if latex_str is None:
-            latex_str = "x_{}".format(index)
+            latex_str = f"x_{index}"
         pretty_str = str(pretty_str)
         latex_str = str(latex_str)
         # Verify arguments
@@ -176,7 +178,7 @@ class BaseVector(Vector, AtomicExpr):
         return printer._print(system) + "." + system._vector_names[index]
 
     @property
-    def free_symbols(self) -> Set[Symbol]:
+    def free_symbols(self) -> set[Symbol]:
         return {self}
 
 
@@ -256,9 +258,11 @@ class CoordSys(Basic):
 
         vector_names = list(vector_names)
         if is_cartesian:
-            latex_vects = [r"\mathbf{{%s}}" %(x,) for x in vector_names]
+            latex_vects = [r"\mathbf{{%s}}" % (x,) for x in vector_names]
         else:
-            latex_vects = [r"\mathbf{b_{%s}}" % (latex_symbols[x],) for x in variable_names]
+            latex_vects = [
+                r"\mathbf{b_{%s}}" % (latex_symbols[x],) for x in variable_names
+            ]
         pretty_vects = vector_names
 
         obj._vector_names = vector_names
@@ -282,19 +286,21 @@ class CoordSys(Basic):
             base_scalars.append(BaseScalar(i, obj, pretty_scalars[i], latex_scalars[i]))
         obj._psi = psi
         obj._cartesian_xyz = base_scalars if parent is None else parent._cartesian_xyz
-        
-        obj._map_base_scalar_to_symbol = {k: v for k, v in zip(base_scalars, obj._psi)}
-        obj._map_symbol_to_base_scalar = {k: v for k, v in zip(obj._psi, base_scalars)}
+
+        obj._map_base_scalar_to_symbol = {k: v for k, v in zip(base_scalars, obj._psi, strict=False)}
+        obj._map_symbol_to_base_scalar = {k: v for k, v in zip(obj._psi, base_scalars, strict=False)}
 
         position_vector = position_vector.xreplace(obj._map_symbol_to_base_scalar)
         obj._map_xyz_to_base_scalar = {
-            k: v for k, v in zip(obj._cartesian_xyz, position_vector)
+            k: v for k, v in zip(obj._cartesian_xyz, position_vector, strict=False)
         }
 
         # Add doit to Cartesian coordinates, such that x, y, x are evaluated in computational space as x(psi), y(psi), z(psi)
         if not is_cartesian:
             for s in obj._cartesian_xyz:
-                s.doit = MethodType(lambda self, **hints: obj._map_xyz_to_base_scalar[self], s)
+                s.doit = MethodType(
+                    lambda self, **hints: obj._map_xyz_to_base_scalar[self], s
+                )
 
         obj._base_scalars = Tuple(*base_scalars)
         obj._position_vector = position_vector
@@ -314,7 +320,7 @@ class CoordSys(Basic):
         obj._det_g = {True: None, False: None}
         obj._sqrt_det_g = {True: None, False: None}
         obj._covariant_basis_map = {
-            k: v for k, v in zip(range(len(obj._base_vectors)), obj._base_vectors)
+            k: v for k, v in zip(range(len(obj._base_vectors)), obj._base_vectors, strict=False)
         }
 
         for i in range(len(base_scalars)):
@@ -334,7 +340,7 @@ class CoordSys(Basic):
         # Return the instance
         return obj
 
-    def sub_system(self, index: int=0) -> SubCoordSys:
+    def sub_system(self, index: int = 0) -> SubCoordSys:
         return SubCoordSys(self, index)
 
     @property
@@ -397,7 +403,7 @@ class CoordSys(Basic):
             return v
 
         cart_map = {
-            k: v for k, v in zip(self.base_vectors(), self.get_covariant_basis(True))
+            k: v for k, v in zip(self.base_vectors(), self.get_covariant_basis(True), strict=False)
         }
         return v.xreplace(cart_map)
 
@@ -645,16 +651,16 @@ class CoordSys(Basic):
         self._psi = tuple([p.subs(s0, s1) for p in self._psi])
         self._rv = tuple([r.subs(s0, s1) for r in self._rv])
 
-class SubCoordSys:
 
+class SubCoordSys:
     def __init__(self, system: CoordSys, index: int = 0) -> None:
-        assert system.dims > 1 
+        assert system.dims > 1
         self._base_scalars = (system._base_scalars[index],)
         self._base_vectors = (system._base_vectors[index],)
         self._psi = (system._psi[index],)
         self._cartesian_xyz = [system._cartesian_xyz[index]]
         self._variable_names = [system._variable_names[index]]
-        self._position_vector = (system._position_vector[index])
+        self._position_vector = system._position_vector[index]
         self._parent = system
         self.sg = 1
         for k in self._cartesian_xyz:
@@ -685,7 +691,7 @@ def get_CoordSys(
     assumptions: AssumptionKeys = True,
     replace: list[tuple] | tuple[tuple] = (),
     measure: Function = sp.count_ops,
-    cartesian_name: str = "R"
+    cartesian_name: str = "R",
 ) -> CoordSys:
     """Return a curvilinear coordinate system.
 
@@ -727,7 +733,10 @@ def get_CoordSys(
         name,
         transformation,
         vector_names=vector_names,
-        parent=CartCoordSys(cartesian_name, {1: (x,), 2: (x, y), 3: (x, y, z)}[len(transformation.args[1])]),
+        parent=CartCoordSys(
+            cartesian_name,
+            {1: (x,), 2: (x, y), 3: (x, y, z)}[len(transformation.args[1])],
+        ),
         assumptions=assumptions,
         replace=replace,
         measure=measure,

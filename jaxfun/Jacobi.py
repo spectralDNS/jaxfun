@@ -1,11 +1,13 @@
-from typing import Callable, Union
+from collections.abc import Callable
 from functools import partial
-import sympy as sp
-from sympy import Number, Symbol, Expr
-from scipy.special import roots_jacobi
+
 import jax
 import jax.numpy as jnp
+import sympy as sp
 from jax import Array
+from scipy.special import roots_jacobi
+from sympy import Expr, Number, Symbol
+
 from jaxfun.Basespace import BaseSpace, Domain, n
 from jaxfun.coordinates import CoordSys
 
@@ -86,7 +88,7 @@ class Jacobi(BaseSpace):
         return c0 + c1 * ((a + 1) + (a + b + 2) * (X - 1) / 2)
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.N if N == 0 else N 
+        N = self.N if N == 0 else N
         return jnp.array(roots_jacobi(N, float(self.alpha), float(self.beta)))
 
     @partial(jax.jit, static_argnums=(0, 2))
@@ -145,8 +147,8 @@ class Jacobi(BaseSpace):
     def bnd_values(
         self, k: int = 0
     ) -> tuple[
-        Callable[[Union[int, sp.Symbol]], Expr],
-        Callable[[Union[int, sp.Symbol]], Expr],
+        Callable[[int | sp.Symbol], Expr],
+        Callable[[int | sp.Symbol], Expr],
     ]:
         """Return lambda function for computing boundary values"""
         alpha, beta = self.alpha, self.beta
@@ -226,6 +228,7 @@ class Jacobi(BaseSpace):
     # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
     def gn(self, n: Symbol | Number) -> sp.Expr | Number:
         return 1
+
 
 def matrices(test: tuple[Jacobi, int], trial: tuple[Jacobi, int]) -> Array:
     from jax.experimental import sparse

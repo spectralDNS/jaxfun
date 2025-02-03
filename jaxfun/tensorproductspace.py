@@ -1,20 +1,20 @@
-from functools import partial
 import copy
-from typing import Iterable
 import itertools
+from collections.abc import Iterable
+from functools import partial
+
+import jax
+import jax.numpy as jnp
 import numpy as np
 import sympy as sp
-from scipy import sparse as scipy_sparse
-import jax
 from jax import Array
-import jax.numpy as jnp
-from jaxfun.Basespace import BaseSpace
-from jaxfun.Fourier import Fourier
-from jaxfun.Chebyshev import Chebyshev
-from jaxfun.composite import Composite, DirectSum, BCGeneric
-from jaxfun.coordinates import CoordSys
-from jaxfun.utils.common import lambdify, eliminate_near_zeros
+from scipy import sparse as scipy_sparse
 
+from jaxfun.Basespace import BaseSpace
+from jaxfun.composite import BCGeneric, Composite, DirectSum
+from jaxfun.coordinates import CoordSys
+from jaxfun.Fourier import Fourier
+from jaxfun.utils.common import eliminate_near_zeros, lambdify
 
 tensor_product_symbol = "\u2297"
 multiplication_sign = "\u00d7"
@@ -96,13 +96,13 @@ class TensorProductSpace:
         """Evaluate on a given tensor product mesh"""
         dim: int = len(self)
         if dim == 2:
-            for i, (xi, ax) in enumerate(zip(x, range(dim))):
+            for i, (xi, ax) in enumerate(zip(x, range(dim), strict=False)):
                 axi: int = dim - 1 - ax
                 c = jax.vmap(
                     self.spaces[i].evaluate, in_axes=(None, axi), out_axes=axi
                 )(self.spaces[i].map_reference_domain(xi), c)
         else:
-            for i, (xi, ax) in enumerate(zip(x, range(dim))):
+            for i, (xi, ax) in enumerate(zip(x, range(dim), strict=False)):
                 ax0, ax1 = set(range(dim)) - set((ax,))
                 c = jax.vmap(
                     jax.vmap(
@@ -114,7 +114,7 @@ class TensorProductSpace:
         return c
 
     def get_padded(self, N: tuple[int]):
-        paddedspaces = [s.get_padded(n) for s, n in zip(self.spaces, N)]
+        paddedspaces = [s.get_padded(n) for s, n in zip(self.spaces, N, strict=False)]
         return TensorProductSpace(
             paddedspaces, system=self.system, name=self.name + "p"
         )
@@ -131,11 +131,13 @@ class TensorProductSpace:
         # and padding with jnp.fft is not padding the highest wavenumbers, but simply the
         # end of the array.
         if N is not None and has_fft:
-            if jnp.any(jnp.array([n > space.N for n, space in zip(N, self.spaces)])).item():
+            if jnp.any(
+                jnp.array([n > space.N for n, space in zip(N, self.spaces, strict=False)])
+            ).item():
                 shape = list(c.shape)
                 for ax, space in enumerate(self.spaces):
                     if isinstance(space, Fourier):
-                        if N[ax] > space.N: # padding
+                        if N[ax] > space.N:  # padding
                             shape[ax] = N[ax]
                 c0 = np.zeros(shape, dtype=c.dtype)
                 sl = [slice(0, c.shape[ax]) for ax in range(dim)]
@@ -279,7 +281,7 @@ class DirectSumTPS(TensorProductSpace):
             # Set boundary values for boundary spaces
             bcall = []
             for bcthis, bcother, zother in zip(
-                [bc0bcs, bc1bcs], [bc1bcs, bc0bcs], [bc1, bc0]
+                [bc0bcs, bc1bcs], [bc1bcs, bc0bcs], [bc1, bc0], strict=False
             ):
                 bcall.append([])
                 df = 2.0 / (zother.domain.upper - zother.domain.lower)

@@ -1,11 +1,13 @@
 from functools import partial
+
 import jax
 import jax.numpy as jnp
-from jax import Array
 import sympy as sp
-from jaxfun.utils.fastgl import leggauss
-from jaxfun.Jacobi import Jacobi, Domain, n
+from jax import Array
+
 from jaxfun.coordinates import CoordSys
+from jaxfun.Jacobi import Domain, Jacobi, n
+from jaxfun.utils.fastgl import leggauss
 
 
 class Legendre(Jacobi):
@@ -121,7 +123,6 @@ def matrices(test: tuple[Legendre, int], trial: tuple[Legendre, int]) -> Array:
             scipy_sparse.diags((v.norm_squared(),), (0,), (v.N, u.N), "csr")
         )
     if i == 0 and j == 1:
-
         if u.N < 2:
             return None
 

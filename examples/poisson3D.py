@@ -1,19 +1,18 @@
 # Solve Poisson's equation in 3D
 import os
+
+import jax.numpy as jnp
 from scipy import sparse as scipy_sparse
 from scipy.sparse import kron
-import jax.numpy as jnp
-from jaxfun.utils.common import lambdify
-from jaxfun.Legendre import Legendre
-from jaxfun.Chebyshev import Chebyshev
-from jaxfun.inner import inner
-from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.operators import Grad, Div, Dot
-from jaxfun.Basespace import n
-from jaxfun.utils.common import ulp
-from jaxfun.functionspace import FunctionSpace
-from jaxfun.tensorproductspace import TensorProductSpace, tpmats_to_scipy_sparse_list
 
+from jaxfun.arguments import TestFunction, TrialFunction
+from jaxfun.Basespace import n
+from jaxfun.functionspace import FunctionSpace
+from jaxfun.inner import inner
+from jaxfun.Legendre import Legendre
+from jaxfun.operators import Div, Grad
+from jaxfun.tensorproductspace import TensorProductSpace, tpmats_to_scipy_sparse_list
+from jaxfun.utils.common import lambdify, ulp
 
 M = 20
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
@@ -41,7 +40,7 @@ uj = T.backward(un, kind="uniform", N=(20, 20, 20))
 xj = T.mesh(kind="uniform", N=(20, 20, 20))
 uej = lambdify((x, y, z), ue)(*xj)
 error = jnp.linalg.norm(uj - uej)
-if 'pytest' in os.environ:
+if "pytest" in os.environ:
     assert error < ulp(1000), error
 else:
     print("Error =", error)

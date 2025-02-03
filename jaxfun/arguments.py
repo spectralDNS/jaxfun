@@ -1,14 +1,14 @@
-from typing import Any
-import sympy as sp
 import itertools
-from sympy import Function, Symbol, Expr
+from typing import Any
+
+import sympy as sp
+from sympy import Expr, Function, Symbol
 from sympy.printing.pretty.stringpict import prettyForm
-import jax.numpy as jnp
+
 from jaxfun.Basespace import BaseSpace
 from jaxfun.composite import DirectSum
+from jaxfun.coordinates import CoordSys, latex_symbols
 from jaxfun.tensorproductspace import TensorProductSpace, VectorTensorProductSpace
-from jaxfun.coordinates import CoordSys
-from jaxfun.coordinates import latex_symbols
 
 x, y, z = sp.symbols("x,y,z", real=True)
 
@@ -72,7 +72,7 @@ def _get_computational_function(
         return sp.Mul(
             *[
                 func(a, sp.Symbol(v.name + "-" + v.fun_str + "-0"))
-                for a, v in zip(args, V)
+                for a, v in zip(args, V, strict=False)
             ]
         )
 
@@ -86,7 +86,7 @@ def _get_computational_function(
                 sp.Mul(
                     *[
                         func(a, sp.Symbol(v.name + "-" + v.fun_str + "-" + str(i)))
-                        for a, v in zip(args, Vi)
+                        for a, v in zip(args, Vi, strict=False)
                     ]
                 )
                 * b[i]
@@ -99,6 +99,7 @@ def _get_computational_function(
 # Need a unique Symbol in order to create a new TestFunction/TrialFunction for a new space.
 # Without it all TestFunctions/TrialFunctions created with the same Cartesian coordinates
 # will be the same object.
+
 
 class TestFunction(Function):
     __test__ = False  # prevent pytest from considering this a test.

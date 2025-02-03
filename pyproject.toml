@@ -8,5 +8,6 @@ dependencies = [
     "jax>=0.4.36",
     "matplotlib>=3.9.3",
     "pytest>=8.3.4",
+    "ruff>=0.9.4",
     "sympy>=1.13.3",
 ]

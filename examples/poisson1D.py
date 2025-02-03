@@ -1,19 +1,22 @@
 # Solve Poisson's equation
-import sys
 import os
+import sys
+
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
-import jax.numpy as jnp
-from jaxfun.utils.common import lambdify, ulp
-#from jaxfun.Legendre import Legendre as space
+
+from jaxfun.arguments import TestFunction, TrialFunction
+from jaxfun.Basespace import n
+
+# from jaxfun.Legendre import Legendre as space
 from jaxfun.Chebyshev import Chebyshev as space
+from jaxfun.functionspace import FunctionSpace
 
 # from jaxfun.Jacobi import Jacobi as space
 from jaxfun.inner import inner
-from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.operators import Grad, Div, Dot
-from jaxfun.Basespace import n
-from jaxfun.functionspace import FunctionSpace
+from jaxfun.operators import Div, Grad
+from jaxfun.utils.common import lambdify, ulp
 
 M = 30
 bcs = {"left": {"D": 0}, "right": {"D": 0}}

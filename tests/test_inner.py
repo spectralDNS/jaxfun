@@ -1,12 +1,13 @@
+import jax.numpy as jnp
 import pytest
 import sympy as sp
-import jax.numpy as jnp
-from jaxfun.Legendre import Legendre
-from jaxfun.Chebyshev import Chebyshev
+
 from jaxfun.arguments import TestFunction, TrialFunction
+from jaxfun.Chebyshev import Chebyshev
 from jaxfun.composite import Composite
-from jaxfun.utils.common import ulp
 from jaxfun.inner import inner
+from jaxfun.Legendre import Legendre
+from jaxfun.utils.common import ulp
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
@@ -164,4 +165,4 @@ answer2 = {
 
 if __name__ == "__main__":
     test_inner(Chebyshev)
-    test_inner(Legendre) 
+    test_inner(Legendre)

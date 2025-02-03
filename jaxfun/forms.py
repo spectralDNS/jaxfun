@@ -1,4 +1,3 @@
-
 import sympy as sp
 
 from jaxfun.arguments import TestFunction, TrialFunction, test, trial
@@ -9,23 +8,25 @@ def get_basisfunctions(
 ) -> list[TestFunction | None, TrialFunction | None]:
     test_found, trial_found = set(), set()
     for p in sp.core.traversal.iterargs(a):
-        if isinstance(p, (TrialFunction, trial)):
+        if isinstance(p, TrialFunction | trial):
             trial_found.add(p)
-        if isinstance(p, (TestFunction, test)):
+        if isinstance(p, TestFunction | test):
             test_found.add(p)
-    if len(test_found) == 1 and len(trial_found) == 1:
-        return test_found.pop(), trial_found.pop()
-    elif len(test_found) == 1 and len(trial_found) == 0:
-        return test_found.pop(), None
-    elif len(test_found) == 0 and len(trial_found) == 1:
-        return None, trial_found.pop()
-    elif len(test_found) > 0 or len(trial_found) > 0:
-        return test_found, trial_found
-    return None, None
+    match (len(test_found), len(trial_found)):
+        case (1, 1):
+            return test_found.pop(), trial_found.pop()
+        case (1, 0):
+            return test_found.pop(), None
+        case (0, 1):
+            return None, trial_found.pop()
+        case _ if len(test_found) > 0 or len(trial_found) > 0:
+            return test_found, trial_found
+        case _:
+            return None, None
 
 
 def split(forms) -> dict:
-    v, u = get_basisfunctions(forms)
+    v, _ = get_basisfunctions(forms)
     assert v is not None, "A test function is required"
     V = v.functionspace
 

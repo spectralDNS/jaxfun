@@ -66,7 +66,7 @@ def evaluate(
             axi: int = dim - 1 - ax
             c = jax.vmap(fun, in_axes=(None, axi), out_axes=axi)(xi, c)
     else:
-        for i, (xi, ax) in enumerate(zip(x, axes, strict=False)):
+        for xi, ax in zip(x, axes, strict=False):
             ax0, ax1 = jnp.setxor1d(jnp.arange(3), ax)
             c = jax.vmap(
                 jax.vmap(fun, in_axes=(None, ax0), out_axes=ax0),
@@ -107,7 +107,7 @@ def lambdify(
     dummify: bool = False,
     cse: bool = False,
     doctring_limit: int = 1000,
-) -> Callable[Iterable[Array], Array]:
+) -> Callable[[Iterable[Array]], Array]:
     system = expr.free_symbols.pop()._system
     expr = system.expr_base_scalar_to_psi(expr)
     args = system.expr_base_scalar_to_psi(args)

@@ -204,6 +204,10 @@ class VectorTensorProductSpace:
     @property
     def rank(self) -> int:
         return 1
+    
+    @property
+    def dims(self) -> int:
+        return len(self.tensorspaces[0])
 
 
 def TensorProduct(

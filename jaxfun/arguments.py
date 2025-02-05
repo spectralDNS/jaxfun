@@ -16,13 +16,16 @@ CartCoordSys = lambda name, t: CoordSys(name, sp.Lambda(t, t))
 
 functionspacedict = {}
 
+indices = 'ijklmn'
 
 class BasisFunction(Function):
     def __init__(self, coordinate: Symbol, dummy: Symbol) -> None:
-        f, s, j = dummy.name.split("-")
+        f, s, offset, rank, j = dummy.name.split("-")
         self.global_index = int(j)
         self.local_index = coordinate._id[0]
         self.fun_str = s
+        self.offset = int(offset)
+        self.rank = int(rank)
         self.functionspace_name = f
 
     def __new__(cls, coordinate: Symbol, dummy: Symbol) -> Function:
@@ -30,7 +33,11 @@ class BasisFunction(Function):
         return obj
 
     def __str__(self) -> str:
-        return "".join((self.fun_str, "(", self.args[0].name, ")"))
+        index = indices[self.local_index+self.offset]
+        if self.rank == 0:
+            return "".join((self.fun_str, "_", index, "(", self.args[0].name, ")"))
+        elif self.rank == 1:
+            return "".join((self.fun_str, "_", index, "^{(", str(self.global_index) ,")}", "(", self.args[0].name, ")")) 
 
     def _pretty(self, printer: Any = None) -> str:
         return prettyForm(self.__str__())
@@ -39,9 +46,15 @@ class BasisFunction(Function):
         return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
-        return "".join(
-            (latex_symbols[self.fun_str], "(", latex_symbols[self.args[0].name], ")")
-        )
+        index = indices[self.local_index+self.offset]
+        if self.rank == 0:
+            return "".join(
+                (latex_symbols[self.fun_str], "_", str(index), "(", latex_symbols[self.args[0].name], ")")
+            )
+        elif self.rank == 1:
+            return "".join(
+                (latex_symbols[self.fun_str], "_", str(index),  "^{(", str(self.global_index) ,")}", "(", latex_symbols[self.args[0].name], ")")
+            ) 
 
     @property
     def functionspace(self):
@@ -62,16 +75,17 @@ def _get_computational_function(
     func = test if arg == "test" else trial
     args = V.system.base_scalars()
     functionspacedict[V.name] = V
+    offset = V.dims if arg == "trial" else 0
     if isinstance(V, BaseSpace):
         assert args[0].is_Symbol
-        return func(args[0], sp.Symbol(V.name + "-" + V.fun_str + "-0"))
+        return func(args[0], sp.Symbol(V.name + "-" + V.fun_str+ "-" + str(offset) + "-0-0"))
 
     elif isinstance(V, TensorProductSpace):
         for space in V.spaces:
             functionspacedict[space.name] = space
         return sp.Mul(
             *[
-                func(a, sp.Symbol(v.name + "-" + v.fun_str + "-0"))
+                func(a, sp.Symbol(v.name + "-" + v.fun_str + "-" + str(offset) + "-0-0"))
                 for a, v in zip(args, V)
             ]
         )
@@ -85,7 +99,7 @@ def _get_computational_function(
             *[
                 sp.Mul(
                     *[
-                        func(a, sp.Symbol(v.name + "-" + v.fun_str + "-" + str(i)))
+                        func(a, sp.Symbol(v.name + "-" + v.fun_str + "-" + str(offset) + "-1-" + str(i)))
                         for a, v in zip(args, Vi)
                     ]
                 )
@@ -113,13 +127,15 @@ class TestFunction(Function):
             self.functionspace = V[0].get_homogeneous()
         elif isinstance(V, TensorProductSpace):
             f = []
+            vname = V.name
             for space in V.spaces:
                 if isinstance(space, DirectSum):
                     f.append(space[0].get_homogeneous())
+                    vname += "0"
                 else:
                     f.append(space)
             self.functionspace = TensorProductSpace(
-                f, name=V.name + "0", system=V.system
+                f, name=vname, system=V.system
             )
         self.name = name
 

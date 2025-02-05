@@ -3,7 +3,6 @@ import sys
 import os
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-import sympy as sp
 from scipy import sparse as scipy_sparse
 import jax.numpy as jnp
 from jaxfun.utils.common import lambdify, ulp
@@ -28,8 +27,8 @@ u = TrialFunction(T, name="u")
 x, y = T.system.base_scalars()
 ue = (1 - x**2) * (1 - y**2)  # * sp.exp(sp.cos(sp.pi * x)) * sp.exp(sp.sin(sp.pi * y))
 
-# A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
-A, b = inner(v * Div(Grad(u)) + v * Div(Grad(ue)), sparse=False)
+# A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=False)
+A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=False)
 
 # jax can only do kron for dense matrices
 C = jnp.kron(*A[0].mats) + jnp.kron(*A[1].mats)

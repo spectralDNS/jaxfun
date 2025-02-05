@@ -27,7 +27,7 @@ x, y, z = T.system.base_scalars()
 ue = (1 - x**2) * (1 - y**2) * (1 - z**2)
 
 # A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
-A, b = inner(v * Div(Grad(u)) + v * Div(Grad(ue)), sparse=False)
+A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=False)
 
 a = tpmats_to_scipy_sparse_list(A)
 A0 = (

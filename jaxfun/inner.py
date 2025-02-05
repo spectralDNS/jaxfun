@@ -19,7 +19,24 @@ def inner(
     sparse_tol: int = 1000,
     return_all_items: bool = False,
 ) -> Union[Array, list[Array]]:
-    r"""Compute 1D inner products
+    r"""Compute inner products
+
+    Assemble bilinear and linear forms. The expr input needs to represent one of the following 
+    three combinations
+
+        a(u, v) - L(v)
+        a(u, v)
+        L(v)
+
+    where a(u, v) and L(v) are bilinear and linear forms, respectively.
+
+    For a(u, v) - L(v) we return both matrices and a vector, where the vector represents the right
+    hand side of the linear system Ax = b. If only a(u, v), then we return only matrices unless there
+    are non-zero boundary conditions, in which case a right-hand side vector is returned as well. If
+    only L(v), then only a vector is returned.
+
+    If `return_all_items=True`, then we return all computed matrices and vectors, without adding them
+    together first.
 
     Parameters
     ----------
@@ -34,7 +51,7 @@ def inner(
         Whether to return just one matrix/vector, or whether to return all computed matrices/vectors.
         Note that one expr may maintain any number of terms leading to many matrices/vectors.
         This parameter is only relevant for 1D problems. Multidimensional problems always
-        returns all matrices.
+        returns all tensor product matrices.
 
     """
     V, U = get_basisfunctions(expr)
@@ -98,10 +115,13 @@ def inner(
                 )
 
     # Linear form
+    
     for b0 in b_forms:
         bs = []
         sc = sp.sympify(b0['coeff'])
         sc = float(sc) if sc.is_real else complex(sc) 
+        if len(a_forms) > 0:
+            sc = sc*(-1)
         for key, bi in b0.items():
             if key == "coeff":
                 continue
@@ -153,7 +173,6 @@ def inner_bilinear(ai: sp.Expr, v: BaseSpace, u: BaseSpace, sc: float | complex)
     df = float(vo.domain_factor)
     i, j = 0, 0
     scale = jnp.array([sc])
-    sc = 1
     for aii in ai.args:
         found_basis = False
         for p in sp.core.traversal.preorder_traversal(aii):
@@ -210,8 +229,7 @@ def inner_linear(bi: sp.Expr, v: BaseSpace, sc: float | complex) -> Array:
     xj, wj = vo.quad_points_and_weights()
     df = float(vo.domain_factor)
     i = 0
-    uj = jnp.array([sc])  # incorporate scalar coefficient into first matrix
-    sc = 1
+    uj = jnp.array([sc])  # incorporate scalar coefficient into first vector
     if isinstance(bi, test):
         pass
     elif isinstance(bi, sp.Derivative):
@@ -236,7 +254,7 @@ def inner_linear(bi: sp.Expr, v: BaseSpace, sc: float | complex) -> Array:
             else:
                 uj *= float(bii)
     Pi = vo.evaluate_basis_derivative(xj, k=i)
-    w = wj * df ** (i - 1) * sc  # Account for domain different from reference
+    w = wj * df ** (i - 1)   # Account for domain different from reference
     z = matmat(uj * w, jnp.conj(Pi))
     if isinstance(v, Composite):
         z = v.apply_stencil_left(z)
@@ -246,7 +264,7 @@ def inner_linear(bi: sp.Expr, v: BaseSpace, sc: float | complex) -> Array:
 def project1D(ue: sp.Expr, V: BaseSpace) -> Array:
     u = TrialFunction(V)
     v = TestFunction(V)
-    M, b = inner(v * u + v * ue)
+    M, b = inner(v * u - v * ue)
     uh = jnp.linalg.solve(M, b)
     return uh
 

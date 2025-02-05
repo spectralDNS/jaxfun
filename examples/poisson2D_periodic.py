@@ -1,24 +1,24 @@
 # Solve Poisson's equation in 2D
-import sys
 import os
-import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-import sympy as sp
-from scipy import sparse as scipy_sparse
+import sys
+
 import jax.numpy as jnp
-from jaxfun.utils.common import lambdify, ulp
-from jaxfun.Legendre import Legendre
+import matplotlib.pyplot as plt
+import sympy as sp
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from scipy import sparse as scipy_sparse
+
+from jaxfun.arguments import TestFunction, TrialFunction, x, y
+from jaxfun.Basespace import n
 from jaxfun.Chebyshev import Chebyshev
 from jaxfun.Fourier import Fourier
-from jaxfun.inner import inner
 from jaxfun.functionspace import FunctionSpace
-from jaxfun.arguments import TestFunction, TrialFunction, x, y
-from jaxfun.operators import Grad, Div, Dot
-from jaxfun.Basespace import n
+from jaxfun.inner import inner
+from jaxfun.operators import Div, Grad
 from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_sparse_list
+from jaxfun.utils.common import lambdify, ulp
 
-
-ue = (sp.cos(2*x)) * sp.exp(sp.cos(2*sp.pi*y))
+ue = (sp.cos(2 * x)) * sp.exp(sp.cos(2 * sp.pi * y))
 
 M, N = 80, 20
 bcs = {"left": {"D": ue.subs(y, -1)}, "right": {"D": ue.subs(y, 1)}}

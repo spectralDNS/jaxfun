@@ -1,28 +1,29 @@
 # Solve Helmholtz' equation
-import sys
 import os
-import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-import sympy as sp
+import sys
+
 import jax.numpy as jnp
-from jaxfun.utils.common import lambdify, ulp
+import matplotlib.pyplot as plt
+import sympy as sp
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from scipy import sparse as scipy_sparse
+
+from jaxfun.arguments import TestFunction, TrialFunction, x, y
+from jaxfun.Basespace import n
 
 # from jaxfun.Legendre import Legendre as space
 from jaxfun.Chebyshev import Chebyshev as space
-from scipy import sparse as scipy_sparse
+from jaxfun.functionspace import FunctionSpace
 
 # from jaxfun.Jacobi import Jacobi as space
 from jaxfun.inner import inner
-from jaxfun.arguments import TestFunction, TrialFunction, x, y
-from jaxfun.operators import Grad, Div, Dot
-from jaxfun.Basespace import n
-from jaxfun.functionspace import FunctionSpace
+from jaxfun.operators import Div, Grad
 from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_sparse_list
+from jaxfun.utils.common import lambdify, ulp
 
 M = 100
-ue = (
-    sp.exp(sp.cos(2 * sp.pi * (x - sp.S.Half / 2)))
-    * sp.exp(sp.sin(2 * (y - sp.S.Half)))
+ue = sp.exp(sp.cos(2 * sp.pi * (x - sp.S.Half / 2))) * sp.exp(
+    sp.sin(2 * (y - sp.S.Half))
 )
 
 bcsx = {"left": {"D": ue.subs(x, -1)}, "right": {"D": ue.subs(x, 1)}}

@@ -1,20 +1,23 @@
 from __future__ import annotations
+
+import copy
 from functools import partial
 from typing import Any
-import copy
-import sympy as sp
-from sympy import Number
-from scipy import sparse as scipy_sparse
-import numpy as np
+
 import jax
 import jax.numpy as jnp
+import numpy as np
+import sympy as sp
 from jax import Array
 from jax.experimental import sparse
 from jax.experimental.sparse import BCOO
-from jaxfun.Basespace import BaseSpace, n, Domain
+from scipy import sparse as scipy_sparse
+from sympy import Number
+
+from jaxfun.Basespace import BaseSpace, Domain, n
+from jaxfun.coordinates import CoordSys
 from jaxfun.Jacobi import Jacobi
 from jaxfun.utils.common import matmat
-from jaxfun.coordinates import CoordSys
 
 direct_sum_symbol = "\u2295"
 
@@ -22,7 +25,9 @@ direct_sum_symbol = "\u2295"
 class BoundaryConditions(dict):
     """Boundary conditions as a dictionary"""
 
-    def __init__(self, bc: dict, domain: Domain = Domain(-1, 1)) -> None:
+    def __init__(self, bc: dict, domain: Domain | None = None) -> None:
+        if domain is None:
+            domain = Domain(-1, 1)
         bcs = {"left": {}, "right": {}}
         bcs.update(copy.deepcopy(bc))
         dict.__init__(self, bcs)
@@ -37,7 +42,7 @@ class BoundaryConditions(dict):
         for lr in ("left", "right"):
             for key in sorted(self[lr].keys()):
                 val = self[lr][key]
-                ls.append(val[1] if isinstance(val, (tuple, list)) else val)
+                ls.append(val[1] if isinstance(val, tuple | list) else val)
         return ls
 
     def num_bcs(self) -> int:
@@ -65,7 +70,7 @@ class BoundaryConditions(dict):
             for s in v:
                 bc[k][s] = 0
         return BoundaryConditions(bc)
-    
+
 
 class Composite(BaseSpace):
     """Space created by combining orthogonal basis functions
@@ -86,7 +91,7 @@ class Composite(BaseSpace):
         stencil: dict = None,
         alpha: Number = 0,
         beta: Number = 0,
-        scaling: sp.Expr = sp.S(1),
+        scaling: sp.Expr = sp.S.One,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
         BaseSpace.__init__(self, N, domain, system=system, name=name, fun_str=fun_str)
@@ -125,7 +130,7 @@ class Composite(BaseSpace):
     def eval_basis_function(self, X: float, i: int) -> float:
         row: Array = self.get_stencil_row(i)
         psi: Array = jnp.array(
-            [self.orthogonal.eval_basis_function(X, i + j) for j in self.stencil.keys()]
+            [self.orthogonal.eval_basis_function(X, i + j) for j in self.stencil]
         )
         return matmat(row, psi)
 
@@ -148,7 +153,7 @@ class Composite(BaseSpace):
                 ).astype(float)
                 for val in self.stencil.values()
             ],
-            [key for key in self.stencil.keys()],
+            [key for key in self.stencil],
             shape=(self.N - self.bcs.num_bcs(), self.N),
         )
 
@@ -201,7 +206,7 @@ class Composite(BaseSpace):
             alpha=self.orthogonal.alpha,
             beta=self.orthogonal.beta,
         )
-    
+
     def get_padded(self, N: int) -> Composite:
         bc = self.bcs.get_homogeneous()
         return Composite(
@@ -267,7 +272,7 @@ class BCGeneric(Composite):
 class DirectSum:
     def __init__(self, a: BaseSpace, b: BaseSpace) -> None:
         assert isinstance(b, BCGeneric)
-        self.spaces = [a, b]
+        self.spaces: list[BaseSpace] = [a, b]
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
 
@@ -277,7 +282,7 @@ class DirectSum:
     def __len__(self) -> int:
         return len(self.spaces)
 
-    def __getattr__(self, name) -> Any:
+    def __getattr__(self, name) -> Any:  # The 'Any' type messes with autocomplete
         return getattr(self.spaces[0], name)
 
     def bnd_vals(self) -> Array:
@@ -304,7 +309,7 @@ def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
     Example
     -------
     >>> from jaxfun import Chebyshev, Composite
-    >>> C = Composite(Chebyshev.Chebyshev, 10, {'left': {'N': 0}, 'right': {'N': 0}})
+    >>> C = Composite(Chebyshev.Chebyshev, 10, {"left": {"N": 0}, "right": {"N": 0}})
     >>> C.stencil
     {0: 1, 2: -n**2/(n**2 + 4*n + 4)}
     """
@@ -338,7 +343,7 @@ def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
     M = sp.simplify(A.solve(b))
     d = {0: 1}
     for i, s in enumerate(M):
-        if not s == 0:
+        if s != 0:
             d[i + 1] = s
     return d
 
@@ -417,12 +422,13 @@ def get_bc_basis(bcs: BoundaryConditions, orthogonal: Jacobi) -> sp.Matrix:
 
 
 if __name__ == "__main__":
+    import matplotlib.pyplot as plt
     from Chebyshev import Chebyshev
     from Legendre import Legendre
-    import matplotlib.pyplot as plt
-    from jaxfun.inner import inner
+
     from jaxfun.arguments import TestFunction, TrialFunction
     from jaxfun.composite import Composite
+    from jaxfun.inner import inner
 
     n = sp.Symbol("n", positive=True, integer=True)
     N = 50

@@ -1,16 +1,17 @@
-from typing import Union, Any
 import importlib
-from jax import Array
+from typing import Any
+
 import jax.numpy as jnp
-from jaxfun.arguments import test, trial, BasisFunction, TrialFunction, TestFunction
+import sympy as sp
+from jax import Array
+
+from jaxfun.arguments import BasisFunction, TestFunction, TrialFunction, test, trial
+from jaxfun.Basespace import BaseSpace
+from jaxfun.composite import BCGeneric, Composite
 from jaxfun.coordinates import CoordSys
 from jaxfun.forms import get_basisfunctions, split
-from jaxfun.utils.common import matmat, tosparse
-from jaxfun.composite import Composite, BCGeneric
-from jaxfun.Basespace import BaseSpace
-from jaxfun.utils.common import lambdify
 from jaxfun.tensorproductspace import DirectSumTPS, TPMatrix
-import sympy as sp
+from jaxfun.utils.common import lambdify, matmat, tosparse
 
 
 def inner(
@@ -18,7 +19,7 @@ def inner(
     sparse: bool = False,
     sparse_tol: int = 1000,
     return_all_items: bool = False,
-) -> Union[Array, list[Array]]:
+) -> Array | list[Array]:
     r"""Compute inner products
 
     Assemble bilinear and linear forms. The expr input needs to represent one of the following 
@@ -41,19 +42,20 @@ def inner(
     Parameters
     ----------
     expr : Sympy Expr
-        An expression containing :class:`.TestFunction` and optionally :class:`.TrialFunction`.
+        An expression containing :class:`.TestFunction` and optionally:class:`.TrialFunction`.
     sparse : bool
         if True, then sparsify the matrices before returning
     sparse_tol : int
-        An integer multiple of one ulp. The tolereance for something being zero is determined based
-        on the absolute value of the number being less than sparse_tol*ulp.
+        An integer multiple of one ulp. The tolereance for something being zero is
+        determined based on the absolute value of the number being less than
+        sparse_tol*ulp.
     return_all_items : bool
         Whether to return just one matrix/vector, or whether to return all computed matrices/vectors.
         Note that one expr may maintain any number of terms leading to many matrices/vectors.
         This parameter is only relevant for 1D problems. Multidimensional problems always
         returns all tensor product matrices.
 
-    """
+    """  # noqa: E501
     V, U = get_basisfunctions(expr)
     test_space = V.functionspace
     trial_space = U.functionspace if U is not None else None
@@ -68,8 +70,8 @@ def inner(
         # There is one tensor product matrix or just matrix (1D) for each a0
         mats = []
         # one scalar coefficient to all the matrices
-        sc = sp.sympify(a0['coeff'])
-        sc = float(sc) if sc.is_real else complex(sc) 
+        sc = sp.sympify(a0["coeff"])
+        sc = float(sc) if sc.is_real else complex(sc)
         trial = []
         has_bcs = False
         for key, ai in a0.items():
@@ -118,7 +120,7 @@ def inner(
     
     for b0 in b_forms:
         bs = []
-        sc = sp.sympify(b0['coeff'])
+        sc = sp.sympify(b0["coeff"])
         sc = float(sc) if sc.is_real else complex(sc) 
         if len(a_forms) > 0:
             sc = sc*(-1)
@@ -144,7 +146,7 @@ def inner(
 
 def process_results(
     aresults, bresults, return_all_items, dims, sparse, sparse_tol
-) -> Union[Array, list[Array]]:
+) -> Array | list[Array]:
     if return_all_items:
         return aresults, bresults
 
@@ -166,7 +168,9 @@ def process_results(
     return aresults, bresults
 
 
-def inner_bilinear(ai: sp.Expr, v: BaseSpace, u: BaseSpace, sc: float | complex) -> Array:
+def inner_bilinear(
+    ai: sp.Expr, v: BaseSpace, u: BaseSpace, sc: float | complex
+) -> Array:
     vo = v.orthogonal
     uo = u.orthogonal
     xj, wj = vo.quad_points_and_weights()
@@ -202,11 +206,11 @@ def inner_bilinear(ai: sp.Expr, v: BaseSpace, u: BaseSpace, sc: float | complex)
         if z is None:
             pass
         else:
-            s = scale*df**(i+j-1)
+            s = scale * df ** (i + j - 1)
             if s.item() != 1:
-                z.data = z.data*s
+                z.data = z.data * s
             z = z.todense()
-        
+
     if z is None:
         w = wj * df ** (i + j - 1) * scale
         Pi = vo.evaluate_basis_derivative(xj, k=i)
@@ -279,7 +283,7 @@ class Measure:
         self.system = system
         self.__dict__.update(kwargs)
 
-    def __rmul__(self, expr: sp.Expr) -> Union[Array, list[Array]]:
+    def __rmul__(self, expr: sp.Expr) -> Array | list[Array]:
         return inner(
             expr * self.system.sg,
             sparse=self.sparse,

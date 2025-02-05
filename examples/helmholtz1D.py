@@ -1,19 +1,20 @@
 # Solve Helmholtz' equation
-import sys
 import os
+import sys
+
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
-import jax.numpy as jnp
-from jaxfun.utils.common import lambdify, ulp
-from jaxfun.Legendre import Legendre as space
+
+from jaxfun.arguments import TestFunction, TrialFunction
+from jaxfun.Basespace import n
 
 # from jaxfun.Jacobi import Jacobi as space
-from jaxfun.composite import Composite
-from jaxfun.inner import inner
-from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.operators import Grad, Div, Dot
-from jaxfun.Basespace import n
 from jaxfun.functionspace import FunctionSpace
+from jaxfun.inner import inner
+from jaxfun.Legendre import Legendre as space
+from jaxfun.operators import Div, Grad
+from jaxfun.utils.common import lambdify, ulp
 
 x = sp.Symbol("x", real=True)
 M = 50

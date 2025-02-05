@@ -1,2 +1,2 @@
 from .common import *
-from .fastgl import leggauss 
+from .fastgl import leggauss

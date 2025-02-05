@@ -1,14 +1,14 @@
-from typing import Any
-import sympy as sp
 import itertools
-from sympy import Function, Symbol, Expr
+from typing import Any
+
+import sympy as sp
+from sympy import Expr, Function, Symbol
 from sympy.printing.pretty.stringpict import prettyForm
-import jax.numpy as jnp
+
 from jaxfun.Basespace import BaseSpace
 from jaxfun.composite import DirectSum
+from jaxfun.coordinates import CoordSys, latex_symbols
 from jaxfun.tensorproductspace import TensorProductSpace, VectorTensorProductSpace
-from jaxfun.coordinates import CoordSys
-from jaxfun.coordinates import latex_symbols
 
 x, y, z = sp.symbols("x,y,z", real=True)
 
@@ -16,7 +16,8 @@ CartCoordSys = lambda name, t: CoordSys(name, sp.Lambda(t, t))
 
 functionspacedict = {}
 
-indices = 'ijklmn'
+indices = "ijklmn"
+
 
 class BasisFunction(Function):
     def __init__(self, coordinate: Symbol, dummy: Symbol) -> None:
@@ -33,11 +34,23 @@ class BasisFunction(Function):
         return obj
 
     def __str__(self) -> str:
-        index = indices[self.local_index+self.offset]
+        index = indices[self.local_index + self.offset]
         if self.rank == 0:
             return "".join((self.fun_str, "_", index, "(", self.args[0].name, ")"))
         elif self.rank == 1:
-            return "".join((self.fun_str, "_", index, "^{(", str(self.global_index) ,")}", "(", self.args[0].name, ")")) 
+            return "".join(
+                (
+                    self.fun_str,
+                    "_",
+                    index,
+                    "^{(",
+                    str(self.global_index),
+                    ")}",
+                    "(",
+                    self.args[0].name,
+                    ")",
+                )
+            )
 
     def _pretty(self, printer: Any = None) -> str:
         return prettyForm(self.__str__())
@@ -46,15 +59,32 @@ class BasisFunction(Function):
         return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
-        index = indices[self.local_index+self.offset]
+        index = indices[self.local_index + self.offset]
         if self.rank == 0:
             return "".join(
-                (latex_symbols[self.fun_str], "_", str(index), "(", latex_symbols[self.args[0].name], ")")
+                (
+                    latex_symbols[self.fun_str],
+                    "_",
+                    str(index),
+                    "(",
+                    latex_symbols[self.args[0].name],
+                    ")",
+                )
             )
         elif self.rank == 1:
             return "".join(
-                (latex_symbols[self.fun_str], "_", str(index),  "^{(", str(self.global_index) ,")}", "(", latex_symbols[self.args[0].name], ")")
-            ) 
+                (
+                    latex_symbols[self.fun_str],
+                    "_",
+                    str(index),
+                    "^{(",
+                    str(self.global_index),
+                    ")}",
+                    "(",
+                    latex_symbols[self.args[0].name],
+                    ")",
+                )
+            )
 
     @property
     def functionspace(self):
@@ -78,29 +108,44 @@ def _get_computational_function(
     offset = V.dims if arg == "trial" else 0
     if isinstance(V, BaseSpace):
         assert args[0].is_Symbol
-        return func(args[0], sp.Symbol(V.name + "-" + V.fun_str+ "-" + str(offset) + "-0-0"))
+        return func(
+            args[0], sp.Symbol(V.name + "-" + V.fun_str + "-" + str(offset) + "-0-0")
+        )
 
     elif isinstance(V, TensorProductSpace):
         for space in V.spaces:
             functionspacedict[space.name] = space
         return sp.Mul(
             *[
-                func(a, sp.Symbol(v.name + "-" + v.fun_str + "-" + str(offset) + "-0-0"))
-                for a, v in zip(args, V)
+                func(
+                    a, sp.Symbol(v.name + "-" + v.fun_str + "-" + str(offset) + "-0-0")
+                )
+                for a, v in zip(args, V, strict=False)
             ]
         )
 
     elif isinstance(V, VectorTensorProductSpace):
         b = V.system.base_vectors()
-        for i, Vi in enumerate(V):
+        for Vi in V:
             for v in Vi:
                 functionspacedict[v.name] = v
         return sp.vector.VectorAdd(
             *[
                 sp.Mul(
                     *[
-                        func(a, sp.Symbol(v.name + "-" + v.fun_str + "-" + str(offset) + "-1-" + str(i)))
-                        for a, v in zip(args, Vi)
+                        func(
+                            a,
+                            sp.Symbol(
+                                v.name
+                                + "-"
+                                + v.fun_str
+                                + "-"
+                                + str(offset)
+                                + "-1-"
+                                + str(i)
+                            ),
+                        )
+                        for a, v in zip(args, Vi, strict=False)
                     ]
                 )
                 * b[i]
@@ -109,10 +154,11 @@ def _get_computational_function(
         )
 
 
-# Note
-# Need a unique Symbol in order to create a new TestFunction/TrialFunction for a new space.
-# Without it all TestFunctions/TrialFunctions created with the same Cartesian coordinates
-# will be the same object.
+# NOTE
+# Need a unique Symbol in order to create a new TestFunction/TrialFunction for a new
+# space. Without it all TestFunctions/TrialFunctions created with the same Cartesian
+# coordinates will be the same object.
+
 
 class TestFunction(Function):
     __test__ = False  # prevent pytest from considering this a test.
@@ -134,9 +180,7 @@ class TestFunction(Function):
                     vname += "0"
                 else:
                     f.append(space)
-            self.functionspace = TensorProductSpace(
-                f, name=vname, system=V.system
-            )
+            self.functionspace = TensorProductSpace(f, name=vname, system=V.system)
         self.name = name
 
     def __new__(
@@ -166,7 +210,7 @@ class TestFunction(Function):
 
     def _latex(self, printer: Any = None) -> str:
         name = self.name if self.name is not None else "TestFunction"
-        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)
+        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return "".join(
             (
                 name,
@@ -251,7 +295,7 @@ class TrialFunction(Function):
 
     def _latex(self, printer: Any = None) -> str:
         name = self.name if self.name is not None else "TrialFunction"
-        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)
+        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return "".join(
             (
                 name,
@@ -332,4 +376,4 @@ class VectorFunction(Function):
         return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
-        return r"\mathbf{{%s}}" % (latex_symbols[self.name],) + str(self.args[:-1])
+        return r"\mathbf{{%s}}" % (latex_symbols[self.name],) + str(self.args[:-1])  # noqa: UP031

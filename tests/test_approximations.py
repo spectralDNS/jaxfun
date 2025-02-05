@@ -48,8 +48,8 @@ def cn(c: jnp.ndarray) -> np.ndarray:
 def test_vandermonde(space: BaseSpace, x: jnp.ndarray, xn: np.ndarray, N: int) -> None:
     space = space(N)
     np_res = {
-        "Legendre": np.polynomial.legendre.legvander(xn, N-1),
-        "Chebyshev": np.polynomial.chebyshev.chebvander(xn, N-1),
+        "Legendre": np.polynomial.legendre.legvander(xn, N - 1),
+        "Chebyshev": np.polynomial.chebyshev.chebvander(xn, N - 1),
     }[space.__class__.__name__]
     jax_res = space.vandermonde(x)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
@@ -77,8 +77,8 @@ def test_evaluate_basis_derivative(
 ) -> None:
     space = space(N)
     np_res = {
-        "Legendre": np.polynomial.legendre.legvander(xn, N-1),
-        "Chebyshev": np.polynomial.chebyshev.chebvander(xn, N-1),
+        "Legendre": np.polynomial.legendre.legvander(xn, N - 1),
+        "Chebyshev": np.polynomial.chebyshev.chebvander(xn, N - 1),
     }[space.__class__.__name__]
     der = {
         "Legendre": np.polynomial.legendre.legder,

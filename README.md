@@ -1,6 +1,6 @@
 # jaxfun
 
-[![Test jaxfun](https://github.com/augustfe/jaxfun/actions/workflows/pytest.yml/badge.svg)](https://github.com/augustfe/jaxfun/actions/workflows/pytest.yml)
+[![Test jaxfun](https://github.com/spectralDNS/jaxfun/actions/workflows/pytest.yml/badge.svg)](https://github.com/spectralDNS/jaxfun/actions/workflows/pytest.yml)
 
 ## Authors
 - Mikael Mortensen: mikaem@math.uio.no

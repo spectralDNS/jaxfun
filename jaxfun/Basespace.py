@@ -1,16 +1,18 @@
 from __future__ import annotations
-from typing import NamedTuple, Union
+
 from functools import partial
+from typing import NamedTuple
+
+import jax
+import jax.numpy as jnp
+import sympy as sp
+from jax import Array
+from jax.experimental.sparse import BCOO
 from scipy import sparse as scipy_sparse
 from sympy import Number
-import sympy as sp
-import jax
-from jax import Array
-import jax.numpy as jnp
-from jax.experimental.sparse import BCOO
-from jaxfun.utils.common import jacn
+
 from jaxfun.coordinates import CoordSys
-from jaxfun.utils.common import lambdify
+from jaxfun.utils.common import jacn, lambdify
 
 n = sp.Symbol("n", integer=True, positive=True)  # index
 
@@ -162,24 +164,24 @@ class BaseSpace:
         x = x.pop()
         return u.xreplace({x: a + (x - c) / d})
 
-    def map_reference_domain(self, x: Union[sp.Symbol, Array]) -> Union[sp.Expr, Array]:
+    def map_reference_domain(self, x: sp.Symbol | Array) -> sp.Expr | Array:
         """Return true point `x` mapped to reference domain"""
 
-        if not self.domain == self.reference_domain:
+        if self.domain != self.reference_domain:
             a = self.domain.lower
             c = self.reference_domain.lower
-            if isinstance(x, (Array, float)):
+            if isinstance(x, Array | float):
                 x = float(c) + (x - float(a)) * float(self.domain_factor)
             else:
                 x = c + (x - a) * self.domain_factor
         return x
 
-    def map_true_domain(self, X: Union[sp.Symbol, Array]) -> Union[sp.Expr, Array]:
+    def map_true_domain(self, X: sp.Symbol | Array) -> sp.Expr | Array:
         """Return reference point `x` mapped to true domain"""
-        if not self.domain == self.reference_domain:
+        if self.domain != self.reference_domain:
             a = self.domain.lower
             c = self.reference_domain.lower
-            if isinstance(X, (Array, float)):
+            if isinstance(X, Array | float):
                 X = float(a) + (X - float(c)) / float(self.domain_factor)
             else:
                 X = a + (X - c) / self.domain_factor
@@ -194,7 +196,7 @@ class BaseSpace:
             M = N if N != 0 else self.N
             return jnp.linspace(float(a), float(b), M)
 
-    def cartesian_mesh(self, kind: str = "quadrature", N: int = 0):
+    def cartesian_mesh(self, kind: str = "quadrature", N: int = 0) -> tuple[Array, ...]:
         rv = self.system._position_vector
         t = self.system.base_scalars()[0]
         xj = self.mesh(kind, N)

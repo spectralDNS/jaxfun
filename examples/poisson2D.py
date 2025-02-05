@@ -1,20 +1,20 @@
 # Solve Poisson's equation in 2D
-import sys
 import os
+import sys
+
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from scipy import sparse as scipy_sparse
-import jax.numpy as jnp
-from jaxfun.utils.common import lambdify, ulp
-from jaxfun.Legendre import Legendre
-from jaxfun.Chebyshev import Chebyshev
-from jaxfun.inner import inner
-from jaxfun.functionspace import FunctionSpace
-from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.operators import Grad, Div, Dot
-from jaxfun.Basespace import n
-from jaxfun.tensorproductspace import TensorProductSpace, tpmats_to_scipy_sparse_list
 
+from jaxfun.arguments import TestFunction, TrialFunction
+from jaxfun.Basespace import n
+from jaxfun.Chebyshev import Chebyshev
+from jaxfun.functionspace import FunctionSpace
+from jaxfun.inner import inner
+from jaxfun.operators import Div, Grad
+from jaxfun.tensorproductspace import TensorProductSpace, tpmats_to_scipy_sparse_list
+from jaxfun.utils.common import lambdify, ulp
 
 M = 20
 bcs = {"left": {"D": 0}, "right": {"D": 0}}

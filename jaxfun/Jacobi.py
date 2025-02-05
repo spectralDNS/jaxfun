@@ -39,23 +39,16 @@ class Jacobi(BaseSpace):
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
         """
-        Evaluate a Jacobi series at points x.
+        Evaluate a Jacobi series at points X.
 
-        .. math:: p(x) = c_0 * P_0(x) + c_1 * P_1(x) + ... + c_n * P_n(x)
+        .. math:: p(X) = c_0 * P_0(X) + c_1 * P_1(X) + ... + c_n * P_n(X)
 
-        Parameters
-        ----------
-        x : float
-        c : Array
+        Args:
+            X (float): Evaluation point in reference space
+            c (Array): Expansion coefficients
 
-        Returns
-        -------
-        values : Array
-
-        Notes
-        -----
-        The evaluation uses Clenshaw recursion, aka synthetic division.
-
+        Returns:
+            float: Jacobi series evaluated at X.
         """
         a, b = float(self.alpha), float(self.beta)
 
@@ -175,10 +168,9 @@ class Jacobi(BaseSpace):
 
         where :math:`\partial^k` represents the :math:`k`'th derivative
 
-        Parameters
-        ----------
-        n, k : int
-            Parameters in (*)
+        Args:
+            n, k (int) : Parameters in (*)
+
         """  # noqa: E501
         return sp.rf(n + self.alpha + self.beta + 1, k) / 2**k
 
@@ -190,12 +182,9 @@ class Jacobi(BaseSpace):
 
             h_n = (P^{(\alpha,\beta)}_n, P^{(\alpha,\beta)}_n)_{\omega^{(\alpha,\beta)}}
 
-        Parameters
-        ----------
-        alpha, beta : numbers
-            Jacobi parameters
-        n : int
-            Index
+        Args:
+            alpha, beta (numbers) : Jacobi parameters
+            n (int) : Index
         """  # noqa: E501
         f = (
             sp.rf(n + 1, alf)
@@ -215,12 +204,9 @@ class Jacobi(BaseSpace):
 
         where :math:`\partial^k` represents the :math:`k`'th derivative.
 
-        Parameters
-        ----------
-        n : int
-            Index
-        k : int
-            For derivative of k'th order, see (*)
+        Args:
+            n (int) : Index
+            k (int) : For derivative of k'th order, see (*)
         """  # noqa: E501
         f = self.gamma(self.alpha + k, self.beta + k, n - k) * (self.psi(n, k)) ** 2
         return sp.simplify(self.gn(n) ** 2 * f)

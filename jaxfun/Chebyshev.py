@@ -34,23 +34,16 @@ class Chebyshev(Jacobi):
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
         """
-        Evaluate a Chebyshev series at points x.
+        Evaluate a Chebyshev series at points X.
 
-        .. math:: p(x) = c_0 * T_0(x) + T_1 * T_1(x) + ... + c_n * T_n(x)
+        .. math:: p(X) = c_0 * T_0(X) + c_1 * T_1(X) + ... + c_n * T_n(X)
 
-        Parameters
-        ----------
-        X : float
-        c : Array
+        Args:
+            X (float): Evaluation point in reference space
+            c (Array): Expansion coefficients
 
-        Returns
-        -------
-        values : Array
-
-        Notes
-        -----
-        The evaluation uses Clenshaw recursion, aka synthetic division.
-
+        Returns:
+            float: Chebyshev series evaluated at X.
         """
         if len(c) == 1:
             # Multiply by 0 * x for shape

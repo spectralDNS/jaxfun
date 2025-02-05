@@ -38,14 +38,12 @@ class Fourier(BaseSpace):
 
         .. math:: p(x) = c_0 + c_1 * exp(ix) + ... + c_n * exp(iNx)
 
-        Parameters
-        ----------
-        X : float
-        c : Array
+        Args:
+            X (float) : Evaluation point in reference space
+            c (Array) : Expansion coefficients
 
-        Returns
-        -------
-        values : Array
+        Returns:
+            values (Array)
 
         """
         k: Array = self.wavenumbers()

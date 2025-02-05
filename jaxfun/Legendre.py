@@ -33,24 +33,16 @@ class Legendre(Jacobi):
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
-        """
-        Evaluate a Legendre series at points x.
+        """Evaluate a Legendre series at points X.
 
-        .. math:: p(x) = c_0 * L_0(x) + c_1 * L_1(x) + ... + c_n * L_n(x)
+        .. math:: p(X) = c_0 * L_0(X) + c_1 * L_1(X) + ... + c_n * L_n(X)
 
-        Parameters
-        ----------
-        x : float
-        c : Array
+        Args:
+            X (float): Evaluation point in reference space
+            c (Array): Expansion coefficients
 
-        Returns
-        -------
-        values : Array
-
-        Notes
-        -----
-        The evaluation uses Clenshaw recursion, aka synthetic division.
-
+        Returns:
+            float: Legendre series evaluated at X.
         """
         if len(c) == 1:
             # Multiply by 0 * x for shape

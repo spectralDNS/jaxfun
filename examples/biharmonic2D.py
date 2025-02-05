@@ -43,9 +43,7 @@ v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 ue = T.system.expr_psi_to_base_scalar(ue)
 
-#A, b = inner(Div(Grad(Div(Grad(u))))*v - Div(Grad(Div(Grad(ue))))*v, sparse=False)
-A, b = inner(Div(Grad(Div(Grad(u))))*v, sparse=False)
-b += inner(Div(Grad(Div(Grad(ue))))*v, sparse=False)
+A, b = inner(Div(Grad(Div(Grad(u))))*v - Div(Grad(Div(Grad(ue))))*v, sparse=False)
 
 # jax can only do kron for dense matrices
 C = (

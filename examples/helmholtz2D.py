@@ -38,7 +38,7 @@ u = TrialFunction(T, name="u")
 ue = T.system.expr_psi_to_base_scalar(ue)
 
 A, L = inner(
-    v * (Div(Grad(u)) + u) + v * (Div(Grad(ue)) + ue), sparse=True, sparse_tol=1000
+    v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True, sparse_tol=1000
 )
 
 a = tpmats_to_scipy_sparse_list(A)

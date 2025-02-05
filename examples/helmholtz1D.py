@@ -30,7 +30,7 @@ x = D.system.x  # use the same coordinate as u and v
 ue = D.system.expr_psi_to_base_scalar(ue)
 
 A, L = inner(
-    v * (Div(Grad(u)) + u) + v * (Div(Grad(ue)) + ue),
+    v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue),
     sparse=True,
     sparse_tol=1000,
     return_all_items=False,

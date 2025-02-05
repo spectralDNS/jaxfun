@@ -1,7 +1,6 @@
 from jaxfun import Chebyshev, Jacobi, Legendre
 from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.Basespace import BaseSpace
-from jaxfun.composite import Composite
+from jaxfun.Basespace import BaseSpace, Domain
 from jaxfun.coordinates import CoordSys, get_CoordSys
 from jaxfun.functionspace import FunctionSpace
 from jaxfun.inner import inner

@@ -33,7 +33,7 @@ ue = 1 - x**2  # * sp.exp(sp.cos(2 * sp.pi * x))
 # A = inner(v*Div(Grad(u)), sparse=True)
 # b = inner(v*sp.Derivative(ue, x, 2))
 A, b = inner(
-    v * Div(Grad(u)) + v * sp.Derivative(ue, x, 2), sparse=True, sparse_tol=1000
+    v * Div(Grad(u)) - v * sp.Derivative(ue, x, 2), sparse=True, sparse_tol=1000
 )
 
 xj = D.mesh()

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import copy
 import itertools
 from collections.abc import Iterable
@@ -57,7 +59,10 @@ class TensorProductSpace:
         return 0
 
     def shape(self) -> tuple[int]:
-        return tuple([n.N + 1 for n in self.spaces])
+        return tuple([space.N for space in self.spaces])
+
+    def dim(self):
+        return tuple([space.dim for space in self.spaces])
 
     def mesh(
         self,
@@ -91,6 +96,18 @@ class TensorProductSpace:
         s[axis] = slice(None)
         return x[tuple(s)]
 
+    def map_expr_true_domain(self, u: sp.Expr) -> sp.Expr:
+        """Return`u(X, Y, (Z))` mapped to true domain"""
+        for space in self.spaces:
+            u = space.map_expr_true_domain(u)
+        return u
+
+    def map_expr_reference_domain(self, u: sp.Expr) -> sp.Expr:
+        """Return`u(x, y, (z))` mapped to reference domain"""
+        for space in self.spaces:
+            u = space.map_expr_reference_domain(u)
+        return u
+
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, x: list[Array], c: Array) -> Array:
         """Evaluate on a given tensor product mesh"""
@@ -113,7 +130,7 @@ class TensorProductSpace:
                 )(self.spaces[i].map_reference_domain(xi), c)
         return c
 
-    def get_padded(self, N: tuple[int]) -> "TensorProductSpace":
+    def get_padded(self, N: tuple[int]) -> TensorProductSpace:
         paddedspaces = [s.get_padded(n) for s, n in zip(self.spaces, N, strict=False)]
         return TensorProductSpace(
             paddedspaces, system=self.system, name=self.name + "p"
@@ -158,14 +175,13 @@ class TensorProductSpace:
         self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
     ) -> Array:
         dim: int = len(self)
-
         if dim == 2:
             for ax in range(dim):
                 axi: int = dim - 1 - ax
                 backward = partial(
                     self.spaces[ax].backward,
                     kind=kind,
-                    N=self.spaces[ax].N if N is None else N[ax],
+                    N=self.spaces[ax].M if N is None else N[ax],
                 )
                 c = jax.vmap(backward, in_axes=axi, out_axes=axi)(c)
         else:
@@ -173,7 +189,7 @@ class TensorProductSpace:
                 backward = partial(
                     self.spaces[ax].backward,
                     kind=kind,
-                    N=self.spaces[ax] if N is None else N[ax],
+                    N=self.spaces[ax].M if N is None else N[ax],
                 )
                 ax0, ax1 = set(range(dim)) - set((ax,))
                 c = jax.vmap(
@@ -182,6 +198,48 @@ class TensorProductSpace:
                     out_axes=ax1,
                 )(c)
         return c
+
+    @partial(jax.jit, static_argnums=0)
+    def scalar_product(self, u: Array) -> Array:
+        dim: int = len(self)
+        sg = self.system.sg
+        if sg != 1:
+            sg = lambdify(self.system.base_scalars(), sg)(*self.mesh())
+            u = u * sg
+
+        if dim == 2:
+            for ax in range(dim):
+                axi: int = dim - 1 - ax
+                u = jax.vmap(self.spaces[ax].scalar_product, in_axes=axi, out_axes=axi)(
+                    u
+                )
+        else:
+            for ax in range(dim):
+                ax0, ax1 = set(range(dim)) - set((ax,))
+                u = jax.vmap(
+                    jax.vmap(self.spaces[ax].scalar_product, in_axes=ax0, out_axes=ax0),
+                    in_axes=ax1,
+                    out_axes=ax1,
+                )(u)
+        return u
+
+    @partial(jax.jit, static_argnums=0)
+    def forward(self, u: Array) -> Array:
+        dim: int = len(self)
+
+        if dim == 2:
+            for ax in range(dim):
+                axi: int = dim - 1 - ax
+                u = jax.vmap(self.spaces[ax].forward, in_axes=axi, out_axes=axi)(u)
+        else:
+            for ax in range(dim):
+                ax0, ax1 = set(range(dim)) - set((ax,))
+                u = jax.vmap(
+                    jax.vmap(self.spaces[ax].forward, in_axes=ax0, out_axes=ax0),
+                    in_axes=ax1,
+                    out_axes=ax1,
+                )(u)
+        return u
 
 
 class VectorTensorProductSpace:
@@ -210,7 +268,7 @@ class VectorTensorProductSpace:
     @property
     def rank(self) -> int:
         return 1
-    
+
     @property
     def dims(self) -> int:
         return len(self.tensorspaces[0])
@@ -226,6 +284,15 @@ def TensorProduct(
         if system is None
         else system
     )
+    # Make copy of all 1D spaces since they will use different coordinates
+    # Add index to name if some names of spaces are equal
+    # Not sure this is the best approach..
+    spaces = [copy.deepcopy(space) for space in spaces]
+    names = [space.name for space in spaces]
+
+    if jnp.any(jnp.array([name == names[0] for name in names[1:]])):
+        for i, space in enumerate(spaces):
+            space.name = space.name + str(i)
     # Use the same coordinates in BaseSpaces as in TensorProductSpace
     for i, space in enumerate(spaces):
         space.system = system.sub_system(i)
@@ -361,7 +428,12 @@ class DirectSumTPS(TensorProductSpace):
             for i, s in enumerate(tensorspaces)
         }
 
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+    def get_homogeneous(self):
+        return self.tpspaces[(self.spaces[0].spaces[0], self.spaces[1].spaces[0])]
+
+    def backward(
+        self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
+    ) -> Array:
         a = []
         for f, v in self.tpspaces.items():
             if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.spaces])):
@@ -369,6 +441,16 @@ class DirectSumTPS(TensorProductSpace):
             else:
                 a.append(v.backward(c, kind=kind, N=N))
         return jnp.sum(jnp.array(a), axis=0)
+
+    def forward(self, c: Array) -> Array:
+        from jaxfun import TestFunction, TrialFunction, inner
+        from jaxfun.arguments import JAXArray
+        
+        v = TestFunction(self)
+        u = TrialFunction(self)
+        c = c if isinstance(c, JAXArray) else JAXArray(c, "c", self) 
+        A, b = inner((u - c) * v)
+        return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.dim())
 
 
 # NOTE: Could this be a DataClass / NamedTuple?
@@ -384,6 +466,48 @@ class TPMatrix:  # noqa: B903
         self.scale = scale
         self.test_space = test_space
         self.trial_space = trial_space
+
+    @property
+    def mat(self) -> Array:
+        return jnp.kron(*self.mats)
+
+
+class TensorMatrix:
+    def __init__(
+        self,
+        mats: list[tuple[Array, Array]],
+        scale: Array,
+        test_space: TensorProductSpace,
+        trial_space: TensorProductSpace,
+    ) -> None:
+        assert len(mats) == 2
+        P0, P1 = mats[0]
+        P2, P3 = mats[1]
+        i, k = P0.shape[1], P1.shape[1]
+        j, l = P2.shape[1], P3.shape[1]
+        if len(sp.sympify(scale).free_symbols) > 0:
+            s = test_space.system.base_scalars()
+            xj = test_space.mesh()
+            scale = lambdify(s, scale, modules="jax")(*xj)
+        else:
+            scale = jnp.ones((P0.shape[0], P1.shape[0])) * scale
+        # a = np.zeros((i, j, k, l))
+        # for ii in range(i):
+        #   Ph0 = P0[:, ii][:, None] * P1
+        #   for jj in range(j):
+        #       Ph1 = P2[:, jj][:, None] * P3
+        #       a[ii, jj, :] = Ph0.T @ scale @ Ph1
+
+        def fun(p0, p1, p2, p3):
+            ph0 = p0[:, None] * p1
+            ph1 = p2[:, None] * p3
+            return ph0.T @ scale @ ph1
+
+        a = jax.vmap(
+            jax.vmap(fun, in_axes=(None, None, 1, None)), in_axes=(1, None, None, None)
+        )(P0, P1, P2, P3)
+
+        self.mat = a.reshape((i * j, k * l))
 
 
 def tpmats_to_scipy_sparse_list(

@@ -1,7 +1,9 @@
 import itertools
 from typing import Any
 
+import jax.numpy as jnp
 import sympy as sp
+from jax import Array
 from sympy import Expr, Function, Symbol
 from sympy.printing.pretty.stringpict import prettyForm
 
@@ -329,7 +331,7 @@ class ScalarFunction(Function):
         return (
             self.name + f"({self.args[0]})"
             if len(self.args) == 2
-            else str(self.args[:-1])
+            else self.name + str(self.args[:-1])
         )
 
     def _pretty(self, printer: Any = None) -> str:
@@ -377,3 +379,61 @@ class VectorFunction(Function):
 
     def _latex(self, printer: Any = None) -> str:
         return r"\mathbf{{%s}}" % (latex_symbols[self.name],) + str(self.args[:-1])  # noqa: UP031
+
+
+class JAXArray(Function):
+    def __new__(
+        cls, array: Array, name: str, space: BaseSpace | TensorProductSpace | DirectSum
+    ) -> Function:
+        obj = Function.__new__(cls, sp.Dummy())
+        obj.array = array
+        obj.space = space
+        obj.name = name.lower()
+        return obj
+
+    def forward(self):
+        return self.space.forward(self.array)
+
+    def doit(self, **hints: dict) -> Function:
+        return self
+
+    def __str__(self) -> str:
+        return self.name
+
+    def _pretty(self, printer: Any = None) -> str:
+        return prettyForm(self.__str__())
+
+    def _sympystr(self, printer: Any) -> str:
+        return self.__str__()
+
+    def _latex(self, printer: Any = None) -> str:
+        return latex_symbols[self.name]
+
+
+class JAXFunction(Function):
+    def __new__(
+        cls, array: Array, name: str, space: BaseSpace | TensorProductSpace | DirectSum
+    ) -> Function:
+        obj = Function.__new__(cls, sp.Dummy())
+        obj.array = array
+        obj.space = space
+        obj.name = name.lower()
+        return obj
+
+    def backward(self):
+        return self.space.backward(self.array)
+
+    def doit(self, **hints: dict) -> Function:
+        return self
+
+    def __str__(self) -> str:
+        return self.name
+
+    def _pretty(self, printer: Any = None) -> str:
+        return prettyForm(self.__str__())
+
+    def _sympystr(self, printer: Any) -> str:
+        return self.__str__()
+
+    def _latex(self, printer: Any = None) -> str:
+        return latex_symbols[self.name]

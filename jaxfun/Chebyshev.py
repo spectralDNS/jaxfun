@@ -6,8 +6,9 @@ import sympy as sp
 from jax import Array
 from sympy import Expr, Symbol
 
+from jaxfun.Basespace import Domain
 from jaxfun.coordinates import CoordSys
-from jaxfun.Jacobi import Domain, Jacobi
+from jaxfun.Jacobi import Jacobi
 
 
 class Chebyshev(Jacobi):
@@ -36,7 +37,7 @@ class Chebyshev(Jacobi):
         """
         Evaluate a Chebyshev series at points X.
 
-        .. math:: p(X) = c_0 * T_0(X) + c_1 * T_1(X) + ... + c_n * T_n(X)
+        .. math:: p(X) = c_0 * T_0(X) + c_1 * T_1(X) + ... + c_{N-1} * T_{N-1}(X)
 
         Args:
             X (float): Evaluation point in reference space
@@ -67,7 +68,7 @@ class Chebyshev(Jacobi):
         return c0 + c1 * X
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.N if N == 0 else N
+        N = self.M if N == 0 else N
         return jnp.array(
             (
                 jnp.cos(jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)),
@@ -120,8 +121,10 @@ def matrices(test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]) -> Array
     v, i = test
     u, j = trial
     if i == 0 and j == 0:
-        return sparse.BCOO.from_scipy_sparse(
-            scipy_sparse.diags((v.norm_squared(),), (0,), (v.N, u.N), "csr")
+        # BCOO chops the array if v.N > u.N, so no need to check sizes
+        return sparse.BCOO(
+            (v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
+            shape=(v.N, u.N),
         )
     if i == 0 and j == 1:
         k = jnp.arange(max(v.N, u.N))

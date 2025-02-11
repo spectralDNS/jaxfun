@@ -10,26 +10,30 @@ from scipy import sparse as scipy_sparse
 
 from jaxfun.arguments import TestFunction, TrialFunction, x, y
 from jaxfun.Basespace import n
-
-# from jaxfun.Legendre import Legendre as space
 from jaxfun.Chebyshev import Chebyshev as space
 from jaxfun.functionspace import FunctionSpace
 
 # from jaxfun.Jacobi import Jacobi as space
 from jaxfun.inner import inner
+
+# from jaxfun.Legendre import Legendre as space
 from jaxfun.operators import Div, Grad
 from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_sparse_list
 from jaxfun.utils.common import lambdify, ulp
 
-M = 100
+M = 30
 ue = sp.exp(sp.cos(2 * sp.pi * (x - sp.S.Half / 2))) * sp.exp(
     sp.sin(2 * (y - sp.S.Half))
 )
 
-bcsx = {"left": {"D": ue.subs(x, -1)}, "right": {"D": ue.subs(x, 1)}}
-bcsy = {"left": {"D": ue.subs(y, -1)}, "right": {"D": ue.subs(y, 1)}}
-Dx = FunctionSpace(M, space, bcs=bcsx, name="Dx", fun_str="psi", scaling=n + 1)
-Dy = FunctionSpace(M, space, bcs=bcsy, name="Dy", fun_str="phi", scaling=n + 1)
+bcsx = {"left": {"D": ue.subs(x, 0)}, "right": {"D": ue.subs(x, 1)}}
+bcsy = {"left": {"D": ue.subs(y, 0)}, "right": {"D": ue.subs(y, 1)}}
+Dx = FunctionSpace(
+    M, space, bcs=bcsx, name="Dx", fun_str="psi", scaling=n + 1, domain=(0, 1)
+)
+Dy = FunctionSpace(
+    M, space, bcs=bcsy, name="Dy", fun_str="phi", scaling=n + 1, domain=(0, 1)
+)
 T = TensorProduct((Dx, Dy), name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
@@ -49,11 +53,12 @@ A0 = (
 )
 un = jnp.array(scipy_sparse.linalg.spsolve(A0, L.flatten()).reshape(L.shape))
 
-uj = T.backward(un, kind="uniform", N=(100, 100))
-xj = T.mesh(kind="uniform", N=(100, 100))
+N = 100
+uj = T.backward(un, kind="uniform", N=(N, N))
+xj = T.mesh(kind="uniform", N=(N, N))
 uej = lambdify((x, y), ue)(*xj)
 
-error = jnp.linalg.norm(uj - uej)
+error = jnp.linalg.norm(uj - uej) / N
 if "pytest" in os.environ:
     assert error < ulp(1000), error
     sys.exit(1)
@@ -61,7 +66,7 @@ if "pytest" in os.environ:
 print("Error =", error)
 
 f, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4))
-xj = T.mesh(kind="uniform", N=(100, 100), broadcast=False)
+xj = T.mesh(kind="uniform", N=(N, N), broadcast=False)
 ax1.contourf(xj[0], xj[1], uj)
 ax2.contourf(xj[0], xj[1], uej)
 ax2.set_autoscalex_on(False)

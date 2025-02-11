@@ -181,13 +181,20 @@ class Composite(BaseSpace):
     def apply_stencil_right(self, a: Array) -> Array:
         return a @ self.S.T
 
+    @partial(jax.jit, static_argnums=0)
     def mass_matrix(self) -> BCOO:
         P: BCOO = self.orthogonal.mass_matrix()
         T = matmat((self.S * P.data[None, :]), self.S.T).data.reshape(
             (self.dim, -1)
         )  # sparse @ sparse -> dense (yet sparse format), so need to remove zeros
-        return sparse.BCOO.from_scipy_sparse(scipy_sparse.csr_matrix(T))
+        return sparse.BCOO.fromdense(T, nse = 2*self.S.nse - self.S.shape[1])
 
+    @partial(jax.jit, static_argnums=0)
+    def forward(self, u: Array) -> Array:
+        A = self.mass_matrix().todense()
+        L = self.scalar_product(u)
+        return jnp.linalg.solve(A, L)
+    
     @property
     def dim(self) -> int:
         return self.N - self.bcs.num_bcs()
@@ -275,6 +282,10 @@ class DirectSum:
         self.spaces: list[BaseSpace] = [a, b]
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
+        self.system = a.system
+        self.mesh = a.mesh 
+        self.map_expr_true_domain = a.map_expr_reference_domain
+        self.map_expr_reference_domain = a.map_expr_reference_domain
 
     def __getitem__(self, i: int) -> BaseSpace:
         return self.spaces[i]
@@ -282,8 +293,8 @@ class DirectSum:
     def __len__(self) -> int:
         return len(self.spaces)
 
-    def __getattr__(self, name) -> Any:  # The 'Any' type messes with autocomplete
-        return getattr(self.spaces[0], name)
+    def mesh(self, kind: str = "quadrature", N: int = 0) -> Array:
+        return self.spaces[0].mesh(kind=kind, N=N)
 
     def bnd_vals(self) -> Array:
         return self.spaces[1].bnd_vals()

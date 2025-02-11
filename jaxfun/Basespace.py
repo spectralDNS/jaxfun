@@ -34,6 +34,7 @@ class BaseSpace:
         from jaxfun.arguments import CartCoordSys, x
 
         self.N = N
+        self.M = N
         self._domain = Domain(*domain)
         self.name = name
         self.fun_str = fun_str
@@ -71,9 +72,8 @@ class BaseSpace:
                 \psi_{0}(x_{N-1}) & \psi_1(x_{N-1}) & \ldots & \psi_{M-1}(x_{N-1})
             \end{bmatrix}
 
-        Parameters
-        ----------
-        x: Array
+        Args:
+            X: Array
 
         """
         return self.evaluate_basis_derivative(X, 0)
@@ -91,10 +91,31 @@ class BaseSpace:
         xj = self.mesh(kind=kind, N=N)
         return self.evaluate(self.map_reference_domain(xj), c)
 
+    @partial(jax.jit, static_argnums=0)
     def mass_matrix(self) -> BCOO:
-        return BCOO.from_scipy_sparse(
-            scipy_sparse.diags((self.norm_squared(),), (0,), shape=(self.dim, self.dim))
+        return BCOO(
+            (self.norm_squared(), jnp.vstack((jnp.arange(self.N),) * 2).T),
+            shape=(self.N, self.N),
         )
+
+    @partial(jax.jit, static_argnums=0)
+    def forward(self, u: Array) -> Array:
+        # Orthogonal space, diagonal mass matrix
+        A = self.norm_squared()
+        L = self.scalar_product(u)
+        return L / A
+
+    @partial(jax.jit, static_argnums=0)
+    def scalar_product(self, u: Array) -> Array:
+        xj, wj = self.quad_points_and_weights()
+        Pi = self.vandermonde(xj)
+        sg = self.system.sg
+        if sg != 1:
+            sg = lambdify(self.system.base_scalars()[0], self.map_expr_true_domain(sg))(
+                xj
+            )
+            wj = wj * sg
+        return (u * wj) @ Pi
 
     @partial(jax.jit, static_argnums=0)
     def apply_stencil_galerkin(self, b: Array) -> Array:
@@ -145,23 +166,21 @@ class BaseSpace:
         x = u.free_symbols
         if len(x) == 0:
             return u
-        assert len(x) == 1
         a = self.domain.lower
         c = self.reference_domain.lower
         d = self.domain_factor
-        x = x.pop()
+        x = self.system.base_scalars()[0]
         return u.xreplace({x: c + (x - a) * d})
 
     def map_expr_true_domain(self, u: sp.Expr) -> sp.Expr:
-        """Return reference point `x` mapped to true domain"""
+        """Return `u(X)` mapped to true domain"""
         x = u.free_symbols
         if len(x) == 0:
             return u
-        assert len(x) == 1
         a = self.domain.lower
         c = self.reference_domain.lower
         d = self.domain_factor
-        x = x.pop()
+        x = self.system.base_scalars()[0]
         return u.xreplace({x: a + (x - c) / d})
 
     def map_reference_domain(self, x: sp.Symbol | Array) -> sp.Expr | Array:
@@ -193,7 +212,7 @@ class BaseSpace:
             return self.map_true_domain(self.quad_points_and_weights(N)[0])
         elif kind == "uniform":
             a, b = self.domain
-            M = N if N != 0 else self.N
+            M = N if N != 0 else self.M
             return jnp.linspace(float(a), float(b), M)
 
     def cartesian_mesh(self, kind: str = "quadrature", N: int = 0) -> tuple[Array, ...]:

@@ -5,8 +5,9 @@ import jax.numpy as jnp
 import sympy as sp
 from jax import Array
 
+from jaxfun.Basespace import Domain, n
 from jaxfun.coordinates import CoordSys
-from jaxfun.Jacobi import Domain, Jacobi, n
+from jaxfun.Jacobi import Jacobi
 from jaxfun.utils.fastgl import leggauss
 
 
@@ -35,7 +36,7 @@ class Legendre(Jacobi):
     def evaluate(self, X: float, c: Array) -> float:
         """Evaluate a Legendre series at points X.
 
-        .. math:: p(X) = c_0 * L_0(X) + c_1 * L_1(X) + ... + c_n * L_n(X)
+        .. math:: p(X) = c_0 * L_0(X) + c_1 * L_1(X) + ... + c_{N-1} * L_{N-1}(X)
 
         Args:
             X (float): Evaluation point in reference space
@@ -68,7 +69,7 @@ class Legendre(Jacobi):
         return c0 + c1 * X
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.N if N == 0 else N
+        N = self.M if N == 0 else N
         return leggauss(N)
 
     @partial(jax.jit, static_argnums=(0, 2))
@@ -111,8 +112,10 @@ def matrices(test: tuple[Legendre, int], trial: tuple[Legendre, int]) -> Array:
     v, i = test
     u, j = trial
     if i == 0 and j == 0:
-        return sparse.BCOO.from_scipy_sparse(
-            scipy_sparse.diags((v.norm_squared(),), (0,), (v.N, u.N), "csr")
+        # BCOO chops the array if v.N > u.N, so no need to check sizes
+        return sparse.BCOO(
+            (v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
+            shape=(v.N, u.N),
         )
     if i == 0 and j == 1:
         if u.N < 2:

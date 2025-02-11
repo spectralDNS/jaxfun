@@ -81,7 +81,7 @@ class Jacobi(BaseSpace):
         return c0 + c1 * ((a + 1) + (a + b + 2) * (X - 1) / 2)
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.N if N == 0 else N
+        N = self.M if N == 0 else N
         return jnp.array(roots_jacobi(N, float(self.alpha), float(self.beta)))
 
     @partial(jax.jit, static_argnums=(0, 2))

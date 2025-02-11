@@ -1,3 +1,4 @@
+import contextlib
 import runpy
 
 demos = [
@@ -8,16 +9,16 @@ demos = [
     "poisson3D",
     "poisson1D_periodic",
     "poisson2D_periodic",
+    "poisson2D_parametric",
     "biharmonic2D",
+    "helmholtz2D",
 ]
 
 
 def test_demos():
     for demo in demos:
-        try:
+        with contextlib.suppress(SystemExit):
             runpy.run_path(f"examples/{demo}.py", run_name="__main__")
-        except SystemExit:
-            pass
 
 
 if __name__ == "__main__":

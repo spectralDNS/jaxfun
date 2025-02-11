@@ -33,10 +33,10 @@ class Fourier(BaseSpace):
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
-        """
+        r"""
         Evaluate a Fourier series at points x.
 
-        .. math:: p(x) = c_0 + c_1 * exp(ix) + ... + c_n * exp(iNx)
+        .. math:: p(x) = \sum_{j=-N/2+1}^{N/2} c_j exp(ijx)
 
         Args:
             X (float) : Evaluation point in reference space

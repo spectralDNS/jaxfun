@@ -18,7 +18,7 @@ from sympy.vector.operators import (
 from sympy.vector.vector import Cross as sympy_Cross
 from sympy.vector.vector import Vector
 
-from jaxfun.coordinates import BaseVector, CoordSys
+from jaxfun.coordinates import BaseScalar, BaseVector, CoordSys
 
 
 def eijk(i: int, j: int, k: int) -> int:
@@ -37,6 +37,21 @@ def _get_coord_systems(expr: Expr) -> set:
             ret.add(i)
             g.skip()
     return frozenset(ret)
+
+
+def express(expr, system):
+    system_set = set()
+    expr = sp.sympify(expr)
+    # Substitute all the coordinate variables
+    for x in expr.atoms(BaseScalar):
+        if x.system != system:
+            system_set.add(x.system)
+    subs_dict = {}
+    for f in system_set:
+        wrong_scalars = f.base_scalars()
+        scalars = system.base_scalars()
+        subs_dict.update({k: v for k, v in zip(wrong_scalars, scalars, strict=False)})
+    return expr.subs(subs_dict)
 
 
 def cross(vect1: Vector, vect2: Vector) -> Vector:
@@ -195,10 +210,10 @@ def divergence(vect: Vector, doit: bool = True) -> Expr:
         sg = coord_sys.sg
         res = sp.S.Zero
         for i in range(len(x)):
-            res += Derivative(comp(vect, i) * sg, x[i]) / sg
+            res += Derivative(express(comp(vect, i) * sg, coord_sys), x[i]) / sg
 
         if doit:
-            return res.doit()
+            return express(res.doit(), coord_sys)
         return res
     else:
         if isinstance(vect, Add | VectorAdd):

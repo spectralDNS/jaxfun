@@ -5,12 +5,19 @@ import jax.numpy as jnp
 import sympy as sp
 from jax import Array
 
-from jaxfun.arguments import BasisFunction, TestFunction, TrialFunction, test, trial
+from jaxfun.arguments import (
+    BasisFunction,
+    JAXArray,
+    TestFunction,
+    TrialFunction,
+    test,
+    trial,
+)
 from jaxfun.Basespace import BaseSpace
 from jaxfun.composite import BCGeneric, Composite
 from jaxfun.coordinates import CoordSys
 from jaxfun.forms import get_basisfunctions, split
-from jaxfun.tensorproductspace import DirectSumTPS, TPMatrix
+from jaxfun.tensorproductspace import DirectSumTPS, TensorMatrix, TPMatrix
 from jaxfun.utils.common import lambdify, matmat, tosparse
 
 
@@ -22,7 +29,7 @@ def inner(
 ) -> Array | list[Array]:
     r"""Compute inner products
 
-    Assemble bilinear and linear forms. The expr input needs to represent one of the following 
+    Assemble bilinear and linear forms. The expr input needs to represent one of the following
     three combinations
 
         a(u, v) - L(v)
@@ -72,26 +79,30 @@ def inner(
         # one scalar coefficient to all the matrices
         sc = sp.sympify(a0["coeff"])
         sc = float(sc) if sc.is_real else complex(sc)
+
         trial = []
         has_bcs = False
         for key, ai in a0.items():
-            if key == "coeff":
+            if key in ("coeff", "multivar"):
                 continue
 
             v, u = get_basisfunctions(ai)
             vf = v.functionspace
             uf = u.functionspace
             trial.append(uf)
-
-            z = inner_bilinear(ai, vf, uf, sc)
-
-            if z.size == 0:
-                continue
-            if isinstance(uf, BCGeneric) and test_space.dims == 1:
-                bresults.append(-(z @ jnp.array(uf.bcs.orderedvals())))
-                continue
             if isinstance(uf, BCGeneric):
                 has_bcs = True
+
+            z = inner_bilinear(ai, vf, uf, sc, "multivar" in a0)
+
+            if isinstance(z, tuple):
+                mats.append(z)
+                continue
+            if z.size == 0:
+                continue
+            if has_bcs and test_space.dims == 1:
+                bresults.append(-(z @ jnp.array(uf.bcs.orderedvals())))
+                continue
             sc = 1
             mats.append(z)
 
@@ -99,6 +110,25 @@ def inner(
             pass
         elif test_space.dims == 1:
             aresults.append(mats[0])
+        elif isinstance(mats[0], tuple):
+            # multivar
+            Am = TensorMatrix(
+                mats,
+                a0["multivar"],
+                test_space,
+                trial_space.tpspaces[tuple(trial)]
+                if isinstance(trial_space, DirectSumTPS)
+                else trial_space,
+            )
+            if has_bcs:
+                bresults.append(
+                    -(Am.mat @ trial_space.bndvals[(tuple(trial))].flatten()).reshape(
+                        test_space.dim()
+                    )
+                )
+            else:
+                aresults.append(Am)
+
         else:
             if has_bcs:
                 bresults.append(
@@ -117,25 +147,42 @@ def inner(
                 )
 
     # Linear form
-    
+
     for b0 in b_forms:
+        if "jaxarray" in b0:
+            # linear form with JAXArray. Return scalar product
+            df = 1
+            for space in test_space.spaces:
+                df = df / space.domain_factor
+            bresults.append(test_space.scalar_product(b0["jaxarray"].array * df))
+            continue 
+
         bs = []
         sc = sp.sympify(b0["coeff"])
-        sc = float(sc) if sc.is_real else complex(sc) 
+        sc = float(sc) if sc.is_real else complex(sc)
         if len(a_forms) > 0:
-            sc = sc*(-1)
+            sc = sc * (-1)
         for key, bi in b0.items():
-            if key == "coeff":
+            if key in ("coeff", "multivar"):
                 continue
 
             v, _ = get_basisfunctions(bi)
-            z = inner_linear(bi, v.functionspace, sc)
+
+            z = inner_linear(bi, v.functionspace, sc, "multivar" in b0)
+
             sc = 1
             bs.append(z)
         if isinstance(test_space, BaseSpace):
             bresults.append(bs[0])
         elif len(test_space) == 2:
-            bresults.append(jnp.multiply.outer(bs[0], bs[1]))
+            if isinstance(bs[0], tuple):
+                # multivar
+                s = test_space.system.base_scalars()
+                xj = test_space.mesh()
+                uj = lambdify(s, b0["multivar"], modules="jax")(*xj)
+                bresults.append(bs[0][0].T @ uj @ bs[1][0])
+            else:
+                bresults.append(jnp.multiply.outer(bs[0], bs[1]))
         elif len(test_space) == 3:
             bresults.append(jnp.multiply.outer(jnp.multiply.outer(bs[0], bs[1]), bs[2]))
 
@@ -169,7 +216,7 @@ def process_results(
 
 
 def inner_bilinear(
-    ai: sp.Expr, v: BaseSpace, u: BaseSpace, sc: float | complex
+    ai: sp.Expr, v: BaseSpace, u: BaseSpace, sc: float | complex, multivar: bool
 ) -> Array:
     vo = v.orthogonal
     uo = u.orthogonal
@@ -199,7 +246,7 @@ def inner_bilinear(
             scale *= float(aii)
 
     z = None
-    if len(scale) == 1:
+    if len(scale) == 1 and not multivar:
         # Look up matrix
         mod = importlib.import_module(vo.__class__.__module__)
         z = mod.matrices((vo, i), (uo, j))
@@ -215,6 +262,12 @@ def inner_bilinear(
         w = wj * df ** (i + j - 1) * scale
         Pi = vo.evaluate_basis_derivative(xj, k=i)
         Pj = uo.evaluate_basis_derivative(xj, k=j)
+        if multivar:
+            return (
+                v.apply_stencil_right(w[:, None] * Pi),
+                u.apply_stencil_right(jnp.conj(Pj)),
+            )
+
         z = matmat(Pi.T * w[None, :], jnp.conj(Pj))
 
     if u == v and isinstance(u, Composite):
@@ -228,7 +281,9 @@ def inner_bilinear(
     return z
 
 
-def inner_linear(bi: sp.Expr, v: BaseSpace, sc: float | complex) -> Array:
+def inner_linear(
+    bi: sp.Expr, v: BaseSpace, sc: float | complex, multivar: bool
+) -> Array:
     vo = v.orthogonal
     xj, wj = vo.quad_points_and_weights()
     df = float(vo.domain_factor)
@@ -258,7 +313,10 @@ def inner_linear(bi: sp.Expr, v: BaseSpace, sc: float | complex) -> Array:
             else:
                 uj *= float(bii)
     Pi = vo.evaluate_basis_derivative(xj, k=i)
-    w = wj * df ** (i - 1)   # Account for domain different from reference
+    w = wj * df ** (i - 1)  # Account for domain different from reference
+    if multivar:
+        return (v.apply_stencil_right((uj * w)[:, None] * jnp.conj(Pi)),)
+
     z = matmat(uj * w, jnp.conj(Pi))
     if isinstance(v, Composite):
         z = v.apply_stencil_left(z)
@@ -268,7 +326,7 @@ def inner_linear(bi: sp.Expr, v: BaseSpace, sc: float | complex) -> Array:
 def project1D(ue: sp.Expr, V: BaseSpace) -> Array:
     u = TrialFunction(V)
     v = TestFunction(V)
-    M, b = inner(v * u - v * ue)
+    M, b = inner(v * (u - ue))
     uh = jnp.linalg.solve(M, b)
     return uh
 

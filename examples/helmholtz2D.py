@@ -21,7 +21,7 @@ from jaxfun.operators import Div, Grad
 from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_sparse_list
 from jaxfun.utils.common import lambdify, ulp
 
-M = 30
+M = 50
 ue = sp.exp(sp.cos(2 * sp.pi * (x - sp.S.Half / 2))) * sp.exp(
     sp.sin(2 * (y - sp.S.Half))
 )

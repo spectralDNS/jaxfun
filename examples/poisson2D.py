@@ -13,7 +13,7 @@ from jaxfun.Chebyshev import Chebyshev
 from jaxfun.functionspace import FunctionSpace
 from jaxfun.inner import inner
 from jaxfun.operators import Div, Grad
-from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_sparse_list
+from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
 from jaxfun.utils.common import lambdify, ulp
 
 M = 20
@@ -28,16 +28,15 @@ x, y = T.system.base_scalars()
 ue = (1 - x**2) * (1 - y**2)  # * sp.exp(sp.cos(sp.pi * x)) * sp.exp(sp.sin(sp.pi * y))
 
 # A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=False)
-A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=False)
+A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 
 # jax can only do kron for dense matrices
-C = jnp.kron(*A[0].mats) + jnp.kron(*A[1].mats)
-uh = jnp.linalg.solve(C, b.flatten()).reshape(b.shape)
+#C = jnp.kron(*A[0].mats) + jnp.kron(*A[1].mats)
+#uh = jnp.linalg.solve(C, b.flatten()).reshape(b.shape)
 
 # Alternative scipy sparse implementation
-a = tpmats_to_scipy_sparse_list(A)
-A0 = scipy_sparse.kron(a[0], a[1]) + scipy_sparse.kron(a[2], a[3])
-un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
+A0 = tpmats_to_scipy_kron(A)
+uh = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 
 N = 100
 uj = T.backward(uh, kind="uniform", N=(N, N))

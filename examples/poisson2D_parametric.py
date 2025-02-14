@@ -35,7 +35,7 @@ C = get_CoordSys(
             sum([phi[i] * nodes[i][1] for i in range(4)]),
         ),
     ),
-    assumptions=sp.Q.positive(xi+1)&sp.Q.positive(eta+1)
+    assumptions=sp.Q.positive(xi+1)&sp.Q.positive(eta+1)&sp.Q.positive(1-eta)&sp.Q.positive(1-xi)
 )
 
 M = 30

@@ -11,7 +11,7 @@ from jaxfun.functionspace import FunctionSpace
 from jaxfun.inner import inner
 from jaxfun.Legendre import Legendre
 from jaxfun.operators import Div, Grad
-from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_sparse_list
+from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
 from jaxfun.utils.common import lambdify, ulp
 
 M = 20
@@ -28,15 +28,10 @@ ue = (1 - x**2) * (1 - y**2) * (1 - z**2)
 # A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=False)
 
-a = tpmats_to_scipy_sparse_list(A)
-A0 = (
-    kron(kron(a[0], a[1]), a[2])
-    + kron(kron(a[3], a[4]), a[5])
-    + kron(kron(a[6], a[7]), a[8])
-)
-un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
+A0 = tpmats_to_scipy_kron(A)
+uh = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 
-uj = T.backward(un, kind="uniform", N=(20, 20, 20))
+uj = T.backward(uh, kind="uniform", N=(20, 20, 20))
 xj = T.mesh(kind="uniform", N=(20, 20, 20))
 uej = lambdify((x, y, z), ue)(*xj)
 error = jnp.linalg.norm(uj - uej)

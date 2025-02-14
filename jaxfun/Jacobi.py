@@ -218,12 +218,13 @@ class Jacobi(BaseSpace):
 
 def matrices(test: tuple[Jacobi, int], trial: tuple[Jacobi, int]) -> Array:
     from jax.experimental import sparse
-    from scipy import sparse as scipy_sparse
 
     v, i = test
     u, j = trial
     if i == 0 and j == 0:
-        return sparse.BCOO.from_scipy_sparse(
-            scipy_sparse.diags((v.norm_squared(),), (0,), (v.N, u.N), "csr")
+        # BCOO chops the array if v.N > u.N, so no need to check sizes
+        return sparse.BCOO(
+            (v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
+            shape=(v.N, u.N),
         )
     return None

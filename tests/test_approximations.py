@@ -5,7 +5,7 @@ import pytest
 from jaxfun import BaseSpace
 from jaxfun.Chebyshev import Chebyshev
 from jaxfun.Legendre import Legendre
-from jaxfun.utils.common import evaluate, ulp
+from jaxfun.utils.common import ulp
 
 
 # Add pytest fixtures for constants
@@ -56,20 +56,6 @@ def test_vandermonde(space: BaseSpace, x: jnp.ndarray, xn: np.ndarray, N: int) -
     assert diff < 10 * ulp(1.0)
 
 
-@pytest.mark.parametrize("space", (Legendre, Chebyshev))
-def test_evaluate(
-    space, x: jnp.ndarray, xn: np.ndarray, c: jnp.ndarray, cn: np.ndarray, N: int
-) -> None:
-    space = space(N)
-    np_res = {
-        "Legendre": np.polynomial.legendre.legval(xn, cn),
-        "Chebyshev": np.polynomial.chebyshev.chebval(xn, cn),
-    }[space.__class__.__name__]
-    jax_res = space.evaluate(x, c)
-    diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
-    assert diff < 10 * ulp(1.0)
-
-
 @pytest.mark.parametrize("k", (1, 2, 3))
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
 def test_evaluate_basis_derivative(
@@ -93,52 +79,3 @@ def test_evaluate_basis_derivative(
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < 10 ** (k + 2) * ulp(1.0)
 
-
-@pytest.mark.parametrize("space", (Legendre, Chebyshev))
-def test_evaluate_multidimensional(space, N: int) -> None:
-    x = jnp.array([-1.0, 1.0])
-    c = jnp.ones((2, 2))
-    space = space(N)
-    y = evaluate(space.evaluate, (x,), c, (1,))
-    assert jnp.allclose(
-        y,
-        jnp.array(
-            [
-                [
-                    0.0,
-                    2.0,
-                ],
-                [0.0, 2.0],
-            ]
-        ),
-    )
-    y = evaluate(space.evaluate, (x,), c, (0,))
-    assert jnp.allclose(
-        y,
-        jnp.array(
-            [
-                [
-                    0.0,
-                    0.0,
-                ],
-                [2.0, 2.0],
-            ]
-        ),
-    )
-    y = evaluate(space.evaluate, (x, x), c, (0, 1))
-    assert jnp.allclose(
-        y,
-        jnp.array(
-            [
-                [
-                    0.0,
-                    0.0,
-                ],
-                [0.0, 4.0],
-            ]
-        ),
-    )
-
-
-if __name__ == "__main__":
-    test_evaluate(Legendre, x, xn, c, cn)

@@ -2,10 +2,9 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import sympy as sp
 from jax import Array
-from jax.experimental.sparse import BCOO
-from scipy import sparse as scipy_sparse
 
 from jaxfun.Basespace import BaseSpace, Domain
 from jaxfun.coordinates import CoordSys
@@ -57,19 +56,33 @@ class Fourier(BaseSpace):
     def quad_points_and_weights(self, N: int = 0) -> Array:
         N = self.N if N == 0 else N
         points = jnp.arange(N, dtype=float) * 2 * jnp.pi / N
-        return points, jnp.array([2 * jnp.pi / N]*N)
+        return points, jnp.array([2 * jnp.pi / N] * N)
 
     @partial(jax.jit, static_argnums=(0, 2))
     def eval_basis_function(self, x: float, i: int) -> complex:
         return jax.lax.exp(1j * self._k[i] * x)
 
-    @partial(jax.jit, static_argnums=(0, 2, 3))
+    # Cannot jax.jit in case of padding
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+        n: int = self.N if N == 0 else N
+        if n > self.N:
+            c0 = np.zeros(n, dtype=c.dtype)
+            k = self.wavenumbers()
+            c0[k] = c
+            c = jnp.array(c0)
+        return self._backward(c, kind, n)
+
+    @partial(jax.jit, static_argnums=(0, 2, 3))
+    def _backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         n: int = self.N if N == 0 else N
         if n < len(c):  # truncation
             k = self.wavenumbers(n)
             return jnp.fft.ifft(c[k], norm="forward")
         return jnp.fft.ifft(c, norm="forward")
+
+    @partial(jax.jit, static_argnums=0)
+    def scalar_product(self, c: Array) -> Array:
+        return jnp.fft.fft(c, norm="forward") * 2 * jnp.pi
 
     @partial(jax.jit, static_argnums=0)
     def eval_basis_functions(self, x: float) -> Array:
@@ -86,23 +99,19 @@ class Fourier(BaseSpace):
     def norm_squared(self) -> Array:
         return jnp.ones(self.N) * 2 * jnp.pi
 
-    def mass_matrix(self) -> BCOO:
-        return BCOO.from_scipy_sparse(
-            scipy_sparse.diags((self.norm_squared(),), (0,), shape=(self.N, self.N))
-        )
-
 
 def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> Array:
     from jax.experimental import sparse
-    from scipy import sparse as scipy_sparse
 
     v, i = test
     u, j = trial
     k = (1j * v.wavenumbers()) ** j * (-1j * u.wavenumbers()) ** i
     if i + j % 2 == 0:
-        return sparse.BCOO.from_scipy_sparse(
-            scipy_sparse.diags((k.real * v.norm_squared(),), (0,), (v.N, u.N), "csr")
+        return sparse.BCOO(
+            (k.real * v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
+            shape=(v.N, u.N),
         )
-    return sparse.BCOO.from_scipy_sparse(
-        scipy_sparse.diags((k * v.norm_squared(),), (0,), (v.N, u.N), "csr")
+    return sparse.BCOO(
+        (k * v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
+        shape=(v.N, u.N),
     )

@@ -48,4 +48,5 @@ if "pytest" in os.environ:
 print("Error =", error)
 plt.plot(xj, uej, "r")
 plt.plot(xj, uj, "b")
+plt.plot(D.mesh(N=100), D.backward(uh, N=100).real, "g")
 plt.show()

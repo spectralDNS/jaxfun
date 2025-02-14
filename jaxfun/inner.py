@@ -202,6 +202,10 @@ def process_results(
         if sparse:
             aresults = tosparse(aresults, tol=sparse_tol)
 
+    if len(aresults) > 0 and dims > 1 and sparse:
+        for a0 in aresults:
+            a0.mats = [tosparse(a0.mats[i]) for i in range(a0.dims)]
+
     if len(bresults) > 0:
         bresults = jnp.sum(jnp.array(bresults), axis=0)
 

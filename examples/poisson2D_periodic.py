@@ -15,10 +15,10 @@ from jaxfun.Fourier import Fourier
 from jaxfun.functionspace import FunctionSpace
 from jaxfun.inner import inner
 from jaxfun.operators import Div, Grad
-from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_sparse_list
+from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
 from jaxfun.utils.common import lambdify, ulp
 
-ue = (sp.cos(2 * x)) * sp.exp(sp.cos(2 * sp.pi * y))
+ue = (1-y**2)*(sp.cos(2 * x)) * sp.exp(sp.cos(2 * sp.pi * y))
 
 M, N = 80, 20
 bcs = {"left": {"D": ue.subs(y, -1)}, "right": {"D": ue.subs(y, 1)}}
@@ -36,13 +36,12 @@ ue = T.system.expr_psi_to_base_scalar(ue)
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=False)
 
 # jax can only do kron for dense matrices
-C = jnp.kron(*A[0].mats) + jnp.kron(*A[1].mats)
-uh = jnp.linalg.solve(C, b.flatten()).reshape(b.shape)
+#C = jnp.kron(*A[0].mats) + jnp.kron(*A[1].mats)
+#uh = jnp.linalg.solve(C, b.flatten()).reshape(b.shape)
 
 # Alternative scipy sparse implementation
-a = tpmats_to_scipy_sparse_list(A)
-A0 = scipy_sparse.kron(a[0], a[1]) + scipy_sparse.kron(a[2], a[3])
-un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
+A0 = tpmats_to_scipy_kron(A)
+uh = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 
 N = 100
 uj = T.backward(uh, N=(N, N))

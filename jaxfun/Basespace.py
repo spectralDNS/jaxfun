@@ -5,6 +5,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from jax.experimental import sparse
 import sympy as sp
 from jax import Array
 from jax.experimental.sparse import BCOO
@@ -42,7 +43,9 @@ class BaseSpace:
         self.bcs = None
         self.orthogonal = self
         self.stencil = {0: 1}
-        self.S = BCOO.from_scipy_sparse(scipy_sparse.diags((1,), (0,), (N, N)))
+        self.S = sparse.BCOO(
+            (jnp.ones(N), jnp.vstack((jnp.arange(N),) * 2).T), shape=(N, N)
+        )
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
@@ -86,8 +89,13 @@ class BaseSpace:
     def eval_basis_functions(self, X: float) -> Array:
         raise RuntimeError
 
+    # backward is wrapped because padding may require non-jitable code
     @partial(jax.jit, static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+        return self._backward(c, kind, N)
+
+    @partial(jax.jit, static_argnums=(0, 2, 3))
+    def _backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         xj = self.mesh(kind=kind, N=N)
         return self.evaluate(self.map_reference_domain(xj), c)
 
@@ -115,7 +123,7 @@ class BaseSpace:
                 xj
             )
             wj = wj * sg
-        return (u * wj) @ Pi
+        return (u * wj) @ jnp.conj(Pi)
 
     @partial(jax.jit, static_argnums=0)
     def apply_stencil_galerkin(self, b: Array) -> Array:

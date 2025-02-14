@@ -1,6 +1,8 @@
+import jax.numpy as jnp
 import sympy as sp
 
 from jaxfun.arguments import JAXArray, TestFunction, TrialFunction, test, trial
+from jaxfun.coordinates import CoordSys
 
 
 def get_basisfunctions(
@@ -50,7 +52,7 @@ def split(forms) -> dict:
     v, _ = get_basisfunctions(forms)
     assert v is not None, "A test function is required"
     V = v.functionspace
-    
+
     def _split(ms):
         d = sp.separatevars(ms, dict=True, symbols=V.system._base_scalars)
         if d is None and isinstance(ms, sp.Mul):
@@ -81,9 +83,9 @@ def split(forms) -> dict:
             if jaxarray is not None:
                 d["jaxarray"] = jaxarray
             if basisfunctions[1] in (None, set()):
-                result["linear"].append(d)
+                result["linear"] = add_result(result["linear"], d, V.system)
             else:
-                result["bilinear"].append(d)
+                result["bilinear"] = add_result(result["bilinear"], d, V.system)
 
     else:
         jaxarray, remargs = get_jaxarray(forms)
@@ -92,8 +94,39 @@ def split(forms) -> dict:
         if jaxarray is not None:
             d["jaxarray"] = jaxarray
         if basisfunctions[1] in (None, set()):
-            result["linear"].append(d)
+            result["linear"] = add_result(result["linear"], d, V.system)
         else:
-            result["bilinear"].append(d)
+            result["bilinear"] = add_result(result["bilinear"], d, V.system)
 
     return result
+
+
+def add_result(res: list[dict], d: dict, system: CoordSys) -> list[dict]:
+    """Add result dictionary `d` to list of results `res`.
+
+    Collect all results with identical basis functions in one dict.
+
+    Args:
+        res (list[dict]): list of results
+        d (dict): new result
+        system (CoordSys): Coordinate system
+
+    Returns:
+        list[dict]: appended list of results
+    """
+    found_d: bool = False
+    for g in res:
+        if jnp.all(jnp.array([g[s] == d[s] for s in system.base_scalars()])):
+            if "jaxarray" in d:
+                g["jaxarray"] += d["jaxarray"]
+            if "multivar" not in d:
+                g["coeff"] += d["coeff"]
+            else:
+                g["multivar"] = g["coeff"] * g["multivar"] + d["coeff"] * d["multivar"]
+                g["coeff"] = 1
+                g["multivar"] = g["multivar"].factor()
+            found_d = True
+            break
+    if not found_d:
+        res.append(d)
+    return res

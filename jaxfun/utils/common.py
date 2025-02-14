@@ -18,7 +18,6 @@ __all__ = (
     "diff",
     "diffx",
     "jacn",
-    "evaluate",
     "matmat",
     "tosparse",
     "fromdense",
@@ -50,31 +49,6 @@ def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
     for _ in range(k):
         fun = jax.jacfwd(fun)
     return jax.vmap(fun, in_axes=0, out_axes=0)
-
-
-@partial(jax.jit, static_argnums=(0, 3))
-def evaluate(
-    fun: Callable[[float, Array], Array],
-    x: tuple[float],
-    c: Array,
-    axes: tuple[int] = (0,),
-) -> Array:
-    assert len(x) == len(axes)
-    dim: int = len(c.shape)
-    if dim == 2:
-        for xi, ax in zip(x, axes, strict=False):
-            axi: int = dim - 1 - ax
-            c = jax.vmap(fun, in_axes=(None, axi), out_axes=axi)(xi, c)
-    else:
-        for xi, ax in zip(x, axes, strict=False):
-            ax0, ax1 = jnp.setxor1d(jnp.arange(3), ax)
-            c = jax.vmap(
-                jax.vmap(fun, in_axes=(None, ax0), out_axes=ax0),
-                in_axes=(None, ax1),
-                out_axes=ax1,
-            )(xi, c)
-
-    return c
 
 
 @jax.jit

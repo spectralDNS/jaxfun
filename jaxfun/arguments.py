@@ -398,7 +398,7 @@ class JAXArray(Function):
         return self
 
     def __str__(self) -> str:
-        return self.name
+        return self.name + f"({self.space.name})"
 
     def _pretty(self, printer: Any = None) -> str:
         return prettyForm(self.__str__())
@@ -407,7 +407,7 @@ class JAXArray(Function):
         return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
-        return latex_symbols[self.name]
+        return latex_symbols[self.name] + f"({self.space.name})"
 
 
 class JAXFunction(Function):
@@ -427,7 +427,7 @@ class JAXFunction(Function):
         return self
 
     def __str__(self) -> str:
-        return self.name
+        return self.name + f"({self.space.name})"
 
     def _pretty(self, printer: Any = None) -> str:
         return prettyForm(self.__str__())
@@ -436,4 +436,4 @@ class JAXFunction(Function):
         return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
-        return latex_symbols[self.name]
+        return latex_symbols[self.name] + f"({self.space.name})"

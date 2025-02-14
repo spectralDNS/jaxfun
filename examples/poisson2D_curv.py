@@ -15,7 +15,7 @@ from jaxfun.functionspace import FunctionSpace
 from jaxfun.inner import inner
 from jaxfun.Legendre import Legendre
 from jaxfun.operators import Div, Grad
-from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_sparse_list
+from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
 from jaxfun.utils.common import lambdify, ulp
 
 M = 20
@@ -41,16 +41,11 @@ ue = C.expr_psi_to_base_scalar(ue)
 A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue))), sparse=False)
 
 # jax can only do kron for dense matrices
-H = jnp.kron(*A[0].mats) + jnp.kron(*A[1].mats) + jnp.kron(*A[2].mats)
+H = A[0].mat + A[1].mat + A[2].mat
 uh = jnp.linalg.solve(H, b.flatten()).reshape(b.shape)
 
 # Alternative scipy sparse implementation
-a = tpmats_to_scipy_sparse_list(A)
-A0 = (
-    scipy_sparse.kron(a[0], a[1])
-    + scipy_sparse.kron(a[2], a[3])
-    + scipy_sparse.kron(a[4], a[5])
-)
+A0 = tpmats_to_scipy_kron(A)
 un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 
 assert jnp.linalg.norm(uh - un) < ulp(1000)

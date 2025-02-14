@@ -179,7 +179,7 @@ class TensorProductSpace:
             for ax in range(dim):
                 axi: int = dim - 1 - ax
                 backward = partial(
-                    self.spaces[ax].backward,
+                    self.spaces[ax]._backward,
                     kind=kind,
                     N=self.spaces[ax].M if N is None else N[ax],
                 )
@@ -187,7 +187,7 @@ class TensorProductSpace:
         else:
             for ax in range(dim):
                 backward = partial(
-                    self.spaces[ax].backward,
+                    self.spaces[ax]._backward,
                     kind=kind,
                     N=self.spaces[ax].M if N is None else N[ax],
                 )
@@ -445,10 +445,10 @@ class DirectSumTPS(TensorProductSpace):
     def forward(self, c: Array) -> Array:
         from jaxfun import TestFunction, TrialFunction, inner
         from jaxfun.arguments import JAXArray
-        
+
         v = TestFunction(self)
         u = TrialFunction(self)
-        c = c if isinstance(c, JAXArray) else JAXArray(c, "c", self) 
+        c = c if isinstance(c, JAXArray) else JAXArray(c, "c", self)
         A, b = inner((u - c) * v)
         return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.dim())
 
@@ -466,6 +466,10 @@ class TPMatrix:  # noqa: B903
         self.scale = scale
         self.test_space = test_space
         self.trial_space = trial_space
+
+    @property
+    def dims(self) -> int:
+        return len(self.mats)
 
     @property
     def mat(self) -> Array:
@@ -510,11 +514,32 @@ class TensorMatrix:
         self.mat = a.reshape((i * j, k * l))
 
 
-def tpmats_to_scipy_sparse_list(
+def tpmats_to_scipy_sparse(
     A: list[TPMatrix], tol: int = 100
-) -> list[scipy_sparse.csc_array]:
+) -> list[tuple[scipy_sparse.csc_array]]:
     return [
-        scipy_sparse.csc_array(eliminate_near_zeros(mat, tol))
+        tuple(
+            scipy_sparse.csc_array(
+                eliminate_near_zeros(mat, tol)
+                if isinstance(mat, Array)
+                else mat.todense()
+            )
+            for mat in a.mats
+        )
         for a in A
-        for mat in a.mats
     ]
+
+
+def tpmats_to_scipy_kron(A: list[TPMatrix], tol: int = 100) -> scipy_sparse.csc_matrix:
+    a = tpmats_to_scipy_sparse(A)
+    if len(a[0]) == 2:
+        return np.sum([scipy_sparse.kron(b[0], b[1], format="csc") for b in a])
+    else:
+        return np.sum(
+            [
+                scipy_sparse.kron(
+                    scipy_sparse.kron(b[0], b[1], format="csc"), b[2], format="csc"
+                )
+                for b in a
+            ]
+        )

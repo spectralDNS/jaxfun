@@ -5,6 +5,7 @@ import sys
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from scipy import sparse as scipy_sparse
 
 from jaxfun.arguments import TestFunction, TrialFunction, x, y
 from jaxfun.Basespace import n
@@ -12,7 +13,7 @@ from jaxfun.Chebyshev import Chebyshev
 from jaxfun.functionspace import FunctionSpace
 from jaxfun.inner import inner
 from jaxfun.operators import Div, Grad
-from jaxfun.tensorproductspace import TensorProduct
+from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
 from jaxfun.utils.common import lambdify, ulp
 
 # Method of manufactured solution
@@ -40,18 +41,8 @@ ue = T.system.expr_psi_to_base_scalar(ue)
 
 A, b = inner(Div(Grad(Div(Grad(u))))*v - Div(Grad(Div(Grad(ue))))*v, sparse=False)
 
-# jax can only do kron for dense matrices
-C = jnp.kron(*A[0].mats) + jnp.kron(*A[1].mats) + jnp.kron(*A[2].mats)
-uh = jnp.linalg.solve(C, b.flatten()).reshape(b.shape)
-
-## Alternative scipy sparse implementation
-# a = tpmats_to_scipy_sparse_list(A, tol=1000)
-# A0 = (
-#    scipy_sparse.kron(a[0], a[1], 'csc')
-#    + scipy_sparse.kron(a[2], a[3], 'csc')
-#    + scipy_sparse.kron(a[4], a[5], 'csc')
-# )
-# un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
+C = tpmats_to_scipy_kron(A)
+uh = jnp.array(scipy_sparse.linalg.spsolve(C, b.flatten()).reshape(b.shape))
 
 N = 100
 xj = T.mesh(kind="uniform", N=(N, N))

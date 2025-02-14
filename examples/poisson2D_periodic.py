@@ -18,7 +18,7 @@ from jaxfun.operators import Div, Grad
 from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
 from jaxfun.utils.common import lambdify, ulp
 
-ue = (1-y**2)*(sp.cos(2 * x)) * sp.exp(sp.cos(2 * sp.pi * y))
+ue = (1-y**2)*(sp.cos(2 * x)) * sp.exp(sp.cos(sp.pi * y))
 
 M, N = 80, 20
 bcs = {"left": {"D": ue.subs(y, -1)}, "right": {"D": ue.subs(y, 1)}}
@@ -34,10 +34,6 @@ ue = T.system.expr_psi_to_base_scalar(ue)
 
 # A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=False)
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=False)
-
-# jax can only do kron for dense matrices
-#C = jnp.kron(*A[0].mats) + jnp.kron(*A[1].mats)
-#uh = jnp.linalg.solve(C, b.flatten()).reshape(b.shape)
 
 # Alternative scipy sparse implementation
 A0 = tpmats_to_scipy_kron(A)

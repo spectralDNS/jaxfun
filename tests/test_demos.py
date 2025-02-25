@@ -10,7 +10,7 @@ demos = [
     "poisson1D_periodic",
     "poisson2D_periodic",
     "poisson2D_parametric",
-    #"biharmonic2D",
+    "biharmonic2D",
     "helmholtz2D",
 ]
 

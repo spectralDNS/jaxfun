@@ -16,8 +16,10 @@ from jaxfun.operators import Div, Grad
 from jaxfun.tensorproductspace import TensorProduct
 from jaxfun.utils.common import lambdify, ulp
 
+#ax, ay, bx, by, cx, cy, dx, dy = sp.symbols('ax,ay,bx,by,cx,cy,dx,dy', real=True)
 # Some quadrilateral
 nodes = ((0, 0), (4, 0), (3, 2), (0, 3))
+#nodes =((ax, ay), (bx, by), (cx, cy), (dx, dy))
 
 xi, eta = sp.symbols("xi,eta", real=True)
 phi = (
@@ -38,7 +40,7 @@ C = get_CoordSys(
     assumptions=sp.Q.positive(xi+1)&sp.Q.positive(eta+1)&sp.Q.positive(1-eta)&sp.Q.positive(1-xi)
 )
 
-M = 30
+M = 20
 ue = (1 + xi**2) * (1 + eta**2)
 bcsx = {"left": {"D": ue.subs(xi, -1)}, "right": {"D": ue.subs(xi, 1)}}
 bcsy = {"left": {"D": ue.subs(eta, -1)}, "right": {"D": ue.subs(eta, 1)}}

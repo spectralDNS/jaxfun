@@ -82,7 +82,7 @@ class Fourier(BaseSpace):
 
     @partial(jax.jit, static_argnums=0)
     def scalar_product(self, c: Array) -> Array:
-        return jnp.fft.fft(c, norm="forward") * 2 * jnp.pi
+        return jnp.fft.fft(c, norm="forward") * 2 * jnp.pi / self.domain_factor
 
     @partial(jax.jit, static_argnums=0)
     def eval_basis_functions(self, x: float) -> Array:

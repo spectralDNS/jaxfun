@@ -5,11 +5,10 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
-from jax.experimental import sparse
 import sympy as sp
 from jax import Array
+from jax.experimental import sparse
 from jax.experimental.sparse import BCOO
-from scipy import sparse as scipy_sparse
 from sympy import Number
 
 from jaxfun.coordinates import CoordSys
@@ -29,7 +28,7 @@ class BaseSpace:
         N: int,
         domain: Domain = None,
         system: CoordSys = None,
-        name: str = None,
+        name: str = "BaseSpace",
         fun_str: str = "psi",
     ) -> None:
         from jaxfun.arguments import CartCoordSys, x
@@ -51,6 +50,7 @@ class BaseSpace:
     def evaluate(self, X: float, c: Array) -> float:
         raise RuntimeError
 
+    @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
         raise RuntimeError
 
@@ -102,14 +102,17 @@ class BaseSpace:
     @partial(jax.jit, static_argnums=0)
     def mass_matrix(self) -> BCOO:
         return BCOO(
-            (self.norm_squared(), jnp.vstack((jnp.arange(self.N),) * 2).T),
+            (
+                self.norm_squared() / self.domain_factor,
+                jnp.vstack((jnp.arange(self.N),) * 2).T,
+            ),
             shape=(self.N, self.N),
         )
 
     @partial(jax.jit, static_argnums=0)
     def forward(self, u: Array) -> Array:
         # Orthogonal space, diagonal mass matrix
-        A = self.norm_squared()
+        A = self.norm_squared() / self.domain_factor
         L = self.scalar_product(u)
         return L / A
 
@@ -117,8 +120,10 @@ class BaseSpace:
     def scalar_product(self, u: Array) -> Array:
         xj, wj = self.quad_points_and_weights()
         Pi = self.vandermonde(xj)
-        sg = self.system.sg
-        if sg != 1:
+        sg = self.system.sg / self.domain_factor
+        if sp.sympify(sg).is_number:
+            wj = wj * sg
+        else:
             sg = lambdify(self.system.base_scalars()[0], self.map_expr_true_domain(sg))(
                 xj
             )
@@ -214,6 +219,7 @@ class BaseSpace:
                 X = a + (X - c) / self.domain_factor
         return X
 
+    @partial(jax.jit, static_argnums=(0, 1, 2))
     def mesh(self, kind: str = "quadrature", N: int = 0) -> Array:
         """Return mesh in the domain of self"""
         if kind == "quadrature":

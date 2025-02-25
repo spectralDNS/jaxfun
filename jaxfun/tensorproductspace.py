@@ -27,7 +27,7 @@ class TensorProductSpace:
         self,
         spaces: list[BaseSpace],
         system: CoordSys = None,
-        name: str = None,
+        name: str = "TPS",
     ) -> None:
         from jaxfun.arguments import CartCoordSys, x, y, z
 
@@ -246,7 +246,7 @@ class VectorTensorProductSpace:
     def __init__(
         self,
         tensorspace: TensorProductSpace | tuple[TensorProductSpace],
-        name: str = None,
+        name: str = "VTPS",
     ) -> None:
         if not isinstance(tensorspace, tuple):
             assert isinstance(tensorspace, TensorProductSpace)
@@ -292,7 +292,12 @@ def TensorProduct(
 
     if jnp.any(jnp.array([name == names[0] for name in names[1:]])):
         for i, space in enumerate(spaces):
-            space.name = space.name + str(i)
+            if isinstance(space, DirectSum):
+                for spi in space.spaces:
+                    spi.name = spi.name + str(i)
+            else:
+                space.name = space.name + str(i)
+
     # Use the same coordinates in BaseSpaces as in TensorProductSpace
     for i, space in enumerate(spaces):
         space.system = system.sub_system(i)
@@ -322,7 +327,7 @@ class DirectSumTPS(TensorProductSpace):
         self,
         spaces: list[BaseSpace | DirectSum],
         system: CoordSys = None,
-        name: str = None,
+        name: str = "DSTPS",
     ) -> None:
         from jaxfun.inner import project1D
 
@@ -444,16 +449,41 @@ class DirectSumTPS(TensorProductSpace):
 
     def forward(self, c: Array) -> Array:
         from jaxfun import TestFunction, TrialFunction, inner
-        from jaxfun.arguments import JAXArray
 
         v = TestFunction(self)
         u = TrialFunction(self)
-        c = c if isinstance(c, JAXArray) else JAXArray(c, "c", self)
-        A, b = inner((u - c) * v)
+        A, b = inner(u * v)
+        b += v.functionspace.scalar_product(c)
         return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.dim())
 
+    def scalar_product(self, c: Array):
+        raise RuntimeError(
+            "Scalar product needs to use a homogeneous test space and should not be called on this direct sum TensorProductSpace"  # noqa: E501
+        )
 
-# NOTE: Could this be a DataClass / NamedTuple?
+
+class TPMatrices:
+    def __init__(self, tpmats: list[TPMatrix]):
+        self.tpmats: list[TPMatrix] = tpmats
+
+    @partial(jax.jit, static_argnums=0)
+    def __call__(self, u: Array):
+        return jnp.sum(jnp.array([mat(u) for mat in self.tpmats]), axis=0)
+
+    @partial(jax.jit, static_argnums=0)
+    def precond(self, u: Array):
+        return jnp.sum(jnp.array([mat.M(u) for mat in self.tpmats]), axis=0)
+
+
+class precond:
+    def __init__(self, M):
+        self.M = M
+
+    @partial(jax.jit, static_argnums=0)
+    def __call__(self, u):
+        return self.M * u
+
+
 class TPMatrix:  # noqa: B903
     def __init__(
         self,
@@ -462,10 +492,15 @@ class TPMatrix:  # noqa: B903
         test_space: TensorProductSpace,
         trial_space: TensorProductSpace,
     ) -> None:
-        self.mats = mats
+        self.mats: list[Array] = mats
         self.scale = scale
         self.test_space = test_space
         self.trial_space = trial_space
+        # self.M = None
+        self.M = precond(
+            (1.0 / self.mats[0].diagonal())[:, None]
+            * (1.0 / self.mats[1].diagonal())[None, :]
+        )
 
     @property
     def dims(self) -> int:
@@ -474,6 +509,14 @@ class TPMatrix:  # noqa: B903
     @property
     def mat(self) -> Array:
         return jnp.kron(*self.mats)
+
+    @partial(jax.jit, static_argnums=0)
+    def __call__(self, u: Array):
+        return self.mats[0] @ u @ self.mats[1].T
+
+    @partial(jax.jit, static_argnums=0)
+    def precond(self, u: Array):
+        return self.M * u
 
 
 class TensorMatrix:

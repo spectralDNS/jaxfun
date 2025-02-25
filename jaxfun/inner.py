@@ -4,10 +4,10 @@ from typing import Any
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
+from jax.experimental.sparse import BCOO
 
 from jaxfun.arguments import (
     BasisFunction,
-    JAXArray,
     TestFunction,
     TrialFunction,
     test,
@@ -16,7 +16,7 @@ from jaxfun.arguments import (
 from jaxfun.Basespace import BaseSpace
 from jaxfun.composite import BCGeneric, Composite
 from jaxfun.coordinates import CoordSys
-from jaxfun.forms import get_basisfunctions, split
+from jaxfun.forms import get_basisfunctions, split, split_coeff
 from jaxfun.tensorproductspace import DirectSumTPS, TensorMatrix, TPMatrix
 from jaxfun.utils.common import lambdify, matmat, tosparse
 
@@ -49,7 +49,8 @@ def inner(
     Parameters
     ----------
     expr : Sympy Expr
-        An expression containing :class:`.TestFunction` and optionally:class:`.TrialFunction`.
+        An expression containing :class:`.TestFunction` and optionally :class:`.TrialFunction` 
+        or :class:`.JAXFunction`.
     sparse : bool
         if True, then sparsify the matrices before returning
     sparse_tol : int
@@ -67,21 +68,32 @@ def inner(
     test_space = V.functionspace
     trial_space = U.functionspace if U is not None else None
     measure = test_space.system.sg
-    forms = split(expr * measure)
-    a_forms = forms["bilinear"]
-    b_forms = forms["linear"]
+    allforms = split(expr * measure)
+    a_forms = allforms["bilinear"]
+    b_forms = allforms["linear"]
     aresults = []
     bresults = []
+    all_linear = not (
+        len(a_forms) > 0
+        and jnp.any(
+            jnp.array(["bilinear" in split_coeff(c0["coeff"]) for c0 in a_forms])
+        )
+    )
 
     for a0 in a_forms:  # Bilinear form
         # There is one tensor product matrix or just matrix (1D) for each a0
+        # If the form contains a JAXFunction, then the matrix assembled will 
+        # be multiplied with the JAXFunction and return a vector
         mats = []
-        # one scalar coefficient to all the matrices
-        sc = sp.sympify(a0["coeff"])
-        sc = float(sc) if sc.is_real else complex(sc)
+        # one scalar coefficient to all the matrices. If the form contains 
+        # a JAXFunction, then this result will be linear. Split coefficients 
+        # into linear and bilinear contributions.
+        coeffs = split_coeff(a0["coeff"])
+        sc = coeffs.get("bilinear", 1)
 
         trial = []
         has_bcs = False
+
         for key, ai in a0.items():
             if key in ("coeff", "multivar"):
                 continue
@@ -103,15 +115,20 @@ def inner(
             if has_bcs and test_space.dims == 1:
                 bresults.append(-(z @ jnp.array(uf.bcs.orderedvals())))
                 continue
+            if "linear" in coeffs and test_space.dims == 1:
+                sign = 1 if all_linear else -1
+                bresults.append(sign * (z @ coeffs["linear"]["jaxfunction"].array))
+
             sc = 1
             mats.append(z)
 
         if len(mats) == 0:
             pass
-        elif test_space.dims == 1:
+        elif test_space.dims == 1 and "bilinear" in coeffs:
             aresults.append(mats[0])
+
         elif isinstance(mats[0], tuple):
-            # multivar
+            # multivariable form, like sqrt(x+y)*u*v, that cannot be separated
             Am = TensorMatrix(
                 mats,
                 a0["multivar"],
@@ -120,6 +137,7 @@ def inner(
                 if isinstance(trial_space, DirectSumTPS)
                 else trial_space,
             )
+
             if has_bcs:
                 bresults.append(
                     -(Am.mat @ trial_space.bndvals[(tuple(trial))].flatten()).reshape(
@@ -127,41 +145,54 @@ def inner(
                     )
                 )
             else:
-                aresults.append(Am)
-
-        else:
-            if has_bcs:
-                bresults.append(
-                    -(mats[0] @ trial_space.bndvals[tuple(trial)] @ mats[1].T)
-                )
-            else:
-                aresults.append(
-                    TPMatrix(
-                        mats,
-                        1.0,
-                        test_space,
-                        trial_space.tpspaces[tuple(trial)]
-                        if isinstance(trial_space, DirectSumTPS)
-                        else trial_space,
+                if "linear" in coeffs:
+                    sign = 1 if all_linear else -1
+                    bresults.append(
+                        sign
+                        * (
+                            Am.mat @ coeffs["linear"]["jaxfunction"].array.flatten()
+                        ).reshape(test_space.dim())
                     )
+                if "bilinear" in coeffs:
+                    assert coeffs["bilinear"] == 1
+                    aresults.append(Am)
+
+        else: # regular separable multivariable form
+            if has_bcs:
+                fun = (
+                    trial_space.bndvals[tuple(trial)]
+                    if trial_space
+                    else coeffs["linear"]["jaxfunction"].space.bndvals[tuple(trial)]
                 )
+                bresults.append(-(mats[0] @ fun @ mats[1].T))
+            else:
+                if "linear" in coeffs:
+                    sign = 1 if all_linear else -1
+                    bresults.append(
+                        (sign * coeffs["linear"]["scale"])
+                        * (mats[0] @ coeffs["linear"]["jaxfunction"].array @ mats[1].T)
+                    )
 
-    # Linear form
+                if "bilinear" in coeffs:
+                    aresults.append(
+                        TPMatrix(
+                            mats,
+                            coeffs["bilinear"],
+                            test_space,
+                            trial_space.tpspaces[tuple(trial)]
+                            if isinstance(trial_space, DirectSumTPS)
+                            else trial_space,
+                        )
+                    )
 
+    # Pure linear forms: (no JAXFunctions, but could be unseparable in coefficients)
     for b0 in b_forms:
-        if "jaxarray" in b0:
-            # linear form with JAXArray. Return scalar product
-            df = 1
-            for space in test_space.spaces:
-                df = df / space.domain_factor
-            bresults.append(test_space.scalar_product(b0["jaxarray"].array * df))
-            continue 
-
-        bs = []
         sc = sp.sympify(b0["coeff"])
         sc = float(sc) if sc.is_real else complex(sc)
         if len(a_forms) > 0:
             sc = sc * (-1)
+
+        bs = []
         for key, bi in b0.items():
             if key in ("coeff", "multivar"):
                 continue
@@ -191,9 +222,23 @@ def inner(
     )
 
 
+def tosparse_and_attach(z: Array, sparse_tol: int) -> BCOO:
+    a0 = tosparse(z, tol=sparse_tol)
+    a0.test_derivatives = z.test_derivatives
+    a0.trial_derivatives = z.trial_derivatives
+    a0.test_name = z.test_name
+    a0.trial_name = z.trial_name
+    return a0
+
+
 def process_results(
-    aresults, bresults, return_all_items, dims, sparse, sparse_tol
-) -> Array | list[Array]:
+    aresults: list[Array],
+    bresults: list[Array],
+    return_all_items: bool,
+    dims: int,
+    sparse: bool,
+    sparse_tol: int,
+) -> Array | list[Array] | BCOO | list[BCOO] | tuple[BCOO | Array, Array]:
     if return_all_items:
         return aresults, bresults
 
@@ -204,7 +249,13 @@ def process_results(
 
     if len(aresults) > 0 and dims > 1 and sparse:
         for a0 in aresults:
-            a0.mats = [tosparse(a0.mats[i]) for i in range(a0.dims)]
+            a0.mats = [
+                tosparse_and_attach(
+                    a0.mats[i],
+                    sparse_tol,
+                )
+                for i in range(a0.dims)
+            ]
 
     if len(bresults) > 0:
         bresults = jnp.sum(jnp.array(bresults), axis=0)
@@ -282,11 +333,20 @@ def inner_bilinear(
         z = v.apply_stencil_left(z)
     elif isinstance(u, Composite):
         z = u.apply_stencil_right(z)
+
+    # Attach some attributes to the matrix such that it can be easily recognized
+    z.test_derivatives = i
+    z.trial_derivatives = j
+    z.test_name = v.name
+    z.trial_name = u.name
     return z
 
 
 def inner_linear(
-    bi: sp.Expr, v: BaseSpace, sc: float | complex, multivar: bool
+    bi: sp.Expr,
+    v: BaseSpace,
+    sc: float | complex,
+    multivar: bool,
 ) -> Array:
     vo = v.orthogonal
     xj, wj = vo.quad_points_and_weights()
@@ -316,6 +376,7 @@ def inner_linear(
                 uj *= lambdify(s, vo.map_expr_true_domain(bii), modules="jax")(xj)
             else:
                 uj *= float(bii)
+
     Pi = vo.evaluate_basis_derivative(xj, k=i)
     w = wj * df ** (i - 1)  # Account for domain different from reference
     if multivar:
@@ -332,6 +393,13 @@ def project1D(ue: sp.Expr, V: BaseSpace) -> Array:
     v = TestFunction(V)
     M, b = inner(v * (u - ue))
     uh = jnp.linalg.solve(M, b)
+    return uh
+
+def project(ue: sp.Expr, V: BaseSpace) -> Array:
+    u = TrialFunction(V)
+    v = TestFunction(V)
+    M, b = inner(v * (u - ue))
+    uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(V.dim())
     return uh
 
 

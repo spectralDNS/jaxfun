@@ -1,7 +1,14 @@
 import jax.numpy as jnp
 import sympy as sp
 
-from jaxfun.arguments import JAXArray, TestFunction, TrialFunction, test, trial
+from jaxfun.arguments import (
+    JAXF,
+    JAXFunction,
+    TestFunction,
+    TrialFunction,
+    test,
+    trial,
+)
 from jaxfun.coordinates import CoordSys
 
 
@@ -28,27 +35,43 @@ def get_basisfunctions(
             return None, None
 
 
-def get_jaxarray(
-    forms: sp.Expr,
-) -> tuple[None | JAXArray, sp.Expr]:
-    jaxarray = None
-    for p in sp.core.traversal.iterargs(forms):
-        if isinstance(p, JAXArray):
-            jaxarray = True
-            break
-    if jaxarray:
-        assert isinstance(forms, sp.Mul)
-        formargs = []
-        for arg in forms.args:
-            if isinstance(arg, JAXArray):
-                jaxarray = arg
+def split_coeff(c0: sp.Expr) -> dict:
+    coeffs = {}
+    c0 = sp.sympify(c0)
+
+    if c0.is_number:
+        coeffs["bilinear"] = float(c0) if c0.is_real else complex(c0)
+
+    elif isinstance(c0, JAXF):
+        coeffs["linear"] = {"scale": 1, "jaxfunction": c0}
+
+    elif isinstance(c0, sp.Mul):
+        coeffs["linear"] = {"scale": 1, "jaxfunction": None}
+        for ci in c0.args:
+            if isinstance(ci, JAXF):
+                coeffs["linear"]["jaxfunction"] = ci
             else:
-                formargs.append(arg)
-        forms = sp.Mul(*formargs)
-    return jaxarray, forms
+                coeffs["linear"]["scale"] *= float(ci) if ci.is_real else complex(ci)
+
+    elif isinstance(c0, sp.Add):
+        coeffs.update({"linear": {"scale": 1, "jaxfunction": None}, "bilinear": 0})
+        for arg in c0.args:
+            if arg.is_number:
+                coeffs["bilinear"] = float(arg) if arg.is_real else complex(arg)
+            elif isinstance(arg, JAXF):
+                coeffs["linear"]["jaxfunction"] = arg
+            elif isinstance(arg, sp.Mul):
+                for ci in arg.args:
+                    if isinstance(ci, JAXF):
+                        coeffs["linear"]["jaxfunction"] = ci
+                    else:
+                        coeffs["linear"]["scale"] *= (
+                            float(ci) if ci.is_real else complex(ci)
+                        )
+    return coeffs
 
 
-def split(forms) -> dict:
+def split(forms: sp.Expr) -> dict:
     v, _ = get_basisfunctions(forms)
     assert v is not None, "A test function is required"
     V = v.functionspace
@@ -58,9 +81,12 @@ def split(forms) -> dict:
         if d is None and isinstance(ms, sp.Mul):
             scale = []
             rest = []
+            jfun = []
             for arg in ms.args:
                 if isinstance(arg, sp.Derivative | test | trial):
                     rest.append(arg)
+                elif isinstance(arg, JAXFunction | JAXF):
+                    jfun.append(arg)
                 else:
                     scale.append(arg)
             if len(rest) > 0:
@@ -69,6 +95,8 @@ def split(forms) -> dict:
                 )
             if len(scale) > 0:
                 d["multivar"] = sp.Mul(*scale)
+            if len(jfun) > 0:
+                d["coeff"] = jfun[0] 
         if d is None:
             raise RuntimeError("Could not split form")
         return d
@@ -77,22 +105,22 @@ def split(forms) -> dict:
     result = {"linear": [], "bilinear": []}
     if isinstance(forms, sp.Add):
         for arg in forms.args:
-            jaxarray, remargs = get_jaxarray(arg)
-            basisfunctions = get_basisfunctions(remargs)
-            d = _split(remargs)
-            if jaxarray is not None:
-                d["jaxarray"] = jaxarray
+            # jaxfunction, args = replace_jaxfunction(arg)
+            basisfunctions = get_basisfunctions(arg)
+            d = _split(arg)
+            # if jaxfunction is not None:
+            #    d["jaxfunction"] = jaxfunction
             if basisfunctions[1] in (None, set()):
                 result["linear"] = add_result(result["linear"], d, V.system)
             else:
                 result["bilinear"] = add_result(result["bilinear"], d, V.system)
 
     else:
-        jaxarray, remargs = get_jaxarray(forms)
-        basisfunctions = get_basisfunctions(remargs)
-        d = _split(remargs)
-        if jaxarray is not None:
-            d["jaxarray"] = jaxarray
+        # jaxfunction, args = replace_jaxfunction(forms)
+        basisfunctions = get_basisfunctions(forms)
+        d = _split(forms)
+        # if jaxfunction is not None:
+        #    d["jaxfunction"] = jaxfunction
         if basisfunctions[1] in (None, set()):
             result["linear"] = add_result(result["linear"], d, V.system)
         else:
@@ -117,8 +145,6 @@ def add_result(res: list[dict], d: dict, system: CoordSys) -> list[dict]:
     found_d: bool = False
     for g in res:
         if jnp.all(jnp.array([g[s] == d[s] for s in system.base_scalars()])):
-            if "jaxarray" in d:
-                g["jaxarray"] += d["jaxarray"]
             if "multivar" not in d:
                 g["coeff"] += d["coeff"]
             else:

@@ -80,6 +80,7 @@ class Jacobi(BaseSpace):
         _, c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (n, c0, c1))
         return c0 + c1 * ((a + 1) + (a + b + 2) * (X - 1) / 2)
 
+    @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
         N = self.M if N == 0 else N
         return jnp.array(roots_jacobi(N, float(self.alpha), float(self.beta)))

@@ -640,7 +640,7 @@ class CoordSys(Basic):
             sc = sc.replace(a, b)
         return self.expr_psi_to_base_scalar(sc)
 
-    def subs(self, s0: Expr, s1: Expr) -> Expr:
+    def subs(self, s0: Expr, s1: Expr) -> None:
         b = self.get_covariant_basis()
         for i in range(b.shape[0]):
             for j in range(b.shape[1]):

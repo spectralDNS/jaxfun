@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 from functools import partial
-from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -15,8 +14,10 @@ from scipy import sparse as scipy_sparse
 from sympy import Number
 
 from jaxfun.Basespace import BaseSpace, Domain, n
+from jaxfun.Chebyshev import Chebyshev
 from jaxfun.coordinates import CoordSys
 from jaxfun.Jacobi import Jacobi
+from jaxfun.Legendre import Legendre
 from jaxfun.utils.common import matmat
 
 direct_sum_symbol = "\u2295"
@@ -105,8 +106,9 @@ class Composite(BaseSpace):
         self.stencil = {(si[0]): si[1] / scaling for si in sorted(stencil.items())}
         self.S = BCOO.from_scipy_sparse(self.stencil_to_scipy_sparse())
 
+    @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        return self.orthogonal.quad_points_and_weights(N=N)
+        return self.orthogonal.quad_points_and_weights(N)
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
@@ -187,14 +189,19 @@ class Composite(BaseSpace):
         T = matmat((self.S * P.data[None, :]), self.S.T).data.reshape(
             (self.dim, -1)
         )  # sparse @ sparse -> dense (yet sparse format), so need to remove zeros
-        return sparse.BCOO.fromdense(T, nse = 2*self.S.nse - self.S.shape[1])
+        return sparse.BCOO.fromdense(T, nse=2 * self.S.nse - self.S.shape[1])
 
     @partial(jax.jit, static_argnums=0)
     def forward(self, u: Array) -> Array:
         A = self.mass_matrix().todense()
         L = self.scalar_product(u)
         return jnp.linalg.solve(A, L)
-    
+
+    @partial(jax.jit, static_argnums=0)
+    def scalar_product(self, u: Array) -> Array:
+        P: Array = self.orthogonal.scalar_product(u)
+        return self.apply_stencil_right(P)
+
     @property
     def dim(self) -> int:
         return self.N - self.bcs.num_bcs()
@@ -262,6 +269,7 @@ class BCGeneric(Composite):
         )
         S = get_bc_basis(bcs, self.orthogonal)
         self.orthogonal.N = S.shape[1]
+        self.orthogonal.M = M
         self.S = BCOO.fromdense(S.__array__().astype(float))
 
     @property
@@ -271,6 +279,7 @@ class BCGeneric(Composite):
     def bnd_vals(self) -> Array:
         return jnp.array(self.bcs.orderedvals())
 
+    @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
         N = self.M if N == 0 else N
         return self.orthogonal.quad_points_and_weights(N)
@@ -283,7 +292,7 @@ class DirectSum:
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
         self.system = a.system
-        self.mesh = a.mesh 
+        self.mesh = a.mesh
         self.map_expr_true_domain = a.map_expr_reference_domain
         self.map_expr_reference_domain = a.map_expr_reference_domain
 
@@ -305,6 +314,12 @@ class DirectSum:
             X, self.bnd_vals()
         )
 
+    @partial(jax.jit, static_argnums=(0, 2, 3))
+    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+        return self.spaces[0].backward(c, kind, N) + self.spaces[1].backward(
+            self.bnd_vals(), kind, N
+        )
+
 
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
     r"""Return stencil matrix as dictionary of keys, values being diagonals
@@ -324,6 +339,20 @@ def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
     >>> C.stencil
     {0: 1, 2: -n**2/(n**2 + 4*n + 4)}
     """
+    if "".join(bcs.orderednames()) == "LDRD" and isinstance(
+        orthogonal, Chebyshev | Legendre
+    ):
+        return {0: 1, 2: -1}
+    if "".join(bcs.orderednames()) == "LDLNRDRN":
+        if orthogonal.name == "Legendre":
+            return {
+                0: 1,
+                2: 2 * (-2 * n - 5) / (2 * n + 7),
+                4: (2 * n + 3) / (2 * n + 7),
+            }
+        elif orthogonal.name == "Chebyshev":
+            return {0: 1, 2: 2 * (-n - 2) / (n + 3), 4: (n + 1) / (n + 3)}
+
     bc = {"D": 0, "N": 1, "N2": 2, "N3": 3, "N4": 4}
     lr = {"L": 0, "R": 1}
     lra = {"L": "left", "R": "right"}

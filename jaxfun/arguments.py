@@ -410,9 +410,9 @@ class JAXArray(Function):
         return latex_symbols[self.name] + f"({self.space.name})"
 
 
-class JAXFunction(Function):
+class JAXF(Function):
     def __new__(
-        cls, array: Array, name: str, space: BaseSpace | TensorProductSpace | DirectSum
+        cls, array: Array, space: BaseSpace | TensorProductSpace | DirectSum, name: str
     ) -> Function:
         obj = Function.__new__(cls, sp.Dummy())
         obj.array = array
@@ -437,3 +437,68 @@ class JAXFunction(Function):
 
     def _latex(self, printer: Any = None) -> str:
         return latex_symbols[self.name] + f"({self.space.name})"
+
+
+class JAXFunction(Function):
+    def __init__(
+        self,
+        array: Array,
+        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
+        name: str = None,
+    ) -> None:
+        self.array = array
+        self.functionspace = V
+        self.name = name
+
+    def __new__(
+        cls,
+        array: Array,
+        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
+        name: str = None,
+    ) -> Function:
+        coors = V.system
+        obj = Function.__new__(cls, *(coors._cartesian_xyz + [sp.Symbol(V.name)]))
+        return obj
+
+    def backward(self):
+        return self.functionspace.backward(self.array)
+
+    def doit(self, **hints: dict) -> Expr:
+        # return self
+        return (
+            JAXF(self.array, self.functionspace, self.name)
+            * TrialFunction(self.functionspace).doit()
+        )
+
+    def __str__(self) -> str:
+        name = self.name if self.name is not None else "JAXFunction"
+        return "".join(
+            (
+                name,
+                "(",
+                ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
+                "; ",
+                self.functionspace.name,
+                ")",
+            )
+        )
+
+    def _latex(self, printer: Any = None) -> str:
+        name = self.name if self.name is not None else "JAXFunction"
+        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
+        return "".join(
+            (
+                name,
+                "(",
+                ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
+                "; ",
+                self.functionspace.name,
+                ")",
+            )
+        )
+
+    def _pretty(self, printer: Any = None) -> str:
+        return prettyForm(self.__str__())
+
+    def _sympystr(self, printer: Any) -> str:
+        return self.__str__()

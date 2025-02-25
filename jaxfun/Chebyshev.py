@@ -67,6 +67,7 @@ class Chebyshev(Jacobi):
         c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (c0, c1))
         return c0 + c1 * X
 
+    @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
         N = self.M if N == 0 else N
         return jnp.array(

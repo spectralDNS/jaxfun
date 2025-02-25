@@ -12,9 +12,9 @@ from jaxfun.Basespace import n
 # from jaxfun.Legendre import Legendre as space
 from jaxfun.Chebyshev import Chebyshev as space
 from jaxfun.functionspace import FunctionSpace
+from jaxfun.inner import inner
 
 # from jaxfun.Jacobi import Jacobi as space
-from jaxfun.inner import inner
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, ulp
 

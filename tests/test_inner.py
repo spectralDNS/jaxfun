@@ -11,7 +11,7 @@ from jaxfun.utils.common import ulp
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
-def test_inner(space) -> None:
+def test_inner(space: Legendre | Chebyshev) -> None:
     N = 11
     V = space(N)
     x = V.system.x

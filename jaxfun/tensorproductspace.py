@@ -25,30 +25,30 @@ multiplication_sign = "\u00d7"
 class TensorProductSpace:
     def __init__(
         self,
-        spaces: list[BaseSpace],
+        basespaces: list[BaseSpace],
         system: CoordSys = None,
         name: str = "TPS",
     ) -> None:
         from jaxfun.arguments import CartCoordSys, x, y, z
 
         system = (
-            CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[len(spaces)])
+            CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[len(basespaces)])
             if system is None
             else system
         )
-        self.spaces = spaces
+        self.basespaces = basespaces
         self.name = name
         self.system = system
-        self.tensorname = tensor_product_symbol.join([b.name for b in spaces])
+        self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
 
     def __len__(self) -> int:
-        return len(self.spaces)
+        return len(self.basespaces)
 
     def __iter__(self) -> Iterable[BaseSpace]:
-        return iter(self.spaces)
+        return iter(self.basespaces)
 
     def __getitem__(self, i: int) -> BaseSpace:
-        return self.spaces[i]
+        return self.basespaces[i]
 
     @property
     def dims(self) -> int:
@@ -59,10 +59,10 @@ class TensorProductSpace:
         return 0
 
     def shape(self) -> tuple[int]:
-        return tuple([space.N for space in self.spaces])
+        return tuple([space.N for space in self.basespaces])
 
     def dim(self):
-        return tuple([space.dim for space in self.spaces])
+        return tuple([space.dim for space in self.basespaces])
 
     def mesh(
         self,
@@ -73,8 +73,8 @@ class TensorProductSpace:
         """Return mesh in the domain of self"""
         mesh = []
         if N is None:
-            N = tuple([s.N for s in self.spaces])
-        for ax, space in enumerate(self.spaces):
+            N = tuple([s.N for s in self.basespaces])
+        for ax, space in enumerate(self.basespaces):
             X = space.mesh(kind, N[ax])
             mesh.append(self.broadcast_to_ndims(X, ax) if broadcast else X)
         return tuple(mesh)
@@ -98,13 +98,13 @@ class TensorProductSpace:
 
     def map_expr_true_domain(self, u: sp.Expr) -> sp.Expr:
         """Return`u(X, Y, (Z))` mapped to true domain"""
-        for space in self.spaces:
+        for space in self.basespaces:
             u = space.map_expr_true_domain(u)
         return u
 
     def map_expr_reference_domain(self, u: sp.Expr) -> sp.Expr:
         """Return`u(x, y, (z))` mapped to reference domain"""
-        for space in self.spaces:
+        for space in self.basespaces:
             u = space.map_expr_reference_domain(u)
         return u
 
@@ -116,22 +116,24 @@ class TensorProductSpace:
             for i, (xi, ax) in enumerate(zip(x, range(dim), strict=False)):
                 axi: int = dim - 1 - ax
                 c = jax.vmap(
-                    self.spaces[i].evaluate, in_axes=(None, axi), out_axes=axi
-                )(self.spaces[i].map_reference_domain(xi), c)
+                    self.basespaces[i].evaluate, in_axes=(None, axi), out_axes=axi
+                )(self.basespaces[i].map_reference_domain(xi), c)
         else:
             for i, (xi, ax) in enumerate(zip(x, range(dim), strict=False)):
                 ax0, ax1 = set(range(dim)) - set((ax,))
                 c = jax.vmap(
                     jax.vmap(
-                        self.spaces[i].evaluate, in_axes=(None, ax0), out_axes=ax0
+                        self.basespaces[i].evaluate, in_axes=(None, ax0), out_axes=ax0
                     ),
                     in_axes=(None, ax1),
                     out_axes=ax1,
-                )(self.spaces[i].map_reference_domain(xi), c)
+                )(self.basespaces[i].map_reference_domain(xi), c)
         return c
 
     def get_padded(self, N: tuple[int]) -> TensorProductSpace:
-        paddedspaces = [s.get_padded(n) for s, n in zip(self.spaces, N, strict=False)]
+        paddedspaces = [
+            s.get_padded(n) for s, n in zip(self.basespaces, N, strict=False)
+        ]
         return TensorProductSpace(
             paddedspaces, system=self.system, name=self.name + "p"
         )
@@ -141,7 +143,9 @@ class TensorProductSpace:
     ) -> Array:
         dim: int = len(self)
         has_fft = jnp.any(
-            jnp.array([isinstance(space.orthogonal, Fourier) for space in self.spaces])
+            jnp.array(
+                [isinstance(space.orthogonal, Fourier) for space in self.basespaces]
+            )
         )
 
         # padding in Fourier requires additional effort because we are using the FFT
@@ -152,17 +156,17 @@ class TensorProductSpace:
             and has_fft
             and jnp.any(
                 jnp.array(
-                    [n > space.N for n, space in zip(N, self.spaces, strict=False)]
+                    [n > space.N for n, space in zip(N, self.basespaces, strict=False)]
                 )
             ).item()
         ):
             shape = list(c.shape)
-            for ax, space in enumerate(self.spaces):
+            for ax, space in enumerate(self.basespaces):
                 if isinstance(space, Fourier) and N[ax] > space.N:  # padding
                     shape[ax] = N[ax]
             c0 = np.zeros(shape, dtype=c.dtype)
             sl = [slice(0, c.shape[ax]) for ax in range(dim)]
-            for ax, space in enumerate(self.spaces):
+            for ax, space in enumerate(self.basespaces):
                 if isinstance(space, Fourier):
                     sl[ax] = space.wavenumbers()
                 c0[tuple(sl)] = c
@@ -179,17 +183,17 @@ class TensorProductSpace:
             for ax in range(dim):
                 axi: int = dim - 1 - ax
                 backward = partial(
-                    self.spaces[ax]._backward,
+                    self.basespaces[ax]._backward,
                     kind=kind,
-                    N=self.spaces[ax].M if N is None else N[ax],
+                    N=self.basespaces[ax].M if N is None else N[ax],
                 )
                 c = jax.vmap(backward, in_axes=axi, out_axes=axi)(c)
         else:
             for ax in range(dim):
                 backward = partial(
-                    self.spaces[ax]._backward,
+                    self.basespaces[ax]._backward,
                     kind=kind,
-                    N=self.spaces[ax].M if N is None else N[ax],
+                    N=self.basespaces[ax].M if N is None else N[ax],
                 )
                 ax0, ax1 = set(range(dim)) - set((ax,))
                 c = jax.vmap(
@@ -210,14 +214,16 @@ class TensorProductSpace:
         if dim == 2:
             for ax in range(dim):
                 axi: int = dim - 1 - ax
-                u = jax.vmap(self.spaces[ax].scalar_product, in_axes=axi, out_axes=axi)(
-                    u
-                )
+                u = jax.vmap(
+                    self.basespaces[ax].scalar_product, in_axes=axi, out_axes=axi
+                )(u)
         else:
             for ax in range(dim):
                 ax0, ax1 = set(range(dim)) - set((ax,))
                 u = jax.vmap(
-                    jax.vmap(self.spaces[ax].scalar_product, in_axes=ax0, out_axes=ax0),
+                    jax.vmap(
+                        self.basespaces[ax].scalar_product, in_axes=ax0, out_axes=ax0
+                    ),
                     in_axes=ax1,
                     out_axes=ax1,
                 )(u)
@@ -230,12 +236,12 @@ class TensorProductSpace:
         if dim == 2:
             for ax in range(dim):
                 axi: int = dim - 1 - ax
-                u = jax.vmap(self.spaces[ax].forward, in_axes=axi, out_axes=axi)(u)
+                u = jax.vmap(self.basespaces[ax].forward, in_axes=axi, out_axes=axi)(u)
         else:
             for ax in range(dim):
                 ax0, ax1 = set(range(dim)) - set((ax,))
                 u = jax.vmap(
-                    jax.vmap(self.spaces[ax].forward, in_axes=ax0, out_axes=ax0),
+                    jax.vmap(self.basespaces[ax].forward, in_axes=ax0, out_axes=ax0),
                     in_axes=ax1,
                     out_axes=ax1,
                 )(u)
@@ -275,23 +281,24 @@ class VectorTensorProductSpace:
 
 
 def TensorProduct(
-    spaces: list[BaseSpace | DirectSum], system: CoordSys = None, name: str = "T"
+    basespaces: list[BaseSpace | DirectSum], system: CoordSys = None, name: str = "T"
 ) -> TensorProductSpace | list[TensorProductSpace]:
     from jaxfun.arguments import CartCoordSys, x, y, z
 
     system = (
-        CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[len(spaces)])
+        CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[len(basespaces)])
         if system is None
         else system
     )
+        
     # Make copy of all 1D spaces since they will use different coordinates
     # Add index to name if some names of spaces are equal
     # Not sure this is the best approach..
-    spaces = [copy.deepcopy(space) for space in spaces]
-    names = [space.name for space in spaces]
+    basespaces = [copy.deepcopy(space) for space in basespaces]
+    names = [space.name for space in basespaces]
 
     if jnp.any(jnp.array([name == names[0] for name in names[1:]])):
-        for i, space in enumerate(spaces):
+        for i, space in enumerate(basespaces):
             if isinstance(space, DirectSum):
                 for spi in space.spaces:
                     spi.name = spi.name + str(i)
@@ -299,20 +306,20 @@ def TensorProduct(
                 space.name = space.name + str(i)
 
     # Use the same coordinates in BaseSpaces as in TensorProductSpace
-    for i, space in enumerate(spaces):
+    for i, space in enumerate(basespaces):
         space.system = system.sub_system(i)
         if isinstance(space, Composite):
             space.orthogonal.system = system.sub_system(i)
         if isinstance(space, DirectSum):
-            space.spaces[0].system = system.sub_system(i)
-            if isinstance(space.spaces[0], Composite):
-                space.spaces[0].orthogonal.system = system.sub_system(i)
-            space.spaces[1].system = system.sub_system(i)
-            space.spaces[1].orthogonal.system = system.sub_system(i)
+            space.basespaces[0].system = system.sub_system(i)
+            if isinstance(space.basespaces[0], Composite):
+                space.basespaces[0].orthogonal.system = system.sub_system(i)
+            space.basespaces[1].system = system.sub_system(i)
+            space.basespaces[1].orthogonal.system = system.sub_system(i)
 
-    if isinstance(spaces[0], DirectSum) or isinstance(spaces[1], DirectSum):
-        return DirectSumTPS(spaces, system, name)
-    return TensorProductSpace(spaces, system, name)
+    if isinstance(basespaces[0], DirectSum) or isinstance(basespaces[1], DirectSum):
+        return DirectSumTPS(basespaces, system, name)
+    return TensorProductSpace(basespaces, system, name)
 
 
 class DirectSumTPS(TensorProductSpace):
@@ -325,33 +332,35 @@ class DirectSumTPS(TensorProductSpace):
 
     def __init__(
         self,
-        spaces: list[BaseSpace | DirectSum],
+        basespaces: list[BaseSpace | DirectSum],
         system: CoordSys = None,
         name: str = "DSTPS",
     ) -> None:
         from jaxfun.inner import project1D
 
-        self.spaces = spaces
+        self.basespaces = basespaces
         self.system = system
         self.name = name
         self.bndvals = {}
-        self.tensorname = tensor_product_symbol.join([b.name for b in spaces])
-
-        for space in spaces:
+        self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
+        
+        for space in basespaces:
             if space.bcs is None:
                 continue
             if space.bcs.is_homogeneous():
                 continue
             if isinstance(space, DirectSum):
-                s0 = space.spaces[1]
+                s0 = space.basespaces[1]
                 for val in s0.bcs.values():
                     for key, v in val.items():
                         if len(sp.sympify(v).free_symbols) > 0:
                             val[key] = system.expr_psi_to_base_scalar(v)
 
         two_inhomogeneous = False
-        if isinstance(spaces[0], DirectSum) and isinstance(spaces[1], DirectSum):
-            bcspaces = (spaces[0].spaces[1], spaces[1].spaces[1])
+        if isinstance(basespaces[0], DirectSum) and isinstance(
+            basespaces[1], DirectSum
+        ):
+            bcspaces = (basespaces[0].basespaces[1], basespaces[1].basespaces[1])
             two_inhomogeneous = bcspaces
             bc0, bc1 = bcspaces
             bc0bcs = copy.deepcopy(bc0.bcs)
@@ -391,7 +400,7 @@ class DirectSumTPS(TensorProductSpace):
 
             self.bndvals[bcspaces] = jnp.array([z.orderedvals() for z in bcall[0]])
 
-        self.tpspaces = self.split(spaces)
+        self.tpspaces = self.split(basespaces)
         # Compute all the known coefficients of all spaces
         for tensorspace in self.tpspaces:
             otherspaces = [p for p in tensorspace if not isinstance(p, BCGeneric)]
@@ -434,14 +443,16 @@ class DirectSumTPS(TensorProductSpace):
         }
 
     def get_homogeneous(self):
-        return self.tpspaces[(self.spaces[0].spaces[0], self.spaces[1].spaces[0])]
+        return self.tpspaces[
+            (self.basespaces[0].basespaces[0], self.basespaces[1].basespaces[0])
+        ]
 
     def backward(
         self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
     ) -> Array:
         a = []
         for f, v in self.tpspaces.items():
-            if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.spaces])):
+            if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
                 a.append(v.backward(self.bndvals[f], kind=kind, N=N))
             else:
                 a.append(v.backward(c, kind=kind, N=N))
@@ -517,44 +528,26 @@ class TPMatrix:  # noqa: B903
     @partial(jax.jit, static_argnums=0)
     def precond(self, u: Array):
         return self.M * u
+    
+    @partial(jax.jit, static_argnums=0) 
+    def __matmul__(self, u: Array) -> Array:
+        return self.mats[0] @ u @ self.mats[1].T 
+
+    @partial(jax.jit, static_argnums=0) 
+    def __rmatmul__(self, u: Array) -> Array:
+        return self.mats[0].T @ u @ self.mats[1]
 
 
 class TensorMatrix:
     def __init__(
         self,
-        mats: list[tuple[Array, Array]],
-        scale: Array,
+        mat: Array,
         test_space: TensorProductSpace,
         trial_space: TensorProductSpace,
     ) -> None:
-        assert len(mats) == 2
-        P0, P1 = mats[0]
-        P2, P3 = mats[1]
-        i, k = P0.shape[1], P1.shape[1]
-        j, l = P2.shape[1], P3.shape[1]
-        if len(sp.sympify(scale).free_symbols) > 0:
-            s = test_space.system.base_scalars()
-            xj = test_space.mesh()
-            scale = lambdify(s, scale, modules="jax")(*xj)
-        else:
-            scale = jnp.ones((P0.shape[0], P1.shape[0])) * scale
-        # a = np.zeros((i, j, k, l))
-        # for ii in range(i):
-        #   Ph0 = P0[:, ii][:, None] * P1
-        #   for jj in range(j):
-        #       Ph1 = P2[:, jj][:, None] * P3
-        #       a[ii, jj, :] = Ph0.T @ scale @ Ph1
-
-        def fun(p0, p1, p2, p3):
-            ph0 = p0[:, None] * p1
-            ph1 = p2[:, None] * p3
-            return ph0.T @ scale @ ph1
-
-        a = jax.vmap(
-            jax.vmap(fun, in_axes=(None, None, 1, None)), in_axes=(1, None, None, None)
-        )(P0, P1, P2, P3)
-
-        self.mat = a.reshape((i * j, k * l))
+        self.mat = mat
+        self.test_space = test_space
+        self.trial_space = trial_space
 
 
 def tpmats_to_scipy_sparse(

@@ -1,7 +1,8 @@
 import itertools
+from functools import partial
 from typing import Any
 
-import jax.numpy as jnp
+import jax
 import sympy as sp
 from jax import Array
 from sympy import Expr, Function, Symbol
@@ -115,7 +116,7 @@ def _get_computational_function(
         )
 
     elif isinstance(V, TensorProductSpace):
-        for space in V.spaces:
+        for space in V.basespaces:
             functionspacedict[space.name] = space
         return sp.Mul(
             *[
@@ -176,7 +177,7 @@ class TestFunction(Function):
         elif isinstance(V, TensorProductSpace):
             f = []
             vname = V.name
-            for space in V.spaces:
+            for space in V.basespaces:
                 if isinstance(space, DirectSum):
                     f.append(space[0].get_homogeneous())
                     vname += "0"
@@ -254,11 +255,11 @@ class TrialFunction(Function):
             return sp.Add(
                 *[
                     _get_computational_function("trial", f)
-                    for f in self.functionspace.spaces
+                    for f in self.functionspace.basespaces
                 ]
             )
         elif isinstance(self.functionspace, TensorProductSpace):
-            spaces = self.functionspace.spaces
+            spaces = self.functionspace.basespaces
             f = []
             for space in spaces:
                 if isinstance(space, DirectSum):
@@ -380,25 +381,25 @@ class VectorFunction(Function):
     def _latex(self, printer: Any = None) -> str:
         return r"\mathbf{{%s}}" % (latex_symbols[self.name],) + str(self.args[:-1])  # noqa: UP031
 
-
+# Not sure this will be useful:
 class JAXArray(Function):
     def __new__(
-        cls, array: Array, name: str, space: BaseSpace | TensorProductSpace | DirectSum
+        cls, array: Array, V: BaseSpace | TensorProductSpace | DirectSum, name: str
     ) -> Function:
         obj = Function.__new__(cls, sp.Dummy())
         obj.array = array
-        obj.space = space
+        obj.functionspace = V
         obj.name = name.lower()
         return obj
 
     def forward(self):
-        return self.space.forward(self.array)
+        return self.functionspace.forward(self.array)
 
     def doit(self, **hints: dict) -> Function:
         return self
 
     def __str__(self) -> str:
-        return self.name + f"({self.space.name})"
+        return self.name + f"({self.functionspace.name})"
 
     def _pretty(self, printer: Any = None) -> str:
         return prettyForm(self.__str__())
@@ -407,27 +408,27 @@ class JAXArray(Function):
         return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
-        return latex_symbols[self.name] + f"({self.space.name})"
+        return latex_symbols[self.name] + f"({self.functionspace.name})"
 
 
-class JAXF(Function):
+class Jaxf(Function):
     def __new__(
-        cls, array: Array, space: BaseSpace | TensorProductSpace | DirectSum, name: str
+        cls, array: Array, V: BaseSpace | TensorProductSpace | DirectSum, name: str
     ) -> Function:
         obj = Function.__new__(cls, sp.Dummy())
         obj.array = array
-        obj.space = space
+        obj.functionspace = V
         obj.name = name.lower()
         return obj
 
     def backward(self):
-        return self.space.backward(self.array)
+        return self.functionspace.backward(self.array)
 
     def doit(self, **hints: dict) -> Function:
         return self
 
     def __str__(self) -> str:
-        return self.name + f"({self.space.name})"
+        return self.name + f"({self.functionspace.name})"
 
     def _pretty(self, printer: Any = None) -> str:
         return prettyForm(self.__str__())
@@ -436,7 +437,7 @@ class JAXF(Function):
         return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
-        return latex_symbols[self.name] + f"({self.space.name})"
+        return latex_symbols[self.name] + f"({self.functionspace.name})"
 
 
 class JAXFunction(Function):
@@ -444,7 +445,7 @@ class JAXFunction(Function):
         self,
         array: Array,
         V: BaseSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
-        name: str = None,
+        name: str = "JAXFunction",
     ) -> None:
         self.array = array
         self.functionspace = V
@@ -464,9 +465,8 @@ class JAXFunction(Function):
         return self.functionspace.backward(self.array)
 
     def doit(self, **hints: dict) -> Expr:
-        # return self
         return (
-            JAXF(self.array, self.functionspace, self.name)
+            Jaxf(self.array, self.functionspace, self.name)
             * TrialFunction(self.functionspace).doit()
         )
 
@@ -502,3 +502,12 @@ class JAXFunction(Function):
 
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
+ 
+    @partial(jax.jit, static_argnums=0)
+    def __matmul__(self, a: Array) -> Array:
+        return self.array @ a
+    
+    @partial(jax.jit, static_argnums=0)
+    def __rmatmul__(self, a: Array) -> Array:
+        return a @ self.array
+    

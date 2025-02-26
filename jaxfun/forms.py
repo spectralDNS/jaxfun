@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import sympy as sp
 
 from jaxfun.arguments import (
-    JAXF,
+    Jaxf,
     JAXFunction,
     TestFunction,
     TrialFunction,
@@ -42,13 +42,13 @@ def split_coeff(c0: sp.Expr) -> dict:
     if c0.is_number:
         coeffs["bilinear"] = float(c0) if c0.is_real else complex(c0)
 
-    elif isinstance(c0, JAXF):
+    elif isinstance(c0, Jaxf):
         coeffs["linear"] = {"scale": 1, "jaxfunction": c0}
 
     elif isinstance(c0, sp.Mul):
         coeffs["linear"] = {"scale": 1, "jaxfunction": None}
         for ci in c0.args:
-            if isinstance(ci, JAXF):
+            if isinstance(ci, Jaxf):
                 coeffs["linear"]["jaxfunction"] = ci
             else:
                 coeffs["linear"]["scale"] *= float(ci) if ci.is_real else complex(ci)
@@ -58,13 +58,14 @@ def split_coeff(c0: sp.Expr) -> dict:
         for arg in c0.args:
             if arg.is_number:
                 coeffs["bilinear"] = float(arg) if arg.is_real else complex(arg)
-            elif isinstance(arg, JAXF):
+            elif isinstance(arg, Jaxf):
                 coeffs["linear"]["jaxfunction"] = arg
             elif isinstance(arg, sp.Mul):
                 for ci in arg.args:
-                    if isinstance(ci, JAXF):
+                    if isinstance(ci, Jaxf):
                         coeffs["linear"]["jaxfunction"] = ci
                     else:
+                        print(ci, c0, type(c0.free_symbols.pop()))
                         coeffs["linear"]["scale"] *= (
                             float(ci) if ci.is_real else complex(ci)
                         )
@@ -85,7 +86,7 @@ def split(forms: sp.Expr) -> dict:
             for arg in ms.args:
                 if isinstance(arg, sp.Derivative | test | trial):
                     rest.append(arg)
-                elif isinstance(arg, JAXFunction | JAXF):
+                elif isinstance(arg, JAXFunction | Jaxf):
                     jfun.append(arg)
                 else:
                     scale.append(arg)
@@ -105,22 +106,16 @@ def split(forms: sp.Expr) -> dict:
     result = {"linear": [], "bilinear": []}
     if isinstance(forms, sp.Add):
         for arg in forms.args:
-            # jaxfunction, args = replace_jaxfunction(arg)
             basisfunctions = get_basisfunctions(arg)
             d = _split(arg)
-            # if jaxfunction is not None:
-            #    d["jaxfunction"] = jaxfunction
             if basisfunctions[1] in (None, set()):
                 result["linear"] = add_result(result["linear"], d, V.system)
             else:
                 result["bilinear"] = add_result(result["bilinear"], d, V.system)
 
     else:
-        # jaxfunction, args = replace_jaxfunction(forms)
         basisfunctions = get_basisfunctions(forms)
         d = _split(forms)
-        # if jaxfunction is not None:
-        #    d["jaxfunction"] = jaxfunction
         if basisfunctions[1] in (None, set()):
             result["linear"] = add_result(result["linear"], d, V.system)
         else:

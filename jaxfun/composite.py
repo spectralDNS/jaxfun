@@ -288,35 +288,32 @@ class BCGeneric(Composite):
 class DirectSum:
     def __init__(self, a: BaseSpace, b: BaseSpace) -> None:
         assert isinstance(b, BCGeneric)
-        self.spaces: list[BaseSpace] = [a, b]
+        self.basespaces: list[BaseSpace] = [a, b]
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
         self.system = a.system
-        self.mesh = a.mesh
-        self.map_expr_true_domain = a.map_expr_reference_domain
-        self.map_expr_reference_domain = a.map_expr_reference_domain
-
+        
     def __getitem__(self, i: int) -> BaseSpace:
-        return self.spaces[i]
+        return self.basespaces[i]
 
     def __len__(self) -> int:
-        return len(self.spaces)
+        return len(self.basespaces)
 
     def mesh(self, kind: str = "quadrature", N: int = 0) -> Array:
-        return self.spaces[0].mesh(kind=kind, N=N)
+        return self.basespaces[0].mesh(kind=kind, N=N)
 
     def bnd_vals(self) -> Array:
-        return self.spaces[1].bnd_vals()
+        return self.basespaces[1].bnd_vals()
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
-        return self.spaces[0].evaluate(X, c) + self.spaces[1].evaluate(
+        return self.basespaces[0].evaluate(X, c) + self.basespaces[1].evaluate(
             X, self.bnd_vals()
         )
 
     @partial(jax.jit, static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
-        return self.spaces[0].backward(c, kind, N) + self.spaces[1].backward(
+        return self.basespaces[0].backward(c, kind, N) + self.basespaces[1].backward(
             self.bnd_vals(), kind, N
         )
 

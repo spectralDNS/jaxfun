@@ -441,6 +441,7 @@ class CoordSys(Basic):
 
     def get_det_g(self, covariant: bool = True) -> Expr:
         """Return determinant of covariant metric tensor"""
+        from jaxfun.operators import express
         if self._det_g[covariant] is not None:
             return self._det_g[covariant]
         if covariant:
@@ -448,12 +449,13 @@ class CoordSys(Basic):
         else:
             g = sp.Matrix(self.get_contravariant_metric_tensor()).det()
         g = g.factor()
-        g = self.simplify(self.refine(g))
+        g = express(self.simplify(self.refine(g)), self)
         self._det_g[covariant] = g
         return g
 
     def get_sqrt_det_g(self, covariant: bool = True) -> Expr:
         """Return square root of determinant of covariant metric tensor"""
+        from jaxfun.operators import express
         if self._sqrt_det_g[covariant] is not None:
             return self._sqrt_det_g[covariant]
         g = self.get_det_g(covariant)
@@ -465,12 +467,13 @@ class CoordSys(Basic):
                 sg = complex(sg)
             else:
                 raise RuntimeError
-
+        sg = express(sg, self)
         self._sqrt_det_g[covariant] = sg
         return sg
 
     def get_scaling_factors(self) -> np.ndarray[Any, np.dtype[object]]:
         """Return scaling factors"""
+        from jaxfun.operators import express
         if self._hi is not None:
             return self._hi
         hi = np.zeros_like(self.psi)
@@ -479,6 +482,7 @@ class CoordSys(Basic):
             hi[i] = sp.sqrt(self.refine(self.simplify(s)))
             hi[i] = self.refine(hi[i])
 
+        hi = express(hi, self)
         self._hi = hi
         return hi
 
@@ -494,6 +498,7 @@ class CoordSys(Basic):
     def get_normal_basis(
         self, as_coordsys3d: bool = False
     ) -> np.ndarray[Any, np.dtype[object]]:
+        from jaxfun.operators import express
         if self._e is not None:
             if as_coordsys3d:
                 return self._e @ self._parent.base_vectors()[: self._e.shape[1]]
@@ -504,7 +509,7 @@ class CoordSys(Basic):
         for i, bi in enumerate(b):
             length = sp.sqrt(self.simplify(np.dot(bi, bi)))
             length = self.refine(length)
-            e[i] = bi / length
+            e[i] = express(bi / length, self)
         self._e = e
         if as_coordsys3d:
             return e @ self._parent.base_vectors()[: e.shape[1]]

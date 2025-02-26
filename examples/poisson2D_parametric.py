@@ -1,4 +1,4 @@
-# Solve Poisson's equation in 2D
+# Solve Poisson's equation in 2D in a generic quadrilateral
 import os
 import sys
 
@@ -16,10 +16,12 @@ from jaxfun.operators import Div, Grad
 from jaxfun.tensorproductspace import TensorProduct
 from jaxfun.utils.common import lambdify, ulp
 
-#ax, ay, bx, by, cx, cy, dx, dy = sp.symbols('ax,ay,bx,by,cx,cy,dx,dy', real=True)
 # Some quadrilateral
-nodes = ((0, 0), (4, 0), (3, 2), (0, 3))
-#nodes =((ax, ay), (bx, by), (cx, cy), (dx, dy))
+#nodes = ((0, 0), (4, 0), (3, 2), (0, 3))
+nodes = ((0, 0), (1, 0), (2, 1), (0, 1))
+#x0, x1, x2, x3  = sp.symbols('x:4', real=True)
+#y0, y1, y2, y3  = sp.symbols('y:4', real=True)
+#nodes =((x0, y0), (x1, y1), (x2, y2), (x3, y3))
 
 xi, eta = sp.symbols("xi,eta", real=True)
 phi = (
@@ -30,13 +32,13 @@ phi = (
 )
 C = get_CoordSys(
     "C",
-    sp.Lambda(
-        (xi, eta),
-        (
-            sum([phi[i] * nodes[i][0] for i in range(4)]),
-            sum([phi[i] * nodes[i][1] for i in range(4)]),
-        ),
+sp.Lambda(
+    (xi, eta),
+    (
+        sum([phi[i] * nodes[i][0] for i in range(4)]),
+        sum([phi[i] * nodes[i][1] for i in range(4)]),
     ),
+),
     assumptions=sp.Q.positive(xi+1)&sp.Q.positive(eta+1)&sp.Q.positive(1-eta)&sp.Q.positive(1-xi)
 )
 
@@ -45,8 +47,10 @@ ue = (1 + xi**2) * (1 + eta**2)
 bcsx = {"left": {"D": ue.subs(xi, -1)}, "right": {"D": ue.subs(xi, 1)}}
 bcsy = {"left": {"D": ue.subs(eta, -1)}, "right": {"D": ue.subs(eta, 1)}}
 D0 = FunctionSpace(M, Chebyshev, bcsx, name="D0", fun_str="phi")
+
 D1 = FunctionSpace(M, Chebyshev, bcsy, name="D1", fun_str="psi")
 T = TensorProduct((D0, D1), system=C, name="T")
+
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 

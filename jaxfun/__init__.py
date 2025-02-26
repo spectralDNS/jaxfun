@@ -1,5 +1,5 @@
-from jaxfun import Chebyshev, Jacobi, Legendre
-from jaxfun.arguments import TestFunction, TrialFunction
+from jaxfun import Chebyshev, Jacobi, Legendre, Fourier
+from jaxfun.arguments import JAXFunction, TestFunction, TrialFunction
 from jaxfun.Basespace import BaseSpace, Domain
 from jaxfun.coordinates import CoordSys, get_CoordSys
 from jaxfun.functionspace import FunctionSpace

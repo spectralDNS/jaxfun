@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -12,43 +11,48 @@ from jax.experimental.sparse import BCOO
 from sympy import Number
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.utils.common import jacn, lambdify
+from jaxfun.utils.common import Domain, jacn, lambdify
 
 n = sp.Symbol("n", integer=True, positive=True)  # index
-
-
-class Domain(NamedTuple):
-    lower: Number
-    upper: Number
 
 
 class BaseSpace:
     def __init__(
         self,
-        N: int,
-        domain: Domain = None,
         system: CoordSys = None,
         name: str = "BaseSpace",
-        fun_str: str = "psi",
+        fun_str: str = "phi",
     ) -> None:
         from jaxfun.arguments import CartCoordSys, x
 
-        self.N = N
-        self.M = N
-        self._domain = Domain(*domain)
         self.name = name
         self.fun_str = fun_str
         self.system = CartCoordSys("N", (x,)) if system is None else system
+        
+    @partial(jax.jit, static_argnums=0)
+    def evaluate(self, X: float, c: Array) -> float:
+        raise RuntimeError
+
+class OrthogonalSpace(BaseSpace):
+    def __init__(
+        self,
+        N: int,
+        domain: Domain = None,
+        system: CoordSys = None,
+        name: str = "OrthogonalSpace",
+        fun_str: str = "psi",
+    ) -> None:
+        
+        self.N = N
+        self.M = N
+        self._domain = Domain(*domain) if domain is not None else None
         self.bcs = None
         self.orthogonal = self
         self.stencil = {0: 1}
         self.S = sparse.BCOO(
             (jnp.ones(N), jnp.vstack((jnp.arange(N),) * 2).T), shape=(N, N)
         )
-
-    @partial(jax.jit, static_argnums=0)
-    def evaluate(self, X: float, c: Array) -> float:
-        raise RuntimeError
+        BaseSpace.__init__(self, system, name, fun_str)
 
     @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
@@ -197,27 +201,28 @@ class BaseSpace:
         return u.xreplace({x: a + (x - c) / d})
 
     def map_reference_domain(self, x: sp.Symbol | Array) -> sp.Expr | Array:
-        """Return true point `x` mapped to reference domain"""
-
+        """Return true point `x` mapped to reference point `X`"""
+        X = x
         if self.domain != self.reference_domain:
             a = self.domain.lower
             c = self.reference_domain.lower
             if isinstance(x, Array | float):
-                x = float(c) + (x - float(a)) * float(self.domain_factor)
+                X = float(c) + (x - float(a)) * float(self.domain_factor)
             else:
-                x = c + (x - a) * self.domain_factor
-        return x
+                X = c + (x - a) * self.domain_factor
+        return X
 
     def map_true_domain(self, X: sp.Symbol | Array) -> sp.Expr | Array:
-        """Return reference point `x` mapped to true domain"""
+        """Return reference point `X` mapped to true point `x`"""
+        x = X
         if self.domain != self.reference_domain:
             a = self.domain.lower
             c = self.reference_domain.lower
             if isinstance(X, Array | float):
-                X = float(a) + (X - float(c)) / float(self.domain_factor)
+                x = float(a) + (X - float(c)) / float(self.domain_factor)
             else:
-                X = a + (X - c) / self.domain_factor
-        return X
+                x = a + (X - c) / self.domain_factor
+        return x
 
     @partial(jax.jit, static_argnums=(0, 1, 2))
     def mesh(self, kind: str = "quadrature", N: int = 0) -> Array:

@@ -82,7 +82,7 @@ class TensorProductSpace:
     def cartesian_mesh(
         self, kind: str = "quadrature", N: tuple[int] | None = None
     ) -> tuple[Array]:
-        rv = self.system._position_vector
+        rv = self.system.position_vector(False)
         x = self.system.base_scalars()
         xj = self.mesh(kind, N, True)
         mesh = []

@@ -13,7 +13,7 @@ from jax.experimental.sparse import BCOO
 from scipy import sparse as scipy_sparse
 from sympy import Number
 
-from jaxfun.Basespace import BaseSpace, Domain, n
+from jaxfun.Basespace import Domain, OrthogonalSpace, n
 from jaxfun.Chebyshev import Chebyshev
 from jaxfun.coordinates import CoordSys
 from jaxfun.Jacobi import Jacobi
@@ -73,7 +73,7 @@ class BoundaryConditions(dict):
         return BoundaryConditions(bc)
 
 
-class Composite(BaseSpace):
+class Composite(OrthogonalSpace):
     """Space created by combining orthogonal basis functions
 
     The stencil matrix is computed from the given boundary conditions, but
@@ -83,7 +83,7 @@ class Composite(BaseSpace):
     def __init__(
         self,
         N: int,
-        orthogonal: BaseSpace,
+        orthogonal: OrthogonalSpace,
         bcs: BoundaryConditions,
         domain: Domain = None,
         name: str = "Composite",
@@ -95,7 +95,7 @@ class Composite(BaseSpace):
         scaling: sp.Expr = sp.S.One,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
-        BaseSpace.__init__(self, N, domain, system=system, name=name, fun_str=fun_str)
+        OrthogonalSpace.__init__(self, N, domain, system=system, name=name, fun_str=fun_str)
         self.orthogonal = orthogonal(
             N, domain=domain, alpha=alpha, beta=beta, system=system
         )
@@ -243,7 +243,7 @@ class BCGeneric(Composite):
     def __init__(
         self,
         N: int,
-        orthogonal: BaseSpace,
+        orthogonal: OrthogonalSpace,
         bcs: dict,
         domain: Domain = None,
         name: str = "BCGeneric",
@@ -256,7 +256,7 @@ class BCGeneric(Composite):
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
         bcs = BoundaryConditions(bcs, domain=domain)
-        BaseSpace.__init__(self, N, domain, system=system, name=name, fun_str=fun_str)
+        OrthogonalSpace.__init__(self, N, domain, system=system, name=name, fun_str=fun_str)
         self.bcs = bcs
         self.stencil = None
         self.M = M
@@ -286,14 +286,14 @@ class BCGeneric(Composite):
 
 
 class DirectSum:
-    def __init__(self, a: BaseSpace, b: BaseSpace) -> None:
+    def __init__(self, a: OrthogonalSpace, b: OrthogonalSpace) -> None:
         assert isinstance(b, BCGeneric)
-        self.basespaces: list[BaseSpace] = [a, b]
+        self.basespaces: list[OrthogonalSpace] = [a, b]
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
         self.system = a.system
         
-    def __getitem__(self, i: int) -> BaseSpace:
+    def __getitem__(self, i: int) -> OrthogonalSpace:
         return self.basespaces[i]
 
     def __len__(self) -> int:

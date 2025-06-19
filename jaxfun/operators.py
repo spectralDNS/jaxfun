@@ -1,3 +1,4 @@
+import collections
 from typing import Any
 
 import numpy as np
@@ -6,19 +7,20 @@ from sympy import Expr
 from sympy.core import preorder_traversal
 from sympy.core.add import Add
 from sympy.core.function import Derivative
+from sympy.core.function import diff as df
 from sympy.core.mul import Mul
 from sympy.vector import Dot as sympy_Dot
 from sympy.vector import VectorAdd, VectorMul, VectorZero
+from sympy.vector.dyadic import Dyadic, DyadicAdd, DyadicZero
 from sympy.vector.operators import Curl as sympy_Curl
 from sympy.vector.operators import (
     Divergence,
     Gradient,
-    _split_mul_args_wrt_coordsys,
 )
 from sympy.vector.vector import Cross as sympy_Cross
 from sympy.vector.vector import Vector
 
-from jaxfun.coordinates import BaseScalar, BaseVector, CoordSys
+from jaxfun.coordinates import BaseDyadic, BaseScalar, BaseVector, CoordSys
 
 
 def eijk(i: int, j: int, k: int) -> int:
@@ -28,6 +30,8 @@ def eijk(i: int, j: int, k: int) -> int:
         return -1
     return 0
 
+def sign(i: int, j: int):
+    return 1 if ((i + 1) % 3 == j) else -1
 
 def _get_coord_systems(expr: Expr) -> set:
     g = preorder_traversal(expr)
@@ -37,6 +41,13 @@ def _get_coord_systems(expr: Expr) -> set:
             ret.add(i)
             g.skip()
     return frozenset(ret)
+
+
+def _split_mul_args_wrt_coordsys(expr):
+    d = collections.defaultdict(lambda: sp.S.One)
+    for i in expr.args:
+        d[_get_coord_systems(i)] *= i
+    return list(d.values())
 
 
 def express(expr, system):
@@ -93,18 +104,16 @@ def cross(vect1: Vector, vect2: Vector) -> Vector:
                 )
                 gt = vect1._sys.get_contravariant_metric_tensor()
                 sg = vect1._sys.sg
-                p = np.setxor1d(range(3), (vect1._id[0], vect2._id[0]))[0]
-                ei = eijk(vect1._id[0], vect2._id[0], p)
+                n3 = ({0, 1, 2}.difference({n1, n2})).pop()
+                ei = eijk(n1, n2, n3)
                 C = vect1._sys
                 b = C.base_vectors()
-                s = gt[p, 0] * b[0]
+                s = gt[n3, 0] * b[0]
                 for i in range(1, gt.shape[1]):
-                    s += gt[p, i] * b[i]
+                    s += gt[n3, i] * b[i]
                 return sg * ei * s
 
-        return cross(
-            vect1._sys.to_cartesian_vector(vect1), vect2._sys.to_cartesian_vector(vect2)
-        )
+        return cross(vect1._sys.to_cartesian(vect1), vect2._sys.to_cartesian(vect2))
 
     if isinstance(vect1, VectorZero) or isinstance(vect2, VectorZero):
         return Vector.zero
@@ -138,9 +147,10 @@ def dot(vect1: Vector, vect2: Vector) -> Expr:
     r**2*theta + r
 
     """
-    if isinstance(vect1, Add):
+
+    if isinstance(vect1, Add | VectorAdd):
         return Add.fromiter(dot(i, vect2) for i in vect1.args)
-    if isinstance(vect2, Add):
+    if isinstance(vect2, Add | VectorAdd):
         return Add.fromiter(dot(vect1, i) for i in vect2.args)
     if isinstance(vect1, BaseVector) and isinstance(vect2, BaseVector):
         if vect1._sys == vect2._sys:
@@ -150,10 +160,65 @@ def dot(vect1: Vector, vect2: Vector) -> Expr:
                 g = vect1._sys.get_covariant_metric_tensor()
                 return g[vect1._id[0], vect2._id[0]]
 
-        return dot(
-            vect1._sys.to_cartesian_vector(vect1), vect2._sys.to_cartesian_vector(vect2)
-        )
+        return dot(vect1._sys.to_cartesian(vect1), vect2._sys.to_cartesian(vect2))
 
+    if isinstance(vect1, BaseDyadic) and isinstance(vect2, BaseVector):
+        if vect1._sys == vect2._sys:
+            if vect1._sys.is_cartesian:
+                return (
+                    vect1.args[0] if vect1.args[1] == vect2 else sp.vector.VectorZero()
+                )
+            else:
+                g = vect1._sys.get_covariant_metric_tensor()
+                g0 = g[vect1.args[1]._id[0], vect2._id[0]]
+                if g0 == 0:
+                    return VectorZero()
+                else:
+                    return g0 * vect1.args[0]
+
+        return dot(vect1._sys.to_cartesian(vect1), vect2._sys.to_cartesian(vect2))
+
+    if isinstance(vect1, BaseVector) and isinstance(vect2, BaseDyadic):
+        if vect1._sys == vect2._sys:
+            if vect1._sys.is_cartesian:
+                return (
+                    vect2.args[1] if vect1 == vect2.args[0] else sp.vector.VectorZero()
+                )
+            else:
+                g = vect1._sys.get_covariant_metric_tensor()
+                g0 = g[vect1._id[0], vect2.args[0]._id[0]]
+                if g0 == 0:
+                    return VectorZero()
+                else:
+                    return g0 * vect2.args[1]
+
+        return dot(vect1._sys.to_cartesian(vect1), vect2._sys.to_cartesian(vect2))
+
+    if isinstance(vect1, BaseDyadic) and isinstance(vect2, BaseDyadic):
+        if vect1._sys == vect2._sys:
+            if vect1._sys.is_cartesian:
+                return (
+                    vect1.args[0] | vect2.args[1]
+                    if vect1.args[1] == vect2.args[0]
+                    else DyadicZero()
+                )
+            else:
+                g = vect1._sys.get_covariant_metric_tensor()
+                g0 = g[vect1.args[1]._id[0], vect2.args[0]._id[0]]
+                if g0 == 0:
+                    return DyadicZero()
+                else:
+                    return g0 * vect1.args[0] | vect2.args[1]
+
+        return dot(vect1._sys.to_cartesian(vect1), vect2._sys.to_cartesian(vect2))
+    if isinstance(vect1, DyadicZero) and isinstance(vect2, BaseVector):
+        return VectorZero()
+    if isinstance(vect1, DyadicZero) and isinstance(vect2, BaseDyadic):
+        return DyadicZero()
+    if isinstance(vect1, BaseVector) and isinstance(vect2, DyadicZero):
+        return VectorZero()
+    if isinstance(vect1, BaseDyadic) and isinstance(vect2, DyadicZero):
+        return DyadicZero()
     if isinstance(vect1, VectorZero) or isinstance(vect2, VectorZero):
         return sp.S.Zero
     if isinstance(vect1, VectorMul):
@@ -166,16 +231,16 @@ def dot(vect1: Vector, vect2: Vector) -> Expr:
     return Dot(vect1, vect2)
 
 
-def divergence(vect: Vector, doit: bool = True) -> Expr:
+def divergence(vect: Vector | Dyadic, doit: bool = True) -> Expr:
     """
-    Returns the divergence of a vector field computed wrt the base
+    Returns the divergence of a vector/dyadic field computed wrt the base
     scalars of the given coordinate system.
 
     Parameters
     ==========
 
-    vector : Vector
-        The vector operand
+    vect : Vector | Dyadic
+        The vector/dyadic operand
 
     doit : bool
         If True, the result is returned after calling .doit() on
@@ -199,7 +264,10 @@ def divergence(vect: Vector, doit: bool = True) -> Expr:
     """
     coord_sys = _get_coord_systems(vect)
     if len(coord_sys) == 0:
-        return sp.S.Zero
+        if vect.is_Vector:
+            return sp.S.Zero
+        else:
+            return sp.vector.VectorZero()
     elif len(coord_sys) == 1:
         if isinstance(vect, Cross | Curl | Gradient):
             return Divergence(vect)
@@ -208,24 +276,62 @@ def divergence(vect: Vector, doit: bool = True) -> Expr:
         x = coord_sys.base_scalars()
         comp = coord_sys.get_contravariant_component
         sg = coord_sys.sg
-        res = sp.S.Zero
-        for i in range(len(x)):
-            res += Derivative(express(comp(vect, i) * sg, coord_sys), x[i]) / sg
+        if vect.is_Vector:
+            res = sp.S.Zero
+            for i in range(len(x)):
+                res += Derivative(express(comp(vect, i) * sg, coord_sys), x[i]) / sg
+        else:
+            bv = coord_sys.base_vectors()
+            ct = coord_sys.get_christoffel_second()
+            res = []
+            for i in range(len(x)):
+                r0 = sp.S.Zero
+                for j in range(len(x)):
+                    r0 += comp(vect, i, j).diff(x[j])
+                    for k in range(len(x)):
+                        r0 += ct[i, k, j] * comp(vect, k, j) + ct[j, k, j] * comp(
+                            vect, i, k
+                        )
+                res.append(r0 * bv[i])
+            res = VectorAdd(*res)
 
         if doit:
             return express(res.doit(), coord_sys)
         return res
+
+    elif len(coord_sys) == 2:
+        # For example a vector expressed using Cartesian basis vectors and 
+        # Curvilinear BaseScalars. Like CoordSys.position_vector(True)
+        coord_sys_arr = np.array(list(coord_sys))
+        not_cart = np.nonzero([not si.is_cartesian for si in coord_sys_arr])[0]
+        assert len(not_cart) == 1
+        return divergence(coord_sys_arr[not_cart[0]].from_cartesian(vect), doit=doit)
+
     else:
-        if isinstance(vect, Add | VectorAdd):
+        if isinstance(vect, DyadicAdd):
+            return VectorAdd.fromiter(divergence(i, doit=doit) for i in vect.args)
+        elif isinstance(vect, Add | VectorAdd):
             return Add.fromiter(divergence(i, doit=doit) for i in vect.args)
         elif isinstance(vect, Mul | VectorMul):
-            vector = [i for i in vect.args if isinstance(i, Vector | Cross | Gradient)][
-                0
-            ]
+            vector = [
+                i
+                for i in vect.args
+                if isinstance(i, Dyadic | Vector | Cross | Gradient)
+            ][0]
             scalar = Mul.fromiter(
-                i for i in vect.args if not isinstance(i, Vector | Cross | Gradient)
+                i
+                for i in vect.args
+                if not isinstance(i, Dyadic | Vector | Cross | Gradient)
             )
-            res = Dot(vector, gradient(scalar)) + scalar * divergence(vector, doit=doit)
+            if not vector.is_Vector:
+                res = sp.vector.VectorAdd(
+                    dot(vector, gradient(scalar)),
+                    scalar * divergence(vector, doit=doit),
+                )
+            else:
+                res = Dot(vector, gradient(scalar)) + scalar * divergence(
+                    vector, doit=doit
+                )
             if doit:
                 return res.doit()
             return res
@@ -235,16 +341,16 @@ def divergence(vect: Vector, doit: bool = True) -> Expr:
             raise Divergence(vect)
 
 
-def gradient(scalar_field: Expr, doit: bool = True) -> Vector:
+def gradient(field: Expr, doit: bool = True) -> Vector:
     """
-    Returns the vector gradient of a scalar field computed wrt the
+    Returns the gradient of a scalar/vector field computed wrt the
     base scalars of the given coordinate system.
 
     Parameters
     ==========
 
-    scalar_field : SymPy Expr
-        The scalar field to compute the gradient of
+    field : SymPy Expr
+        The field to compute the gradient of
 
     doit : bool
         If True, the result is returned after calling .doit() on
@@ -266,7 +372,7 @@ def gradient(scalar_field: Expr, doit: bool = True) -> Vector:
     theta*C.b_r + 1/r*C.b_theta
 
     """
-    coord_sys = _get_coord_systems(scalar_field)
+    coord_sys = _get_coord_systems(field)
 
     if len(coord_sys) == 0:
         return Vector.zero
@@ -275,33 +381,45 @@ def gradient(scalar_field: Expr, doit: bool = True) -> Vector:
         v = coord_sys.base_vectors()
         x = coord_sys.base_scalars()
 
-        if coord_sys.is_cartesian:
+        if coord_sys.is_cartesian and field.is_scalar:
             h = coord_sys.hi
-            vi = sp.vector.VectorZero()
+            vi = VectorZero()
             for i in range(len(h)):
-                vi += v[i] * Derivative(scalar_field, x[i]) / h[i]
+                vi += v[i] * field.diff(x[i]) / h[i]
 
             if doit:
                 return (vi).doit()
             return vi
         else:
             gt = coord_sys.get_contravariant_metric_tensor()
-            vi = sp.vector.VectorZero()
+            vi = []
             for i in range(gt.shape[0]):
                 for j in range(gt.shape[1]):
-                    vi = vi + v[j] * Derivative(scalar_field, x[i]) * gt[i, j]
+                    if field.is_Vector:
+                        vi.append(field.diff(x[i]) * gt[i, j] | v[j])
+                    else:
+                        vi.append(field.diff(x[i]) * gt[i, j] * v[j])
+            vi = DyadicAdd(*vi) if field.is_Vector else VectorAdd(*vi)
 
             if doit:
                 return vi.doit()
             return vi
 
+    elif len(coord_sys) == 2:
+        # For example a vector expressed using Cartesian basis vectors and 
+        # Curvilinear BaseScalars. Like CoordSys.position_vector(True)
+        coord_sys_arr = np.array(list(coord_sys))
+        not_cart = np.nonzero([not si.is_cartesian for si in coord_sys_arr])[0]
+        assert len(not_cart) == 1
+        return gradient(coord_sys_arr[not_cart[0]].from_cartesian(field), doit=doit)
+
     else:
-        if isinstance(scalar_field, Add | VectorAdd):
-            return VectorAdd.fromiter(gradient(i) for i in scalar_field.args)
-        if isinstance(scalar_field, Mul | VectorMul):
-            s = _split_mul_args_wrt_coordsys(scalar_field)
-            return VectorAdd.fromiter(scalar_field / i * gradient(i) for i in s)
-        return Gradient(scalar_field)
+        if isinstance(field, Add | VectorAdd):
+            return VectorAdd.fromiter(gradient(i, doit=doit) for i in field.args)
+        if isinstance(field, Mul | VectorMul):
+            s = _split_mul_args_wrt_coordsys(field)
+            return VectorAdd.fromiter(field / i * gradient(i, doit=doit) for i in s)
+        return Gradient(field)
 
 
 def curl(vect: Vector, doit: bool = True) -> Vector:
@@ -334,11 +452,12 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
     2*C.b_z
 
     """
+    assert vect.is_Vector
 
     coord_sys = _get_coord_systems(vect)
 
     if len(coord_sys) == 0:
-        return Vector.zero
+        return VectorZero()
     elif len(coord_sys) == 1:
         coord_sys = next(iter(coord_sys))
         v = coord_sys.base_vectors()
@@ -353,6 +472,15 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
         if doit:
             return outvec.doit()
         return outvec
+    
+    elif len(coord_sys) == 2:
+        # For example a vector expressed using Cartesian basis vectors and 
+        # Curvilinear BaseScalars. Like CoordSys.position_vector(True)
+        coord_sys_arr = np.array(list(coord_sys))
+        not_cart = np.nonzero([not si.is_cartesian for si in coord_sys_arr])[0]
+        assert len(not_cart) == 1
+        return curl(coord_sys_arr[not_cart[0]].from_cartesian(vect), doit=doit)
+
     else:
         if isinstance(vect, Add | VectorAdd):
             from sympy.vector import express
@@ -383,78 +511,21 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
 
 
 class Grad(Gradient):
-    # def __new__(cls, expr):
-    #    expr = sp.sympify(expr)
-    #    if isinstance(expr, sp.Add):
-    #        return sp.Add(*[Grad(e) for e in expr.args])
-    #    if isinstance(expr, sp.Mul):
-    #        u = expr.args[0]
-    #        v = sp.Mul(*expr.args[1:])
-    #        if u.is_Number:
-    #            return u*Grad(v)
-    #        return v*Grad(u) + u*Grad(v)
-    #    obj = Expr.__new__(cls, expr)
-    #    obj._expr = expr
-    #    return obj
-
     def doit(self, **hints: dict[Any]) -> Expr:
         return gradient(self._expr.doit(**hints), doit=True)
 
 
 class Div(Divergence):
-    # def __new__(cls, expr):
-    #    expr = sp.sympify(expr)
-    #    if isinstance(expr, sp.Add):
-    #        return sp.Add(*[Div(e) for e in expr.args])
-    #    if isinstance(expr, sp.Mul):
-    #        expr = expr.expand()
-    #        if isinstance(expr, sp.Add):
-    #            return sp.Add(*[Div(e) for e in expr.args])
-    #        vector = [i for i in expr.args if isinstance(i, (Vector, Cross, Grad))][0]
-    #        scalar = Mul.fromiter(i for i in expr.args if not isinstance(i, (Vector, Cross, Grad))) # noqa: E501
-    #        if scalar.is_Number:
-    #            return scalar*Div(vector)
-    #        return Dot(vector, Grad(scalar)) + scalar*Div(vector)
-    #
-    #    obj = Expr.__new__(cls, expr)
-    #    obj._expr = expr
-    #    return obj
-
     def doit(self, **hints: dict[Any]) -> Expr:
         return divergence(self._expr.doit(**hints), doit=True)
 
 
 class Curl(sympy_Curl):
-    # def __new__(cls, expr):
-    #    expr = sp.sympify(expr)
-    #    if isinstance(expr, sp.Add):
-    #        return sp.Add(*[Curl(e) for e in expr.args])
-    #    if isinstance(expr, sp.Mul):
-    #        expr = expr.expand()
-    #        if isinstance(expr, sp.Add):
-    #            return sp.Add(*[Curl(e) for e in expr.args])
-    #        vector = [i for i in expr.args if isinstance(i, (Vector, Cross, Grad))][0]
-    #        scalar = Mul.fromiter(i for i in expr.args if not isinstance(i, (Vector, Cross, Grad))) # noqa: E501
-    #        return Cross(Grad(scalar), vector) + scalar*Curl(vector)
-
     def doit(self, **hints: dict[Any]) -> Expr:
         return curl(self._expr.doit(**hints), doit=True)
 
 
 class Dot(sympy_Dot):
-    # def __new__(cls, expr1, expr2):
-    #    expr1 = sp.sympify(expr1)
-    #    expr2 = sp.sympify(expr2)
-    #    expr1, expr2 = sorted([expr1, expr2], key=sp.core.sorting.default_sort_key)
-    #    if isinstance(expr1, sp.Add):
-    #        return sp.Add(*[Dot(e, expr2) for e in expr1.args])
-    #    if isinstance(expr2, sp.Add):
-    #        return sp.Add(*[Dot(expr1, e) for e in expr2.args])
-    #    obj = Expr.__new__(cls, expr1, expr2)
-    #    obj._expr1 = expr1
-    #    obj._expr2 = expr2
-    #    return obj
-
     def doit(self, **hints: dict[Any]) -> Expr:
         return dot(self._expr1.doit(), self._expr2.doit())
 
@@ -493,6 +564,25 @@ class Cross(sympy_Cross):
         return cross(self._expr1.doit(), self._expr2.doit())
 
 
+def diff(self, *args, **kwargs):
+    """
+    Implements the SymPy diff routine, for vectors.
+
+    diff's documentation
+    ========================
+
+    """
+    for x in args:
+        if isinstance(x, sp.vector.basisdependent.BasisDependent):
+            raise TypeError("Invalid arg for differentiation")
+    # Move to Cartesian because the basis vectors are then constant and non-differentiable
+    # Alternatively use Christoffel symbols, but this gets messy for more than one args.
+    v0 = self._sys.to_cartesian(self)
+    diff_components = [df(v, *args, **kwargs) * k for k, v in v0.components.items()]
+    f = self._add_func(*diff_components)
+    return self._sys.from_cartesian(f)
+    
+
 sp.vector.vector.dot = dot
 sp.vector.vector.cross = cross
 sp.vector.operators.gradient = gradient
@@ -508,3 +598,4 @@ sp.vector.Dot = Dot
 sp.vector.Curl = Curl
 sp.vector.Gradient = Grad
 sp.vector.Divergence = Div
+sp.vector.basisdependent.BasisDependent.diff = diff

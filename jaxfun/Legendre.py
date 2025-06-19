@@ -45,28 +45,52 @@ class Legendre(Jacobi):
         Returns:
             float: Legendre series evaluated at X.
         """
-        if len(c) == 1:
-            # Multiply by 0 * x for shape
+        nd: int = len(c)
+        if nd == 1:
+            # Multiply by 0 * X for shape
             return c[0] + 0 * X
-        if len(c) == 2:
+        if nd == 2:
             return c[0] + c[1] * X
 
         def body_fun(i: int, val: tuple[int, Array, Array]) -> tuple[int, Array, Array]:
-            nd, c0, c1 = val
+            n, c0, c1 = val
 
             tmp = c0
-            nd = nd - 1
-            c0 = c[-i] - (c1 * (nd - 1)) / nd
-            c1 = tmp + (c1 * X * (2 * nd - 1)) / nd
+            n -= 1
+            c0 = c[-i] - (c1 * (n - 1)) / n
+            c1 = tmp + (c1 * X * (2 * n - 1)) / n
 
-            return nd, c0, c1
+            return n, c0, c1
 
-        nd = len(c)
-        c0 = jnp.ones_like(X) * c[-2]
-        c1 = jnp.ones_like(X) * c[-1]
+        c0: Array = jnp.ones_like(X) * c[-2]
+        c1: Array = jnp.ones_like(X) * c[-1]
 
-        _, c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (nd, c0, c1))
+        _, c0, c1 = jax.lax.fori_loop(3, nd + 1, body_fun, (nd, c0, c1))
         return c0 + c1 * X
+
+    @partial(jax.jit, static_argnums=0)
+    def evaluate2(self, X: float, c: Array) -> float:
+        """Alternative implementation of evaluate
+
+        Args:
+            X (float): Evaluation point in reference space
+            c (Array): Expansion coefficients
+
+        Returns:
+            float: Legendre series evaluated at X.
+        """
+        x0 = jnp.ones_like(X)
+
+        def inner_loop(
+            carry: tuple[float, float], i: int
+        ) -> tuple[tuple[float, float], Array]:
+            x0, x1 = carry
+            x2 = (x1 * X * (2 * i - 1) - x0 * (i - 1)) / i
+            return (x1, x2), x1 * c[i - 1]
+
+        _, xs = jax.lax.scan(inner_loop, (x0, X), jnp.arange(2, self.N + 1))
+
+        return jnp.sum(xs, axis=0) + c[0] 
 
     @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
@@ -99,7 +123,8 @@ class Legendre(Jacobi):
 
         _, xs = jax.lax.scan(inner_loop, (x0, X), jnp.arange(2, self.N + 1))
 
-        return jnp.hstack((x0, xs))
+        #return jnp.hstack((x0, xs))
+        return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
     def norm_squared(self) -> Array:
         return sp.lambdify(n, 2 / (2 * n + 1), modules="jax")(jnp.arange(self.N))

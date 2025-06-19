@@ -1,6 +1,6 @@
 from collections.abc import Callable, Iterable
 from functools import partial
-from typing import Any
+from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -9,20 +9,28 @@ from jax import Array
 from jax.experimental import sparse
 from jax.experimental.sparse import BCOO
 from scipy import sparse as scipy_sparse
-from sympy import Expr, Symbol
+from scipy.special import sph_harm
+from sympy import Expr, Number, Symbol
 
+Ynm = lambda n, m, x, y : sph_harm(m, n, y, x)
 n = Symbol("n", positive=True, integer=True)
 
 
 __all__ = (
     "diff",
     "diffx",
+    "Domain",
     "jacn",
     "matmat",
     "tosparse",
     "fromdense",
     "lambdify",
 )
+
+
+class Domain(NamedTuple):
+    lower: Number
+    upper: Number
 
 
 def ulp(x: float) -> float:
@@ -46,8 +54,8 @@ def diffx(
 
 
 def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
-    for _ in range(k):
-        fun = jax.jacfwd(fun)
+    for i in range(k):
+        fun = jax.jacrev(fun) if i % 2 else jax.jacfwd(fun) 
     return jax.vmap(fun, in_axes=0, out_axes=0)
 
 
@@ -85,6 +93,8 @@ def lambdify(
     system = expr.free_symbols.pop()._system
     expr = system.expr_base_scalar_to_psi(expr)
     args = system.expr_base_scalar_to_psi(args)
+    modules_default = ["jax", {'Ynm': Ynm}]
+    modules = modules_default if modules is None else [modules]+modules_default
     return sp.lambdify(
         args,
         expr,

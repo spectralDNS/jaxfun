@@ -8,7 +8,7 @@ from jax import Array
 from sympy import Expr, Function, Symbol
 from sympy.printing.pretty.stringpict import prettyForm
 
-from jaxfun.Basespace import BaseSpace
+from jaxfun.Basespace import OrthogonalSpace
 from jaxfun.composite import DirectSum
 from jaxfun.coordinates import CoordSys, latex_symbols
 from jaxfun.tensorproductspace import TensorProductSpace, VectorTensorProductSpace
@@ -94,6 +94,37 @@ class BasisFunction(Function):
         return functionspacedict[self.functionspace_name]
 
 
+class BasisFunctionNN(Function):
+    def __init__(self, coordinates, dummy: str) -> None:
+        self.dummy, self.fun_str = dummy.split("-")
+        self.base_scalars = coordinates
+        
+    def __new__(cls, coordinates, dummy: str) -> Function:
+        obj = Function.__new__(cls, *coordinates, dummy)
+        return obj
+
+    def __str__(self) -> str:
+        if len(self.args[1:]) == 1:
+            return "".join((self.fun_str, "(", str(self.args[0]), ")"))
+        else:
+            return "".join((self.fun_str, str(self.args[:-1])))
+        
+    def doit(self, **hints: dict) -> Function:
+        return self 
+    
+    def _pretty(self, printer: Any = None) -> str:
+        return prettyForm(self.__str__())
+
+    def _sympystr(self, printer: Any) -> str:
+        return self.__str__()
+    
+    def _latex(self, printer: Any = None) -> str:
+        if len(self.args[1:]) == 1:
+            return "".join((latex_symbols[self.fun_str], "(", str(self.args[0]), ")"))
+        else:
+            return "".join((latex_symbols[self.fun_str], str(self.args[:-1]))) 
+
+
 class trial(BasisFunction):
     pass
 
@@ -103,13 +134,13 @@ class test(BasisFunction):
 
 
 def _get_computational_function(
-    arg: str, V: BaseSpace | TensorProductSpace | VectorTensorProductSpace
+    arg: str, V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
 ) -> Expr:
     func = test if arg == "test" else trial
     args = V.system.base_scalars()
     functionspacedict[V.name] = V
     offset = V.dims if arg == "trial" else 0
-    if isinstance(V, BaseSpace):
+    if isinstance(V, OrthogonalSpace):
         assert args[0].is_Symbol
         return func(
             args[0], sp.Symbol(V.name + "-" + V.fun_str + "-" + str(offset) + "-0-0")
@@ -168,7 +199,7 @@ class TestFunction(Function):
 
     def __init__(
         self,
-        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
+        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
     ) -> None:
         self.functionspace = V
@@ -188,7 +219,7 @@ class TestFunction(Function):
 
     def __new__(
         cls,
-        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
+        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
     ) -> Function:
         coors = V.system
@@ -235,7 +266,7 @@ class TestFunction(Function):
 class TrialFunction(Function):
     def __init__(
         self,
-        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
+        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
     ) -> None:
         self.functionspace = V
@@ -243,7 +274,7 @@ class TrialFunction(Function):
 
     def __new__(
         cls,
-        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
+        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
     ) -> Function:
         coors = V.system
@@ -251,6 +282,7 @@ class TrialFunction(Function):
         return obj
 
     def doit(self, **hints: dict) -> Expr:
+        
         if isinstance(self.functionspace, DirectSum):
             return sp.Add(
                 *[
@@ -280,7 +312,7 @@ class TrialFunction(Function):
                     for i, s in enumerate(tensorspaces)
                 ]
             )
-
+        
         return _get_computational_function("trial", self.functionspace)
 
     def __str__(self) -> str:
@@ -315,7 +347,7 @@ class TrialFunction(Function):
 
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
-
+    
 
 class ScalarFunction(Function):
     def __new__(cls, name: str, system: CoordSys) -> Function:
@@ -384,7 +416,7 @@ class VectorFunction(Function):
 # Not sure this will be useful:
 class JAXArray(Function):
     def __new__(
-        cls, array: Array, V: BaseSpace | TensorProductSpace | DirectSum, name: str
+        cls, array: Array, V: OrthogonalSpace | TensorProductSpace | DirectSum, name: str
     ) -> Function:
         obj = Function.__new__(cls, sp.Dummy())
         obj.array = array
@@ -413,7 +445,7 @@ class JAXArray(Function):
 
 class Jaxf(Function):
     def __new__(
-        cls, array: Array, V: BaseSpace | TensorProductSpace | DirectSum, name: str
+        cls, array: Array, V: OrthogonalSpace | TensorProductSpace | DirectSum, name: str
     ) -> Function:
         obj = Function.__new__(cls, sp.Dummy())
         obj.array = array
@@ -444,7 +476,7 @@ class JAXFunction(Function):
     def __init__(
         self,
         array: Array,
-        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
+        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = "JAXFunction",
     ) -> None:
         self.array = array
@@ -454,7 +486,7 @@ class JAXFunction(Function):
     def __new__(
         cls,
         array: Array,
-        V: BaseSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
+        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
     ) -> Function:
         coors = V.system

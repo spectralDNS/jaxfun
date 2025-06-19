@@ -6,13 +6,13 @@ import numpy as np
 import sympy as sp
 from jax import Array
 
-from jaxfun.Basespace import BaseSpace, Domain
+from jaxfun.Basespace import Domain, OrthogonalSpace
 from jaxfun.coordinates import CoordSys
 
 # ruff: noqa: F706
 
 
-class Fourier(BaseSpace):
+class Fourier(OrthogonalSpace):
     """Space of all Fourier exponentials of order less than or equal to N"""
 
     def __init__(
@@ -25,7 +25,7 @@ class Fourier(BaseSpace):
     ) -> None:
         assert N % 2 == 0, "Fourier must use an even number of modes"
         domain = Domain(0, 2 * sp.pi) if domain is None else domain
-        BaseSpace.__init__(
+        OrthogonalSpace.__init__(
             self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
         self._k = {k: self.wavenumbers()[k].item() for k in range(N)}

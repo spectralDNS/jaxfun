@@ -17,8 +17,8 @@ from jaxfun.tensorproductspace import TensorProduct
 from jaxfun.utils.common import lambdify, ulp
 
 # Some quadrilateral
-#nodes = ((0, 0), (4, 0), (3, 2), (0, 3))
-nodes = ((0, 0), (1, 0), (2, 1), (0, 1))
+nodes = ((0, 0), (4, 0), (3, 2), (0, 3))
+#nodes = ((0, 0), (1, 0), (2, 1), (0, 1))
 #x0, x1, x2, x3  = sp.symbols('x:4', real=True)
 #y0, y1, y2, y3  = sp.symbols('y:4', real=True)
 #nodes =((x0, y0), (x1, y1), (x2, y2), (x3, y3))
@@ -39,7 +39,8 @@ sp.Lambda(
         sum([phi[i] * nodes[i][1] for i in range(4)]),
     ),
 ),
-    assumptions=sp.Q.positive(xi+1)&sp.Q.positive(eta+1)&sp.Q.positive(1-eta)&sp.Q.positive(1-xi)
+    assumptions=sp.Q.positive(xi+1)&sp.Q.positive(eta+1)&sp.Q.positive(1-eta)&sp.Q.positive(1-xi),
+    #replace=((x0, 0), (y0, 0), (x1, 4), (y1, 0), (x2, 3), (y2, 2), (x3, 0), (y3, 3))
 )
 
 M = 20
@@ -47,7 +48,6 @@ ue = (1 + xi**2) * (1 + eta**2)
 bcsx = {"left": {"D": ue.subs(xi, -1)}, "right": {"D": ue.subs(xi, 1)}}
 bcsy = {"left": {"D": ue.subs(eta, -1)}, "right": {"D": ue.subs(eta, 1)}}
 D0 = FunctionSpace(M, Chebyshev, bcsx, name="D0", fun_str="phi")
-
 D1 = FunctionSpace(M, Chebyshev, bcsy, name="D1", fun_str="psi")
 T = TensorProduct((D0, D1), system=C, name="T")
 

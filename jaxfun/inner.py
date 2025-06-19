@@ -14,7 +14,7 @@ from jaxfun.arguments import (
     test,
     trial,
 )
-from jaxfun.Basespace import BaseSpace
+from jaxfun.Basespace import OrthogonalSpace
 from jaxfun.composite import BCGeneric, Composite
 from jaxfun.coordinates import CoordSys
 from jaxfun.forms import get_basisfunctions, split, split_coeff
@@ -211,7 +211,7 @@ def inner(
 
             sc = 1
             bs.append(z)
-        if isinstance(test_space, BaseSpace):
+        if isinstance(test_space, OrthogonalSpace):
             bresults.append(bs[0])
         elif len(test_space) == 2:
             if isinstance(bs[0], tuple):
@@ -279,7 +279,7 @@ def process_results(
 
 
 def inner_bilinear(
-    ai: sp.Expr, v: BaseSpace, u: BaseSpace, sc: float | complex, multivar: bool
+    ai: sp.Expr, v: OrthogonalSpace, u: OrthogonalSpace, sc: float | complex, multivar: bool
 ) -> Array:
     vo = v.orthogonal
     uo = u.orthogonal
@@ -352,7 +352,7 @@ def inner_bilinear(
 
 def inner_linear(
     bi: sp.Expr,
-    v: BaseSpace,
+    v: OrthogonalSpace,
     sc: float | complex,
     multivar: bool,
 ) -> Array:
@@ -422,7 +422,7 @@ def assemble_multivar(
     return a.reshape((i * j, k * l))
 
 
-def project1D(ue: sp.Expr, V: BaseSpace) -> Array:
+def project1D(ue: sp.Expr, V: OrthogonalSpace) -> Array:
     u = TrialFunction(V)
     v = TestFunction(V)
     M, b = inner(v * (u - ue))
@@ -430,7 +430,7 @@ def project1D(ue: sp.Expr, V: BaseSpace) -> Array:
     return uh
 
 
-def project(ue: sp.Expr, V: BaseSpace) -> Array:
+def project(ue: sp.Expr, V: OrthogonalSpace) -> Array:
     u = TrialFunction(V)
     v = TestFunction(V)
     M, b = inner(v * (u - ue))

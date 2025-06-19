@@ -8,7 +8,7 @@ from jax import Array
 from scipy.special import roots_jacobi
 from sympy import Expr, Number, Symbol
 
-from jaxfun.Basespace import BaseSpace, Domain, n
+from jaxfun.Basespace import Domain, OrthogonalSpace, n
 from jaxfun.coordinates import CoordSys
 
 alf, bet = sp.symbols("a,b", real=True)
@@ -16,7 +16,7 @@ alf, bet = sp.symbols("a,b", real=True)
 # ruff: noqa: F706
 
 
-class Jacobi(BaseSpace):
+class Jacobi(OrthogonalSpace):
     """Space of all Jacobi polynomials of order less than or equal to N"""
 
     def __init__(
@@ -30,7 +30,7 @@ class Jacobi(BaseSpace):
         beta: Number = 0,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
-        BaseSpace.__init__(
+        OrthogonalSpace.__init__(
             self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
         self.alpha = alpha

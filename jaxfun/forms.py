@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import sympy as sp
 
 from jaxfun.arguments import (
+    BasisFunctionNN,
     Jaxf,
     JAXFunction,
     TestFunction,
@@ -10,16 +11,17 @@ from jaxfun.arguments import (
     trial,
 )
 from jaxfun.coordinates import CoordSys
+from jaxfun.pinns.module import NNFunction
 
 
 def get_basisfunctions(
     a: sp.Expr,
-) -> tuple[TestFunction | test | None, TrialFunction | trial | None]:
+) -> tuple[TestFunction | test | NNFunction | BasisFunctionNN | None, TrialFunction | trial | None]:
     test_found, trial_found = set(), set()
     for p in sp.core.traversal.iterargs(a):
         if isinstance(p, TrialFunction | trial):
             trial_found.add(p)
-        if isinstance(p, TestFunction | test):
+        if isinstance(p, TestFunction | test | NNFunction | BasisFunctionNN):
             test_found.add(p)
 
     match (len(test_found), len(trial_found)):
@@ -102,7 +104,7 @@ def split(forms: sp.Expr) -> dict:
             raise RuntimeError("Could not split form")
         return d
 
-    forms = forms.doit().expand()
+    forms = forms.doit().factor().expand()
     result = {"linear": [], "bilinear": []}
     if isinstance(forms, sp.Add):
         for arg in forms.args:
@@ -148,6 +150,7 @@ def add_result(res: list[dict], d: dict, system: CoordSys) -> list[dict]:
                 g["multivar"] = g["multivar"].factor()
             found_d = True
             break
+
     if not found_d:
         res.append(d)
     return res

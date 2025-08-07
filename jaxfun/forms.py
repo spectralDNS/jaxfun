@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import sympy as sp
 
 from jaxfun.arguments import (
-    BasisFunctionNN,
+    FlaxBasisFunction,
     Jaxf,
     JAXFunction,
     TestFunction,
@@ -11,17 +11,20 @@ from jaxfun.arguments import (
     trial,
 )
 from jaxfun.coordinates import CoordSys
-from jaxfun.pinns.module import NNFunction
+from jaxfun.pinns.module import FlaxFunction
 
 
 def get_basisfunctions(
     a: sp.Expr,
-) -> tuple[TestFunction | test | NNFunction | BasisFunctionNN | None, TrialFunction | trial | None]:
+) -> tuple[
+    TestFunction | test | FlaxFunction | FlaxBasisFunction | None,
+    TrialFunction | trial | None,
+]:
     test_found, trial_found = set(), set()
     for p in sp.core.traversal.iterargs(a):
         if isinstance(p, TrialFunction | trial):
             trial_found.add(p)
-        if isinstance(p, TestFunction | test | NNFunction | BasisFunctionNN):
+        if isinstance(p, TestFunction | test | FlaxFunction | FlaxBasisFunction):
             test_found.add(p)
 
     match (len(test_found), len(trial_found)):
@@ -36,6 +39,11 @@ def get_basisfunctions(
         case _:
             return None, None
 
+def get_system(a: sp.Expr) -> CoordSys:
+    for p in sp.core.traversal.iterargs(a):
+        if isinstance(p, CoordSys):
+            return p
+    raise RuntimeError("CoordSys not found")
 
 def split_coeff(c0: sp.Expr) -> dict:
     coeffs = {}
@@ -99,25 +107,15 @@ def split(forms: sp.Expr) -> dict:
             if len(scale) > 0:
                 d["multivar"] = sp.Mul(*scale)
             if len(jfun) > 0:
-                d["coeff"] = jfun[0] 
+                d["coeff"] = jfun[0]
         if d is None:
             raise RuntimeError("Could not split form")
         return d
 
-    forms = forms.doit().factor().expand()
     result = {"linear": [], "bilinear": []}
-    if isinstance(forms, sp.Add):
-        for arg in forms.args:
-            basisfunctions = get_basisfunctions(arg)
-            d = _split(arg)
-            if basisfunctions[1] in (None, set()):
-                result["linear"] = add_result(result["linear"], d, V.system)
-            else:
-                result["bilinear"] = add_result(result["bilinear"], d, V.system)
-
-    else:
-        basisfunctions = get_basisfunctions(forms)
-        d = _split(forms)
+    for arg in sp.Add.make_args(forms.doit().factor().expand()):
+        basisfunctions = get_basisfunctions(arg)
+        d = _split(arg)
         if basisfunctions[1] in (None, set()):
             result["linear"] = add_result(result["linear"], d, V.system)
         else:

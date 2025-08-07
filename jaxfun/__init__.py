@@ -1,4 +1,4 @@
-from jaxfun import Chebyshev, Jacobi, Legendre, Fourier
+from jaxfun import Chebyshev, Fourier, Jacobi, Legendre
 from jaxfun.arguments import JAXFunction, TestFunction, TrialFunction
 from jaxfun.Basespace import BaseSpace, Domain
 from jaxfun.coordinates import CoordSys, get_CoordSys
@@ -10,11 +10,13 @@ from jaxfun.operators import (
     Div,
     Dot,
     Grad,
+    Outer,
     cross,
     curl,
     divergence,
     dot,
     gradient,
+    outer,
 )
 from jaxfun.tensorproductspace import (
     TensorProduct,

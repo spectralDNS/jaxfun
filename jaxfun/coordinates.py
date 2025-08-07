@@ -18,8 +18,8 @@ from sympy.core.symbol import Str
 from sympy.core.sympify import _sympify
 from sympy.printing.precedence import PRECEDENCE
 from sympy.printing.pretty.stringpict import prettyForm
-from sympy.vector.dyadic import Dyadic
-from sympy.vector.vector import Vector
+from sympy.vector.dyadic import Dyadic, DyadicZero
+from sympy.vector.vector import Vector, VectorZero
 
 tensor_product_symbol = "\u2297"
 
@@ -538,8 +538,8 @@ class CoordSys(Basic):
         # We use covariant basis vectors, so the vector v already contains the
         # contravariant components.
         if v.is_Vector:
-            return v.components.get(self._covariant_basis_map[k], sp.S.Zero)
-        return v.components.get(self._covariant_basis_dyadic_map[k, j], sp.S.Zero)
+            return v.components.get(self._covariant_basis_map[k], VectorZero)
+        return v.components.get(self._covariant_basis_dyadic_map[k, j], DyadicZero)
 
     def get_covariant_component(self, v: Vector | Dyadic, k: int, j: int = None) -> Any:
         b = self.get_covariant_basis(True)
@@ -632,6 +632,7 @@ class CoordSys(Basic):
         self, as_coordsys3d: bool = False
     ) -> np.ndarray[Any, np.dtype[object]]:
         """Return covariant basisvectors"""
+        from jaxfun.operators import express
         if self._b is not None:
             if as_coordsys3d:
                 return self._b @ self._parent.base_vectors()[: self._b.shape[1]]
@@ -641,7 +642,7 @@ class CoordSys(Basic):
         for i, ti in enumerate(self.psi):
             for j, rj in enumerate(self.rv):
                 b[i, j] = rj.diff(ti, 1)
-                b[i, j] = self.refine_replace(self.simplify(b[i, j]))
+                b[i, j] = express(self.refine_replace(self.simplify(b[i, j])), self)
 
         self._b = b
         if as_coordsys3d:

@@ -1,4 +1,5 @@
 import collections
+from itertools import product
 from typing import Any
 
 import numpy as np
@@ -11,7 +12,7 @@ from sympy.core.function import diff as df
 from sympy.core.mul import Mul
 from sympy.vector import Dot as sympy_Dot
 from sympy.vector import VectorAdd, VectorMul, VectorZero
-from sympy.vector.dyadic import Dyadic, DyadicAdd, DyadicZero
+from sympy.vector.dyadic import Dyadic, DyadicAdd, DyadicMul, DyadicZero
 from sympy.vector.operators import Curl as sympy_Curl
 from sympy.vector.operators import (
     Divergence,
@@ -30,8 +31,10 @@ def eijk(i: int, j: int, k: int) -> int:
         return -1
     return 0
 
+
 def sign(i: int, j: int):
     return 1 if ((i + 1) % 3 == j) else -1
+
 
 def _get_coord_systems(expr: Expr) -> set:
     g = preorder_traversal(expr)
@@ -65,6 +68,46 @@ def express(expr, system):
     return expr.subs(subs_dict)
 
 
+def outer(vect1: Vector, vect2: Vector) -> Expr:
+    """
+    Returns outer product of two vectors.
+
+    Examples
+    ========
+
+    >>> from jaxfun import get_CoordSys
+    >>> from jaxfun.operators import dot
+    >>> import sympy as sp
+    >>> r, theta = sp.symbols("r,theta", real=True)
+    >>> P = get_CoordSys(
+    ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
+    ... )
+    >>> v1 = P.r * P.b_r
+    >>> v2 = P.theta * P.b_theta
+    >>> outer(v1, v2)
+    r*theta*(P.b_r⊗P.b_theta)
+
+    """
+    if isinstance(vect1, Add | VectorAdd):
+        return DyadicAdd.fromiter(outer(i, vect2) for i in vect1.args) 
+    if isinstance(vect2, Add | VectorAdd):
+        return DyadicAdd.fromiter(outer(vect1, i) for i in vect2.args)  
+    if isinstance(vect1, VectorMul):
+        v1, m1 = next(iter(vect1.components.items()))
+        return m1 * outer(v1, vect2)
+    if isinstance(vect2, VectorMul):
+        v2, m2 = next(iter(vect2.components.items()))
+        return m2 * outer(vect1, v2) 
+    
+    if (isinstance(vect1, VectorZero) or isinstance(vect2, VectorZero)):
+        return Dyadic.zero
+
+    args = [(v1 * v2) * BaseDyadic(k1, k2) for (k1, v1), (k2, v2)
+            in product(vect1.components.items(), vect2.components.items())]
+
+    return DyadicAdd(*args)
+
+    
 def cross(vect1: Vector, vect2: Vector) -> Vector:
     """
     Returns cross product of two vectors.
@@ -75,7 +118,7 @@ def cross(vect1: Vector, vect2: Vector) -> Vector:
     >>> from jaxfun import get_CoordSys
     >>> from jaxfun.operators import dot
     >>> import sympy as sp
-    >>> r, theta = sp.symbols("r,theta", real=True)
+    >>> r, theta, z = sp.symbols("r,theta,z", real=True)
     >>> C = get_CoordSys(
     ...     "C", sp.Lambda((r, theta, z), (r * sp.cos(theta), r * sp.sin(theta), z))
     ... )
@@ -127,9 +170,9 @@ def cross(vect1: Vector, vect2: Vector) -> Vector:
     return Cross(vect1, vect2)
 
 
-def dot(vect1: Vector, vect2: Vector) -> Expr:
+def dot(vect1: Vector | Dyadic, vect2: Vector | Dyadic) -> Expr:
     """
-    Returns dot product of two vectors.
+    Returns dot product of two tensors.
 
     Examples
     ========
@@ -147,11 +190,29 @@ def dot(vect1: Vector, vect2: Vector) -> Expr:
     r**2*theta + r
 
     """
+    rank: int = 0
+    if (isinstance(vect1, Vector) and isinstance(vect2, Dyadic)) or (
+        isinstance(vect1, Dyadic) and isinstance(vect2, Vector)
+    ):
+        rank = 1
+    elif isinstance(vect1, Dyadic) and isinstance(vect2, Dyadic):
+        rank = 2
 
-    if isinstance(vect1, Add | VectorAdd):
-        return Add.fromiter(dot(i, vect2) for i in vect1.args)
-    if isinstance(vect2, Add | VectorAdd):
-        return Add.fromiter(dot(vect1, i) for i in vect2.args)
+    if isinstance(vect1, Add | VectorAdd | DyadicAdd):
+        if rank == 0:
+            return Add.fromiter(dot(i, vect2) for i in vect1.args)
+        elif rank == 1:
+            return VectorAdd.fromiter(dot(i, vect2) for i in vect1.args) 
+        else:
+            return DyadicAdd.fromiter(dot(i, vect2) for i in vect1.args)
+    if isinstance(vect2, Add | VectorAdd | DyadicAdd):
+        if rank == 0:
+            return Add.fromiter(dot(vect1, i) for i in vect2.args)
+        elif rank == 1:
+            return VectorAdd.fromiter(dot(vect1, i) for i in vect2.args) 
+        else:
+            return DyadicAdd.fromiter(dot(vect1, i) for i in vect2.args)
+        
     if isinstance(vect1, BaseVector) and isinstance(vect2, BaseVector):
         if vect1._sys == vect2._sys:
             if vect1._sys.is_cartesian:
@@ -221,10 +282,10 @@ def dot(vect1: Vector, vect2: Vector) -> Expr:
         return DyadicZero()
     if isinstance(vect1, VectorZero) or isinstance(vect2, VectorZero):
         return sp.S.Zero
-    if isinstance(vect1, VectorMul):
+    if isinstance(vect1, VectorMul | DyadicMul):
         v1, m1 = next(iter(vect1.components.items()))
         return m1 * dot(v1, vect2)
-    if isinstance(vect2, VectorMul):
+    if isinstance(vect2, VectorMul | DyadicMul):
         v2, m2 = next(iter(vect2.components.items()))
         return m2 * dot(vect1, v2)
 
@@ -270,8 +331,8 @@ def divergence(vect: Vector | Dyadic, doit: bool = True) -> Expr:
             return sp.vector.VectorZero()
     elif len(coord_sys) == 1:
         if isinstance(vect, Cross | Curl | Gradient):
-            return Divergence(vect)
-        # vect should be a vector with Cartesian or covariant basis vectors
+            return Div(vect)
+        # vect should be a vector/dyadic with Cartesian or covariant basis vectors
         coord_sys = next(iter(coord_sys))
         x = coord_sys.base_scalars()
         comp = coord_sys.get_contravariant_component
@@ -300,7 +361,7 @@ def divergence(vect: Vector | Dyadic, doit: bool = True) -> Expr:
         return res
 
     elif len(coord_sys) == 2:
-        # For example a vector expressed using Cartesian basis vectors and 
+        # For example a vector expressed using Cartesian basis vectors and
         # Curvilinear BaseScalars. Like CoordSys.position_vector(True)
         coord_sys_arr = np.array(list(coord_sys))
         not_cart = np.nonzero([not si.is_cartesian for si in coord_sys_arr])[0]
@@ -336,9 +397,9 @@ def divergence(vect: Vector | Dyadic, doit: bool = True) -> Expr:
                 return res.doit()
             return res
         elif isinstance(vect, Cross | Curl | Gradient):
-            return Divergence(vect)
+            return Div(vect)
         else:
-            raise Divergence(vect)
+            raise Div(vect)
 
 
 def gradient(field: Expr, doit: bool = True) -> Vector:
@@ -369,7 +430,7 @@ def gradient(field: Expr, doit: bool = True) -> Vector:
     ... )
     >>> s = P.r * P.theta
     >>> gradient(s)
-    theta*C.b_r + 1/r*C.b_theta
+    theta*P.b_r + 1/r*P.b_theta
 
     """
     coord_sys = _get_coord_systems(field)
@@ -406,7 +467,7 @@ def gradient(field: Expr, doit: bool = True) -> Vector:
             return vi
 
     elif len(coord_sys) == 2:
-        # For example a vector expressed using Cartesian basis vectors and 
+        # For example a vector expressed using Cartesian basis vectors and
         # Curvilinear BaseScalars. Like CoordSys.position_vector(True)
         coord_sys_arr = np.array(list(coord_sys))
         not_cart = np.nonzero([not si.is_cartesian for si in coord_sys_arr])[0]
@@ -419,7 +480,7 @@ def gradient(field: Expr, doit: bool = True) -> Vector:
         if isinstance(field, Mul | VectorMul):
             s = _split_mul_args_wrt_coordsys(field)
             return VectorAdd.fromiter(field / i * gradient(i, doit=doit) for i in s)
-        return Gradient(field)
+        return Grad(field)
 
 
 def curl(vect: Vector, doit: bool = True) -> Vector:
@@ -449,7 +510,7 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
     ... )
     >>> v = P.b_r + P.b_theta
     >>> curl(v)
-    2*C.b_z
+    2*P.b_z
 
     """
     assert vect.is_Vector
@@ -472,9 +533,9 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
         if doit:
             return outvec.doit()
         return outvec
-    
+
     elif len(coord_sys) == 2:
-        # For example a vector expressed using Cartesian basis vectors and 
+        # For example a vector expressed using Cartesian basis vectors and
         # Curvilinear BaseScalars. Like CoordSys.position_vector(True)
         coord_sys_arr = np.array(list(coord_sys))
         not_cart = np.nonzero([not si.is_cartesian for si in coord_sys_arr])[0]
@@ -518,7 +579,7 @@ class Grad(Gradient):
 class Div(Divergence):
     def doit(self, **hints: dict[Any]) -> Expr:
         return divergence(self._expr.doit(**hints), doit=True)
-
+    
 
 class Curl(sympy_Curl):
     def doit(self, **hints: dict[Any]) -> Expr:
@@ -526,6 +587,14 @@ class Curl(sympy_Curl):
 
 
 class Dot(sympy_Dot):
+    def __new__(cls, expr1, expr2):
+        expr1 = sp.sympify(expr1)
+        expr2 = sp.sympify(expr2)
+        obj = Expr.__new__(cls, expr1, expr2)
+        obj._expr1 = expr1
+        obj._expr2 = expr2
+        return obj
+
     def doit(self, **hints: dict[Any]) -> Expr:
         return dot(self._expr1.doit(), self._expr2.doit())
 
@@ -537,24 +606,21 @@ class Cross(sympy_Cross):
     Examples
     ========
 
-    >>> from sympy.vector import CoordSys3D, Cross
-    >>> R = CoordSys("R")
-    >>> v1 = R.i + R.j + R.k
-    >>> v2 = R.x * R.i + R.y * R.j + R.z * R.k
+    >>> from jaxfun.arguments import CartCoordSys, x, y, z
+    >>> from jaxfun.operators import Cross
+    >>> N = CartCoordSys("N", (x, y, z))
+    >>> v1 = N.i + N.j + N.k
+    >>> v2 = N.x * N.i + N.y * N.j + N.z * N.k
     >>> Cross(v1, v2)
-    Cross(R.i + R.j + R.k, R.x*R.i + R.y*R.j + R.z*R.k)
+    Cross(N.i + N.j + N.k, x*N.i + y*N.j + z*N.k)
     >>> Cross(v1, v2).doit()
-    (-R.y + R.z)*R.i + (R.x - R.z)*R.j + (-R.x + R.y)*R.k
+    (-y + z)*N.i + (x - z)*N.j + (-x + y)*N.k
 
     """
 
     def __new__(cls, expr1, expr2):
         expr1 = sp.sympify(expr1)
         expr2 = sp.sympify(expr2)
-        if isinstance(expr1, sp.Add):
-            return sp.Add(*[Cross(e, expr2) for e in expr1.args])
-        if isinstance(expr2, sp.Add):
-            return sp.Add(*[Cross(expr1, e) for e in expr2.args])
         obj = Expr.__new__(cls, expr1, expr2)
         obj._expr1 = expr1
         obj._expr2 = expr2
@@ -562,6 +628,38 @@ class Cross(sympy_Cross):
 
     def doit(self, **hints: dict[Any]) -> Expr:
         return cross(self._expr1.doit(), self._expr2.doit())
+
+
+class Outer(Expr):
+    """
+    Represents unevaluated Outer product.
+
+    Examples
+    ========
+
+    >>> from jaxfun.arguments import CartCoordSys, x, y
+    >>> from jaxfun.operators import Outer
+    >>> N = CartCoordSys("N", (x, y))
+    >>> v1 = N.i
+    >>> v2 = N.j
+    >>> Outer(v1, v2) 
+    Outer(N.i, N.j)
+    >>> Outer(v1, v2).doit()
+    (N.i⊗N.j)
+
+    """
+
+    def __new__(cls, expr1, expr2):
+        expr1 = sp.sympify(expr1)
+        expr2 = sp.sympify(expr2)
+        expr1, expr2 = sorted([expr1, expr2], key=sp.default_sort_key)
+        obj = Expr.__new__(cls, expr1, expr2)
+        obj._expr1 = expr1
+        obj._expr2 = expr2
+        return obj
+
+    def doit(self, **hints):
+        return outer(self._expr1.doit(), self._expr2.doit())
 
 
 def diff(self, *args, **kwargs):
@@ -581,8 +679,54 @@ def diff(self, *args, **kwargs):
     diff_components = [df(v, *args, **kwargs) * k for k, v in v0.components.items()]
     f = self._add_func(*diff_components)
     return self._sys.from_cartesian(f)
-    
 
+
+# Regular doit() is problematic for vectors and dyadics when such are 
+# used unevaluated. For example 
+# from sympy.vector import CoordSys3D, Gardient
+# N = CoordSys3D("N")
+# f = N.x*N.y
+# h = 4*Gradient(f)
+# z = h.doit()
+## -> z = 4*N.x*N.j + 4*N.y*N.i
+# z.is_Vector
+## -> False
+# z is now a type Add and not VectorAdd. Using the doit function
+# below is a hack around it
+# from jaxfun.arguments import CartCoordSys, x, y, z
+# from jaxfun.operators import Grad
+# N = CartCoordSys("N", (x, y, z))
+# f = N.x*N.y
+# h = 4*Grad(f)
+# h.doit().is_Vector
+## -> True
+
+def doit(self, **hints):
+    if hints.get('deep', True):
+        terms = [term.doit(**hints) if isinstance(term, sp.Basic) else term
+                                     for term in self.args]
+        z = self.func(*terms)
+    else:
+        z = self
+    if isinstance(z, sp.Add):
+        # Check if should be VectorAdd
+        for p in sp.core.traversal.preorder_traversal(z):
+            if isinstance(p, BaseVector):
+                return sp.vector.VectorAdd.fromiter(z.args)
+            elif isinstance(p, BaseDyadic):
+                return sp.vector.DyadicAdd.fromiter(z.args) 
+            
+    elif isinstance(z, sp.Mul):
+        # Check if should be VectorMul
+        for p in sp.core.traversal.preorder_traversal(z):
+            if isinstance(p, BaseVector):
+                return sp.vector.VectorMul.fromiter(z.args)
+            elif isinstance(p, BaseDyadic):
+                return sp.vector.DyadicMul.fromiter(z.args)  
+    return z
+            
+
+sp.core.Expr.doit = doit
 sp.vector.vector.dot = dot
 sp.vector.vector.cross = cross
 sp.vector.operators.gradient = gradient
@@ -599,3 +743,4 @@ sp.vector.Curl = Curl
 sp.vector.Gradient = Grad
 sp.vector.Divergence = Div
 sp.vector.basisdependent.BasisDependent.diff = diff
+sp.vector.Dyadic.is_Dyadic = True

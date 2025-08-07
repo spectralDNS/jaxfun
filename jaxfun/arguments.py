@@ -10,7 +10,7 @@ from sympy.printing.pretty.stringpict import prettyForm
 
 from jaxfun.Basespace import OrthogonalSpace
 from jaxfun.composite import DirectSum
-from jaxfun.coordinates import CoordSys, latex_symbols
+from jaxfun.coordinates import BaseScalar, CoordSys, latex_symbols
 from jaxfun.tensorproductspace import TensorProductSpace, VectorTensorProductSpace
 
 x, y, z = sp.symbols("x,y,z", real=True)
@@ -26,7 +26,7 @@ class BasisFunction(Function):
     def __init__(self, coordinate: Symbol, dummy: Symbol) -> None:
         f, s, offset, rank, j = dummy.name.split("-")
         self.global_index = int(j)
-        self.local_index = coordinate._id[0]
+        self.local_index = getattr(coordinate, "_id", [0])[0]
         self.fun_str = s
         self.offset = int(offset)
         self.rank = int(rank)
@@ -94,13 +94,16 @@ class BasisFunction(Function):
         return functionspacedict[self.functionspace_name]
 
 
-class BasisFunctionNN(Function):
-    def __init__(self, coordinates, dummy: str) -> None:
-        self.dummy, self.fun_str = dummy.split("-")
+class FlaxBasisFunction(Function):
+    def __init__(self, *args) -> None:
+        coordinates = args[:-1]
+        dummy = args[-1]
+        global_index, dummy, self.fun_str = dummy.name.split("+")
+        self.global_index = int(global_index)
         self.base_scalars = coordinates
         
-    def __new__(cls, coordinates, dummy: str) -> Function:
-        obj = Function.__new__(cls, *coordinates, dummy)
+    def __new__(cls, *coordinates) -> Function:
+        obj = Function.__new__(cls, *coordinates)
         return obj
 
     def __str__(self) -> str:
@@ -377,7 +380,7 @@ class ScalarFunction(Function):
         return (
             latex_symbols[self.name] + f"({self.args[0]})"
             if len(self.args) == 2
-            else str(self.args[:-1])
+            else self.name + str(self.args[:-1])
         )
 
 
@@ -389,7 +392,7 @@ class VectorFunction(Function):
         return obj
 
     def __str__(self) -> str:
-        return self.name + str(self.args[:-1])
+        return "\033[1m%s\033[0m" % (self.name,) + str(self.args[:-1])
 
     def doit(self, **hints: dict) -> Function:
         """Return function in computational domain"""

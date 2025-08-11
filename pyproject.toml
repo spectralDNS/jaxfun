@@ -12,3 +12,8 @@ dependencies = [
     "sympy>=1.13.3",
     "flax>=0.10.1"
 ]
+
+[dependency-groups]
+dev = [
+    "ipython>=8.37.0",
+]

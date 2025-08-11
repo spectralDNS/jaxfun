@@ -52,6 +52,40 @@ class MLPSpace(BaseSpace):
 MLPVectorSpace = partial(MLPSpace, rank=1)
 
 
+class PirateSpace(MLPSpace):
+    """MLP alternative with PirateNet architecture."""
+
+    def __init__(
+        self,
+        hidden_size: list[int] | int,
+        dims: int = 1,
+        rank: int = 0,
+        system: CoordSys = None,
+        name: str = "PirateNet",
+        transient: bool = False,
+        offset: int = 0,
+        # PirateNet specific parameters
+        nonlinearity: float = 0.0,
+        periodicity: dict | None = None,
+        fourier_emb: dict | None = None,
+        pi_init: jnp.ndarray | None = None,
+    ) -> None:
+        super().__init__(
+            hidden_size=hidden_size,
+            dims=dims,
+            rank=rank,
+            system=system,
+            name=name,
+            transient=transient,
+            offset=offset,
+        )
+
+        self.nonlinearity = nonlinearity
+        self.periodicity = periodicity
+        self.fourier_emb = fourier_emb
+        self.pi_init = pi_init
+
+
 class CompositeMLP:
     def __init__(self, mlpspaces, name: str = "CMLP"):
         offset = 0
@@ -178,6 +212,7 @@ class FourierEmbs(nnx.Module):
 
         init = nnx.initializers.normal(embed_scale)
         k = init(rngs.params(), (in_dim, embed_dim // 2), jnp.float32)
+        self.embed_dim = embed_dim
         self.kernel = nnx.Param(k)
 
     def __call__(self, x: Array) -> Array:
@@ -207,10 +242,15 @@ class Embedding(nnx.Module):
         return x
 
 
+class PIModifiedBottleneck(nnx.Module):
+    def __init__(self, *args) -> None:
+        raise NotImplementedError
+
+
 class PirateNet(nnx.Module):
     def __init__(
         self,
-        V: BaseSpace | CompositeMLP,
+        V: PirateSpace,
         *,
         kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
         bias_init: Initializer = nnx.nn.linear.default_bias_init,
@@ -221,7 +261,69 @@ class PirateNet(nnx.Module):
             if isinstance(V.hidden_size, list | tuple)
             else [V.hidden_size]
         )
-        self.embedder = ...
+        # TODO: Need a smarter way to handle the input size at each step
+        self.embedder = Embedding(
+            periodicity=V.periodicity, fourier_emb=V.fourier_emb, rngs=rngs
+        )
+        in_dim = V.in_size
+        if V.periodicity is not None:
+            in_dim += len(V.periodicity.axis)
+        if V.fourier_emb is not None:
+            in_dim = V.fourier_emb.embed_dim
+
+        self.u_net = nnx.Linear(
+            in_dim,
+            hidden_size[0],
+            rngs=rngs,
+            bias_init=bias_init,
+            kernel_init=kernel_init,
+            param_dtype=float,
+            dtype=float,
+        )
+        self.v_net = nnx.Linear(
+            in_dim,
+            hidden_size[0],
+            rngs=rngs,
+            bias_init=bias_init,
+            kernel_init=kernel_init,
+            param_dtype=float,
+            dtype=float,
+        )
+        self.hidden_layers = []
+        for i in range(len(hidden_size)):
+            layer = PIModifiedBottleneck(
+                in_channels=hidden_size[i - 1] if i > 0 else in_dim,
+                out_channels=hidden_size[i],
+                kernel_init=kernel_init,
+                bias_init=bias_init,
+                rngs=rngs,
+            )
+            self.hidden_layers.append(layer)
+
+        if V.pi_init is not None:
+            raise NotImplementedError("Least squares initialization not implemented")
+        else:
+            self.output_layer = nnx.Linear(
+                hidden_size[-1],
+                V.out_size,
+                rngs=rngs,
+                bias_init=bias_init,
+                kernel_init=kernel_init,
+                param_dtype=float,
+                dtype=float,
+            )
+
+    def __call__(self, x: Array) -> Array:
+        x = self.embedder(x)
+        u = nnx.tanh(self.u_net(x))
+        v = nnx.tanh(self.v_net(x))
+
+        for layer in self.hidden_layers:
+            x = layer(x, u, v)
+
+        y = self.output_layer(x)
+
+        return x, y
 
 
 class SpectralModule(nnx.Module):

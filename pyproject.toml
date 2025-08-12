@@ -16,4 +16,8 @@ dependencies = [
 [dependency-groups]
 dev = [
     "ipython>=8.37.0",
+    "soap-jax",
 ]
+
+[tool.uv.sources]
+soap-jax = { git = "https://github.com/haydn-jones/SOAP_JAX" }

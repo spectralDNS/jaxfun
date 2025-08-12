@@ -48,7 +48,7 @@ class FourierEmbs(nnx.Module):
             raise ValueError("embed_dim must be even (cos & sin halves).")
 
         init = nnx.initializers.normal(embed_scale)
-        k = init(rngs.params(), (in_dim, embed_dim // 2), jnp.float32)
+        k = init(rngs(), (in_dim, embed_dim // 2), float)
         self.embed_dim = embed_dim
         self.kernel = nnx.Param(k)
 

@@ -170,8 +170,36 @@ class MLP(nnx.Module):
 
 
 class PIModifiedBottleneck(nnx.Module):
-    def __init__(self, *args) -> None:
-        raise NotImplementedError
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        nonlinearity: float,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        self.alpha = nnx.Param(nonlinearity)
+
+        self.layer1 = nnx.Linear(in_dim, hidden_dim, rngs=rngs)
+        self.layer2 = nnx.Linear(hidden_dim, hidden_dim, rngs=rngs)
+        self.layer3 = nnx.Linear(hidden_dim, output_dim, rngs=rngs)
+
+        self.act_fun = nnx.tanh
+
+    def __call__(self, x: Array, u: Array, v: Array) -> Array:
+        identity = x
+
+        x = self.act_fun(self.layer1(x))
+        x = x * u + (1 - x) * v
+
+        x = self.act_fun(self.layer2(x))
+        x = x * u + (1 - x) * v
+
+        x = self.act_fun(self.layer3(x))
+        x = self.alpha * x + (1 - self.alpha) * identity
+
+        return x
 
 
 class PirateNet(nnx.Module):
@@ -219,10 +247,9 @@ class PirateNet(nnx.Module):
         self.hidden_layers = []
         for i in range(len(hidden_size)):
             layer = PIModifiedBottleneck(
-                in_channels=hidden_size[i - 1] if i > 0 else in_dim,
-                out_channels=hidden_size[i],
-                kernel_init=kernel_init,
-                bias_init=bias_init,
+                in_dim=hidden_size[i - 1] if i > 0 else in_dim,
+                out_dim=hidden_size[i],
+                nonlinearity=V.nonlinearity,
                 rngs=rngs,
             )
             self.hidden_layers.append(layer)

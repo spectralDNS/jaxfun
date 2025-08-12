@@ -45,6 +45,7 @@ def test_period_embs_is_periodic():
     x1 = jnp.array([0.5, 1.0])
     x2 = jnp.array([0.5 + period, 1.0])
     x3 = jnp.array([0.5 - period, 1.0])
+
     out1 = pe(x1)
     out2 = pe(x2)
     out3 = pe(x3)

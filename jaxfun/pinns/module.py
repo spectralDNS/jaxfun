@@ -53,7 +53,7 @@ class MLPSpace(BaseSpace):
 MLPVectorSpace = partial(MLPSpace, rank=1)
 
 
-class PirateSpace(MLPSpace):
+class PirateSpace(BaseSpace):
     """MLP alternative with PirateNet architecture."""
 
     def __init__(
@@ -71,15 +71,21 @@ class PirateSpace(MLPSpace):
         fourier_emb: dict | None = None,
         pi_init: jnp.ndarray | None = None,
     ) -> None:
-        super().__init__(
-            hidden_size=hidden_size,
-            dims=dims,
-            rank=rank,
-            system=system,
-            name=name,
-            transient=transient,
-            offset=offset,
+        from jaxfun.arguments import CartCoordSys, x, y, z
+
+        self.in_size = dims + int(transient)
+        self.hidden_size = hidden_size
+        self.out_size = dims**rank
+        self.dims = dims
+        self.rank = rank
+        self.offset = offset
+        self.transient = transient
+        system = (
+            CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[dims])
+            if system is None
+            else system
         )
+        BaseSpace.__init__(self, system, name)
 
         self.nonlinearity = nonlinearity
         self.periodicity = periodicity
@@ -364,9 +370,11 @@ class FlaxFunction(Function):
         kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
         bias_init: Initializer = nnx.nn.linear.default_bias_init,
         rngs: nnx.Rngs,
-    ):
+    ) -> MLP | PirateNet | SpectralModule:
         if isinstance(V, MLPSpace | CompositeMLP):
             return MLP(V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)
+        elif isinstance(V, PirateSpace):
+            return PirateNet(V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)
         return SpectralModule(
             V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs
         )

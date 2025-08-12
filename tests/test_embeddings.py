@@ -2,16 +2,18 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from jaxfun.pinns.module import Embedding, FourierEmbs, PeriodEmbs
+from jaxfun.pinns.embeddings import Embedding, FourierEmbs, PeriodEmbs
 
 
 def test_period_embs_values_and_shape_nontrainable():
     # Embed only the first axis -> output is [cos(p*x0), sin(p*x0), x1]
-    pe = PeriodEmbs(period=(2.0,), axis=(0,), trainable=(False,))
+    period = 2.0
+    pe = PeriodEmbs(period=(period,), axis=(0,), trainable=(False,))
     x = jnp.array([0.5, 1.0])
     out = pe(x)
 
-    expected = jnp.array([jnp.cos(2.0 * x[0]), jnp.sin(2.0 * x[0]), x[1]])
+    val = x[0] * 2 * jnp.pi / period
+    expected = jnp.array([jnp.cos(val), jnp.sin(val), x[1]])
     assert out.shape == (3,)
     assert jnp.allclose(out, expected, atol=1e-7)
 
@@ -20,7 +22,8 @@ def test_period_embs_values_and_shape_nontrainable():
 
 
 def test_period_embs_trainable_param_and_call():
-    pe = PeriodEmbs(period=(3.0,), axis=(0,), trainable=(True,))
+    period = 3.0
+    pe = PeriodEmbs(period=(period,), axis=(0,), trainable=(True,))
     # Period is stored as nnx.Param when trainable
     p = pe._periods["period_0"]
     assert isinstance(p, nnx.Param)
@@ -28,9 +31,26 @@ def test_period_embs_trainable_param_and_call():
     # Forward pass works with trainable period
     x = jnp.array([0.25, -2.0])
     out = pe(x)
-    expected = jnp.array([jnp.cos(3.0 * x[0]), jnp.sin(3.0 * x[0]), x[1]])
+    val = x[0] * 2 * jnp.pi / period
+    expected = jnp.array([jnp.cos(val), jnp.sin(val), x[1]])
+
     assert out.shape == (3,)
     assert jnp.allclose(out, expected, atol=1e-7)
+
+
+def test_period_embs_is_periodic():
+    period = 2.0
+    pe = PeriodEmbs(period=(period,), axis=(0,), trainable=(False,))
+
+    x1 = jnp.array([0.5, 1.0])
+    x2 = jnp.array([0.5 + period, 1.0])
+    x3 = jnp.array([0.5 - period, 1.0])
+    out1 = pe(x1)
+    out2 = pe(x2)
+    out3 = pe(x3)
+
+    assert jnp.allclose(out1, out2, atol=1e-6), "Outputs should be periodic"
+    assert jnp.allclose(out1, out3, atol=1e-6), "Outputs should be periodic"
 
 
 def test_fourier_embs_shape_and_batch():

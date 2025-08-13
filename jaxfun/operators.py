@@ -10,6 +10,8 @@ from sympy.core.add import Add
 from sympy.core.function import Derivative
 from sympy.core.function import diff as df
 from sympy.core.mul import Mul
+from sympy.printing.latex import LatexPrinter
+from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import Dot as sympy_Dot
 from sympy.vector import VectorAdd, VectorMul, VectorZero
 from sympy.vector.dyadic import Dyadic, DyadicAdd, DyadicMul, DyadicZero
@@ -89,25 +91,29 @@ def outer(vect1: Vector, vect2: Vector) -> Expr:
 
     """
     if isinstance(vect1, Add | VectorAdd):
-        return DyadicAdd.fromiter(outer(i, vect2) for i in vect1.args) 
+        return DyadicAdd.fromiter(outer(i, vect2) for i in vect1.args)
     if isinstance(vect2, Add | VectorAdd):
-        return DyadicAdd.fromiter(outer(vect1, i) for i in vect2.args)  
+        return DyadicAdd.fromiter(outer(vect1, i) for i in vect2.args)
     if isinstance(vect1, VectorMul):
         v1, m1 = next(iter(vect1.components.items()))
         return m1 * outer(v1, vect2)
     if isinstance(vect2, VectorMul):
         v2, m2 = next(iter(vect2.components.items()))
-        return m2 * outer(vect1, v2) 
-    
-    if (isinstance(vect1, VectorZero) or isinstance(vect2, VectorZero)):
+        return m2 * outer(vect1, v2)
+
+    if isinstance(vect1, VectorZero) or isinstance(vect2, VectorZero):
         return Dyadic.zero
 
-    args = [(v1 * v2) * BaseDyadic(k1, k2) for (k1, v1), (k2, v2)
-            in product(vect1.components.items(), vect2.components.items())]
+    args = [
+        (v1 * v2) * BaseDyadic(k1, k2)
+        for (k1, v1), (k2, v2) in product(
+            vect1.components.items(), vect2.components.items()
+        )
+    ]
 
     return DyadicAdd(*args)
 
-    
+
 def cross(vect1: Vector, vect2: Vector) -> Vector:
     """
     Returns cross product of two vectors.
@@ -202,17 +208,17 @@ def dot(vect1: Vector | Dyadic, vect2: Vector | Dyadic) -> Expr:
         if rank == 0:
             return Add.fromiter(dot(i, vect2) for i in vect1.args)
         elif rank == 1:
-            return VectorAdd.fromiter(dot(i, vect2) for i in vect1.args) 
+            return VectorAdd.fromiter(dot(i, vect2) for i in vect1.args)
         else:
             return DyadicAdd.fromiter(dot(i, vect2) for i in vect1.args)
     if isinstance(vect2, Add | VectorAdd | DyadicAdd):
         if rank == 0:
             return Add.fromiter(dot(vect1, i) for i in vect2.args)
         elif rank == 1:
-            return VectorAdd.fromiter(dot(vect1, i) for i in vect2.args) 
+            return VectorAdd.fromiter(dot(vect1, i) for i in vect2.args)
         else:
             return DyadicAdd.fromiter(dot(vect1, i) for i in vect2.args)
-        
+
     if isinstance(vect1, BaseVector) and isinstance(vect2, BaseVector):
         if vect1._sys == vect2._sys:
             if vect1._sys.is_cartesian:
@@ -402,7 +408,7 @@ def divergence(vect: Vector | Dyadic, doit: bool = True) -> Expr:
             raise Div(vect)
 
 
-def gradient(field: Expr, doit: bool = True) -> Vector:
+def gradient(field: Expr, doit: bool = True, transpose: bool = False) -> Vector:
     """
     Returns the gradient of a scalar/vector field computed wrt the
     base scalars of the given coordinate system.
@@ -457,7 +463,10 @@ def gradient(field: Expr, doit: bool = True) -> Vector:
             for i in range(gt.shape[0]):
                 for j in range(gt.shape[1]):
                     if field.is_Vector:
-                        vi.append(field.diff(x[i]) * gt[i, j] | v[j])
+                        if transpose:
+                            vi.append(v[j] | field.diff(x[i]) * gt[i, j])
+                        else:
+                            vi.append(field.diff(x[i]) * gt[i, j] | v[j])
                     else:
                         vi.append(field.diff(x[i]) * gt[i, j] * v[j])
             vi = DyadicAdd(*vi) if field.is_Vector else VectorAdd(*vi)
@@ -472,15 +481,23 @@ def gradient(field: Expr, doit: bool = True) -> Vector:
         coord_sys_arr = np.array(list(coord_sys))
         not_cart = np.nonzero([not si.is_cartesian for si in coord_sys_arr])[0]
         assert len(not_cart) == 1
-        return gradient(coord_sys_arr[not_cart[0]].from_cartesian(field), doit=doit)
+        return gradient(
+            coord_sys_arr[not_cart[0]].from_cartesian(field),
+            doit=doit,
+            transpose=transpose,
+        )
 
     else:
         if isinstance(field, Add | VectorAdd):
-            return VectorAdd.fromiter(gradient(i, doit=doit) for i in field.args)
+            return VectorAdd.fromiter(
+                gradient(i, doit=doit, transpose=transpose) for i in field.args
+            )
         if isinstance(field, Mul | VectorMul):
             s = _split_mul_args_wrt_coordsys(field)
-            return VectorAdd.fromiter(field / i * gradient(i, doit=doit) for i in s)
-        return Grad(field)
+            return VectorAdd.fromiter(
+                field / i * gradient(i, doit=doit, transpose=transpose) for i in s
+            )
+        return Grad(field, transpose=transpose)
 
 
 def curl(vect: Vector, doit: bool = True) -> Vector:
@@ -572,14 +589,45 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
 
 
 class Grad(Gradient):
+    def __new__(cls, expr, transpose: bool = False):
+        expr = sp.sympify(expr)
+        obj = Expr.__new__(cls, expr)
+        obj._expr = expr
+        obj._transpose = False if expr.is_scalar else transpose
+        return obj
+
     def doit(self, **hints: dict[Any]) -> Expr:
-        return gradient(self._expr.doit(**hints), doit=True)
+        return gradient(self._expr.doit(**hints), doit=True, transpose=self._transpose)
+
+    @property
+    def T(self):
+        if self._expr.doit().is_scalar:
+            return self
+        return Grad(self._expr, transpose=not self._transpose)
+
+    def __str__(self) -> str:
+        w = "Grad(" + self._expr.__str__() + ")"
+        return w + ".T" if self._transpose else w
+
+    def _pretty(self, printer: Any = None) -> str:
+        return prettyForm(self.__str__())
+
+    def _sympystr(self, printer: Any) -> str:
+        return self.__str__()
+
+    def _latex(self, printer: Any = None) -> str:
+        printer = printer if printer is not None else LatexPrinter() 
+        return (
+            f"\\displaystyle (\\nabla {printer._print(self._expr)})^T"
+            if self._transpose
+            else f"\\displaystyle \\nabla {printer._print(self._expr)}"
+        )
 
 
 class Div(Divergence):
     def doit(self, **hints: dict[Any]) -> Expr:
         return divergence(self._expr.doit(**hints), doit=True)
-    
+
 
 class Curl(sympy_Curl):
     def doit(self, **hints: dict[Any]) -> Expr:
@@ -642,7 +690,7 @@ class Outer(Expr):
     >>> N = CartCoordSys("N", (x, y))
     >>> v1 = N.i
     >>> v2 = N.j
-    >>> Outer(v1, v2) 
+    >>> Outer(v1, v2)
     Outer(N.i, N.j)
     >>> Outer(v1, v2).doit()
     (N.i⊗N.j)
@@ -652,11 +700,17 @@ class Outer(Expr):
     def __new__(cls, expr1, expr2):
         expr1 = sp.sympify(expr1)
         expr2 = sp.sympify(expr2)
-        expr1, expr2 = sorted([expr1, expr2], key=sp.default_sort_key)
         obj = Expr.__new__(cls, expr1, expr2)
         obj._expr1 = expr1
         obj._expr2 = expr2
         return obj
+
+    @property
+    def T(self):
+        return Outer(self._expr2, self._expr1)
+
+    def transpose(self):
+        return self.T
 
     def doit(self, **hints):
         return outer(self._expr1.doit(), self._expr2.doit())
@@ -681,8 +735,8 @@ def diff(self, *args, **kwargs):
     return self._sys.from_cartesian(f)
 
 
-# Regular doit() is problematic for vectors and dyadics when such are 
-# used unevaluated. For example 
+# Regular doit() is problematic for vectors and dyadics when such are
+# used unevaluated. For example
 # from sympy.vector import CoordSys3D, Gardient
 # N = CoordSys3D("N")
 # f = N.x*N.y
@@ -701,10 +755,13 @@ def diff(self, *args, **kwargs):
 # h.doit().is_Vector
 ## -> True
 
+
 def doit(self, **hints):
-    if hints.get('deep', True):
-        terms = [term.doit(**hints) if isinstance(term, sp.Basic) else term
-                                     for term in self.args]
+    if hints.get("deep", True):
+        terms = [
+            term.doit(**hints) if isinstance(term, sp.Basic) else term
+            for term in self.args
+        ]
         z = self.func(*terms)
     else:
         z = self
@@ -714,17 +771,17 @@ def doit(self, **hints):
             if isinstance(p, BaseVector):
                 return sp.vector.VectorAdd.fromiter(z.args)
             elif isinstance(p, BaseDyadic):
-                return sp.vector.DyadicAdd.fromiter(z.args) 
-            
+                return sp.vector.DyadicAdd.fromiter(z.args)
+
     elif isinstance(z, sp.Mul):
         # Check if should be VectorMul
         for p in sp.core.traversal.preorder_traversal(z):
             if isinstance(p, BaseVector):
                 return sp.vector.VectorMul.fromiter(z.args)
             elif isinstance(p, BaseDyadic):
-                return sp.vector.DyadicMul.fromiter(z.args)  
+                return sp.vector.DyadicMul.fromiter(z.args)
     return z
-            
+
 
 sp.core.Expr.doit = doit
 sp.vector.vector.dot = dot

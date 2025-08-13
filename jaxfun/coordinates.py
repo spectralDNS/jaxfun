@@ -94,7 +94,7 @@ class BaseScalar(AtomicExpr):
     is_symbol = True
     is_Symbol = True
     is_real = True
-    is_positive = True
+    #is_positive = True
 
     @property
     def free_symbols(self) -> set:

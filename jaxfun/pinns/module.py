@@ -53,7 +53,13 @@ MLPVectorSpace = partial(MLPSpace, rank=1)
 
 
 class CompositeMLP:
-    def __init__(self, mlpspaces, name: str = "CMLP"):
+    """Multilayer perceptron composite functionspace
+
+    To be used for multiple outputs, or multiple coupled
+    equations.
+    """
+
+    def __init__(self, mlpspaces: list[MLPSpace], name: str = "CMLP") -> None:
         offset = 0
         newspaces = []
         self.name = name
@@ -70,15 +76,18 @@ class CompositeMLP:
             )
             offset += newmlp.out_size
             newspaces.append(newmlp)
+            assert newmlp.hidden_size == mlpspaces[0].hidden_size
+            assert newmlp.dims == mlpspaces[0].dims
+
         self.mlp = newspaces
         self.in_size = self.mlp[0].in_size
         self.hidden_size = self.mlp[0].hidden_size
         self.out_size = sum([p.out_size for p in self.mlp])
 
-    def __getitem__(self, i: int):
+    def __getitem__(self, i: int) -> MLPSpace:
         return self.mlp[i]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.mlp)
 
 
@@ -126,6 +135,11 @@ class MLP(nnx.Module):
             param_dtype=float,
             dtype=float,
         )
+
+    def size(self) -> int:
+        gd, st = nnx.split(self)
+        pyt, ret = jax.flatten_util.ravel_pytree(st)
+        return pyt.shape[0]
 
     def __call__(self, x: Array) -> Array:
         x = nnx.tanh(self.linear_in(x))
@@ -204,12 +218,24 @@ class FlaxFunction(Function):
         )
 
     @property
-    def rank(self):
+    def rank(self) -> int:
         return (
             None
             if isinstance(self.functionspace, CompositeMLP)
             else self.functionspace.rank
         )
+
+    @property
+    def is_scalar(self) -> bool:
+        return self.rank == 0
+
+    @property
+    def is_Vector(self) -> bool:
+        return self.rank == 1
+
+    @property
+    def is_Dyadic(self) -> bool:
+        return self.rank == 2
 
     @staticmethod
     def get_flax_module(
@@ -218,7 +244,7 @@ class FlaxFunction(Function):
         kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
         bias_init: Initializer = nnx.nn.linear.default_bias_init,
         rngs: nnx.Rngs,
-    ):
+    ) -> nnx.Module:
         if isinstance(V, MLPSpace | CompositeMLP):
             return MLP(V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)
         return SpectralModule(
@@ -299,7 +325,7 @@ class FlaxFunction(Function):
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
 
-    def __call__(self, x):
+    def __call__(self, x: Array) -> Array:
         y = self.module(x)
         V = self.functionspace
         if self.rank == 0:
@@ -321,7 +347,11 @@ def derivative_count(f: sp.Expr, k: set[int]):
 
 class Residual:
     def __init__(
-        self, f: sp.Expr, x: Array, target: Array = 0, weights: Array = 1
+        self,
+        f: sp.Expr,
+        x: Array,
+        target: Array | Number = 0,
+        weights: Array | Number = 1,
     ) -> None:
         from jaxfun.forms import get_system
 
@@ -334,12 +364,15 @@ class Residual:
         self.derivatives = set()
         [derivative_count(h, self.derivatives) for h in expand(f)]
 
-    def __call__(self, model, Js):
+    def __call__(self, model, Js) -> Array:
         return sum([eq(model, self.x, Js) - self.target for eq in self.eqs])
 
 
 class LSQR:
-    def __init__(self, fs: tuple[tuple[sp.Expr, Array, Array | None]]):
+    def __init__(
+        self,
+        fs: tuple[tuple[sp.Expr, Array, Array | Number | None, Array | Number | None]],
+    ):
         from jaxfun.forms import get_basisfunctions
         from jaxfun.operators import Dot
 
@@ -376,30 +409,32 @@ class LSQR:
         self.Js = Js
         self.xs = xs
 
-    def update_gradients(self, model):
+    def update_gradients(self, model: nnx.Module):
         for k in self.Js:
             self.Js[k] = jacn(model, k[1])(self.xs[k[0]])
 
-    def compute_residual_i(self, model, i: int):
+    def compute_residual_i(self, model: nnx.Module, i: int) -> Array:
         self.update_gradients(model)
         return self.residuals[i](model, self.Js)
 
-    def __call__(self, model):
+    def __call__(self, model: nnx.Module) -> float:
         self.update_gradients(model)
         return sum(
             [(eq.weights * eq(model, self.Js) ** 2).mean() for eq in self.residuals]
         )
 
 
-def get_fn(f: sp.Expr, s: tuple[BaseScalar]) -> Callable[[nnx.Module, Array], Array]:
-    """Return Sympy Expr as function evaluated by Module and spatial coordinates
+def get_fn(
+    f: sp.Expr, s: tuple[BaseScalar]
+) -> Callable[[nnx.Module, Array, dict], Array]:
+    """Return Sympy Expr as function evaluated by Module, points and gradients
 
     Args:
         f (sp.Expr)
-        w (FlaxFunction)
+        s (x, y, ...)
 
     Returns:
-        Callable[[nnx.Module, Array], Array]
+        Callable[[nnx.Module, Array, dict], Array]
     """
     from jaxfun.forms import get_basisfunctions
 
@@ -461,26 +496,36 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar]) -> Callable[[nnx.Module, Array], Ar
     # )
 
 
-def get_derivative(mod, x, Js, i: int = 0, k: int = 1, variables: tuple[int] = [0]):
+def get_derivative(
+    mod: nnx.Module,
+    x: Array,
+    Js: dict,
+    i: int = 0,
+    k: int = 1,
+    variables: tuple[int] = [0],
+) -> Array:
     var: tuple[int] = tuple((slice(None), i)) + tuple(int(s._id[0]) for s in variables)
     return Js[(id(x), k)][var]
 
 
-def eval_derivative(mod, x, Js, i: int = 0, k: int = 1, variables: tuple[int] = [0]):
+def eval_derivative(
+    mod: nnx.Module,
+    x: Array,
+    Js: dict,
+    i: int = 0,
+    k: int = 1,
+    variables: tuple[int] = [0],
+) -> Array:
     var: tuple[int] = tuple((slice(None), i)) + tuple(int(s._id[0]) for s in variables)
     val = jacn(mod, k)(x)
     return val[var]
 
 
-def train(eqs: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
+def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
     @nnx.jit
     def train_step(model: nnx.Module, optimizer: nnx.Optimizer) -> float:
         gd, state = nnx.split(model, nnx.Param)
         unravel = jax.flatten_util.ravel_pytree(state)[1]
-
-        def loss_fn(model: nnx.Module) -> Array:
-            return eqs(model)
-
         loss, gradients = nnx.value_and_grad(loss_fn)(model)
         loss_fn_split = lambda state: loss_fn(nnx.merge(gd, state))
         H_loss_fn = lambda flat_weights: loss_fn(nnx.merge(gd, unravel(flat_weights)))
@@ -496,74 +541,83 @@ def train(eqs: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
     return train_step
 
 
-def run_optimizer(t, model, opt, num, name, epoch_print=100):
+def run_optimizer(
+    train: Callable[[nnx.Module, nnx.Optimizer], float],
+    model: nnx.Module,
+    opt: nnx.Optimizer,
+    num: int,
+    name: str,
+    epoch_print: int = 100,
+    abs_limit_loss: float = ulp(1000),
+    abs_limit_change: float = ulp(100),
+):
     loss_old = 1.0
     for epoch in range(1, num + 1):
-        loss = t(model, opt)
+        loss = train(model, opt)
         if epoch % epoch_print == 0:
             print(f"Epoch {epoch} {name}, loss: {loss}")
-        if abs(loss) < ulp(1000) or abs(loss - loss_old) < ulp(100):
+        if abs(loss) < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
             break
         loss_old = loss
 
 
-def train_CPINN(
-    eqs: list[Residual],
-) -> Callable[[nnx.Module, nnx.Optimizer, nnx.Module, nnx.Optimizer], float]:
-    @nnx.jit
-    def train_step(
-        model: nnx.Module,
-        optimizer: nnx.Optimizer,
-        discriminator: nnx.Module,
-        optd: nnx.Optimizer,
-    ) -> tuple[float, float]:
-        gd, state = nnx.split(model)
-        unravel = jax.flatten_util.ravel_pytree(state)[1]
-
-        def loss_fn(mod: nnx.Module) -> Array:
-            return sum([((eq(mod) * discriminator(eq.x)) ** 2).mean() for eq in eqs])
-
-        loss, gradients = nnx.value_and_grad(loss_fn)(model)
-        loss_fn_split = lambda state: loss_fn(nnx.merge(gd, state))
-        H_loss_fn = lambda flat_weights: loss_fn(nnx.merge(gd, unravel(flat_weights)))
-        optimizer.update(
-            gradients,
-            grad=gradients,
-            value_fn=loss_fn_split,
-            value=loss,
-            H_loss_fn=H_loss_fn,
-        )
-
-        def loss_fn_d(disc: nnx.Module) -> Array:
-            return sum([((eq(disc) * model(eq.x)) ** 2).mean() for eq in eqs])
-
-        gdd, stated = nnx.split(discriminator)
-        unraveld = jax.flatten_util.ravel_pytree(stated)[1]
-        lossd, gradd = nnx.value_and_grad(loss_fn_d)(discriminator)
-        loss_fn_d_split = lambda state: loss_fn_d(nnx.merge(gdd, state))
-        H_loss_fn_d = lambda flat_weights: loss_fn_d(
-            nnx.merge(gdd, unraveld(flat_weights))
-        )
-        gradd = jax.tree_util.tree_map(lambda p: -p, gradd)
-        optd.update(
-            gradd,
-            grad=gradd,
-            value_fn=loss_fn_d_split,
-            value=lossd,
-            H_loss_fn=H_loss_fn_d,
-        )
-
-        return loss, lossd
-
-    return train_step
-
-
-def run_optimizer_d(t, model, opt, disc, optd, num, name, epoch_print=100):
-    loss_old = 1.0
-    for epoch in range(1, num + 1):
-        loss, lossd = t(model, opt, disc, optd)
-        if epoch % epoch_print == 0:
-            print(f"Epoch {epoch} {name}, loss: {loss}, lossd: {lossd}")
-        if abs(loss) < ulp(1000) or abs(loss - loss_old) < ulp(1):
-            break
-        loss_old = loss
+# def train_CPINN(
+#    eqs: list[Residual],
+# ) -> Callable[[nnx.Module, nnx.Optimizer, nnx.Module, nnx.Optimizer], float]:
+#    @nnx.jit
+#    def train_step(
+#        model: nnx.Module,
+#        optimizer: nnx.Optimizer,
+#        discriminator: nnx.Module,
+#        optd: nnx.Optimizer,
+#    ) -> tuple[float, float]:
+#        gd, state = nnx.split(model)
+#        unravel = jax.flatten_util.ravel_pytree(state)[1]
+#
+#        def loss_fn(mod: nnx.Module) -> Array:
+#            return sum([((eq(mod) * discriminator(eq.x)) ** 2).mean() for eq in eqs])
+#
+#        loss, gradients = nnx.value_and_grad(loss_fn)(model)
+#        loss_fn_split = lambda state: loss_fn(nnx.merge(gd, state))
+#        H_loss_fn = lambda flat_weights: loss_fn(nnx.merge(gd, unravel(flat_weights)))
+#        optimizer.update(
+#            gradients,
+#            grad=gradients,
+#            value_fn=loss_fn_split,
+#            value=loss,
+#            H_loss_fn=H_loss_fn,
+#        )
+#
+#        def loss_fn_d(disc: nnx.Module) -> Array:
+#            return sum([((eq(disc) * model(eq.x)) ** 2).mean() for eq in eqs])
+#
+#        gdd, stated = nnx.split(discriminator)
+#        unraveld = jax.flatten_util.ravel_pytree(stated)[1]
+#        lossd, gradd = nnx.value_and_grad(loss_fn_d)(discriminator)
+#        loss_fn_d_split = lambda state: loss_fn_d(nnx.merge(gdd, state))
+#        H_loss_fn_d = lambda flat_weights: loss_fn_d(
+#            nnx.merge(gdd, unraveld(flat_weights))
+#        )
+#        gradd = jax.tree_util.tree_map(lambda p: -p, gradd)
+#        optd.update(
+#            gradd,
+#            grad=gradd,
+#            value_fn=loss_fn_d_split,
+#            value=lossd,
+#            H_loss_fn=H_loss_fn_d,
+#        )
+#
+#        return loss, lossd
+#
+#    return train_step
+#
+#
+# def run_optimizer_d(t, model, opt, disc, optd, num, name, epoch_print=100):
+#    loss_old = 1.0
+#    for epoch in range(1, num + 1):
+#        loss, lossd = t(model, opt, disc, optd)
+#        if epoch % epoch_print == 0:
+#            print(f"Epoch {epoch} {name}, loss: {loss}, lossd: {lossd}")
+#        if abs(loss) < ulp(1000) or abs(loss - loss_old) < ulp(1):
+#            break
+#        loss_old = loss

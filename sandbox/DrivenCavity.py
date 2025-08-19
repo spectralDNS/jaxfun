@@ -1,6 +1,10 @@
+# ruff: noqa: E402
 import time
 
 import jax
+
+jax.config.update("jax_enable_x64", True)
+
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,14 +20,15 @@ from jaxfun.pinns.hessoptimizer import hess
 from jaxfun.pinns.mesh import Rectangle
 from jaxfun.pinns.module import (
     LSQR,
+    Comp,
     CompositeMLP,
     FlaxFunction,
     MLPSpace,
     run_optimizer,
     train,
 )
+from jaxfun.utils.common import ulp
 
-jax.config.update("jax_enable_x64", True)
 dtype = jnp.float64
 
 print("JAX running on", jax.devices()[0].platform.upper())
@@ -41,22 +46,39 @@ xyp = jnp.array([[0.0, 0.0]])
 wqi = mesh.get_weights_inside_domain("legendre")
 wqb = mesh.get_weights_on_domain("legendre")
 
-V = MLPSpace([16], dims=2, rank=1)  # Vector space for velocity
-Q = MLPSpace([16], dims=2, rank=0)  # Scalar space for pressure
-VQ = CompositeMLP((V, Q), name="VQ")  # Coupled space V x Q
+V = MLPSpace([16], dims=2, rank=1, name="V")  # Vector space for velocity
+Q = MLPSpace([14], dims=2, rank=0, name="Q")  # Scalar space for pressure
+#VQ = CompositeMLP((V, Q))  # Coupled space V x Q
+#up = FlaxFunction(
+#    VQ,
+#    "up",
+#    rngs=nnx.Rngs(2002),
+#    kernel_init=nnx.initializers.xavier_normal(dtype=float),
+#)
+#u, p = up
+#module = up.module
 
-up = FlaxFunction(
-    VQ,
-    "up",
+u = FlaxFunction(
+    V,
+    "u",
     rngs=nnx.Rngs(2002),
     kernel_init=nnx.initializers.xavier_normal(dtype=float),
 )
-u, p = up
 
-x, y = VQ.system.base_scalars()
+p = FlaxFunction(
+    Q,
+    "p",
+    rngs=nnx.Rngs(2002),
+    kernel_init=nnx.initializers.xavier_normal(dtype=float),
+)
+
+module = Comp([u, p])
+
+x, y = V.system.base_scalars()
+i, j = V.system.base_vectors()
 
 eq1 = Dot(Grad(u), u) - nu * Div(Grad(u)) + Grad(p)
-#eq1 = Div(Outer(u, u)) - nu * Div(Grad(u)) + Grad(p)
+# eq1 = Div(Outer(u, u)) - nu * Div(Grad(u)) + Grad(p)
 
 eq2 = Div(u)
 
@@ -70,11 +92,9 @@ loss_fn = LSQR(
         (eq1, xyi, 0, wqi),  # momentum vector equation
         (eq2, xyi, 0, wqi),  # Divergence constraint
         (u, xyb, ub, wqb),  # Boundary conditions on u
-        (p, xyp, 0, 10),   # Pressure pin-point
+        (p, xyp, 0, 10),  # Pressure pin-point
     )
 )
-
-i, j = VQ.system.base_vectors()
 
 opt = optax.adam(optax.linear_schedule(1e-3, 1e-4, 10000))
 optlbfgs = optax.lbfgs(
@@ -86,35 +106,37 @@ opthess = hess(
     cg_max_iter=100,
     linesearch=optax.scale_by_zoom_linesearch(25, max_learning_rate=1.0),
 )
-opt_adam = nnx.Optimizer(up.module, opt)
+opt_adam = nnx.Optimizer(module, opt)
 
 train_step = train(loss_fn)
 t0 = time.time()
-run_optimizer(train_step, up.module, opt_adam, 1000, "Adam", 100)
+run_optimizer(train_step, module, opt_adam, 1000, "Adam", 100)
 print("Time Adam", time.time() - t0)
 
 # up.module = freeze_layer(up.module, "hidden", 0)
 # up.module = freeze_layer(up.module, "hidden", 1)
 
-opt_lbfgs = nnx.Optimizer(up.module, optlbfgs)
+opt_lbfgs = nnx.Optimizer(module, optlbfgs)
 t1 = time.time()
-run_optimizer(train_step, up.module, opt_lbfgs, 1000, "LBFGS", 100)
+run_optimizer(
+    train_step, module, opt_lbfgs, 1000, "LBFGS", 100, abs_limit_change=ulp(1)
+)
 print("Time LBFGS", time.time() - t1)
 
 # up.module = unfreeze_layer(up.module, "hidden", 0)
 
-opt_hess = nnx.Optimizer(up.module, opthess)
+opt_hess = nnx.Optimizer(module, opthess)
 t2 = time.time()
-run_optimizer(train_step, up.module, opt_hess, 10, "Hess", 1)
+run_optimizer(train_step, module, opt_hess, 10, "Hess", 1, abs_limit_change=ulp(1))
 print("Time Hess", time.time() - t2)
 
-gd, st = nnx.split(up.module)
+gd, st = nnx.split(module)
 pyt, ret = jax.flatten_util.ravel_pytree(st)
 
 yj = jnp.linspace(-1, 1, 50)
 xx, yy = jnp.meshgrid(yj, yj, sparse=False, indexing="ij")
 z = jnp.column_stack((xx.ravel(), yy.ravel()))
-uvp = up.module(z)
+uvp = module(z)
 plt.contourf(xx, yy, uvp[:, 0].reshape(xx.shape), 100)
 plt.figure()
 plt.contourf(xx, yy, uvp[:, 1].reshape(xx.shape), 100)
@@ -130,7 +152,7 @@ pts = cen.points
 xO = jnp.array(pts[:, 0], dtype=float)
 yO = jnp.array(pts[:, 1], dtype=float)
 zO = jnp.column_stack((xO, yO))
-U0 = up.module(zO)
+U0 = module(zO)
 U1 = jnp.array(m.cell_data["U"], dtype=float)
 UC = jnp.array(
     np.load(

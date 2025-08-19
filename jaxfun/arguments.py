@@ -1,11 +1,13 @@
 import itertools
 from functools import partial
+from numbers import Number
 from typing import Any
 
 import jax
 import sympy as sp
 from jax import Array
 from sympy import Expr, Function, Symbol
+from sympy.printing import latex
 from sympy.printing.pretty.stringpict import prettyForm
 
 from jaxfun.Basespace import OrthogonalSpace
@@ -61,10 +63,10 @@ class BasisFunction(Function):
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
 
-    def _latex(self, printer: Any = None) -> str:
+    def _latex(self, printer: Any = None, exp: Number = None) -> str:
         index = indices[self.local_index + self.offset]
         if self.rank == 0:
-            return "".join(
+            s = "".join(
                 (
                     latex_symbols[self.fun_str],
                     "_",
@@ -75,7 +77,7 @@ class BasisFunction(Function):
                 )
             )
         elif self.rank == 1:
-            return "".join(
+            s = "".join(
                 (
                     latex_symbols[self.fun_str],
                     "_",
@@ -88,6 +90,7 @@ class BasisFunction(Function):
                     ")",
                 )
             )
+        return s if exp is None else f"\\left({s}\\right)^{{{exp}}}"
 
     @property
     def functionspace(self):
@@ -96,36 +99,54 @@ class BasisFunction(Function):
 
 class FlaxBasisFunction(Function):
     def __init__(self, *args) -> None:
+        from jaxfun.pinns.module import moduledict
+        
         coordinates = args[:-1]
         dummy = args[-1]
-        global_index, dummy, self.fun_str = dummy.name.split("+")
+        global_index, functionspace_name, rank_parent, name = dummy.name.split("+")
+        self.name = name
+        self._latex_form = latex_symbols[name]
+        self.functionspace_name = functionspace_name
+        self._module = moduledict[functionspace_name]
+        if int(rank_parent) > 0:
+            name, base_vector_name = name.split("_")
+            self._latex_form = name + f"_{{{latex_symbols[base_vector_name]}}}"
         self.global_index = int(global_index)
         self.base_scalars = coordinates
-        
+
     def __new__(cls, *coordinates) -> Function:
         obj = Function.__new__(cls, *coordinates)
         return obj
+    
+    @property
+    def module(self):
+        return self._module
+    
+    @property
+    def functionspace(self):
+        return functionspacedict[self.functionspace_name]
 
     def __str__(self) -> str:
         if len(self.args[1:]) == 1:
-            return "".join((self.fun_str, "(", str(self.args[0]), ")"))
+            return "".join((self.name, "(", str(self.args[0]), ")"))
         else:
-            return "".join((self.fun_str, str(self.args[:-1])))
-        
+            return "".join((self.name, str(self.args[:-1])))
+
     def doit(self, **hints: dict) -> Function:
-        return self 
-    
+        return self
+
     def _pretty(self, printer: Any = None) -> str:
         return prettyForm(self.__str__())
 
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
-    
-    def _latex(self, printer: Any = None) -> str:
+
+    def _latex(self, printer: Any = None, exp: Number = None) -> str:
+        form = self._latex_form if exp is None else self._latex_form + f"^{{{exp}}}"
         if len(self.args[1:]) == 1:
-            return "".join((latex_symbols[self.fun_str], "(", str(self.args[0]), ")"))
+            return "".join((form, "(", latex_symbols[self.args[0].name], ")"))
         else:
-            return "".join((latex_symbols[self.fun_str], str(self.args[:-1]))) 
+            return "".join((form, latex(self.args[:-1])))
 
 
 class trial(BasisFunction):
@@ -226,7 +247,7 @@ class TestFunction(Function):
         name: str = None,
     ) -> Function:
         coors = V.system
-        obj = Function.__new__(cls, *(coors._cartesian_xyz + [sp.Symbol(V.name)]))
+        obj = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)]))
         return obj
 
     def doit(self, **hints: dict) -> Expr:
@@ -281,11 +302,10 @@ class TrialFunction(Function):
         name: str = None,
     ) -> Function:
         coors = V.system
-        obj = Function.__new__(cls, *(coors._cartesian_xyz + [sp.Symbol(V.name)]))
+        obj = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)]))
         return obj
 
     def doit(self, **hints: dict) -> Expr:
-        
         if isinstance(self.functionspace, DirectSum):
             return sp.Add(
                 *[
@@ -315,7 +335,7 @@ class TrialFunction(Function):
                     for i, s in enumerate(tensorspaces)
                 ]
             )
-        
+
         return _get_computational_function("trial", self.functionspace)
 
     def __str__(self) -> str:
@@ -350,11 +370,11 @@ class TrialFunction(Function):
 
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
-    
+
 
 class ScalarFunction(Function):
     def __new__(cls, name: str, system: CoordSys) -> Function:
-        obj = Function.__new__(cls, *(system._cartesian_xyz + [sp.Dummy()]))
+        obj = Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
         obj.system = system
         obj.name = name.lower()
         return obj
@@ -386,7 +406,7 @@ class ScalarFunction(Function):
 
 class VectorFunction(Function):
     def __new__(cls, name: str, system: CoordSys) -> Function:
-        obj = Function.__new__(cls, *(system._cartesian_xyz + [sp.Dummy()]))
+        obj = Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
         obj.system = system
         obj.name = name.lower()
         return obj
@@ -416,10 +436,14 @@ class VectorFunction(Function):
     def _latex(self, printer: Any = None) -> str:
         return r"\mathbf{{%s}}" % (latex_symbols[self.name],) + str(self.args[:-1])  # noqa: UP031
 
+
 # Not sure this will be useful:
 class JAXArray(Function):
     def __new__(
-        cls, array: Array, V: OrthogonalSpace | TensorProductSpace | DirectSum, name: str
+        cls,
+        array: Array,
+        V: OrthogonalSpace | TensorProductSpace | DirectSum,
+        name: str,
     ) -> Function:
         obj = Function.__new__(cls, sp.Dummy())
         obj.array = array
@@ -448,7 +472,10 @@ class JAXArray(Function):
 
 class Jaxf(Function):
     def __new__(
-        cls, array: Array, V: OrthogonalSpace | TensorProductSpace | DirectSum, name: str
+        cls,
+        array: Array,
+        V: OrthogonalSpace | TensorProductSpace | DirectSum,
+        name: str,
     ) -> Function:
         obj = Function.__new__(cls, sp.Dummy())
         obj.array = array
@@ -493,7 +520,7 @@ class JAXFunction(Function):
         name: str = None,
     ) -> Function:
         coors = V.system
-        obj = Function.__new__(cls, *(coors._cartesian_xyz + [sp.Symbol(V.name)]))
+        obj = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)]))
         return obj
 
     def backward(self):
@@ -537,12 +564,31 @@ class JAXFunction(Function):
 
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
- 
+
     @partial(jax.jit, static_argnums=0)
     def __matmul__(self, a: Array) -> Array:
         return self.array @ a
-    
+
     @partial(jax.jit, static_argnums=0)
     def __rmatmul__(self, a: Array) -> Array:
         return a @ self.array
-    
+
+
+class Constant(sp.Symbol):
+    def __new__(cls, name: str, val: Number, **assumptions):
+        obj = super().__new__(cls, name, **assumptions)
+        obj.val = val
+        return obj
+
+    def doit(self) -> Number:
+        return self.val
+
+
+class Identity(sp.Expr):
+    def __init__(self, sys: CoordSys):
+        self.sys = sys
+
+    def doit(self):
+        return sum(
+            self.sys.base_dyadics()[:: self.sys.dims + 1], sp.vector.DyadicZero()
+        )

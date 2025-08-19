@@ -1,3 +1,13 @@
+"""
+Here we extend the Sympy operators Divergence, Gradient, Curl, Cross and Dot
+using curvilinear coordinates. The expressions used for computing the operators
+have been collected from the online book
+
+[1] Kelly, PA. Mechanics Lecture Notes: An introduction to Solid Mechanics.  
+Available from http://homepages.engineering.auckland.ac.nz/~pkel015/SolidMechanicsBooks/index.html
+
+"""
+
 import collections
 from itertools import product
 from typing import Any
@@ -20,7 +30,6 @@ from sympy.vector.operators import (
     Divergence,
     Gradient,
 )
-from sympy.vector.vector import Cross as sympy_Cross
 from sympy.vector.vector import Vector
 
 from jaxfun.coordinates import BaseDyadic, BaseScalar, BaseVector, CoordSys
@@ -34,7 +43,7 @@ def eijk(i: int, j: int, k: int) -> int:
     return 0
 
 
-def sign(i: int, j: int):
+def sign(i: int, j: int) -> int:
     return 1 if ((i + 1) % 3 == j) else -1
 
 
@@ -48,14 +57,14 @@ def _get_coord_systems(expr: Expr) -> set:
     return frozenset(ret)
 
 
-def _split_mul_args_wrt_coordsys(expr):
+def _split_mul_args_wrt_coordsys(expr: Expr) -> list[Expr]:
     d = collections.defaultdict(lambda: sp.S.One)
     for i in expr.args:
         d[_get_coord_systems(i)] *= i
     return list(d.values())
 
 
-def express(expr, system):
+def express(expr: Expr, system: CoordSys) -> Expr:
     system_set = set()
     expr = sp.sympify(expr)
     # Substitute all the coordinate variables
@@ -78,7 +87,7 @@ def outer(vect1: Vector, vect2: Vector) -> Expr:
     ========
 
     >>> from jaxfun import get_CoordSys
-    >>> from jaxfun.operators import dot
+    >>> from jaxfun.operators import outer
     >>> import sympy as sp
     >>> r, theta = sp.symbols("r,theta", real=True)
     >>> P = get_CoordSys(
@@ -124,7 +133,7 @@ def cross(vect1: Vector, vect2: Vector) -> Vector:
     >>> from jaxfun import get_CoordSys
     >>> from jaxfun.operators import dot
     >>> import sympy as sp
-    >>> r, theta, z = sp.symbols("r,theta,z", real=True)
+    >>> r, theta, z = sp.symbols("r,theta,z", real=True, positive=True)
     >>> C = get_CoordSys(
     ...     "C", sp.Lambda((r, theta, z), (r * sp.cos(theta), r * sp.sin(theta), z))
     ... )
@@ -155,12 +164,8 @@ def cross(vect1: Vector, vect2: Vector) -> Vector:
                 sg = vect1._sys.sg
                 n3 = ({0, 1, 2}.difference({n1, n2})).pop()
                 ei = eijk(n1, n2, n3)
-                C = vect1._sys
-                b = C.base_vectors()
-                s = gt[n3, 0] * b[0]
-                for i in range(1, gt.shape[1]):
-                    s += gt[n3, i] * b[i]
-                return sg * ei * s
+                b = vect1._sys.base_vectors()
+                return sg * ei * gt[n3] @ b
 
         return cross(vect1._sys.to_cartesian(vect1), vect2._sys.to_cartesian(vect2))
 
@@ -186,7 +191,7 @@ def dot(vect1: Vector | Dyadic, vect2: Vector | Dyadic) -> Expr:
     >>> from jaxfun import get_CoordSys
     >>> from jaxfun.operators import dot
     >>> import sympy as sp
-    >>> r, theta = sp.symbols("r,theta", real=True)
+    >>> r, theta = sp.symbols("r,theta", real=True, positive=True)
     >>> P = get_CoordSys(
     ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
     ... )
@@ -303,6 +308,8 @@ def divergence(vect: Vector | Dyadic, doit: bool = True) -> Expr:
     Returns the divergence of a vector/dyadic field computed wrt the base
     scalars of the given coordinate system.
 
+    Reference Eqs. (1.18.27), (1.18.28) and (1.18.18) in [1]
+
     Parameters
     ==========
 
@@ -320,7 +327,7 @@ def divergence(vect: Vector | Dyadic, doit: bool = True) -> Expr:
     >>> from jaxfun import get_CoordSys
     >>> from jaxfun.operators import divergence
     >>> import sympy as sp
-    >>> r, theta = sp.symbols("r,theta", real=True)
+    >>> r, theta = sp.symbols("r,theta", real=True, positive=True)
     >>> P = get_CoordSys(
     ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
     ... )
@@ -413,6 +420,8 @@ def gradient(field: Expr, doit: bool = True, transpose: bool = False) -> Vector:
     Returns the gradient of a scalar/vector field computed wrt the
     base scalars of the given coordinate system.
 
+    Reference [1] Eqs. (1.18.23), (1.18.25)
+
     Parameters
     ==========
 
@@ -424,13 +433,16 @@ def gradient(field: Expr, doit: bool = True, transpose: bool = False) -> Vector:
         each component. Else, the returned expression contains
         Derivative instances
 
+    transpose : bool
+        Whether to transpose the gradient of a vector
+
     Examples
     ========
 
     >>> from jaxfun import get_CoordSys
     >>> from jaxfun.operators import gradient
     >>> import sympy as sp
-    >>> r, theta = sp.symbols("r,theta", real=True)
+    >>> r, theta = sp.symbols("r,theta", real=True, positive=True)
     >>> P = get_CoordSys(
     ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
     ... )
@@ -505,6 +517,8 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
     Returns the curl of a vector field computed wrt the base scalars
     of the given coordinate system.
 
+    Reference [1] Eq. (1.18.29)
+
     Parameters
     ==========
 
@@ -521,7 +535,7 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
     >>> from jaxfun import get_CoordSys
     >>> from jaxfun.operators import curl
     >>> import sympy as sp
-    >>> r, theta, z = sp.symbols("r,theta,z", real=True)
+    >>> r, theta, z = sp.symbols("r,theta,z", real=True, positive=True)
     >>> P = get_CoordSys(
     ...     "P", sp.Lambda((r, theta, z), (r * sp.cos(theta), r * sp.sin(theta), z))
     ... )
@@ -599,6 +613,9 @@ class Grad(Gradient):
     def doit(self, **hints: dict[Any]) -> Expr:
         return gradient(self._expr.doit(**hints), doit=True, transpose=self._transpose)
 
+    def __hash__(self):
+        return Gradient.__hash__(self) + int(self._transpose)
+
     @property
     def T(self):
         if self._expr.doit().is_scalar:
@@ -616,7 +633,7 @@ class Grad(Gradient):
         return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
-        printer = printer if printer is not None else LatexPrinter() 
+        printer = printer if printer is not None else LatexPrinter()
         return (
             f"\\displaystyle (\\nabla {printer._print(self._expr)})^T"
             if self._transpose
@@ -644,10 +661,11 @@ class Dot(sympy_Dot):
         return obj
 
     def doit(self, **hints: dict[Any]) -> Expr:
-        return dot(self._expr1.doit(), self._expr2.doit())
+        return dot(self._expr1.doit(**hints), self._expr2.doit(**hints))
 
 
-class Cross(sympy_Cross):
+# Note: Sympy subclasses Cross(Vector), which breaks operators for unevaluated expressions
+class Cross(Expr):
     """
     Represents unevaluated Cross product.
 
@@ -675,7 +693,7 @@ class Cross(sympy_Cross):
         return obj
 
     def doit(self, **hints: dict[Any]) -> Expr:
-        return cross(self._expr1.doit(), self._expr2.doit())
+        return cross(self._expr1.doit(**hints), self._expr2.doit(**hints))
 
 
 class Outer(Expr):
@@ -715,6 +733,17 @@ class Outer(Expr):
     def doit(self, **hints):
         return outer(self._expr1.doit(), self._expr2.doit())
 
+
+class Source(Expr):
+
+    def __new__(cls, expr):
+        expr = sp.sympify(expr)
+        obj = Expr.__new__(cls, expr)
+        obj._expr = expr
+        return obj 
+    
+    def doit(self, **hints):
+        return self._expr.doit(**hints)
 
 def diff(self, *args, **kwargs):
     """

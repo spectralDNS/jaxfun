@@ -18,8 +18,8 @@ from sympy.core.symbol import Str
 from sympy.core.sympify import _sympify
 from sympy.printing.precedence import PRECEDENCE
 from sympy.printing.pretty.stringpict import prettyForm
-from sympy.vector.dyadic import Dyadic
-from sympy.vector.vector import Vector
+from sympy.vector.dyadic import Dyadic, DyadicAdd
+from sympy.vector.vector import Vector, VectorAdd
 
 tensor_product_symbol = "\u2297"
 
@@ -219,7 +219,6 @@ class BaseDyadic(Dyadic, AtomicExpr):
         obj._latex_form = (
             r"\left("
             + vector1._latex_form
-            + r"{\middle}"
             + tensor_product_symbol
             + vector2._latex_form
             + r"\right)"
@@ -687,6 +686,14 @@ class CoordSys(Basic):
         return ct
 
     def simplify(self, expr: Expr) -> Expr:
+        if isinstance(expr, VectorAdd):
+            return VectorAdd.fromiter(
+                self.simplify(f) * b for b, f in expr.components.items()
+            )
+        elif isinstance(expr, DyadicAdd):
+            return DyadicAdd.fromiter(
+                self.simplify(f) * b for b, f in expr.components.items()
+            )
         return self.expr_psi_to_base_scalar(
             sp.simplify(self.expr_base_scalar_to_psi(expr), measure=self._measure)
         )

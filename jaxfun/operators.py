@@ -764,7 +764,7 @@ def diff(self, *args, **kwargs):
     return self._sys.from_cartesian(f)
 
 
-# Regular doit() is problematic for vectors and dyadics when such are
+# Regular doit() is problematic for vectors and dyadics when these are
 # used unevaluated. For example
 # from sympy.vector import CoordSys3D, Gardient
 # N = CoordSys3D("N")
@@ -774,8 +774,8 @@ def diff(self, *args, **kwargs):
 ## -> z = 4*N.x*N.j + 4*N.y*N.i
 # z.is_Vector
 ## -> False
-# z is now a type Add and not VectorAdd. Using the doit function
-# below is a hack around it
+# z is now a type Add and not VectorAdd as it should be. 
+# Using the doit function below is a hack around it
 # from jaxfun.arguments import CartCoordSys, x, y, z
 # from jaxfun.operators import Grad
 # N = CartCoordSys("N", (x, y, z))

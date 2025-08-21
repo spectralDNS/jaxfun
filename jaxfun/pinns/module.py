@@ -11,11 +11,12 @@ from flax import nnx
 from flax.typing import Initializer
 from jax import Array
 from sympy import Function
+from sympy.printing import latex
 from sympy.printing.pretty.stringpict import prettyForm
+from sympy.vector import VectorAdd
 
-from jaxfun.arguments import FlaxBasisFunction
 from jaxfun.Basespace import BaseSpace
-from jaxfun.coordinates import BaseScalar, CoordSys
+from jaxfun.coordinates import BaseScalar, CoordSys, latex_symbols
 from jaxfun.utils.common import lambdify, ulp
 
 moduledict = {}
@@ -146,7 +147,8 @@ class MLP(nnx.Module):
             dtype=float,
         )
 
-    def size(self) -> int:
+    @property
+    def dim(self) -> int:
         gd, st = nnx.split(self)
         pyt, ret = jax.flatten_util.ravel_pytree(st)
         return pyt.shape[0]
@@ -171,6 +173,10 @@ class SpectralModule(nnx.Module):
         self.space = basespace
         self.space.offset = 0
 
+    @property
+    def dim(self) -> int:
+        return self.space.dim
+
     def __call__(self, x: Array) -> Array:
         # return self.space.evaluate2(
         #    self.space.map_reference_domain(x), self.kernel.value[0]
@@ -184,31 +190,6 @@ class SpectralModule(nnx.Module):
 
 
 class FlaxFunction(Function):
-    def __init__(
-        self,
-        V: BaseSpace | CompositeMLP,
-        name: str,
-        *,
-        module: nnx.Module = None,
-        fun_str: str = None,
-        kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
-        bias_init: Initializer = nnx.nn.linear.default_bias_init,
-        rngs: nnx.Rngs = None,
-    ) -> None:
-        self.functionspace = V
-
-        self.module = (
-            self.get_flax_module(
-                V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs
-            )
-            if module is None
-            else module
-        )
-        self.name = name
-        self.fun_str = fun_str if fun_str is not None else name
-        if isinstance(V, CompositeMLP):
-            assert len(name) == len(V)
-
     def __new__(
         cls,
         V: BaseSpace | CompositeMLP,
@@ -222,6 +203,19 @@ class FlaxFunction(Function):
     ) -> Function:
         coors = V.system
         obj = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)]))
+        obj.functionspace = V
+        obj.module = (
+            obj.get_flax_module(
+                V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs
+            )
+            if module is None
+            else module
+        )
+        obj.name = name
+        obj.fun_str = fun_str if fun_str is not None else name
+        obj.argument = 2
+        if isinstance(V, CompositeMLP):
+            assert len(name) == len(V)
         return obj
 
     def __getitem__(self, i: int):
@@ -274,42 +268,29 @@ class FlaxFunction(Function):
             raise RuntimeError
 
         if V.rank == 0:
-            return FlaxBasisFunction(
-                *(
-                    V.system.base_scalars()
-                    + (
-                        sp.Symbol(
-                            "+".join((str(V.offset), V.name, str(V.rank), self.fun_str))
-                        ),
-                    )
-                )
-            )
+            return Function(
+                self.fun_str,
+                global_index=V.offset,
+                functionspace_name=V.name,
+                rank_parent=V.rank,
+                module=self.module,
+                argument=2,
+            )(*V.system.base_scalars())
 
         if V.rank == 1:
             b = V.system.base_vectors()
             s = V.system.base_scalars()
-            return sp.vector.VectorAdd(
-                *[
-                    FlaxBasisFunction(
-                        *(
-                            s
-                            + (
-                                sp.Symbol(
-                                    "+".join(
-                                        (
-                                            str(V.offset + i),
-                                            V.name,
-                                            str(V.rank),
-                                            self.fun_str + "_" + s[i].name,
-                                        )
-                                    )
-                                ),
-                            )
-                        )
-                    )
-                    * b[i]
-                    for i in range(V.dims)
-                ]
+            return VectorAdd.fromiter(
+                Function(
+                    self.fun_str + "_" + s[i].name,
+                    global_index=V.offset + i,
+                    functionspace_name=V.name,
+                    rank_parent=V.rank,
+                    module=self.module,
+                    argument=2,
+                )(*s)
+                * b[i]
+                for i in range(V.dims)
             )
         raise NotImplementedError
 
@@ -372,9 +353,32 @@ class FlaxFunction(Function):
         return y
 
 
+def get_flaxfunctions(
+    a: sp.Expr,
+) -> set[Function]:
+    flax_found = set()
+    for p in sp.core.traversal.iterargs(a):
+        if getattr(p, "argument", -1) == 2:
+            flax_found.add(p)
+    return flax_found
+
+
+def eval_flaxfunction(expr, x: Array):
+    f = get_flaxfunctions(expr)
+    assert len(f) == 1
+    f = f.pop()
+    du = jacn(f.module, expr.derivative_count)(x)
+    V = f.functionspace
+    offset = V.offset if f.rank == 0 else slice(V.offset, V.offset + V.dims)
+    var: tuple[int] = tuple((slice(None), offset)) + tuple(
+        int(s._id[0]) for s in expr.variables
+    )
+    return du[var]
+
+
 # Experimental...
 class Comp(nnx.Module):
-    def __init__(self, flaxfunctions: list[FlaxFunction]):
+    def __init__(self, flaxfunctions: list[FlaxFunction]) -> None:
         self.flaxfunctions = flaxfunctions
         [setattr(self, str(id(p.module)), p.module) for p in flaxfunctions]
 
@@ -382,14 +386,26 @@ class Comp(nnx.Module):
         return jnp.hstack([f.module(x) for f in self.flaxfunctions])
 
 
-def expand(forms: sp.Expr) -> dict:
-    return sp.Add.make_args(forms.doit().expand())
+def expand(forms: sp.Expr) -> list[sp.Expr]:
+    """Expand and collect all terms without basis functions
 
+    Args:
+        forms: Sympy expression
 
-def derivative_count(f: sp.Expr, k: set[int]):
-    for p in sp.core.traversal.preorder_traversal(f):
-        if isinstance(p, sp.Derivative):
-            k.add(int(p.derivative_count))
+    Returns:
+        A list of sp.Exprs as arguments to Add
+    """
+    f = sp.Add.make_args(forms.doit().expand())
+    # return f
+    consts = []
+    flaxs = []
+    for fi in f:
+        v = get_flaxfunctions(fi)
+        if len(v) == 0:
+            consts.append(fi)
+        else:
+            flaxs.append(fi)
+    return sp.Add(*consts), flaxs
 
 
 class Residual:
@@ -404,26 +420,62 @@ class Residual:
 
         sys = get_system(f.doit())
         s = sys.base_scalars()
-        self.eqs = [get_fn(h, s) for h in expand(f)]
+        t, expr = expand(f)
+        self.eqs = [get_fn(h, s) for h in expr]
         self.x = x
+        # Place all terms without flaxfunctions in the target
         self.target = target
+        if len(t.free_symbols) > 0:
+            self.target = target - lambdify(s, t, modules="jax")(*x.T)
+        elif t != 0:
+            self.target = target - t
         self.weights = weights
 
     def __call__(self, Js) -> Array:
-        return sum([eq(self.x, Js) - self.target for eq in self.eqs])
+        return sum([eq(self.x, Js) for eq in self.eqs]) - self.target
 
 
 class LSQR:
+    """Least squares loss function"""
+
     def __init__(
         self,
-        fs: tuple[tuple[sp.Expr, Array, Array | Number | None, Array | Number | None]],
+        fs: tuple[sp.Expr, Array, Array | Number | None, Array | Number | None],
     ):
+        """The least squares method is to compute the loss over all input equations at
+        all collocation points. The equations are all defined with their own points
+
+        Args:
+            fs (tuple[tuple[sp.Expr, Array, Array  |  Number  |  None, Array  |  Number  |  None]]):
+                tuple of tuples, where the latter contains the subproblems that
+                are to be solved. The subproblems are defined by the equation
+                residuals (first item) and the collocation points (second item)
+                used to evaluate the residuals. The third item is the target,
+                which is zero by defauls, whereas the last item is an optional
+                weight. The weight needs to be a number or an array of the same
+                shape as the collocation points.
+
+        Examples:
+
+            >>> import jax.numpy as jnp
+            >>> from flax import nnx
+            >>> import optax
+            >>> from jaxfun.operators import Div, Grad
+            >>> from jaxfun.pinns.module import LSQR, MLPSpace, FlaxFunction
+            >>> V = MLPSpace([8, 8], dims=1, rank=0, name="V")
+            >>> u = FlaxFunction(V, rngs=nnx.Rngs(1001), name="u")
+            >>> eq = Div(Grad(u)) + 2
+            >>> xj = jnp.linspace(-1, 1, 10)[:, None]
+            >>> xb = jnp.array([[-1.0], [1.0]])
+            >>> loss_fn = LSQR(((eq, xj, 0, 1), (u, xb, 0, 10)))
+        """
         from jaxfun.forms import get_system
         from jaxfun.operators import Dot
 
         self.residuals = []
-        self.Js = Js = {} # All modules' evaluation and derivatives evaluations
-        self.xs = xs = {} # All collocation points
+        self.Js = Js = {}  # All modules' evaluation and derivatives eval wrt variables
+        self.xs = xs = {}  # All collocation points
+        res = []
 
         for f in fs:
             f0 = f[0].doit()
@@ -441,26 +493,34 @@ class LSQR:
                         g += (f[3],)
 
                     self.residuals.append(Residual(*g))
+                    res.append((g[0], g[1]))
+                    
             else:
                 self.residuals.append(Residual(*f))
+                res.append((f[0], f[1]))
 
+        self.Jres = [set() for _ in range(len(res))]
+        for i, f in enumerate(res):
+            f0 = f[0].doit()
             for s in sp.core.traversal.preorder_traversal(f0):
                 if isinstance(s, sp.Derivative):
                     func = s.args[0]
-                    if isinstance(func, FlaxBasisFunction):
+                    if hasattr(func, "module"):
                         key = (id(f[1]), id(func.module), s.derivative_count)
                         if key not in Js:
                             Js[key] = jacn(func.module, s.derivative_count)(f[1])
+                        self.Jres[i].add(key)
 
-                if isinstance(s, FlaxBasisFunction):
+                if hasattr(s, "module"):
                     key = (id(f[1]), id(s.module), 0)
                     if key not in Js:
                         Js[key] = s.module(f[1])
+                    self.Jres[i].add(key)
 
             if id(f[1]) not in xs:
                 xs[id(f[1])] = f[1]
 
-    def update_arrays(self, model, Js):
+    def update_arrays(self, model: nnx.Module, Js: dict) -> None:
         for k in Js:
             mod = (
                 model.__getattribute__(str(k[1])) if isinstance(model, Comp) else model
@@ -468,8 +528,21 @@ class LSQR:
             Js[k] = jacn(mod, k[2])(self.xs[k[0]])
 
     def compute_residual_i(self, model: nnx.Module, i: int) -> Array:
+        Jsi = {k: self.Js[k] for k in self.Jres[i]}
+        self.update_arrays(model, Jsi)
+        self.Js.update(Jsi)
+        return self.residuals[i](Jsi)
+
+    def compute_residuals(self, model: nnx.Module):
         self.update_arrays(model, self.Js)
-        return self.residuals[i](self.Js)
+        L2 = []
+        for res in self.residuals:
+            L2.append((res.weights * res(self.Js) ** 2).mean())
+        return jnp.array(L2)
+    
+    def compute_Li(self, model: nnx.Module, i: int):
+        x = self.compute_residual_i(model, i)
+        return (self.residuals[i].weights * x**2).mean()
 
     def __call__(self, model: nnx.Module) -> float:
         self.update_arrays(model, self.Js)
@@ -486,11 +559,10 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar]) -> Callable[[Array, dict], Array]:
     Returns:
         Callable[[Array, dict], Array]
     """
-    from jaxfun.forms import get_basisfunctions
 
-    v, _ = get_basisfunctions(f)
+    v = get_flaxfunctions(f)
 
-    if v is None:
+    if len(v) == 0:
         # Coefficient independent of basis function
         if len(f.free_symbols) > 0:
             return lambda x, Js, s0=s, bi0=f: lambdify(s0, bi0, modules="jax")(*x.T)
@@ -503,9 +575,9 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar]) -> Callable[[Array, dict], Array]:
         gi = []
         gc = []
         for bii in f.args:
-            v0, _ = get_basisfunctions(bii)
+            v0 = get_flaxfunctions(bii)
             # Collect terms that do not contain the basis function
-            if v0 is None:
+            if len(v0) == 0:
                 gc.append(bii)
                 continue
             gi.append(bii)
@@ -520,12 +592,17 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar]) -> Callable[[Array, dict], Array]:
         return lambda x, Js, gc0=gc, gi0=gi: get_fn(gc0, s)(x, Js) * mult(
             [get_fn(gii, s)(x, Js) for gii in gi0]
         )
+        # return lambda x, Js, gc0=gc, gi0=gi: get_fn(gc0, s)(x, Js) * jnp.prod(
+        #    jnp.array([get_fn(gii, s)(x, Js) for gii in gi0]), axis=0
+        # )
 
     elif isinstance(f, sp.Pow):
         bii = f.args[0]
         p: int = int(f.args[1])
         return lambda x, Js, bi0=bii, p0=p: get_fn(bi0, s)(x, Js) ** p0
 
+    assert len(v) == 1
+    v = v.pop()
     return partial(
         lookup_array,
         mod=id(v.module),

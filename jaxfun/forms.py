@@ -1,30 +1,21 @@
 import jax.numpy as jnp
 import sympy as sp
 
-from jaxfun.arguments import (
-    FlaxBasisFunction,
-    Jaxf,
-    JAXFunction,
-    TestFunction,
-    TrialFunction,
-    test,
-    trial,
-)
+from jaxfun.arguments import Jaxf, JAXFunction
 from jaxfun.coordinates import CoordSys
-from jaxfun.pinns.module import FlaxFunction
 
 
 def get_basisfunctions(
     a: sp.Expr,
 ) -> tuple[
-    TestFunction | test | FlaxFunction | FlaxBasisFunction | None,
-    TrialFunction | trial | None,
+    set[sp.Function] | sp.Function | None,
+    set[sp.Function] | sp.Function | None,
 ]:
     test_found, trial_found = set(), set()
     for p in sp.core.traversal.iterargs(a):
-        if isinstance(p, TrialFunction | trial):
+        if getattr(p, 'argument', -1) == 1:
             trial_found.add(p)
-        if isinstance(p, TestFunction | test | FlaxFunction | FlaxBasisFunction):
+        if getattr(p, 'argument', -1) == 0:
             test_found.add(p)
 
     match (len(test_found), len(trial_found)):
@@ -94,7 +85,7 @@ def split(forms: sp.Expr) -> dict:
             rest = []
             jfun = []
             for arg in ms.args:
-                if isinstance(arg, sp.Derivative | test | trial):
+                if isinstance(arg, sp.Derivative) or hasattr(arg, 'argument'):
                     rest.append(arg)
                 elif isinstance(arg, JAXFunction | Jaxf):
                     jfun.append(arg)

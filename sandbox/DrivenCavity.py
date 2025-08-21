@@ -48,29 +48,18 @@ wqb = mesh.get_weights_on_domain("legendre")
 
 V = MLPSpace([16], dims=2, rank=1, name="V")  # Vector space for velocity
 Q = MLPSpace([14], dims=2, rank=0, name="Q")  # Scalar space for pressure
-#VQ = CompositeMLP((V, Q))  # Coupled space V x Q
-#up = FlaxFunction(
+# VQ = CompositeMLP((V, Q))  # Coupled space V x Q
+# up = FlaxFunction(
 #    VQ,
 #    "up",
 #    rngs=nnx.Rngs(2002),
 #    kernel_init=nnx.initializers.xavier_normal(dtype=float),
-#)
-#u, p = up
-#module = up.module
+# )
+# u, p = up
+# module = up.module
 
-u = FlaxFunction(
-    V,
-    "u",
-    rngs=nnx.Rngs(2002),
-    kernel_init=nnx.initializers.xavier_normal(dtype=float),
-)
-
-p = FlaxFunction(
-    Q,
-    "p",
-    rngs=nnx.Rngs(2002),
-    kernel_init=nnx.initializers.xavier_normal(dtype=float),
-)
+u = FlaxFunction(V, "u", rngs=nnx.Rngs(2002))
+p = FlaxFunction(Q, "p", rngs=nnx.Rngs(2002))
 
 module = Comp([u, p])
 
@@ -113,17 +102,12 @@ t0 = time.time()
 run_optimizer(train_step, module, opt_adam, 1000, "Adam", 100)
 print("Time Adam", time.time() - t0)
 
-# up.module = freeze_layer(up.module, "hidden", 0)
-# up.module = freeze_layer(up.module, "hidden", 1)
-
 opt_lbfgs = nnx.Optimizer(module, optlbfgs)
 t1 = time.time()
 run_optimizer(
     train_step, module, opt_lbfgs, 1000, "LBFGS", 100, abs_limit_change=ulp(1)
 )
 print("Time LBFGS", time.time() - t1)
-
-# up.module = unfreeze_layer(up.module, "hidden", 0)
 
 opt_hess = nnx.Optimizer(module, opthess)
 t2 = time.time()

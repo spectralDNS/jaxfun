@@ -8,11 +8,8 @@ from jax import Array
 from jax.experimental.sparse import BCOO
 
 from jaxfun.arguments import (
-    BasisFunction,
     TestFunction,
     TrialFunction,
-    test,
-    trial,
 )
 from jaxfun.Basespace import OrthogonalSpace
 from jaxfun.composite import BCGeneric, Composite
@@ -290,15 +287,15 @@ def inner_bilinear(
     for aii in ai.args:
         found_basis = False
         for p in sp.core.traversal.preorder_traversal(aii):
-            if isinstance(p, BasisFunction):
+            if hasattr(p, 'argument'):
                 found_basis = True
                 break
         if found_basis:
             if isinstance(aii, sp.Derivative):
-                if isinstance(aii.args[0], test):
+                if getattr(aii.args[0], 'argument', -1) == 0:
                     assert i == 0
                     i = int(aii.derivative_count)
-                elif isinstance(aii.args[0], trial):
+                elif getattr(aii.args[0], 'argument', -1) == 1:
                     assert j == 0
                     j = int(aii.derivative_count)
             continue
@@ -361,7 +358,7 @@ def inner_linear(
     df = float(vo.domain_factor)
     i = 0
     uj = jnp.array([sc])  # incorporate scalar coefficient into first vector
-    if isinstance(bi, test):
+    if getattr(bi, 'argument', -1) == 0:
         pass
     elif isinstance(bi, sp.Derivative):
         i = int(bi.derivative_count)
@@ -369,7 +366,7 @@ def inner_linear(
         for bii in bi.args:
             found_basis = False
             for p in sp.core.traversal.preorder_traversal(bii):
-                if isinstance(p, BasisFunction):
+                if getattr(p, 'argument', -1) == 0:
                     found_basis = True
                     break
             if found_basis:

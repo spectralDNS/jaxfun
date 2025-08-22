@@ -31,8 +31,6 @@ from jaxfun.utils.common import lambdify, ulp
 default_kernel_init = nnx.initializers.glorot_normal()
 default_bias_init = nnx.initializers.zeros_init()
 
-moduledict = {}
-
 
 # Differs from jaxfun.utils.common.jacn in the last if else
 def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
@@ -525,7 +523,7 @@ class FlaxFunction(Function):
         fun_str: str = None,
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,
-        rngs: nnx.Rngs = None,
+        rngs: nnx.Rngs = nnx.Rngs(101),
     ) -> Function:
         coors = V.system
         obj = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)]))
@@ -540,6 +538,7 @@ class FlaxFunction(Function):
         obj.name = name
         obj.fun_str = fun_str if fun_str is not None else name
         obj.argument = 2
+        obj.rngs = rngs
         if isinstance(V, CompositeMLP):
             assert len(name) == len(V)
         return obj
@@ -579,7 +578,6 @@ class FlaxFunction(Function):
 
         V = self.functionspace
         functionspacedict[V.name] = V
-        moduledict[V.name] = self.module
 
         if isinstance(V, CompositeMLP):
             raise RuntimeError
@@ -747,6 +745,7 @@ class Residual:
     def __call__(self, Js) -> Array:
         return sum([eq(self.x, Js) for eq in self.eqs]) - self.target
 
+
 class LSQR:
     """Least squares loss function"""
 
@@ -775,11 +774,11 @@ class LSQR:
             >>> from jaxfun.operators import Div, Grad
             >>> from jaxfun.pinns.module import LSQR, MLPSpace, FlaxFunction
             >>> V = MLPSpace([8, 8], dims=1, rank=0, name="V")
-            >>> u = FlaxFunction(V, rngs=nnx.Rngs(1001), name="u")
+            >>> u = FlaxFunction(V, name="u")
             >>> eq = Div(Grad(u)) + 2
             >>> xj = jnp.linspace(-1, 1, 10)[:, None]
             >>> xb = jnp.array([[-1.0], [1.0]])
-            >>> loss_fn = LSQR(((eq, xj, 0, 1), (u, xb, 0, 10)))
+            >>> loss_fn = LSQR((eq, xj, 0, 1), (u, xb, 0, 10))
         """
         from jaxfun.forms import get_system
         from jaxfun.operators import Dot
@@ -811,7 +810,7 @@ class LSQR:
                 self.residuals.append(Residual(*f))
                 res.append((f[0], f[1]))
 
-        self.Jres = [set() for _ in range(len(res))]
+        self.Jres = [set() for _ in range(len(res))]  # Collection for each residual
         for i, f in enumerate(res):
             f0 = f[0].doit()
             for s in sp.core.traversal.preorder_traversal(f0):
@@ -866,6 +865,7 @@ class LSQR:
             norms.append(self.norm_grad_loss_i(model, i))
         return jnp.array(norms)
 
+    @partial(nnx.jit, static_argnums=0)
     def lambda_weights(self, model: nnx.Module) -> Array:
         norms = self.norm_grad_loss(model)
         return jnp.sum(norms) / jnp.where(norms < 1e-6, 1e-6, norms)
@@ -875,7 +875,7 @@ class LSQR:
         return sum([(eq.weights * eq(self.Js) ** 2).mean() for eq in self.residuals])
 
 
-class LSQR2(LSQR):
+class LSQR_Adaptive_Weights(LSQR):
     def __init__(
         self,
         *fs: LSQR_Tuple,
@@ -886,11 +886,10 @@ class LSQR2(LSQR):
         self.alpha = alpha
         self.lambda_updates = lambda_updates
         self.lambdas = jnp.ones(len(self.residuals))
-
+    
     def update_lambdas(self, model: nnx.Module) -> None:
         new_lambdas = self.lambda_weights(model)
-        old_lambdas = self.lambdas
-        self.lambdas = new_lambdas * self.alpha + old_lambdas * (1 - self.alpha)
+        self.lambdas = new_lambdas * self.alpha + self.lambdas * (1 - self.alpha)
 
     def __call__(self, model: nnx.Module) -> float:
         self.update_arrays(model, self.Js)
@@ -936,15 +935,6 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar]) -> Callable[[Array, dict], Array]:
             gi.append(bii)
         gc = sp.Mul(*gc)
 
-        # def mult(gg):
-        #    g0 = gg[0]
-        #    for gj in gg[1:]:
-        #        g0 = g0 * gj
-        #    return g0
-
-        # return lambda x, Js, gc0=gc, gi0=gi: get_fn(gc0, s)(x, Js) * mult(
-        #    [get_fn(gii, s)(x, Js) for gii in gi0]
-        # )
         return lambda x, Js, gc0=gc, gi0=gi: get_fn(gc0, s)(x, Js) * jnp.prod(
             jnp.array([get_fn(gii, s)(x, Js) for gii in gi0]), axis=0
         )
@@ -999,14 +989,15 @@ def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
 
 def run_optimizer(
     loss_fn: LSQR,
-    # train: Callable[[nnx.Module, nnx.Optimizer], float],
     model: nnx.Module,
     opt: nnx.Optimizer,
     num: int,
     name: str,
     epoch_print: int = 100,
+    update_weights: int = 100,
     abs_limit_loss: float = ulp(1000),
     abs_limit_change: float = ulp(100),
+    print_final_loss: bool = False,
 ):
     train_step = train(loss_fn)
     loss_old = 1.0
@@ -1017,6 +1008,8 @@ def run_optimizer(
         if abs(loss) < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
             break
         loss_old = loss
-        if isinstance(loss_fn, LSQR2) and epoch % epoch_print == 0:
+        if isinstance(loss_fn, LSQR_Adaptive_Weights) and epoch % update_weights == 0:
             loss_fn.update_lambdas(model)
-    print(f"Final loss for {name}: {loss}")
+            print('lambda weights', loss_fn.lambdas)
+    if print_final_loss:
+        print(f"Final loss for {name}: {loss}")

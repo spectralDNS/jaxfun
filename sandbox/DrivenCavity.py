@@ -83,13 +83,12 @@ ub = DirichletBC(
 )
 
 # Each item is (equation, points, target, optional weights)
-loss_fn = LSQR2(
+loss_fn = LSQR(
         (eq1, xyi),  # momentum vector equation
         (eq2, xyi),  # Divergence constraint
         (u, xyb, ub),  # Boundary conditions on u
         (p, xyp),  # Pressure pin-point,
-    alpha=0.9,
-    lambda_updates=1,
+    #alpha=0.9,
 )
 
 opt = optax.adam(optax.linear_schedule(1e-3, 1e-4, 10000))
@@ -106,21 +105,19 @@ opt_adam = nnx.Optimizer(module, opt)
 opt_soap = nnx.Optimizer(module, soap(optax.linear_schedule(1e-3, 1e-4, 10000)))
 
 tm1 = time.time()
-print("Starting run?")
-run_optimizer(loss_fn, module, opt_soap, 10000, "SOAP", 100, abs_limit_change=0)
-print("finished runnings?")
+run_optimizer(loss_fn, module, opt_soap, 1000, "SOAP", 100, abs_limit_change=0)
+print("Time Soap", time.time() - tm1)
 
-#train_step = train(loss_fn)
 # t0 = time.time()
 # run_optimizer(loss_fn, module, opt_adam, 100, "Adam", 10)
 # print("Time Adam", time.time() - t0)
 
-# opt_lbfgs = nnx.Optimizer(module, optlbfgs)
-# t1 = time.time()
-# run_optimizer(
-#     loss_fn, module, opt_lbfgs, 1000, "LBFGS", 100, abs_limit_change=ulp(1)
-# )
-# print("Time LBFGS", time.time() - t1)
+opt_lbfgs = nnx.Optimizer(module, optlbfgs)
+t1 = time.time()
+run_optimizer(
+    loss_fn, module, opt_lbfgs, 1000, "LBFGS", 100, abs_limit_change=ulp(1)
+)
+print("Time LBFGS", time.time() - t1)
 
 # opt_hess = nnx.Optimizer(module, opthess)
 # t2 = time.time()

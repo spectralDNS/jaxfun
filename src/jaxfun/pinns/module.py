@@ -14,7 +14,7 @@ from flax.typing import (
     Dtype,
     Initializer,
     PrecisionLike,
-    PromoteDtypeFn,
+    # PromoteDtypeFn,
 )
 from jax import Array, lax
 from sympy import Function
@@ -241,7 +241,7 @@ class RWFLinear(nnx.Module):
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,
         dot_general: DotGeneralT = lax.dot_general,
-        promote_dtype: PromoteDtypeFn = dtypes.promote_dtype,
+        promote_dtype = dtypes.promote_dtype,
         rngs: nnx.Rngs,
     ):
         kernel_key = rngs.params()
@@ -370,13 +370,13 @@ class PIModifiedBottleneck(nnx.Module):
     ) -> None:
         self.alpha = nnx.Param(jnp.array(nonlinearity).reshape((1,)))
 
-        self.layer1 = nnx.Linear(
+        self.layer1 = RWFLinear(
             in_dim, hidden_dim, rngs=rngs, dtype=float, param_dtype=float
         )
-        self.layer2 = nnx.Linear(
+        self.layer2 = RWFLinear(
             hidden_dim, hidden_dim, rngs=rngs, dtype=float, param_dtype=float
         )
-        self.layer3 = nnx.Linear(
+        self.layer3 = RWFLinear(
             hidden_dim, output_dim, rngs=rngs, dtype=float, param_dtype=float
         )
 
@@ -423,7 +423,7 @@ class PirateNet(nnx.Module):
 
         # print(rngs, V)
 
-        self.u_net = nnx.Linear(
+        self.u_net = RWFLinear(
             in_dim,
             hidden_size[0],
             rngs=rngs,
@@ -432,7 +432,7 @@ class PirateNet(nnx.Module):
             param_dtype=float,
             dtype=float,
         )
-        self.v_net = nnx.Linear(
+        self.v_net = RWFLinear(
             in_dim,
             hidden_size[0],
             rngs=rngs,
@@ -456,7 +456,7 @@ class PirateNet(nnx.Module):
         if V.pi_init is not None:
             raise NotImplementedError("Least squares initialization not implemented")
         else:
-            self.output_layer = nnx.Linear(
+            self.output_layer = RWFLinear(
                 in_dim,
                 V.out_size,
                 rngs=rngs,
@@ -930,16 +930,11 @@ def lookup_array(
     return Js[(id(x), mod, k)][var]
 
 
-def train(eqs: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
+def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
     @nnx.jit
     def train_step(model: nnx.Module, optimizer: nnx.Optimizer) -> float:
         gd, state = nnx.split(model, nnx.Param)
         unravel = jax.flatten_util.ravel_pytree(state)[1]
-
-        def loss_fn(model: nnx.Module) -> Array:
-            return eqs(model)
-
-        # print("Model in TrainStep", model)
         loss, gradients = nnx.value_and_grad(loss_fn)(model)
         loss_fn_split = lambda state: loss_fn(nnx.merge(gd, state))
         H_loss_fn = lambda flat_weights: loss_fn(nnx.merge(gd, unravel(flat_weights)))
@@ -955,75 +950,22 @@ def train(eqs: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
     return train_step
 
 
-def run_optimizer(t, model, opt, num, name, epoch_print=100):
+def run_optimizer(
+    train: Callable[[nnx.Module, nnx.Optimizer], float],
+    model: nnx.Module,
+    opt: nnx.Optimizer,
+    num: int,
+    name: str,
+    epoch_print: int = 100,
+    abs_limit_loss: float = ulp(1000),
+    abs_limit_change: float = ulp(100),
+):
     loss_old = 1.0
     for epoch in range(1, num + 1):
-        loss = t(model, opt)
+        loss = train(model, opt)
         if epoch % epoch_print == 0:
             print(f"Epoch {epoch} {name}, loss: {loss}")
-        # if abs(loss) < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
-        #     break
-        loss_old = loss
-    print(f"Final loss for {name}: {loss}")
-
-
-def train_CPINN(
-    eqs: list[Residual],
-) -> Callable[[nnx.Module, nnx.Optimizer, nnx.Module, nnx.Optimizer], float]:
-    @nnx.jit
-    def train_step(
-        model: nnx.Module,
-        optimizer: nnx.Optimizer,
-        discriminator: nnx.Module,
-        optd: nnx.Optimizer,
-    ) -> tuple[float, float]:
-        gd, state = nnx.split(model)
-        unravel = jax.flatten_util.ravel_pytree(state)[1]
-
-        def loss_fn(mod: nnx.Module) -> Array:
-            return sum([((eq(mod) * discriminator(eq.x)) ** 2).mean() for eq in eqs])
-
-        loss, gradients = nnx.value_and_grad(loss_fn)(model)
-        loss_fn_split = lambda state: loss_fn(nnx.merge(gd, state))
-        H_loss_fn = lambda flat_weights: loss_fn(nnx.merge(gd, unravel(flat_weights)))
-        optimizer.update(
-            gradients,
-            grad=gradients,
-            value_fn=loss_fn_split,
-            value=loss,
-            H_loss_fn=H_loss_fn,
-        )
-
-        def loss_fn_d(disc: nnx.Module) -> Array:
-            return sum([((eq(disc) * model(eq.x)) ** 2).mean() for eq in eqs])
-
-        gdd, stated = nnx.split(discriminator)
-        unraveld = jax.flatten_util.ravel_pytree(stated)[1]
-        lossd, gradd = nnx.value_and_grad(loss_fn_d)(discriminator)
-        loss_fn_d_split = lambda state: loss_fn_d(nnx.merge(gdd, state))
-        H_loss_fn_d = lambda flat_weights: loss_fn_d(
-            nnx.merge(gdd, unraveld(flat_weights))
-        )
-        gradd = jax.tree_util.tree_map(lambda p: -p, gradd)
-        optd.update(
-            gradd,
-            grad=gradd,
-            value_fn=loss_fn_d_split,
-            value=lossd,
-            H_loss_fn=H_loss_fn_d,
-        )
-
-        return loss, lossd
-
-    return train_step
-
-
-def run_optimizer_d(t, model, opt, disc, optd, num, name, epoch_print=100):
-    loss_old = 1.0
-    for epoch in range(1, num + 1):
-        loss, lossd = t(model, opt, disc, optd)
-        if epoch % epoch_print == 0:
-            print(f"Epoch {epoch} {name}, loss: {loss}, lossd: {lossd}")
-        if abs(loss) < ulp(1000) or abs(loss - loss_old) < ulp(1):
+        if abs(loss) < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
             break
         loss_old = loss
+    print(f"Final loss for {name}: {loss}")

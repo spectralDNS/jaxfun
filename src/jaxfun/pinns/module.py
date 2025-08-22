@@ -25,6 +25,7 @@ from sympy.vector import VectorAdd
 from jaxfun.Basespace import BaseSpace
 from jaxfun.coordinates import BaseScalar, CoordSys
 from jaxfun.pinns.embeddings import Embedding
+from jaxfun.typing import LSQR_Tuple
 from jaxfun.utils.common import lambdify, ulp
 
 default_kernel_init = nnx.initializers.glorot_normal()
@@ -206,25 +207,29 @@ class CompositeNetwork:
         return len(self.mlp)
 
 
+class Count(nnx.Variable):
+    pass
+
+
 class RWFLinear(nnx.Module):
     """A linear transformation applied over the last dimension of the input.
 
     Args:
-      in_features: the number of input features.
-      out_features: the number of output features.
-      use_bias: whether to add a bias to the output (default: True).
-      dtype: the dtype of the computation (default: infer from input and params).
-      param_dtype: the dtype passed to parameter initializers (default: float32).
-      precision: numerical precision of the computation see ``jax.lax.Precision``
-        for details.
-      kernel_init: initializer function for the weight matrix.
-      bias_init: initializer function for the bias.
-      dot_general: dot product function.
-      promote_dtype: function to promote the dtype of the arrays to the desired
-        dtype. The function should accept a tuple of ``(inputs, kernel, bias)``
-        and a ``dtype`` keyword argument, and return a tuple of arrays with the
-        promoted dtype.
-      rngs: rng key.
+        in_features: the number of input features.
+        out_features: the number of output features.
+        use_bias: whether to add a bias to the output (default: True).
+        dtype: the dtype of the computation (default: infer from input and params).
+        param_dtype: the dtype passed to parameter initializers (default: float32).
+        precision: numerical precision of the computation see ``jax.lax.Precision``
+            for details.
+        kernel_init: initializer function for the weight matrix.
+        bias_init: initializer function for the bias.
+        dot_general: dot product function.
+        promote_dtype: function to promote the dtype of the arrays to the desired
+            dtype. The function should accept a tuple of ``(inputs, kernel, bias)``
+            and a ``dtype`` keyword argument, and return a tuple of arrays with the
+            promoted dtype.
+        rngs: rng key.
     """
 
     __data__ = ("kernel", "scaling", "bias")
@@ -241,7 +246,7 @@ class RWFLinear(nnx.Module):
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,
         dot_general: DotGeneralT = lax.dot_general,
-        promote_dtype = dtypes.promote_dtype,
+        promote_dtype=dtypes.promote_dtype,
         rngs: nnx.Rngs,
     ):
         kernel_key = rngs.params()
@@ -275,10 +280,10 @@ class RWFLinear(nnx.Module):
         """Applies a linear transformation to the inputs along the last dimension.
 
         Args:
-          inputs: The nd-array to be transformed.
+            inputs: The nd-array to be transformed.
 
         Returns:
-          The transformed input.
+            The transformed input.
         """
         kernel = self.kernel.value
         bias = self.bias.value if self.bias is not None else None
@@ -344,6 +349,7 @@ class MLP(nnx.Module):
             param_dtype=float,
             dtype=float,
         )
+        # self.count = Count(jnp.array(0))
 
     @property
     def dim(self) -> int:
@@ -352,6 +358,7 @@ class MLP(nnx.Module):
         return pyt.shape[0]
 
     def __call__(self, x: Array) -> Array:
+        # self.count += 1
         x = nnx.swish(self.linear_in(x))
         for z in self.hidden:
             x = nnx.swish(z(x))
@@ -740,20 +747,19 @@ class Residual:
     def __call__(self, Js) -> Array:
         return sum([eq(self.x, Js) for eq in self.eqs]) - self.target
 
-
 class LSQR:
     """Least squares loss function"""
 
     def __init__(
         self,
-        fs: tuple[sp.Expr, Array, Array | Number | None, Array | Number | None],
+        *fs: LSQR_Tuple,
     ):
         """The least squares method is to compute the loss over all input equations at
         all collocation points. The equations are all defined with their own points
 
         Args:
-            fs (tuple[tuple[sp.Expr, Array, Array  |  Number  |  None, Array  |  Number  |  None]]):
-                tuple of tuples, where the latter contains the subproblems that
+            fs:
+                tuples, where the latter contains the subproblems that
                 are to be solved. The subproblems are defined by the equation
                 residuals (first item) and the collocation points (second item)
                 used to evaluate the residuals. The third item is the target,
@@ -834,9 +840,8 @@ class LSQR:
             Js[k] = jacn(mod, k[2])(self.xs[k[0]])
 
     def compute_residual_i(self, model: nnx.Module, i: int) -> Array:
-        Jsi = {k: self.Js[k] for k in self.Jres[i]}
+        Jsi = {k: None for k in self.Jres[i]}
         self.update_arrays(model, Jsi)
-        self.Js.update(Jsi)
         return self.residuals[i](Jsi)
 
     def compute_residuals(self, model: nnx.Module):
@@ -850,9 +855,53 @@ class LSQR:
         x = self.compute_residual_i(model, i)
         return (self.residuals[i].weights * x**2).mean()
 
+    def norm_grad_loss_i(self, model: nnx.Module, i: int) -> float:
+        return jnp.linalg.norm(
+            jax.flatten_util.ravel_pytree(nnx.grad(self.compute_Li)(model, i))[0]
+        )
+
+    def norm_grad_loss(self, model: nnx.Module) -> Array:
+        norms = []
+        for i in range(len(self.residuals)):
+            norms.append(self.norm_grad_loss_i(model, i))
+        return jnp.array(norms)
+
+    def lambda_weights(self, model: nnx.Module) -> Array:
+        norms = self.norm_grad_loss(model)
+        return jnp.sum(norms) / jnp.where(norms < 1e-6, 1e-6, norms)
+
     def __call__(self, model: nnx.Module) -> float:
         self.update_arrays(model, self.Js)
         return sum([(eq.weights * eq(self.Js) ** 2).mean() for eq in self.residuals])
+
+
+class LSQR2(LSQR):
+    def __init__(
+        self,
+        *fs: LSQR_Tuple,
+        alpha: float = 0.9,
+        lambda_updates: int = 0,
+    ):
+        LSQR.__init__(self, *fs)
+        self.alpha = alpha
+        self.lambda_updates = lambda_updates
+        self.lambdas = jnp.ones(len(self.residuals))
+
+    def update_lambdas(self, model: nnx.Module) -> None:
+        new_lambdas = self.lambda_weights(model)
+        old_lambdas = self.lambdas
+        self.lambdas = new_lambdas * self.alpha + old_lambdas * (1 - self.alpha)
+        # self.lambdas = new_lambdas * self.alpha + self.lambdas * (1 - self.alpha)
+
+    def __call__(self, model: nnx.Module) -> float:
+        self.update_arrays(model, self.Js)
+        # self.update_lambdas(model)
+        return sum(
+            [
+                self.lambdas[i] * (eq.weights * eq(self.Js) ** 2).mean()
+                for i, eq in enumerate(self.residuals)
+            ]
+        )
 
 
 def get_fn(f: sp.Expr, s: tuple[BaseScalar]) -> Callable[[Array, dict], Array]:
@@ -889,18 +938,18 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar]) -> Callable[[Array, dict], Array]:
             gi.append(bii)
         gc = sp.Mul(*gc)
 
-        def mult(gg):
-            g0 = gg[0]
-            for gj in gg[1:]:
-                g0 = g0 * gj
-            return g0
+        # def mult(gg):
+        #    g0 = gg[0]
+        #    for gj in gg[1:]:
+        #        g0 = g0 * gj
+        #    return g0
 
-        return lambda x, Js, gc0=gc, gi0=gi: get_fn(gc0, s)(x, Js) * mult(
-            [get_fn(gii, s)(x, Js) for gii in gi0]
-        )
-        # return lambda x, Js, gc0=gc, gi0=gi: get_fn(gc0, s)(x, Js) * jnp.prod(
-        #    jnp.array([get_fn(gii, s)(x, Js) for gii in gi0]), axis=0
+        # return lambda x, Js, gc0=gc, gi0=gi: get_fn(gc0, s)(x, Js) * mult(
+        #    [get_fn(gii, s)(x, Js) for gii in gi0]
         # )
+        return lambda x, Js, gc0=gc, gi0=gi: get_fn(gc0, s)(x, Js) * jnp.prod(
+            jnp.array([get_fn(gii, s)(x, Js) for gii in gi0]), axis=0
+        )
 
     elif isinstance(f, sp.Pow):
         bii = f.args[0]
@@ -933,7 +982,7 @@ def lookup_array(
 def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
     @nnx.jit
     def train_step(model: nnx.Module, optimizer: nnx.Optimizer) -> float:
-        gd, state = nnx.split(model, nnx.Param)
+        gd, state = nnx.split(model)
         unravel = jax.flatten_util.ravel_pytree(state)[1]
         loss, gradients = nnx.value_and_grad(loss_fn)(model)
         loss_fn_split = lambda state: loss_fn(nnx.merge(gd, state))
@@ -951,7 +1000,8 @@ def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
 
 
 def run_optimizer(
-    train: Callable[[nnx.Module, nnx.Optimizer], float],
+    loss_fn: LSQR,
+    # train: Callable[[nnx.Module, nnx.Optimizer], float],
     model: nnx.Module,
     opt: nnx.Optimizer,
     num: int,
@@ -960,12 +1010,15 @@ def run_optimizer(
     abs_limit_loss: float = ulp(1000),
     abs_limit_change: float = ulp(100),
 ):
+    train_step = train(loss_fn)
     loss_old = 1.0
     for epoch in range(1, num + 1):
-        loss = train(model, opt)
+        loss = train_step(model, opt)
         if epoch % epoch_print == 0:
             print(f"Epoch {epoch} {name}, loss: {loss}")
         if abs(loss) < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
             break
         loss_old = loss
+        if isinstance(loss_fn, LSQR2) and epoch % epoch_print == 0:
+            loss_fn.update_lambdas(model)
     print(f"Final loss for {name}: {loss}")

@@ -7,7 +7,7 @@ authors = [
     { name = "Mikael Mortensen" },
     { name = "August Femtehjell" }
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "jax>=0.4.36",
     "matplotlib>=3.9.3",

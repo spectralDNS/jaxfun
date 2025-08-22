@@ -4,6 +4,7 @@ import time
 import jax
 
 jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_default_matmul_precision", "highest")
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -21,6 +22,7 @@ from jaxfun.pinns.hessoptimizer import hess
 from jaxfun.pinns.mesh import Rectangle
 from jaxfun.pinns.module import (
     LSQR,
+    LSQR2,
     Comp,
     CompositeMLP,
     CompositeNetwork,
@@ -31,10 +33,10 @@ from jaxfun.pinns.module import (
     train,
 )
 from jaxfun.utils.common import ulp
+from soap_jax import soap
 
-jax.config.update("jax_default_matmul_precision", "highest")
-jax.config.update("jax_enable_x64", True)
-dtype = jnp.float64
+# jax.config.update("jax_default_matmul_precision", "highest")
+# jax.config.update("jax_enable_x64", True)
 
 print("JAX running on", jax.devices()[0].platform.upper())
 
@@ -63,8 +65,8 @@ Q = MLPSpace([14], dims=2, rank=0, name="Q")  # Scalar space for pressure
 # u, p = up
 # module = up.module
 
-u = FlaxFunction(V, "u", rngs=nnx.Rngs(2002))
-p = FlaxFunction(Q, "p", rngs=nnx.Rngs(2002))
+u = FlaxFunction(V, "u", rngs=nnx.Rngs(2002), bias_init=nnx.initializers.normal())
+p = FlaxFunction(Q, "p", rngs=nnx.Rngs(2002), bias_init=nnx.initializers.normal())
 
 module = Comp([u, p])
 
@@ -81,13 +83,13 @@ ub = DirichletBC(
 )
 
 # Each item is (equation, points, target, optional weights)
-loss_fn = LSQR(
-    (
-        (eq1, xyi, 0, wqi),  # momentum vector equation
-        (eq2, xyi, 0, wqi),  # Divergence constraint
-        (u, xyb, ub, wqb),  # Boundary conditions on u
-        (p, xyp, 0, 10),  # Pressure pin-point
-    )
+loss_fn = LSQR2(
+        (eq1, xyi),  # momentum vector equation
+        (eq2, xyi),  # Divergence constraint
+        (u, xyb, ub),  # Boundary conditions on u
+        (p, xyp),  # Pressure pin-point,
+    alpha=0.9,
+    lambda_updates=1,
 )
 
 opt = optax.adam(optax.linear_schedule(1e-3, 1e-4, 10000))
@@ -101,23 +103,29 @@ opthess = hess(
     linesearch=optax.scale_by_zoom_linesearch(25, max_learning_rate=1.0),
 )
 opt_adam = nnx.Optimizer(module, opt)
+opt_soap = nnx.Optimizer(module, soap(optax.linear_schedule(1e-3, 1e-4, 10000)))
 
-train_step = train(loss_fn)
-t0 = time.time()
-run_optimizer(train_step, module, opt_adam, 1000, "Adam", 100)
-print("Time Adam", time.time() - t0)
+tm1 = time.time()
+print("Starting run?")
+run_optimizer(loss_fn, module, opt_soap, 10000, "SOAP", 100, abs_limit_change=0)
+print("finished runnings?")
 
-opt_lbfgs = nnx.Optimizer(module, optlbfgs)
-t1 = time.time()
-run_optimizer(
-    train_step, module, opt_lbfgs, 1000, "LBFGS", 100, abs_limit_change=ulp(1)
-)
-print("Time LBFGS", time.time() - t1)
+#train_step = train(loss_fn)
+# t0 = time.time()
+# run_optimizer(loss_fn, module, opt_adam, 100, "Adam", 10)
+# print("Time Adam", time.time() - t0)
 
-opt_hess = nnx.Optimizer(module, opthess)
-t2 = time.time()
-run_optimizer(train_step, module, opt_hess, 10, "Hess", 1, abs_limit_change=ulp(1))
-print("Time Hess", time.time() - t2)
+# opt_lbfgs = nnx.Optimizer(module, optlbfgs)
+# t1 = time.time()
+# run_optimizer(
+#     loss_fn, module, opt_lbfgs, 1000, "LBFGS", 100, abs_limit_change=ulp(1)
+# )
+# print("Time LBFGS", time.time() - t1)
+
+# opt_hess = nnx.Optimizer(module, opthess)
+# t2 = time.time()
+# run_optimizer(loss_fn, module, opt_hess, 10, "Hess", 1, abs_limit_change=ulp(1))
+# print("Time Hess", time.time() - t2)
 
 gd, st = nnx.split(module)
 pyt, ret = jax.flatten_util.ravel_pytree(st)

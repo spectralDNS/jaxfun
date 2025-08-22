@@ -8,16 +8,27 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
-from flax.typing import Initializer
-from jax import Array
+from flax.nnx.nn import dtypes
+from flax.typing import (
+    DotGeneralT,
+    Dtype,
+    Initializer,
+    PrecisionLike,
+    PromoteDtypeFn,
+)
+from jax import Array, lax
 from sympy import Function
 from sympy.printing import latex
 from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
 from jaxfun.Basespace import BaseSpace
-from jaxfun.coordinates import BaseScalar, CoordSys, latex_symbols
+from jaxfun.coordinates import BaseScalar, CoordSys
+from jaxfun.pinns.embeddings import Embedding
 from jaxfun.utils.common import lambdify, ulp
+
+default_kernel_init = nnx.initializers.glorot_normal()
+default_bias_init = nnx.initializers.zeros_init()
 
 moduledict = {}
 
@@ -63,6 +74,46 @@ class MLPSpace(BaseSpace):
 MLPVectorSpace = partial(MLPSpace, rank=1)
 
 
+class PirateSpace(BaseSpace):
+    """MLP alternative with PirateNet architecture."""
+
+    def __init__(
+        self,
+        hidden_size: list[int] | int,
+        dims: int = 1,
+        rank: int = 0,
+        system: CoordSys = None,
+        name: str = "PirateNet",
+        transient: bool = False,
+        offset: int = 0,
+        # PirateNet specific parameters
+        nonlinearity: float = 0.0,
+        periodicity: dict | None = None,
+        fourier_emb: dict | None = None,
+        pi_init: jnp.ndarray | None = None,
+    ) -> None:
+        from jaxfun.arguments import CartCoordSys, x, y, z
+
+        self.in_size = dims + int(transient)
+        self.hidden_size = hidden_size
+        self.out_size = dims**rank
+        self.dims = dims
+        self.rank = rank
+        self.offset = offset
+        self.transient = transient
+        system = (
+            CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[dims])
+            if system is None
+            else system
+        )
+        BaseSpace.__init__(self, system, name)
+
+        self.nonlinearity = nonlinearity
+        self.periodicity = periodicity
+        self.fourier_emb = fourier_emb
+        self.pi_init = pi_init
+
+
 class CompositeMLP:
     """Multilayer perceptron composite functionspace
 
@@ -87,19 +138,166 @@ class CompositeMLP:
             )
             offset += newmlp.out_size
             newspaces.append(newmlp)
-            assert newmlp.hidden_size == mlpspaces[0].hidden_size
-            assert newmlp.dims == mlpspaces[0].dims
-
         self.mlp = newspaces
         self.in_size = self.mlp[0].in_size
         self.hidden_size = self.mlp[0].hidden_size
         self.out_size = sum([p.out_size for p in self.mlp])
 
-    def __getitem__(self, i: int) -> MLPSpace:
+    def __getitem__(self, i: int):
+        return self.mlp[i]
+
+    def __len__(self):
+        return len(self.mlp)
+
+
+class CompositeNetwork:
+    def __init__(self, spaces: tuple[BaseSpace, ...], name: str = "C") -> None:
+        offset = 0
+        # TODO: should refactor name from mlp to something more general
+        self.mlp = []
+        self.name = name  # Prefix, not name
+        self.system = spaces[0].system
+
+        has_pirate = any(isinstance(s, PirateSpace) for s in spaces)
+        if has_pirate:
+            p_params = {"period": (), "axis": (), "trainable": ()}
+            f_params = {"embed_dim": 0, "embed_scale": 1.0}
+            self.nonlinearity = 0.0
+
+        for i, space in enumerate(spaces):
+            # Is there any point in initializing a brand new space,
+            # instead of just correcting the existing one?
+            # With this, it's easier to be agnostic about the space type.
+            space.system = self.system
+            space.name = f"{name}{space.name}_{i}"
+            space.offset = offset
+
+            if isinstance(space, PirateSpace):
+                if space.periodicity is not None:
+                    prev_p = space.periodicity
+                    p_params["period"] += prev_p["period"]
+                    p_params["axis"] += (a + offset for a in prev_p["axis"])
+                    p_params["trainable"] += prev_p["trainable"]
+                if space.fourier_emb is not None:
+                    f_params["embed_dim"] += space.fourier_emb["embed_dim"]
+                    f_params["embed_scale"] = space.fourier_emb["embed_scale"]
+                self.nonlinearity = max(self.nonlinearity, space.nonlinearity)
+
+            offset += space.out_size
+            self.mlp.append(space)
+        self.in_size = self.mlp[0].in_size
+
+        if has_pirate:
+            self.periodicity = p_params if p_params["axis"] else None
+            if f_params["embed_dim"] > 0:
+                f_params["in_dim"] = self.in_size
+                self.fourier_emb = f_params
+            else:
+                self.fourier_emb = None
+            self.pi_init = None
+
+        self.hidden_size = self.mlp[0].hidden_size
+        self.out_size = sum([p.out_size for p in self.mlp])
+
+    def __getitem__(self, i: int) -> BaseSpace:
         return self.mlp[i]
 
     def __len__(self) -> int:
         return len(self.mlp)
+
+
+class RWFLinear(nnx.Module):
+    """A linear transformation applied over the last dimension of the input.
+
+    Args:
+      in_features: the number of input features.
+      out_features: the number of output features.
+      use_bias: whether to add a bias to the output (default: True).
+      dtype: the dtype of the computation (default: infer from input and params).
+      param_dtype: the dtype passed to parameter initializers (default: float32).
+      precision: numerical precision of the computation see ``jax.lax.Precision``
+        for details.
+      kernel_init: initializer function for the weight matrix.
+      bias_init: initializer function for the bias.
+      dot_general: dot product function.
+      promote_dtype: function to promote the dtype of the arrays to the desired
+        dtype. The function should accept a tuple of ``(inputs, kernel, bias)``
+        and a ``dtype`` keyword argument, and return a tuple of arrays with the
+        promoted dtype.
+      rngs: rng key.
+    """
+
+    __data__ = ("kernel", "scaling", "bias")
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        use_bias: bool = True,
+        dtype: Dtype | None = None,
+        param_dtype: Dtype = jnp.float32,
+        precision: PrecisionLike = None,
+        kernel_init: Initializer = default_kernel_init,
+        bias_init: Initializer = default_bias_init,
+        dot_general: DotGeneralT = lax.dot_general,
+        promote_dtype: PromoteDtypeFn = dtypes.promote_dtype,
+        rngs: nnx.Rngs,
+    ):
+        kernel_key = rngs.params()
+        w = kernel_init(kernel_key, (in_features, out_features), param_dtype)
+        scaling_key = rngs.params()
+        # Use RWF params from https://arxiv.org/pdf/2507.08972
+        scaling_init = nnx.initializers.normal(0.1)
+        g = 1.0 + scaling_init(scaling_key, (out_features,), param_dtype)
+        self.g = nnx.Param(jnp.exp(g))
+        self.kernel = nnx.Param(w / g)
+
+        self.bias: nnx.Param[jax.Array] | None
+        if use_bias:
+            bias_key = rngs.params()
+            self.bias = nnx.Param(bias_init(bias_key, (out_features,), param_dtype))
+        else:
+            self.bias = None
+
+        self.in_features = in_features
+        self.out_features = out_features
+        self.use_bias = use_bias
+        self.dtype = dtype
+        self.param_dtype = param_dtype
+        self.precision = precision
+        self.kernel_init = kernel_init
+        self.bias_init = bias_init
+        self.dot_general = dot_general
+        self.promote_dtype = promote_dtype
+
+    def __call__(self, inputs: Array) -> Array:
+        """Applies a linear transformation to the inputs along the last dimension.
+
+        Args:
+          inputs: The nd-array to be transformed.
+
+        Returns:
+          The transformed input.
+        """
+        kernel = self.kernel.value
+        bias = self.bias.value if self.bias is not None else None
+        g = self.g.value
+
+        inputs, kernel, bias, g = self.promote_dtype(
+            (inputs, kernel, bias, g), dtype=self.dtype
+        )
+        weights = g * kernel
+        y = self.dot_general(
+            inputs,
+            weights,
+            (((inputs.ndim - 1,), (0,)), ((), ())),
+            precision=self.precision,
+        )
+        assert self.use_bias == (bias is not None)
+        if bias is not None:
+            y += jnp.reshape(bias, (1,) * (y.ndim - 1) + (-1,))
+        return y
 
 
 class MLP(nnx.Module):
@@ -107,8 +305,8 @@ class MLP(nnx.Module):
         self,
         V: BaseSpace | CompositeMLP,
         *,
-        kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
-        bias_init: Initializer = nnx.nn.linear.default_bias_init,
+        kernel_init: Initializer = default_kernel_init,
+        bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs,
     ) -> None:
         hidden_size = (
@@ -116,7 +314,7 @@ class MLP(nnx.Module):
             if isinstance(V.hidden_size, list | tuple)
             else [V.hidden_size]
         )
-        self.linear_in = nnx.Linear(
+        self.linear_in = RWFLinear(
             V.in_size,
             hidden_size[0],
             rngs=rngs,
@@ -126,7 +324,7 @@ class MLP(nnx.Module):
             dtype=float,
         )
         self.hidden = [
-            nnx.Linear(
+            RWFLinear(
                 hidden_size[i],
                 hidden_size[min(i + 1, len(hidden_size) - 1)],
                 rngs=rngs,
@@ -137,7 +335,7 @@ class MLP(nnx.Module):
             )
             for i in range(len(hidden_size))
         ]
-        self.linear_out = nnx.Linear(
+        self.linear_out = RWFLinear(
             hidden_size[-1],
             V.out_size,
             rngs=rngs,
@@ -154,10 +352,131 @@ class MLP(nnx.Module):
         return pyt.shape[0]
 
     def __call__(self, x: Array) -> Array:
-        x = nnx.tanh(self.linear_in(x))
+        x = nnx.swish(self.linear_in(x))
         for z in self.hidden:
-            x = nnx.tanh(z(x))
+            x = nnx.swish(z(x))
         return self.linear_out(x)
+
+
+class PIModifiedBottleneck(nnx.Module):
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        nonlinearity: float,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        self.alpha = nnx.Param(jnp.array(nonlinearity).reshape((1,)))
+
+        self.layer1 = nnx.Linear(
+            in_dim, hidden_dim, rngs=rngs, dtype=float, param_dtype=float
+        )
+        self.layer2 = nnx.Linear(
+            hidden_dim, hidden_dim, rngs=rngs, dtype=float, param_dtype=float
+        )
+        self.layer3 = nnx.Linear(
+            hidden_dim, output_dim, rngs=rngs, dtype=float, param_dtype=float
+        )
+
+        self.act_fun = nnx.tanh
+
+    def __call__(self, x: Array, u: Array, v: Array) -> Array:
+        identity = x
+
+        x = self.act_fun(self.layer1(x))
+        x = x * u + (1 - x) * v
+
+        x = self.act_fun(self.layer2(x))
+        x = x * u + (1 - x) * v
+
+        x = self.act_fun(self.layer3(x))
+        x = self.alpha * x + (1 - self.alpha) * identity
+
+        return x
+
+
+class PirateNet(nnx.Module):
+    def __init__(
+        self,
+        V: PirateSpace | CompositeNetwork,
+        *,
+        kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
+        bias_init: Initializer = nnx.nn.linear.default_bias_init,
+        rngs: nnx.Rngs,
+    ) -> None:
+        hidden_size = (
+            V.hidden_size
+            if isinstance(V.hidden_size, list | tuple)
+            else [V.hidden_size]
+        )
+        # TODO: Need a smarter way to handle the input size at each step
+        self.embedder = Embedding(
+            periodicity=V.periodicity, fourier_emb=V.fourier_emb, rngs=rngs
+        )
+        in_dim = V.in_size
+        if V.periodicity is not None:
+            in_dim += len(V.periodicity["axis"])
+        if V.fourier_emb is not None:
+            in_dim = V.fourier_emb["embed_dim"]
+
+        # print(rngs, V)
+
+        self.u_net = nnx.Linear(
+            in_dim,
+            hidden_size[0],
+            rngs=rngs,
+            bias_init=bias_init,
+            kernel_init=kernel_init,
+            param_dtype=float,
+            dtype=float,
+        )
+        self.v_net = nnx.Linear(
+            in_dim,
+            hidden_size[0],
+            rngs=rngs,
+            bias_init=bias_init,
+            kernel_init=kernel_init,
+            param_dtype=float,
+            dtype=float,
+        )
+        self.hidden_layers = []
+        for i in range(len(hidden_size)):
+            # in_dim = hidden_size[i - 1] if i > 0 else in_dim
+            layer = PIModifiedBottleneck(
+                in_dim=in_dim,
+                hidden_dim=hidden_size[i],
+                output_dim=in_dim,
+                nonlinearity=V.nonlinearity,
+                rngs=rngs,
+            )
+            self.hidden_layers.append(layer)
+
+        if V.pi_init is not None:
+            raise NotImplementedError("Least squares initialization not implemented")
+        else:
+            self.output_layer = nnx.Linear(
+                in_dim,
+                V.out_size,
+                rngs=rngs,
+                bias_init=bias_init,
+                kernel_init=kernel_init,
+                param_dtype=float,
+                dtype=float,
+            )
+
+    def __call__(self, x: Array) -> Array:
+        x = self.embedder(x)
+        u = nnx.tanh(self.u_net(x))
+        v = nnx.tanh(self.v_net(x))
+
+        for layer in self.hidden_layers:
+            x = layer(x, u, v)
+
+        y = self.output_layer(x)
+
+        return y
 
 
 class SpectralModule(nnx.Module):
@@ -165,8 +484,8 @@ class SpectralModule(nnx.Module):
         self,
         basespace: BaseSpace,
         *,
-        kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
-        bias_init: Initializer = nnx.nn.linear.default_bias_init,
+        kernel_init: Initializer = default_kernel_init,
+        bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs,
     ) -> None:
         self.kernel = nnx.Param(kernel_init(rngs(), (1, basespace.N)))
@@ -197,8 +516,8 @@ class FlaxFunction(Function):
         *,
         module: nnx.Module = None,
         fun_str: str = None,
-        kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
-        bias_init: Initializer = nnx.nn.linear.default_bias_init,
+        kernel_init: Initializer = default_kernel_init,
+        bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs = None,
     ) -> Function:
         coors = V.system
@@ -208,7 +527,7 @@ class FlaxFunction(Function):
             obj.get_flax_module(
                 V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs
             )
-            if module is None
+            if module is None  # and not isinstance(V, CompositeNetwork)
             else module
         )
         obj.name = name
@@ -219,40 +538,31 @@ class FlaxFunction(Function):
         return obj
 
     def __getitem__(self, i: int):
+        # print("FlaxFunction __getitem__", i, self.functionspace[i])
         return FlaxFunction(
-            self.functionspace[i], name=self.name[i], module=self.module
+            self.functionspace[i], name=self.name[i], module=self.module, rngs=self.rngs
         )
 
     @property
-    def rank(self) -> int:
+    def rank(self):
         return (
             None
-            if isinstance(self.functionspace, CompositeMLP)
+            if isinstance(self.functionspace, CompositeMLP | CompositeNetwork)
             else self.functionspace.rank
         )
-
-    @property
-    def is_scalar(self) -> bool:
-        return self.rank == 0
-
-    @property
-    def is_Vector(self) -> bool:
-        return self.rank == 1
-
-    @property
-    def is_Dyadic(self) -> bool:
-        return self.rank == 2
 
     @staticmethod
     def get_flax_module(
         V,
         *,
-        kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
-        bias_init: Initializer = nnx.nn.linear.default_bias_init,
+        kernel_init: Initializer = default_kernel_init,
+        bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs,
-    ) -> nnx.Module:
+    ) -> MLP | PirateNet | SpectralModule:
         if isinstance(V, MLPSpace | CompositeMLP):
             return MLP(V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)
+        elif isinstance(V, PirateSpace | CompositeNetwork):
+            return PirateNet(V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)
         return SpectralModule(
             V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs
         )
@@ -312,7 +622,7 @@ class FlaxFunction(Function):
         return jnp.array(mesh).T
 
     def __str__(self) -> str:
-        name = "\033[1m%s\033[0m" % (self.name,) if self.rank == 1 else self.name
+        name = "\033[1m%s\033[0m" % (self.name,) if self.rank == 1 else self.name  # noqa: UP031
         return "".join(
             (
                 name,
@@ -343,7 +653,7 @@ class FlaxFunction(Function):
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
 
-    def __call__(self, x: Array) -> Array:
+    def __call__(self, x):
         y = self.module(x)
         V = self.functionspace
         if self.rank == 0:
@@ -410,11 +720,7 @@ def expand(forms: sp.Expr) -> list[sp.Expr]:
 
 class Residual:
     def __init__(
-        self,
-        f: sp.Expr,
-        x: Array,
-        target: Array | Number = 0,
-        weights: Array | Number = 1,
+        self, f: sp.Expr, x: Array, target: Array = 0, weights: Array = 1
     ) -> None:
         from jaxfun.forms import get_system
 
@@ -494,7 +800,7 @@ class LSQR:
 
                     self.residuals.append(Residual(*g))
                     res.append((g[0], g[1]))
-                    
+
             else:
                 self.residuals.append(Residual(*f))
                 res.append((f[0], f[1]))
@@ -539,7 +845,7 @@ class LSQR:
         for res in self.residuals:
             L2.append((res.weights * res(self.Js) ** 2).mean())
         return jnp.array(L2)
-    
+
     def compute_Li(self, model: nnx.Module, i: int):
         x = self.compute_residual_i(model, i)
         return (self.residuals[i].weights * x**2).mean()
@@ -554,7 +860,7 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar]) -> Callable[[Array, dict], Array]:
 
     Args:
         f (sp.Expr)
-        s (x, y, ...)
+        w (FlaxFunction)
 
     Returns:
         Callable[[Array, dict], Array]
@@ -624,11 +930,16 @@ def lookup_array(
     return Js[(id(x), mod, k)][var]
 
 
-def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
+def train(eqs: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
     @nnx.jit
     def train_step(model: nnx.Module, optimizer: nnx.Optimizer) -> float:
         gd, state = nnx.split(model, nnx.Param)
         unravel = jax.flatten_util.ravel_pytree(state)[1]
+
+        def loss_fn(model: nnx.Module) -> Array:
+            return eqs(model)
+
+        # print("Model in TrainStep", model)
         loss, gradients = nnx.value_and_grad(loss_fn)(model)
         loss_fn_split = lambda state: loss_fn(nnx.merge(gd, state))
         H_loss_fn = lambda flat_weights: loss_fn(nnx.merge(gd, unravel(flat_weights)))
@@ -644,83 +955,75 @@ def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
     return train_step
 
 
-def run_optimizer(
-    train: Callable[[nnx.Module, nnx.Optimizer], float],
-    model: nnx.Module,
-    opt: nnx.Optimizer,
-    num: int,
-    name: str,
-    epoch_print: int = 100,
-    abs_limit_loss: float = ulp(1000),
-    abs_limit_change: float = ulp(100),
-):
+def run_optimizer(t, model, opt, num, name, epoch_print=100):
     loss_old = 1.0
     for epoch in range(1, num + 1):
-        loss = train(model, opt)
+        loss = t(model, opt)
         if epoch % epoch_print == 0:
             print(f"Epoch {epoch} {name}, loss: {loss}")
-        if abs(loss) < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
+        # if abs(loss) < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
+        #     break
+        loss_old = loss
+    print(f"Final loss for {name}: {loss}")
+
+
+def train_CPINN(
+    eqs: list[Residual],
+) -> Callable[[nnx.Module, nnx.Optimizer, nnx.Module, nnx.Optimizer], float]:
+    @nnx.jit
+    def train_step(
+        model: nnx.Module,
+        optimizer: nnx.Optimizer,
+        discriminator: nnx.Module,
+        optd: nnx.Optimizer,
+    ) -> tuple[float, float]:
+        gd, state = nnx.split(model)
+        unravel = jax.flatten_util.ravel_pytree(state)[1]
+
+        def loss_fn(mod: nnx.Module) -> Array:
+            return sum([((eq(mod) * discriminator(eq.x)) ** 2).mean() for eq in eqs])
+
+        loss, gradients = nnx.value_and_grad(loss_fn)(model)
+        loss_fn_split = lambda state: loss_fn(nnx.merge(gd, state))
+        H_loss_fn = lambda flat_weights: loss_fn(nnx.merge(gd, unravel(flat_weights)))
+        optimizer.update(
+            gradients,
+            grad=gradients,
+            value_fn=loss_fn_split,
+            value=loss,
+            H_loss_fn=H_loss_fn,
+        )
+
+        def loss_fn_d(disc: nnx.Module) -> Array:
+            return sum([((eq(disc) * model(eq.x)) ** 2).mean() for eq in eqs])
+
+        gdd, stated = nnx.split(discriminator)
+        unraveld = jax.flatten_util.ravel_pytree(stated)[1]
+        lossd, gradd = nnx.value_and_grad(loss_fn_d)(discriminator)
+        loss_fn_d_split = lambda state: loss_fn_d(nnx.merge(gdd, state))
+        H_loss_fn_d = lambda flat_weights: loss_fn_d(
+            nnx.merge(gdd, unraveld(flat_weights))
+        )
+        gradd = jax.tree_util.tree_map(lambda p: -p, gradd)
+        optd.update(
+            gradd,
+            grad=gradd,
+            value_fn=loss_fn_d_split,
+            value=lossd,
+            H_loss_fn=H_loss_fn_d,
+        )
+
+        return loss, lossd
+
+    return train_step
+
+
+def run_optimizer_d(t, model, opt, disc, optd, num, name, epoch_print=100):
+    loss_old = 1.0
+    for epoch in range(1, num + 1):
+        loss, lossd = t(model, opt, disc, optd)
+        if epoch % epoch_print == 0:
+            print(f"Epoch {epoch} {name}, loss: {loss}, lossd: {lossd}")
+        if abs(loss) < ulp(1000) or abs(loss - loss_old) < ulp(1):
             break
         loss_old = loss
-
-
-# def train_CPINN(
-#    eqs: list[Residual],
-# ) -> Callable[[nnx.Module, nnx.Optimizer, nnx.Module, nnx.Optimizer], float]:
-#    @nnx.jit
-#    def train_step(
-#        model: nnx.Module,
-#        optimizer: nnx.Optimizer,
-#        discriminator: nnx.Module,
-#        optd: nnx.Optimizer,
-#    ) -> tuple[float, float]:
-#        gd, state = nnx.split(model)
-#        unravel = jax.flatten_util.ravel_pytree(state)[1]
-#
-#        def loss_fn(mod: nnx.Module) -> Array:
-#            return sum([((eq(mod) * discriminator(eq.x)) ** 2).mean() for eq in eqs])
-#
-#        loss, gradients = nnx.value_and_grad(loss_fn)(model)
-#        loss_fn_split = lambda state: loss_fn(nnx.merge(gd, state))
-#        H_loss_fn = lambda flat_weights: loss_fn(nnx.merge(gd, unravel(flat_weights)))
-#        optimizer.update(
-#            gradients,
-#            grad=gradients,
-#            value_fn=loss_fn_split,
-#            value=loss,
-#            H_loss_fn=H_loss_fn,
-#        )
-#
-#        def loss_fn_d(disc: nnx.Module) -> Array:
-#            return sum([((eq(disc) * model(eq.x)) ** 2).mean() for eq in eqs])
-#
-#        gdd, stated = nnx.split(discriminator)
-#        unraveld = jax.flatten_util.ravel_pytree(stated)[1]
-#        lossd, gradd = nnx.value_and_grad(loss_fn_d)(discriminator)
-#        loss_fn_d_split = lambda state: loss_fn_d(nnx.merge(gdd, state))
-#        H_loss_fn_d = lambda flat_weights: loss_fn_d(
-#            nnx.merge(gdd, unraveld(flat_weights))
-#        )
-#        gradd = jax.tree_util.tree_map(lambda p: -p, gradd)
-#        optd.update(
-#            gradd,
-#            grad=gradd,
-#            value_fn=loss_fn_d_split,
-#            value=lossd,
-#            H_loss_fn=H_loss_fn_d,
-#        )
-#
-#        return loss, lossd
-#
-#    return train_step
-#
-#
-# def run_optimizer_d(t, model, opt, disc, optd, num, name, epoch_print=100):
-#    loss_old = 1.0
-#    for epoch in range(1, num + 1):
-#        loss, lossd = t(model, opt, disc, optd)
-#        if epoch % epoch_print == 0:
-#            print(f"Epoch {epoch} {name}, loss: {loss}, lossd: {lossd}")
-#        if abs(loss) < ulp(1000) or abs(loss - loss_old) < ulp(1):
-#            break
-#        loss_old = loss

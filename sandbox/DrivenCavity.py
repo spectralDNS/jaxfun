@@ -12,6 +12,7 @@ import optax
 import pyvista
 import sympy as sp
 from flax import nnx
+from soap_jax import soap
 
 from jaxfun import Div, Dot, Grad, Outer
 from jaxfun.pinns.bcs import DirichletBC
@@ -22,13 +23,17 @@ from jaxfun.pinns.module import (
     LSQR,
     Comp,
     CompositeMLP,
+    CompositeNetwork,
     FlaxFunction,
     MLPSpace,
+    PirateSpace,
     run_optimizer,
     train,
 )
 from jaxfun.utils.common import ulp
 
+jax.config.update("jax_default_matmul_precision", "highest")
+jax.config.update("jax_enable_x64", True)
 dtype = jnp.float64
 
 print("JAX running on", jax.devices()[0].platform.upper())

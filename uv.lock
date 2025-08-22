@@ -530,15 +530,13 @@ wheels = [
 [[package]]
 name = "jaxfun"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "flax", version = "0.10.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "flax", version = "0.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jax", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "jax", version = "0.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "matplotlib" },
-    { name = "pytest" },
-    { name = "ruff" },
     { name = "sympy" },
 ]
 
@@ -546,6 +544,8 @@ dependencies = [
 dev = [
     { name = "ipython", version = "8.37.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "ipython", version = "9.4.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pytest" },
+    { name = "ruff" },
     { name = "soap-jax" },
 ]
 
@@ -554,14 +554,14 @@ requires-dist = [
     { name = "flax", specifier = ">=0.10.1" },
     { name = "jax", specifier = ">=0.4.36" },
     { name = "matplotlib", specifier = ">=3.9.3" },
-    { name = "pytest", specifier = ">=8.3.4" },
-    { name = "ruff", specifier = ">=0.9.4" },
     { name = "sympy", specifier = ">=1.13.3" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "ipython", specifier = ">=8.37.0" },
+    { name = "pytest", specifier = ">=8.4.1" },
+    { name = "ruff", specifier = ">=0.12.10" },
     { name = "soap-jax", git = "https://github.com/haydn-jones/SOAP_JAX" },
 ]
 

@@ -22,7 +22,6 @@ from sympy.printing import latex
 from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
-from jaxfun.arguments import FlaxBasisFunction
 from jaxfun.Basespace import BaseSpace
 from jaxfun.coordinates import BaseScalar, CoordSys
 from jaxfun.pinns.embeddings import Embedding

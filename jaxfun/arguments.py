@@ -1,14 +1,16 @@
 import itertools
 from functools import partial
+from numbers import Number
 from typing import Any
 
 import jax
 import sympy as sp
 from jax import Array
-from sympy import Expr, Function, Symbol
+from sympy import Expr, Function
 from sympy.printing.pretty.stringpict import prettyForm
+from sympy.vector import VectorAdd
 
-from jaxfun.Basespace import OrthogonalSpace
+from jaxfun.Basespace import BaseSpace, OrthogonalSpace
 from jaxfun.composite import DirectSum
 from jaxfun.coordinates import BaseScalar, CoordSys, latex_symbols
 from jaxfun.tensorproductspace import TensorProductSpace, VectorTensorProductSpace
@@ -22,143 +24,125 @@ functionspacedict = {}
 indices = "ijklmn"
 
 
-class BasisFunction(Function):
-    def __init__(self, coordinate: Symbol, dummy: Symbol) -> None:
-        f, s, offset, rank, j = dummy.name.split("-")
-        self.global_index = int(j)
-        self.local_index = getattr(coordinate, "_id", [0])[0]
-        self.fun_str = s
-        self.offset = int(offset)
-        self.rank = int(rank)
-        self.functionspace_name = f
+def get_BasisFunction(
+    name,
+    *,
+    global_index: int,
+    local_index: int,
+    rank: int,
+    offset: int,
+    functionspace: BaseSpace,
+    argument: int,
+    arg: BaseScalar,
+):
+    # Need additional printing because of the tensor product structure of the basis
+    # functions
 
-    def __new__(cls, coordinate: Symbol, dummy: Symbol) -> Function:
-        obj = Function.__new__(cls, coordinate, dummy)
-        return obj
-
-    def __str__(self) -> str:
-        index = indices[self.local_index + self.offset]
-        if self.rank == 0:
-            return "".join((self.fun_str, "_", index, "(", self.args[0].name, ")"))
-        elif self.rank == 1:
+    def __str__(cls) -> str:
+        index = indices[cls.local_index + cls.offset]
+        if cls.rank == 0:
+            return "".join((cls.name, "_", index, "(", cls.args[0].name, ")"))
+        elif cls.rank == 1:
             return "".join(
                 (
-                    self.fun_str,
+                    cls.name,
                     "_",
                     index,
                     "^{(",
-                    str(self.global_index),
+                    str(cls.global_index),
                     ")}",
                     "(",
-                    self.args[0].name,
+                    cls.args[0].name,
                     ")",
                 )
             )
 
-    def _pretty(self, printer: Any = None) -> str:
-        return prettyForm(self.__str__())
+    def _pretty(cls, printer: Any = None) -> str:
+        return prettyForm(cls.__str__())
 
-    def _sympystr(self, printer: Any) -> str:
-        return self.__str__()
+    def _sympystr(cls, printer: Any) -> str:
+        return cls.__str__()
 
-    def _latex(self, printer: Any = None) -> str:
-        index = indices[self.local_index + self.offset]
-        if self.rank == 0:
-            return "".join(
+    def _latex(cls, printer: Any = None, exp: Number = None) -> str:
+        index = indices[cls.local_index + cls.offset]
+        if cls.rank == 0:
+            s = "".join(
                 (
-                    latex_symbols[self.fun_str],
+                    latex_symbols[cls.name],
                     "_",
                     str(index),
                     "(",
-                    latex_symbols[self.args[0].name],
+                    latex_symbols[cls.args[0].name],
                     ")",
                 )
             )
-        elif self.rank == 1:
-            return "".join(
+        elif cls.rank == 1:
+            s = "".join(
                 (
-                    latex_symbols[self.fun_str],
+                    latex_symbols[cls.name],
                     "_",
                     str(index),
                     "^{(",
-                    str(self.global_index),
+                    str(cls.global_index),
                     ")}",
                     "(",
-                    latex_symbols[self.args[0].name],
+                    latex_symbols[cls.args[0].name],
                     ")",
                 )
             )
+        return s if exp is None else f"\\left({s}\\right)^{{{exp}}}"
 
-    @property
-    def functionspace(self):
-        return functionspacedict[self.functionspace_name]
+    b = sp.Function(
+        name,
+        global_index=global_index,
+        local_index=local_index,
+        rank=rank,
+        offset=offset,
+        functionspace=functionspace,
+        argument=argument,
+    )(arg)
 
-
-class FlaxBasisFunction(Function):
-    def __init__(self, *args) -> None:
-        coordinates = args[:-1]
-        dummy = args[-1]
-        global_index, dummy, self.fun_str = dummy.name.split("+")
-        self.global_index = int(global_index)
-        self.base_scalars = coordinates
-        
-    def __new__(cls, *coordinates) -> Function:
-        obj = Function.__new__(cls, *coordinates)
-        return obj
-
-    def __str__(self) -> str:
-        if len(self.args[1:]) == 1:
-            return "".join((self.fun_str, "(", str(self.args[0]), ")"))
-        else:
-            return "".join((self.fun_str, str(self.args[:-1])))
-        
-    def doit(self, **hints: dict) -> Function:
-        return self 
-    
-    def _pretty(self, printer: Any = None) -> str:
-        return prettyForm(self.__str__())
-
-    def _sympystr(self, printer: Any) -> str:
-        return self.__str__()
-    
-    def _latex(self, printer: Any = None) -> str:
-        if len(self.args[1:]) == 1:
-            return "".join((latex_symbols[self.fun_str], "(", str(self.args[0]), ")"))
-        else:
-            return "".join((latex_symbols[self.fun_str], str(self.args[:-1]))) 
-
-
-class trial(BasisFunction):
-    pass
-
-
-class test(BasisFunction):
-    pass
+    b.__class__.__str__ = __str__
+    b.__class__._pretty = _pretty
+    b.__class__._sympystr = _sympystr
+    b.__class__._latex = _latex
+    return b
 
 
 def _get_computational_function(
     arg: str, V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
 ) -> Expr:
-    func = test if arg == "test" else trial
-    args = V.system.base_scalars()
+    base_scalars = V.system.base_scalars()
     functionspacedict[V.name] = V
     offset = V.dims if arg == "trial" else 0
     if isinstance(V, OrthogonalSpace):
-        assert args[0].is_Symbol
-        return func(
-            args[0], sp.Symbol(V.name + "-" + V.fun_str + "-" + str(offset) + "-0-0")
+        assert base_scalars[0].is_Symbol
+        return get_BasisFunction(
+            V.fun_str,
+            global_index=0,
+            local_index=0,
+            rank=0,
+            offset=offset,
+            functionspace=V,
+            argument=0 if arg == "test" else 1,
+            arg=base_scalars[0],
         )
 
     elif isinstance(V, TensorProductSpace):
         for space in V.basespaces:
             functionspacedict[space.name] = space
-        return sp.Mul(
-            *[
-                func(
-                    a, sp.Symbol(v.name + "-" + v.fun_str + "-" + str(offset) + "-0-0")
-                )
-                for a, v in zip(args, V, strict=False)
-            ]
+        return sp.Mul.fromiter(
+            get_BasisFunction(
+                v.fun_str,
+                global_index=0,
+                local_index=getattr(a, "_id", [0])[0],
+                rank=0,
+                offset=offset,
+                functionspace=v,
+                argument=0 if arg == "test" else 1,
+                arg=a,
+            )
+            for a, v in zip(base_scalars, V, strict=False)
         )
 
     elif isinstance(V, VectorTensorProductSpace):
@@ -166,28 +150,22 @@ def _get_computational_function(
         for Vi in V:
             for v in Vi:
                 functionspacedict[v.name] = v
-        return sp.vector.VectorAdd(
-            *[
-                sp.Mul(
-                    *[
-                        func(
-                            a,
-                            sp.Symbol(
-                                v.name
-                                + "-"
-                                + v.fun_str
-                                + "-"
-                                + str(offset)
-                                + "-1-"
-                                + str(i)
-                            ),
-                        )
-                        for a, v in zip(args, Vi, strict=False)
-                    ]
+        return VectorAdd.fromiter(
+            sp.Mul.fromiter(
+                get_BasisFunction(
+                    v.fun_str,
+                    global_index=i,
+                    local_index=getattr(a, "_id", [0])[0],
+                    rank=1,
+                    offset=offset,
+                    functionspace=v,
+                    argument=0 if arg == "test" else 1,
+                    arg=a,
                 )
-                * b[i]
-                for i, Vi in enumerate(V)
-            ]
+                for a, v in zip(base_scalars, Vi, strict=False)
+            )
+            * b[i]
+            for i, Vi in enumerate(V)
         )
 
 
@@ -200,14 +178,17 @@ def _get_computational_function(
 class TestFunction(Function):
     __test__ = False  # prevent pytest from considering this a test.
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
-    ) -> None:
-        self.functionspace = V
+    ) -> Function:
+        coors = V.system
+        obj = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)]))
+        obj.functionspace = V
+        obj.argument = 0
         if isinstance(V, DirectSum):
-            self.functionspace = V[0].get_homogeneous()
+            obj.functionspace = V[0].get_homogeneous()
         elif isinstance(V, TensorProductSpace):
             f = []
             vname = V.name
@@ -217,26 +198,17 @@ class TestFunction(Function):
                     vname += "0"
                 else:
                     f.append(space)
-            self.functionspace = TensorProductSpace(f, name=vname, system=V.system)
-        self.name = name
-
-    def __new__(
-        cls,
-        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
-        name: str = None,
-    ) -> Function:
-        coors = V.system
-        obj = Function.__new__(cls, *(coors._cartesian_xyz + [sp.Symbol(V.name)]))
+            obj.functionspace = TensorProductSpace(f, name=vname, system=V.system)
+        obj.name = name if name is not None else "TestFunction"
         return obj
 
     def doit(self, **hints: dict) -> Expr:
         return _get_computational_function("test", self.functionspace)
 
     def __str__(self) -> str:
-        name = self.name if self.name is not None else "TestFunction"
         return "".join(
             (
-                name,
+                self.name,
                 "(",
                 ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
                 "; ",
@@ -246,8 +218,9 @@ class TestFunction(Function):
         )
 
     def _latex(self, printer: Any = None) -> str:
-        name = self.name if self.name is not None else "TestFunction"
-        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
+        name = self.name
+        if name != "TestFunction" and self.functionspace.rank == 1:
+            name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return "".join(
             (
                 name,
@@ -267,31 +240,23 @@ class TestFunction(Function):
 
 
 class TrialFunction(Function):
-    def __init__(
-        self,
-        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
-        name: str = None,
-    ) -> None:
-        self.functionspace = V
-        self.name = name
-
     def __new__(
         cls,
         V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
     ) -> Function:
         coors = V.system
-        obj = Function.__new__(cls, *(coors._cartesian_xyz + [sp.Symbol(V.name)]))
+        obj = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)]))
+        obj.functionspace = V
+        obj.name = name if name is not None else "TrialFunction"
+        obj.argument = 1
         return obj
 
     def doit(self, **hints: dict) -> Expr:
-        
         if isinstance(self.functionspace, DirectSum):
-            return sp.Add(
-                *[
-                    _get_computational_function("trial", f)
-                    for f in self.functionspace.basespaces
-                ]
+            return sp.Add.fromiter(
+                _get_computational_function("trial", f)
+                for f in self.functionspace.basespaces
             )
         elif isinstance(self.functionspace, TensorProductSpace):
             spaces = self.functionspace.basespaces
@@ -302,27 +267,24 @@ class TrialFunction(Function):
                 else:
                     f.append([space])
             tensorspaces = itertools.product(*f)
-            return sp.Add(
-                *[
-                    _get_computational_function(
-                        "trial",
-                        TensorProductSpace(
-                            s,
-                            name=self.functionspace.name + f"{i}",
-                            system=self.functionspace.system,
-                        ),
-                    )
-                    for i, s in enumerate(tensorspaces)
-                ]
+            return sp.Add.fromiter(
+                _get_computational_function(
+                    "trial",
+                    TensorProductSpace(
+                        s,
+                        name=self.functionspace.name + f"{i}",
+                        system=self.functionspace.system,
+                    ),
+                )
+                for i, s in enumerate(tensorspaces)
             )
-        
+
         return _get_computational_function("trial", self.functionspace)
 
     def __str__(self) -> str:
-        name = self.name if self.name is not None else "TrialFunction"
         return "".join(
             (
-                name,
+                self.name,
                 "(",
                 ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
                 "; ",
@@ -332,8 +294,9 @@ class TrialFunction(Function):
         )
 
     def _latex(self, printer: Any = None) -> str:
-        name = self.name if self.name is not None else "TrialFunction"
-        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
+        name = self.name
+        if name != "TrialFunction" and self.functionspace.rank == 1:
+            name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return "".join(
             (
                 name,
@@ -350,11 +313,11 @@ class TrialFunction(Function):
 
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
-    
+
 
 class ScalarFunction(Function):
     def __new__(cls, name: str, system: CoordSys) -> Function:
-        obj = Function.__new__(cls, *(system._cartesian_xyz + [sp.Dummy()]))
+        obj = Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
         obj.system = system
         obj.name = name.lower()
         return obj
@@ -386,7 +349,7 @@ class ScalarFunction(Function):
 
 class VectorFunction(Function):
     def __new__(cls, name: str, system: CoordSys) -> Function:
-        obj = Function.__new__(cls, *(system._cartesian_xyz + [sp.Dummy()]))
+        obj = Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
         obj.system = system
         obj.name = name.lower()
         return obj
@@ -397,14 +360,12 @@ class VectorFunction(Function):
     def doit(self, **hints: dict) -> Function:
         """Return function in computational domain"""
         vn = self.system._variable_names
-        return sp.vector.VectorAdd(
-            *[
-                Function(self.name.upper() + f"_{latex_symbols[vn[i]]}")(
-                    *self.system.base_scalars()
-                )
-                * bi
-                for i, bi in enumerate(self.system.base_vectors())
-            ]
+        return VectorAdd.fromiter(
+            Function(self.name.upper() + f"_{latex_symbols[vn[i]]}")(
+                *self.system.base_scalars()
+            )
+            * bi
+            for i, bi in enumerate(self.system.base_vectors())
         )
 
     def _pretty(self, printer: Any = None) -> str:
@@ -416,15 +377,19 @@ class VectorFunction(Function):
     def _latex(self, printer: Any = None) -> str:
         return r"\mathbf{{%s}}" % (latex_symbols[self.name],) + str(self.args[:-1])  # noqa: UP031
 
+
 # Not sure this will be useful:
 class JAXArray(Function):
     def __new__(
-        cls, array: Array, V: OrthogonalSpace | TensorProductSpace | DirectSum, name: str
+        cls,
+        array: Array,
+        V: OrthogonalSpace | TensorProductSpace | DirectSum,
+        name: str = None,
     ) -> Function:
         obj = Function.__new__(cls, sp.Dummy())
         obj.array = array
         obj.functionspace = V
-        obj.name = name.lower()
+        obj.name = name if name is not None else "JAXArray"
         return obj
 
     def forward(self):
@@ -448,12 +413,15 @@ class JAXArray(Function):
 
 class Jaxf(Function):
     def __new__(
-        cls, array: Array, V: OrthogonalSpace | TensorProductSpace | DirectSum, name: str
+        cls,
+        array: Array,
+        V: OrthogonalSpace | TensorProductSpace | DirectSum,
+        name: str = None,
     ) -> Function:
         obj = Function.__new__(cls, sp.Dummy())
         obj.array = array
         obj.functionspace = V
-        obj.name = name.lower()
+        obj.name = name if name is not None else "Jaxf"
         return obj
 
     def backward(self):
@@ -476,16 +444,6 @@ class Jaxf(Function):
 
 
 class JAXFunction(Function):
-    def __init__(
-        self,
-        array: Array,
-        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
-        name: str = "JAXFunction",
-    ) -> None:
-        self.array = array
-        self.functionspace = V
-        self.name = name
-
     def __new__(
         cls,
         array: Array,
@@ -493,7 +451,10 @@ class JAXFunction(Function):
         name: str = None,
     ) -> Function:
         coors = V.system
-        obj = Function.__new__(cls, *(coors._cartesian_xyz + [sp.Symbol(V.name)]))
+        obj = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)]))
+        obj.array = array
+        obj.functionspace = V
+        obj.name = name if name is not None else "JAXFunction"
         return obj
 
     def backward(self):
@@ -506,10 +467,9 @@ class JAXFunction(Function):
         )
 
     def __str__(self) -> str:
-        name = self.name if self.name is not None else "JAXFunction"
         return "".join(
             (
-                name,
+                self.name,
                 "(",
                 ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
                 "; ",
@@ -519,8 +479,9 @@ class JAXFunction(Function):
         )
 
     def _latex(self, printer: Any = None) -> str:
-        name = self.name if self.name is not None else "JAXFunction"
-        name = name if self.functionspace.rank == 0 else r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
+        name = self.name
+        if name != "JAXFunction" and self.functionspace.rank == 1:
+            name = r"\mathbf{ {%s} }" % (self.name,)  # noqa: UP031
         return "".join(
             (
                 name,
@@ -537,12 +498,31 @@ class JAXFunction(Function):
 
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
- 
+
     @partial(jax.jit, static_argnums=0)
     def __matmul__(self, a: Array) -> Array:
         return self.array @ a
-    
+
     @partial(jax.jit, static_argnums=0)
     def __rmatmul__(self, a: Array) -> Array:
         return a @ self.array
-    
+
+
+class Constant(sp.Symbol):
+    def __new__(cls, name: str, val: Number, **assumptions):
+        obj = super().__new__(cls, name, **assumptions)
+        obj.val = val
+        return obj
+
+    def doit(self) -> Number:
+        return self.val
+
+
+class Identity(sp.Expr):
+    def __init__(self, sys: CoordSys):
+        self.sys = sys
+
+    def doit(self):
+        return sum(
+            self.sys.base_dyadics()[:: self.sys.dims + 1], sp.vector.DyadicZero()
+        )

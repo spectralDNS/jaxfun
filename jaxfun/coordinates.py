@@ -18,8 +18,8 @@ from sympy.core.symbol import Str
 from sympy.core.sympify import _sympify
 from sympy.printing.precedence import PRECEDENCE
 from sympy.printing.pretty.stringpict import prettyForm
-from sympy.vector.dyadic import Dyadic, DyadicZero
-from sympy.vector.vector import Vector, VectorZero
+from sympy.vector.dyadic import Dyadic, DyadicAdd
+from sympy.vector.vector import Vector, VectorAdd
 
 tensor_product_symbol = "\u2297"
 
@@ -94,7 +94,6 @@ class BaseScalar(AtomicExpr):
     is_symbol = True
     is_Symbol = True
     is_real = True
-    #is_positive = True
 
     @property
     def free_symbols(self) -> set:
@@ -220,7 +219,6 @@ class BaseDyadic(Dyadic, AtomicExpr):
         obj._latex_form = (
             r"\left("
             + vector1._latex_form
-            + r"{\middle}"
             + tensor_product_symbol
             + vector2._latex_form
             + r"\right)"
@@ -325,7 +323,7 @@ class CoordSys(Basic):
             ]
         pretty_vects = vector_names
 
-        obj._vector_names = vector_names
+        obj._vector_names = tuple(vector_names)
 
         # Create covariant basis vectors in case of curvilinear
         v = []
@@ -338,14 +336,15 @@ class CoordSys(Basic):
         latex_scalars = [latex_symbols[x] for x in variable_names]
         pretty_scalars = variable_names
 
-        obj._variable_names = variable_names
-        obj._vector_names = vector_names
+        obj._variable_names = tuple(variable_names)
 
         base_scalars = []
         for i in range(len(psi)):
             base_scalars.append(BaseScalar(i, obj, pretty_scalars[i], latex_scalars[i]))
         obj._psi = psi
-        obj._cartesian_xyz = base_scalars if parent is None else parent._cartesian_xyz
+        obj._cartesian_xyz = (
+            Tuple(*base_scalars) if parent is None else parent._cartesian_xyz
+        )
 
         obj._map_base_scalar_to_symbol = {
             k: v for k, v in zip(base_scalars, obj._psi, strict=False)
@@ -441,12 +440,13 @@ class CoordSys(Basic):
     def rv(self) -> tuple[Expr]:
         return self._position_vector
 
-    def position_vector(self, as_coordsys3d: bool = False) -> tuple[Expr]:
+    def get_cartesian_basis_vectors(self):
+        return self._parent.base_vectors() if self._parent else self.base_vectors()
+
+    def position_vector(self, as_Vector: bool = False) -> tuple[Expr]:
         r = self.refine_replace(self._position_vector)
-        base_vectors = (
-            self._parent.base_vectors() if self._parent else self.base_vectors()
-        )
-        return np.array(r) @ np.array(base_vectors) if as_coordsys3d else r
+        base_vectors = self.get_cartesian_basis_vectors()
+        return np.array(r) @ np.array(base_vectors) if as_Vector else r
 
     @property
     def psi(self) -> tuple[Symbol]:
@@ -538,14 +538,14 @@ class CoordSys(Basic):
         # We use covariant basis vectors, so the vector v already contains the
         # contravariant components.
         if v.is_Vector:
-            return v.components.get(self._covariant_basis_map[k], VectorZero)
-        return v.components.get(self._covariant_basis_dyadic_map[k, j], DyadicZero)
+            return v.components.get(self._covariant_basis_map[k], sp.S.Zero)
+        return v.components.get(self._covariant_basis_dyadic_map[k, j], sp.S.Zero)
 
     def get_covariant_component(self, v: Vector | Dyadic, k: int, j: int = None) -> Any:
-        b = self.get_covariant_basis(True)
+        b = self.base_vectors()
         if v.is_Vector:
-            return self.simplify(v & b[k])
-        return self.simplify(b[k] & v & b[j])
+            return v & b[k]
+        return b[k] & v & b[j]
 
     def get_det_g(self, covariant: bool = True) -> Expr:
         """Return determinant of covariant metric tensor"""
@@ -594,48 +594,22 @@ class CoordSys(Basic):
             hi[i] = sp.sqrt(self.refine(self.simplify(s)))
             hi[i] = self.refine(hi[i])
 
-        hi = express(hi, self)
+        hi = np.array(express(hi, self))
         self._hi = hi
         return hi
 
-    def get_cartesian_basis(
-        self, as_coordsys3d: bool = False
-    ) -> np.ndarray[Any, np.dtype[object]]:
-        """Return Cartesian basis vectors"""
-        if as_coordsys3d:
-            return np.array(self._parent.base_vectors())
-
-        return np.eye(len(self.rv), dtype=object)
-
-    def get_normal_basis(
-        self, as_coordsys3d: bool = False
-    ) -> np.ndarray[Any, np.dtype[object]]:
-        from jaxfun.operators import express
-
-        if self._e is not None:
-            if as_coordsys3d:
-                return self._e @ self._parent.base_vectors()[: self._e.shape[1]]
-            return self._e
-
-        b = self.b
-        e = np.zeros_like(b)
-        for i, bi in enumerate(b):
-            length = sp.sqrt(self.simplify(np.dot(bi, bi)))
-            length = self.refine(length)
-            e[i] = express(bi / length, self)
-        self._e = e
-        if as_coordsys3d:
-            return e @ self._parent.base_vectors()[: e.shape[1]]
-        return e
-
     def get_covariant_basis(
-        self, as_coordsys3d: bool = False
+        self, as_Vector: bool = False
     ) -> np.ndarray[Any, np.dtype[object]]:
-        """Return covariant basisvectors"""
+        """Return covariant basis vectors in terms of Cartesian basis vectors"""
         from jaxfun.operators import express
+
         if self._b is not None:
-            if as_coordsys3d:
-                return self._b @ self._parent.base_vectors()[: self._b.shape[1]]
+            if as_Vector:
+                return (
+                    self._b
+                    @ np.array(self.get_cartesian_basis_vectors())[: self._b.shape[1]]
+                )
             return self._b
 
         b = np.zeros((len(self.psi), len(self.rv)), dtype=object)
@@ -645,60 +619,43 @@ class CoordSys(Basic):
                 b[i, j] = express(self.refine_replace(self.simplify(b[i, j])), self)
 
         self._b = b
-        if as_coordsys3d:
-            return b @ self._parent.base_vectors()[: b.shape[1]]
+        if as_Vector:
+            return b @ np.array(self.get_cartesian_basis_vectors())[: b.shape[1]]
         return b
 
+    def get_contravariant_basis_vector(self, i: int):
+        """Return contravariant basis vector i in terms of the covariant vectors"""
+        return self.get_contravariant_metric_tensor()[i] @ self.base_vectors()
+
     def get_contravariant_basis(
-        self, as_coordsys3d: bool = False
+        self, as_Vector: bool = False
     ) -> np.ndarray[Any, np.dtype[object]]:
         """Return contravariant basisvectors"""
         # Note. Since we only require the transformation to Cartesian in the creation
         # of this CoordSys, we need to make use of b and gt in order to find bt.
+
         if self._bt is not None:
-            if as_coordsys3d:
-                return self._bt @ self._parent.base_vectors()[: self._bt.shape[1]]
+            if as_Vector:
+                return (
+                    self._bt
+                    @ np.array(self.get_cartesian_basis_vectors())[: self._bt.shape[1]]
+                )
             return self._bt
 
-        bt = np.zeros_like(self.b)
         gt = self.get_contravariant_metric_tensor()
         b = self.b
-        for i in range(len(self.psi)):
-            for j in range(len(self.psi)):
-                bt[i] += gt[i, j] * b[j]
-
-        for i in range(len(self.psi)):
-            for j in range(len(self.psi)):
-                bt[i, j] = self.simplify(bt[i, j])
-
+        bt = self.simplify(gt @ b)
         self._bt = bt
-        if as_coordsys3d:
-            return bt @ self._parent.base_vectors()[: bt.shape[1]]
+        if as_Vector:
+            return bt @ np.array(self.get_cartesian_basis_vectors())[: bt.shape[1]]
         return bt
-
-    def get_normal_metric_tensor(self) -> np.ndarray[Any, np.dtype[object]]:
-        """Return normal metric tensor"""
-        if self._gn is not None:
-            return self._gn
-        gn = np.zeros((len(self.psi), len(self.psi)), dtype=object)
-        e = self.e
-        for i in range(len(self.psi)):
-            for j in range(len(self.psi)):
-                gn[i, j] = self.refine_replace(self.simplify(np.dot(e[i], e[j])))
-
-        self._gn = gn
-        return gn
 
     def get_covariant_metric_tensor(self) -> np.ndarray[Any, np.dtype[object]]:
         """Return covariant metric tensor"""
         if self._g is not None:
             return self._g
-        g = np.zeros((len(self.psi), len(self.psi)), dtype=object)
         b = self.b
-        for i in range(len(self.psi)):
-            for j in range(len(self.psi)):
-                g[i, j] = self.refine(self.simplify(np.dot(b[i], b[j])))
-
+        g = self.refine(self.simplify(b @ b.T))
         self._g = g
         return g
 
@@ -708,9 +665,7 @@ class CoordSys(Basic):
             return self._gt
         g = self.get_covariant_metric_tensor()
         gt = sp.Matrix(g).inv()
-        for i in range(gt.shape[0]):
-            for j in range(gt.shape[1]):
-                gt[i, j] = self.simplify(gt[i, j]).factor()
+        gt = sp.factor(self.simplify(gt))
         gt = np.array(gt)
         self._gt = gt
         return gt
@@ -724,33 +679,21 @@ class CoordSys(Basic):
         ct = np.zeros((len(self.psi),) * 3, object)
         for i in range(len(self.psi)):
             for j in range(len(self.psi)):
+                db = np.array([bij.diff(self.psi[j], 1) for bij in b[i]])
                 for k in range(len(self.psi)):
-                    ct[k, i, j] = self.simplify(
-                        np.dot(
-                            np.array([bij.diff(self.psi[j], 1) for bij in b[i]]), bt[k]
-                        )
-                    )
+                    ct[k, i, j] = self.simplify(np.dot(db, bt[k]))
         self._ct = ct
         return ct
 
-    def get_metric_tensor(self, kind="normal") -> np.ndarray[Any, np.dtype[object]]:
-        if kind == "covariant":
-            gij = self.get_covariant_metric_tensor()
-        elif kind == "contravariant":
-            gij = self.get_contravariant_metric_tensor()
-        elif kind == "normal":
-            gij = self.get_normal_metric_tensor()
-        else:
-            raise NotImplementedError
-        return gij
-
-    def get_basis(self, kind: str = "normal") -> np.ndarray[Any, np.dtype[object]]:
-        if kind == "covariant":
-            return self.get_covariant_basis()
-        assert kind == "normal"
-        return self.get_normal_basis()
-
     def simplify(self, expr: Expr) -> Expr:
+        if isinstance(expr, VectorAdd):
+            return VectorAdd.fromiter(
+                self.simplify(f) * b for b, f in expr.components.items()
+            )
+        elif isinstance(expr, DyadicAdd):
+            return DyadicAdd.fromiter(
+                self.simplify(f) * b for b, f in expr.components.items()
+            )
         return self.expr_psi_to_base_scalar(
             sp.simplify(self.expr_base_scalar_to_psi(expr), measure=self._measure)
         )
@@ -890,41 +833,6 @@ def get_CoordSys(
         replace=replace,
         measure=measure,
     )
-
-
-class JacobianDet(sp.Function):
-    """Return Jacobian determinant"""
-
-    def __new__(cls, system: CoordSys):
-        from jaxfun.operators import express
-
-        obj = sp.Function.__new__(cls, *([system.base_scalars()] + [sp.Dummy()]))
-        obj._system = system
-        g = sp.Matrix(system.get_covariant_metric_tensor()).det()
-        g = system.replace(g).factor()
-        g = express(system.refine(system.simplify(g)), system)
-        obj._g = g
-        return obj
-
-    def __str__(self) -> str:
-        return "".join(
-            (
-                "g(",
-                ", ".join([i.name for i in self._system.base_scalars()]),
-                "; ",
-                self._system._name,
-                ")",
-            )
-        )
-
-    def _pretty(self, printer: Any = None) -> str:
-        return prettyForm(self.__str__())
-
-    def _sympystr(self, printer: Any) -> str:
-        return self.__str__()
-
-    def doit(self, **hints):
-        return self._g
 
 
 sp.vector.BaseDyadic = BaseDyadic

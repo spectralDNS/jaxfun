@@ -8,8 +8,15 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
-from flax.typing import Initializer
-from jax import Array
+from flax.nnx.nn import dtypes
+from flax.typing import (
+    DotGeneralT,
+    Dtype,
+    Initializer,
+    PrecisionLike,
+    PromoteDtypeFn,
+)
+from jax import Array, lax
 from sympy import Function
 from sympy.printing.pretty.stringpict import prettyForm
 
@@ -18,6 +25,9 @@ from jaxfun.Basespace import BaseSpace
 from jaxfun.coordinates import BaseScalar, CoordSys
 from jaxfun.pinns.embeddings import Embedding
 from jaxfun.utils.common import jacn, lambdify, ulp
+
+default_kernel_init = nnx.initializers.glorot_normal()
+default_bias_init = nnx.initializers.zeros_init()
 
 
 class MLPSpace(BaseSpace):
@@ -179,13 +189,107 @@ class CompositeNetwork:
         return len(self.mlp)
 
 
+class RWFLinear(nnx.Module):
+    """A linear transformation applied over the last dimension of the input.
+
+    Args:
+      in_features: the number of input features.
+      out_features: the number of output features.
+      use_bias: whether to add a bias to the output (default: True).
+      dtype: the dtype of the computation (default: infer from input and params).
+      param_dtype: the dtype passed to parameter initializers (default: float32).
+      precision: numerical precision of the computation see ``jax.lax.Precision``
+        for details.
+      kernel_init: initializer function for the weight matrix.
+      bias_init: initializer function for the bias.
+      dot_general: dot product function.
+      promote_dtype: function to promote the dtype of the arrays to the desired
+        dtype. The function should accept a tuple of ``(inputs, kernel, bias)``
+        and a ``dtype`` keyword argument, and return a tuple of arrays with the
+        promoted dtype.
+      rngs: rng key.
+    """
+
+    __data__ = ("kernel", "scaling", "bias")
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        use_bias: bool = True,
+        dtype: Dtype | None = None,
+        param_dtype: Dtype = jnp.float32,
+        precision: PrecisionLike = None,
+        kernel_init: Initializer = default_kernel_init,
+        bias_init: Initializer = default_bias_init,
+        dot_general: DotGeneralT = lax.dot_general,
+        promote_dtype: PromoteDtypeFn = dtypes.promote_dtype,
+        rngs: nnx.Rngs,
+    ):
+        kernel_key = rngs.params()
+        w = kernel_init(kernel_key, (in_features, out_features), param_dtype)
+        scaling_key = rngs.params()
+        # Use RWF params from https://arxiv.org/pdf/2507.08972
+        scaling_init = nnx.initializers.normal(0.1)
+        g = 1.0 + scaling_init(scaling_key, (out_features,), param_dtype)
+        self.g = nnx.Param(jnp.exp(g))
+        self.kernel = nnx.Param(w / g)
+
+        self.bias: nnx.Param[jax.Array] | None
+        if use_bias:
+            bias_key = rngs.params()
+            self.bias = nnx.Param(bias_init(bias_key, (out_features,), param_dtype))
+        else:
+            self.bias = None
+
+        self.in_features = in_features
+        self.out_features = out_features
+        self.use_bias = use_bias
+        self.dtype = dtype
+        self.param_dtype = param_dtype
+        self.precision = precision
+        self.kernel_init = kernel_init
+        self.bias_init = bias_init
+        self.dot_general = dot_general
+        self.promote_dtype = promote_dtype
+
+    def __call__(self, inputs: Array) -> Array:
+        """Applies a linear transformation to the inputs along the last dimension.
+
+        Args:
+          inputs: The nd-array to be transformed.
+
+        Returns:
+          The transformed input.
+        """
+        kernel = self.kernel.value
+        bias = self.bias.value if self.bias is not None else None
+        g = self.g.value
+
+        inputs, kernel, bias, g = self.promote_dtype(
+            (inputs, kernel, bias, g), dtype=self.dtype
+        )
+        weights = g * kernel
+        y = self.dot_general(
+            inputs,
+            weights,
+            (((inputs.ndim - 1,), (0,)), ((), ())),
+            precision=self.precision,
+        )
+        assert self.use_bias == (bias is not None)
+        if bias is not None:
+            y += jnp.reshape(bias, (1,) * (y.ndim - 1) + (-1,))
+        return y
+
+
 class MLP(nnx.Module):
     def __init__(
         self,
         V: BaseSpace | CompositeMLP,
         *,
-        kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
-        bias_init: Initializer = nnx.nn.linear.default_bias_init,
+        kernel_init: Initializer = default_kernel_init,
+        bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs,
     ) -> None:
         hidden_size = (
@@ -193,7 +297,7 @@ class MLP(nnx.Module):
             if isinstance(V.hidden_size, list | tuple)
             else [V.hidden_size]
         )
-        self.linear_in = nnx.Linear(
+        self.linear_in = RWFLinear(
             V.in_size,
             hidden_size[0],
             rngs=rngs,
@@ -203,7 +307,7 @@ class MLP(nnx.Module):
             dtype=float,
         )
         self.hidden = [
-            nnx.Linear(
+            RWFLinear(
                 hidden_size[i],
                 hidden_size[min(i + 1, len(hidden_size) - 1)],
                 rngs=rngs,
@@ -214,7 +318,7 @@ class MLP(nnx.Module):
             )
             for i in range(len(hidden_size))
         ]
-        self.linear_out = nnx.Linear(
+        self.linear_out = RWFLinear(
             hidden_size[-1],
             V.out_size,
             rngs=rngs,
@@ -225,9 +329,9 @@ class MLP(nnx.Module):
         )
 
     def __call__(self, x: Array) -> Array:
-        x = nnx.tanh(self.linear_in(x))
+        x = nnx.swish(self.linear_in(x))
         for z in self.hidden:
-            x = nnx.tanh(z(x))
+            x = nnx.swish(z(x))
         return self.linear_out(x)
 
 
@@ -357,8 +461,8 @@ class SpectralModule(nnx.Module):
         self,
         basespace: BaseSpace,
         *,
-        kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
-        bias_init: Initializer = nnx.nn.linear.default_bias_init,
+        kernel_init: Initializer = default_kernel_init,
+        bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs,
     ) -> None:
         self.kernel = nnx.Param(kernel_init(rngs(), (1, basespace.N)))
@@ -385,8 +489,8 @@ class FlaxFunction(Function):
         *,
         module: nnx.Module = None,
         fun_str: str = None,
-        kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
-        bias_init: Initializer = nnx.nn.linear.default_bias_init,
+        kernel_init: Initializer = default_kernel_init,
+        bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs = None,
     ) -> None:
         self.functionspace = V
@@ -411,8 +515,8 @@ class FlaxFunction(Function):
         name: str,
         *,
         module: nnx.Module = None,
-        kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
-        bias_init: Initializer = nnx.nn.linear.default_bias_init,
+        kernel_init: Initializer = default_kernel_init,
+        bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs = None,
     ) -> Function:
         # print("Creating FlaxFunction", V, name, module, rngs)
@@ -438,8 +542,8 @@ class FlaxFunction(Function):
     def get_flax_module(
         V,
         *,
-        kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
-        bias_init: Initializer = nnx.nn.linear.default_bias_init,
+        kernel_init: Initializer = default_kernel_init,
+        bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs,
     ) -> MLP | PirateNet | SpectralModule:
         if isinstance(V, MLPSpace | CompositeMLP):
@@ -751,8 +855,8 @@ def run_optimizer(t, model, opt, num, name, epoch_print=100):
         loss = t(model, opt)
         if epoch % epoch_print == 0:
             print(f"Epoch {epoch} {name}, loss: {loss}")
-        if abs(loss) < ulp(1000) or abs(loss - loss_old) < ulp(100):
-            break
+        # if abs(loss) < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
+        #     break
         loss_old = loss
     print(f"Final loss for {name}: {loss}")
 

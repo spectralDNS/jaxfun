@@ -7,6 +7,7 @@ import numpy as np
 import optax
 
 # import pyvista
+import sympy as sp
 from flax import nnx
 from soap_jax import soap
 
@@ -25,6 +26,7 @@ from jaxfun.pinns.module import (
 )
 from jaxfun.utils import lambdify
 
+jax.config.update("jax_default_matmul_precision", "highest")
 jax.config.update("jax_enable_x64", True)
 dtype = jnp.float64
 

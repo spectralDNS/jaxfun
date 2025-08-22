@@ -1,0 +1,19 @@
+from numbers import Number
+
+import jax
+import jax.numpy as jnp
+import sympy as sp
+
+from jaxfun.pinns import FlaxFunction
+from jaxfun.utils import lambdify
+
+
+def DirichletBC(u: FlaxFunction, bnd_mesh: jax.Array, bcs: tuple[sp.Expr]):
+    g = []
+    for b in bcs:
+        s = u.functionspace.system.base_scalars()
+        if isinstance(b, Number):
+            g.append(float(b) * jnp.ones(bnd_mesh.shape[0]))
+        else:
+            g.append(lambdify(s, b)(*bnd_mesh.T))
+    return jnp.array(g).T

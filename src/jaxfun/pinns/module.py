@@ -891,11 +891,9 @@ class LSQR2(LSQR):
         new_lambdas = self.lambda_weights(model)
         old_lambdas = self.lambdas
         self.lambdas = new_lambdas * self.alpha + old_lambdas * (1 - self.alpha)
-        # self.lambdas = new_lambdas * self.alpha + self.lambdas * (1 - self.alpha)
 
     def __call__(self, model: nnx.Module) -> float:
         self.update_arrays(model, self.Js)
-        # self.update_lambdas(model)
         return sum(
             [
                 self.lambdas[i] * (eq.weights * eq(self.Js) ** 2).mean()

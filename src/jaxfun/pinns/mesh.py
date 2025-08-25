@@ -8,7 +8,7 @@ import sympy as sp
 from flax import nnx
 from jax.typing import ArrayLike
 
-from jaxfun.utils import lambdify, leggauss
+from jaxfun.utils import leggauss
 
 
 @dataclass

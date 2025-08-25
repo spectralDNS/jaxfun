@@ -18,7 +18,6 @@ from flax.typing import (
 )
 from jax import Array, lax
 from sympy import Function
-from sympy.printing import latex
 from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
@@ -50,9 +49,36 @@ class MLPSpace(BaseSpace):
         system: CoordSys = None,
         transient: bool = False,
         offset: int = 0,
+        act_fun: Callable[[Array], Array] = nnx.tanh,
         *,
         name: str,
     ) -> None:
+        """Class for the structure of an MLP
+
+        Args:
+            hidden_size:
+                If list of integers, like hidden_size = [X, Y, Z], then there will be
+                len(hidden_size) hidden layer of size X, Y and Z, respectively.
+                If integer, like hidden_size = X, then there will be no hidden layers,
+                but the size of the weights in the input layer will be dims * X and the
+                output will be of shape X * self.out_size
+            dims: Spatial dimensions. Defaults to 1.
+            rank:
+                Scalars, vectors and dyadics have rank if 0, 1 and 2, respectively.
+                Defaults to 0.
+            system:
+                Coordinate system. Defaults to None, in which case the coordinate
+                system will be Cartesian
+            transient:
+                Whether to include the variable time or not. Defaults to False.
+            offset: If part of a CompositeMLP, then the offset tells how many
+                outputs there are before this space. The accumulated sum of all
+                out_sizes of all prior spaces. Defaults to 0.
+            act_fun:
+                Activation function for all except the output layer
+            name: Name of MLPSpace
+
+        """
         from jaxfun.arguments import CartCoordSys, x, y, z
 
         self.in_size = dims + int(transient)
@@ -62,6 +88,7 @@ class MLPSpace(BaseSpace):
         self.rank = rank
         self.offset = offset
         self.transient = transient
+        self.act_fun = act_fun
         system = (
             CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[dims])
             if system is None
@@ -85,6 +112,8 @@ class PirateSpace(BaseSpace):
         name: str = "PirateNet",
         transient: bool = False,
         offset: int = 0,
+        act_fun: Callable[[Array], Array] = nnx.tanh,
+        act_fun_hidden: Callable[[Array], Array] = nnx.tanh,
         # PirateNet specific parameters
         nonlinearity: float = 0.0,
         periodicity: dict | None = None,
@@ -94,12 +123,17 @@ class PirateSpace(BaseSpace):
         from jaxfun.arguments import CartCoordSys, x, y, z
 
         self.in_size = dims + int(transient)
-        self.hidden_size = hidden_size
+        # PirateSpace requires at least one hidden layer, so change integer hidden_size to [hidden_size]
+        self.hidden_size = (
+            hidden_size if isinstance(hidden_size, list | tuple) else [hidden_size]
+        )
         self.out_size = dims**rank
         self.dims = dims
         self.rank = rank
         self.offset = offset
         self.transient = transient
+        self.act_fun = act_fun
+        self.act_fun_hidden = act_fun_hidden
         system = (
             CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[dims])
             if system is None
@@ -149,6 +183,7 @@ class CompositeMLP:
         return len(self.mlp)
 
 
+# Note: We should probably get rid of this?
 class CompositeNetwork:
     def __init__(self, spaces: tuple[BaseSpace, ...], name: str = "C") -> None:
         offset = 0
@@ -312,6 +347,14 @@ class MLP(nnx.Module):
         bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs,
     ) -> None:
+        """Multilayer perceptron
+
+        Args:
+            V: Functionspace with detailed layer structure for the MLP
+            rngs: Seed
+            kernel_init (optional): Initializer for kernel. Defaults to default_kernel_init.
+            bias_init (optional): Initializer for bias. Defaults to default_bias_init.
+        """
         hidden_size = (
             V.hidden_size
             if isinstance(V.hidden_size, list | tuple)
@@ -326,18 +369,22 @@ class MLP(nnx.Module):
             param_dtype=float,
             dtype=float,
         )
-        self.hidden = [
-            RWFLinear(
-                hidden_size[i],
-                hidden_size[min(i + 1, len(hidden_size) - 1)],
-                rngs=rngs,
-                bias_init=bias_init,
-                kernel_init=kernel_init,
-                param_dtype=float,
-                dtype=float,
-            )
-            for i in range(len(hidden_size))
-        ]
+        self.hidden = (
+            [
+                RWFLinear(
+                    hidden_size[i],
+                    hidden_size[min(i + 1, len(hidden_size) - 1)],
+                    rngs=rngs,
+                    bias_init=bias_init,
+                    kernel_init=kernel_init,
+                    param_dtype=float,
+                    dtype=float,
+                )
+                for i in range(len(hidden_size))
+            ]
+            if isinstance(V.hidden_size, list | tuple)
+            else []
+        )
         self.linear_out = RWFLinear(
             hidden_size[-1],
             V.out_size,
@@ -347,19 +394,17 @@ class MLP(nnx.Module):
             param_dtype=float,
             dtype=float,
         )
-        # self.count = Count(jnp.array(0))
+        self.act_fun = V.act_fun
 
     @property
     def dim(self) -> int:
-        gd, st = nnx.split(self)
-        pyt, ret = jax.flatten_util.ravel_pytree(st)
-        return pyt.shape[0]
+        st = nnx.split(self, nnx.Param)[1]
+        return jax.flatten_util.ravel_pytree(st)[0].shape[0]
 
     def __call__(self, x: Array) -> Array:
-        # self.count += 1
-        x = nnx.swish(self.linear_in(x))
+        x = self.act_fun(self.linear_in(x))
         for z in self.hidden:
-            x = nnx.swish(z(x))
+            x = self.act_fun(z(x))
         return self.linear_out(x)
 
 
@@ -370,6 +415,7 @@ class PIModifiedBottleneck(nnx.Module):
         hidden_dim: int,
         output_dim: int,
         nonlinearity: float,
+        act_fun: Callable[[Array], Array] = nnx.tanh,
         *,
         rngs: nnx.Rngs,
     ) -> None:
@@ -385,7 +431,7 @@ class PIModifiedBottleneck(nnx.Module):
             hidden_dim, output_dim, rngs=rngs, dtype=float, param_dtype=float
         )
 
-        self.act_fun = nnx.tanh
+        self.act_fun = act_fun
 
     def __call__(self, x: Array, u: Array, v: Array) -> Array:
         identity = x
@@ -426,7 +472,7 @@ class PirateNet(nnx.Module):
         if V.fourier_emb is not None:
             in_dim = V.fourier_emb["embed_dim"]
 
-        # print(rngs, V)
+        self.act_fun = V.act_fun
 
         self.u_net = RWFLinear(
             in_dim,
@@ -446,17 +492,17 @@ class PirateNet(nnx.Module):
             param_dtype=float,
             dtype=float,
         )
-        self.hidden_layers = []
-        for i in range(len(hidden_size)):
-            # in_dim = hidden_size[i - 1] if i > 0 else in_dim
-            layer = PIModifiedBottleneck(
+        self.hidden = [
+            PIModifiedBottleneck(
                 in_dim=in_dim,
                 hidden_dim=hidden_size[i],
                 output_dim=in_dim,
                 nonlinearity=V.nonlinearity,
                 rngs=rngs,
+                act_fun=V.act_fun_hidden,
             )
-            self.hidden_layers.append(layer)
+            for i in range(len(hidden_size))
+        ]
 
         if V.pi_init is not None:
             raise NotImplementedError("Least squares initialization not implemented")
@@ -471,12 +517,17 @@ class PirateNet(nnx.Module):
                 dtype=float,
             )
 
+    @property
+    def dim(self) -> int:
+        st = nnx.split(self, nnx.Param)[1]
+        return jax.flatten_util.ravel_pytree(st)[0].shape[0]
+
     def __call__(self, x: Array) -> Array:
         x = self.embedder(x)
-        u = nnx.tanh(self.u_net(x))
-        v = nnx.tanh(self.v_net(x))
+        u = self.act_fun(self.u_net(x))
+        v = self.act_fun(self.v_net(x))
 
-        for layer in self.hidden_layers:
+        for layer in self.hidden:
             x = layer(x, u, v)
 
         y = self.output_layer(x)
@@ -544,7 +595,6 @@ class FlaxFunction(Function):
         return obj
 
     def __getitem__(self, i: int):
-        # print("FlaxFunction __getitem__", i, self.functionspace[i])
         return FlaxFunction(
             self.functionspace[i], name=self.name[i], module=self.module, rngs=self.rngs
         )
@@ -556,6 +606,10 @@ class FlaxFunction(Function):
             if isinstance(self.functionspace, CompositeMLP | CompositeNetwork)
             else self.functionspace.rank
         )
+
+    @property
+    def dim(self):
+        return self.module.dim
 
     @staticmethod
     def get_flax_module(
@@ -734,7 +788,7 @@ class Residual:
         t, expr = expand(f)
         self.eqs = [get_fn(h, s) for h in expr]
         self.x = x
-        # Place all terms without flaxfunctions in the target
+        # Place all terms without flaxfunctions in the target, because these will not need to be computed more than once
         self.target = target
         if len(t.free_symbols) > 0:
             self.target = target - lambdify(s, t, modules="jax")(*x.T)
@@ -749,10 +803,7 @@ class Residual:
 class LSQR:
     """Least squares loss function"""
 
-    def __init__(
-        self,
-        *fs: LSQR_Tuple,
-    ):
+    def __init__(self, *fs: LSQR_Tuple, alpha: float = 0.9):
         """The least squares method is to compute the loss over all input equations at
         all collocation points. The equations are all defined with their own points
 
@@ -765,6 +816,9 @@ class LSQR:
                 which is zero by defauls, whereas the last item is an optional
                 weight. The weight needs to be a number or an array of the same
                 shape as the collocation points.
+            alpha:
+                Update factor for adaptive weighting of loss functions for each
+                subproblem.
 
         Examples:
 
@@ -783,6 +837,7 @@ class LSQR:
         from jaxfun.forms import get_system
         from jaxfun.operators import Dot
 
+        self.alpha = alpha
         self.residuals = []
         self.Js = Js = {}  # All modules' evaluation and derivatives eval wrt variables
         self.xs = xs = {}  # All collocation points
@@ -810,6 +865,7 @@ class LSQR:
                 self.residuals.append(Residual(*f))
                 res.append((f[0], f[1]))
 
+        self.global_weights = jnp.ones(len(self.residuals), dtype=int)
         self.Jres = [set() for _ in range(len(res))]  # Collection for each residual
         for i, f in enumerate(res):
             f0 = f[0].doit()
@@ -866,36 +922,20 @@ class LSQR:
         return jnp.array(norms)
 
     @partial(nnx.jit, static_argnums=0)
-    def lambda_weights(self, model: nnx.Module) -> Array:
+    def compute_global_weights(self, model: nnx.Module) -> Array:
         norms = self.norm_grad_loss(model)
         return jnp.sum(norms) / jnp.where(norms < 1e-6, 1e-6, norms)
 
-    def __call__(self, model: nnx.Module) -> float:
-        self.update_arrays(model, self.Js)
-        return sum([(eq.weights * eq(self.Js) ** 2).mean() for eq in self.residuals])
-
-
-class LSQR_Adaptive_Weights(LSQR):
-    def __init__(
-        self,
-        *fs: LSQR_Tuple,
-        alpha: float = 0.9,
-        lambda_updates: int = 0,
-    ):
-        LSQR.__init__(self, *fs)
-        self.alpha = alpha
-        self.lambda_updates = lambda_updates
-        self.lambdas = jnp.ones(len(self.residuals))
-    
-    def update_lambdas(self, model: nnx.Module) -> None:
-        new_lambdas = self.lambda_weights(model)
-        self.lambdas = new_lambdas * self.alpha + self.lambdas * (1 - self.alpha)
+    def update_global_weights(self, model: nnx.Module) -> None:
+        new = self.compute_global_weights(model)
+        old = self.global_weights
+        self.global_weights = old * (1 - self.alpha) + new * self.alpha
 
     def __call__(self, model: nnx.Module) -> float:
         self.update_arrays(model, self.Js)
         return sum(
             [
-                self.lambdas[i] * (eq.weights * eq(self.Js) ** 2).mean()
+                self.global_weights[i] * (eq.weights * eq(self.Js) ** 2).mean()
                 for i, eq in enumerate(self.residuals)
             ]
         )
@@ -941,7 +981,7 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar]) -> Callable[[Array, dict], Array]:
 
     elif isinstance(f, sp.Pow):
         bii = f.args[0]
-        p: int = int(f.args[1])
+        p = int(f.args[1])
         return lambda x, Js, bi0=bii, p0=p: get_fn(bi0, s)(x, Js) ** p0
 
     assert len(v) == 1
@@ -970,7 +1010,7 @@ def lookup_array(
 def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
     @nnx.jit
     def train_step(model: nnx.Module, optimizer: nnx.Optimizer) -> float:
-        gd, state = nnx.split(model)
+        gd, state = nnx.split(model, nnx.Param)
         unravel = jax.flatten_util.ravel_pytree(state)[1]
         loss, gradients = nnx.value_and_grad(loss_fn)(model)
         loss_fn_split = lambda state: loss_fn(nnx.merge(gd, state))
@@ -994,10 +1034,11 @@ def run_optimizer(
     num: int,
     name: str,
     epoch_print: int = 100,
-    update_weights: int = 100,
     abs_limit_loss: float = ulp(1000),
     abs_limit_change: float = ulp(100),
     print_final_loss: bool = False,
+    update_global_weights: int = -1,
+    print_global_weights: bool = False,
 ):
     train_step = train(loss_fn)
     loss_old = 1.0
@@ -1008,8 +1049,9 @@ def run_optimizer(
         if abs(loss) < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
             break
         loss_old = loss
-        if isinstance(loss_fn, LSQR_Adaptive_Weights) and epoch % update_weights == 0:
-            loss_fn.update_lambdas(model)
-            print('lambda weights', loss_fn.lambdas)
+        if update_global_weights > 0 and epoch % update_global_weights == 0:
+            loss_fn.update_global_weights(model)
+            if print_global_weights:
+                print("Global weights", loss_fn.global_weights)
     if print_final_loss:
         print(f"Final loss for {name}: {loss}")

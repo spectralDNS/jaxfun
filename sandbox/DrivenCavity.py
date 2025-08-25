@@ -22,7 +22,6 @@ from jaxfun.pinns.hessoptimizer import hess
 from jaxfun.pinns.mesh import Rectangle
 from jaxfun.pinns.module import (
     LSQR,
-    LSQR2,
     Comp,
     CompositeMLP,
     CompositeNetwork,
@@ -30,13 +29,8 @@ from jaxfun.pinns.module import (
     MLPSpace,
     PirateSpace,
     run_optimizer,
-    train,
 )
 from jaxfun.utils.common import ulp
-from soap_jax import soap
-
-# jax.config.update("jax_default_matmul_precision", "highest")
-# jax.config.update("jax_enable_x64", True)
 
 print("JAX running on", jax.devices()[0].platform.upper())
 
@@ -44,17 +38,17 @@ Re = 10.0
 rho = 1.0
 nu = 2.0 / Re
 
-N = 40
+N = 50
 
 mesh = Rectangle(N, N, -1, 1, -1, 1)
-xyi = mesh.get_points_inside_domain("legendre")
-xyb = mesh.get_points_on_domain("legendre")
+xyi = mesh.get_points_inside_domain()
+xyb = mesh.get_points_on_domain()
 xyp = jnp.array([[0.0, 0.0]])
-wqi = mesh.get_weights_inside_domain("legendre")
-wqb = mesh.get_weights_on_domain("legendre")
+wqi = mesh.get_weights_inside_domain()
+wqb = mesh.get_weights_on_domain()
 
-V = MLPSpace([16], dims=2, rank=1, name="V")  # Vector space for velocity
-Q = MLPSpace([14], dims=2, rank=0, name="Q")  # Scalar space for pressure
+V = PirateSpace([20], dims=2, rank=1, name="V")  # Vector space for velocity
+Q = PirateSpace([20], dims=2, rank=0, name="Q")  # Scalar space for pressure
 # VQ = CompositeMLP((V, Q))  # Coupled space V x Q
 # up = FlaxFunction(
 #    VQ,
@@ -84,11 +78,11 @@ ub = DirichletBC(
 
 # Each item is (equation, points, target, optional weights)
 loss_fn = LSQR(
-        (eq1, xyi),  # momentum vector equation
-        (eq2, xyi),  # Divergence constraint
-        (u, xyb, ub),  # Boundary conditions on u
-        (p, xyp),  # Pressure pin-point,
-    #alpha=0.9,
+    (eq1, xyi),  # momentum vector equation
+    (eq2, xyi),  # Divergence constraint
+    (u, xyb, ub),  # Boundary conditions on u
+    (p, xyp, 0),  # Pressure pin-point,
+    alpha=0.8,
 )
 
 opt = optax.adam(optax.linear_schedule(1e-3, 1e-4, 10000))
@@ -104,18 +98,18 @@ opthess = hess(
 opt_adam = nnx.Optimizer(module, opt)
 opt_soap = nnx.Optimizer(module, soap(optax.linear_schedule(1e-3, 1e-4, 10000)))
 
-tm1 = time.time()
-run_optimizer(loss_fn, module, opt_soap, 1000, "SOAP", 100, abs_limit_change=0)
-print("Time Soap", time.time() - tm1)
+# tm1 = time.time()
+# run_optimizer(loss_fn, module, opt_soap, 1000, "SOAP", 100, abs_limit_change=0)
+# print("Time Soap", time.time() - tm1)
 
-# t0 = time.time()
-# run_optimizer(loss_fn, module, opt_adam, 100, "Adam", 10)
-# print("Time Adam", time.time() - t0)
+t0 = time.time()
+run_optimizer(loss_fn, module, opt_adam, 1000, "Adam", 100, update_global_weights=10)
+print("Time Adam", time.time() - t0)
 
 opt_lbfgs = nnx.Optimizer(module, optlbfgs)
 t1 = time.time()
 run_optimizer(
-    loss_fn, module, opt_lbfgs, 1000, "LBFGS", 100, abs_limit_change=ulp(1)
+    loss_fn, module, opt_lbfgs, 1000, "LBFGS", 100, update_global_weights=10
 )
 print("Time LBFGS", time.time() - t1)
 
@@ -123,9 +117,6 @@ print("Time LBFGS", time.time() - t1)
 # t2 = time.time()
 # run_optimizer(loss_fn, module, opt_hess, 10, "Hess", 1, abs_limit_change=ulp(1))
 # print("Time Hess", time.time() - t2)
-
-gd, st = nnx.split(module)
-pyt, ret = jax.flatten_util.ravel_pytree(st)
 
 yj = jnp.linspace(-1, 1, 50)
 xx, yy = jnp.meshgrid(yj, yj, sparse=False, indexing="ij")

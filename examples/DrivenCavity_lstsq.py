@@ -52,7 +52,7 @@ eq1 = Div(Outer(u, u)) - nu * Div(Grad(u)) + Grad(p)  # Alternative form
 
 eq2 = Div(u)
 
-module = Comp([u, p])
+module = Comp(u, p)
 x, y = V.system.base_scalars()
 
 ub = DirichletBC(

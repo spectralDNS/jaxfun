@@ -681,9 +681,19 @@ def eval_flaxfunction(expr, x: Array):
 
 
 class Comp(nnx.Module):
-    def __init__(self, flaxfunctions: list[FlaxFunction]) -> None:
-        self.flaxfunctions = flaxfunctions
+
+    def __init__(self, *flaxfunctions: FlaxFunction) -> None:
+        """Collection of FlaxFunctions to be evaluated and stacked
+        
+        Args:
+            flaxfunctions: FlaxFunctions to be evaluated and stacked
+        """
+        self.flaxfunctions = list(flaxfunctions)
         [setattr(self, str(id(p.module)), p.module) for p in flaxfunctions]
+
+    @property
+    def dim(self) -> int:
+        return sum([f.module.dim for f in self.flaxfunctions])
 
     def __call__(self, x: Array) -> Array:
         return jnp.hstack([f.module(x) for f in self.flaxfunctions])
@@ -701,7 +711,6 @@ def expand(forms: sp.Expr) -> list[sp.Expr]:
         functions, used as arguments to Add
     """
     f = sp.Add.make_args(forms.doit().expand())
-    # return f
     consts = []
     flaxs = []
     for fi in f:
@@ -714,9 +723,19 @@ def expand(forms: sp.Expr) -> list[sp.Expr]:
 
 
 class Residual:
+    """Residual of a single equation"""
+
     def __init__(
         self, f: sp.Expr, x: Array, target: Array = 0, weights: Array = 1
     ) -> None:
+        """Residual of a single equation evaluated at collocation points
+        
+        Args:
+            f: Sympy expression representing the equation residual. The
+                expression may contain one or several FlaxFunctions
+            x: Collocation points where the residual is evaluated
+            target: Target value of the residual. Defaults to 0.
+            weights: Weights for the residual. Defaults to 1."""
         s = get_args(f.doit())
         t, expr = expand(f)
         self.eqs = [get_fn(h, s) for h in expr]
@@ -743,7 +762,7 @@ class LSQR:
 
         Args:
             fs:
-                tuples, where the latter contains the subproblems that
+                One or several tuples. The tuples contain the subproblems that 
                 are to be solved. The subproblems are defined by the equation
                 residuals (first item) and the collocation points (second item)
                 used to evaluate the residuals. The third item is the target,

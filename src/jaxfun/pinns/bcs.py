@@ -8,10 +8,12 @@ from jaxfun.pinns import FlaxFunction
 from jaxfun.utils import lambdify
 
 
-def DirichletBC(u: FlaxFunction, bnd_mesh: jax.Array, bcs: tuple[sp.Expr]):
+def DirichletBC(
+    u: FlaxFunction, bnd_mesh: jax.Array, *bcs: sp.Expr | Number
+) -> jax.Array:
     g = []
     for b in bcs:
-        s = u.functionspace.system.base_scalars()
+        s = u.get_args(Cartesian=False)
         if isinstance(b, Number):
             g.append(float(b) * jnp.ones(bnd_mesh.shape[0]))
         else:

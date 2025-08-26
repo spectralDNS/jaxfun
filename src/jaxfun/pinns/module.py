@@ -22,7 +22,7 @@ from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
 from jaxfun.Basespace import BaseSpace
-from jaxfun.coordinates import BaseScalar, CoordSys
+from jaxfun.coordinates import BaseScalar, BaseTime, CoordSys
 from jaxfun.pinns.embeddings import Embedding
 from jaxfun.typing import LSQR_Tuple
 from jaxfun.utils.common import lambdify, ulp
@@ -38,7 +38,57 @@ def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
     return jax.vmap(fun, in_axes=0, out_axes=0) if k > 0 else fun
 
 
-class MLPSpace(BaseSpace):
+class NNSpace(BaseSpace):
+    """Neural network functionspace"""
+
+    def __init__(
+        self,
+        dims: int = 1,
+        rank: int = 0,
+        transient: bool = False,
+        system: CoordSys = None,
+        name: str = "NN",
+    ) -> None:
+        """Class for the structure of a neural network functionspace
+
+        Args:
+            dims: Spatial dimensions. Defaults to 1.
+            rank:
+                Scalars, vectors and dyadics have rank if 0, 1 and 2, respectively.
+                Defaults to 0.
+            transient:  Whether to include the variable time or not. Defaults to False.
+            system:
+                Coordinate system. Defaults to None, in which case the coordinate
+                system will be Cartesian
+            name: Name of NN space
+
+        """
+        from jaxfun.arguments import CartCoordSys, x, y, z
+
+        self.in_size = dims + int(transient)
+        self.out_size = dims**rank
+        self.dims = dims
+        self.rank = rank
+        self.transient = transient
+        system = (
+            CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[dims])
+            if system is None
+            else system
+        )
+        BaseSpace.__init__(self, system, name)
+
+    @property
+    def is_transient(self):
+        return self.transient
+
+    def base_variables(self) -> list[BaseScalar | BaseTime]:
+        """Return the base variables, including time if transient."""
+        if self.transient:
+            return self.system.base_scalars() + (self.system.base_time(),)
+        else:
+            return self.system.base_scalars()
+
+class MLPSpace(NNSpace):
     """Multilayer perceptron functionspace"""
 
     def __init__(
@@ -78,29 +128,18 @@ class MLPSpace(BaseSpace):
                 Activation function for all except the output layer
             name: Name of MLPSpace
 
-        """
-        from jaxfun.arguments import CartCoordSys, x, y, z
-
-        self.in_size = dims + int(transient)
+        """        
+        NNSpace.__init__(self, dims, rank, transient, system, name)
         self.hidden_size = hidden_size
-        self.out_size = dims**rank
-        self.dims = dims
-        self.rank = rank
         self.offset = offset
-        self.transient = transient
         self.act_fun = act_fun
-        system = (
-            CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[dims])
-            if system is None
-            else system
-        )
-        BaseSpace.__init__(self, system, name)
+
 
 
 MLPVectorSpace = partial(MLPSpace, rank=1)
 
 
-class PirateSpace(BaseSpace):
+class PirateSpace(NNSpace):
     """MLP alternative with PirateNet architecture."""
 
     def __init__(
@@ -120,27 +159,17 @@ class PirateSpace(BaseSpace):
         fourier_emb: dict | None = None,
         pi_init: jnp.ndarray | None = None,
     ) -> None:
-        from jaxfun.arguments import CartCoordSys, x, y, z
+        
+        NNSpace.__init__(self, dims, rank, transient, system, name)
 
-        self.in_size = dims + int(transient)
         # PirateSpace requires at least one hidden layer, so change integer hidden_size to [hidden_size]
         self.hidden_size = (
             hidden_size if isinstance(hidden_size, list | tuple) else [hidden_size]
         )
-        self.out_size = dims**rank
-        self.dims = dims
-        self.rank = rank
         self.offset = offset
-        self.transient = transient
         self.act_fun = act_fun
         self.act_fun_hidden = act_fun_hidden
-        system = (
-            CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[dims])
-            if system is None
-            else system
-        )
-        BaseSpace.__init__(self, system, name)
-
+        
         self.nonlinearity = nonlinearity
         self.periodicity = periodicity
         self.fourier_emb = fourier_emb
@@ -576,9 +605,16 @@ class FlaxFunction(Function):
         bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs = nnx.Rngs(101),
     ) -> Function:
+        from jaxfun.coordinates import BaseTime
+
         coors = V.system
-        obj = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)]))
+        args = list(coors._cartesian_xyz) 
+        t = BaseTime(V.system)
+        args = args + [t] if V.is_transient else args
+        args = args + [sp.Symbol(V.name)]
+        obj = Function.__new__(cls, *args)
         obj.functionspace = V
+        obj.t = t
         obj.module = (
             obj.get_flax_module(
                 V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs
@@ -627,11 +663,20 @@ class FlaxFunction(Function):
             V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs
         )
 
+    def get_args(self, Cartesian=True):
+        if Cartesian:
+            return self.args[:-1]
+        V = self.functionspace
+        s = V.system.base_scalars()
+        return s + (self.t,) if V.is_transient else s
+
     def doit(self, **hints: dict) -> sp.Expr:
         from jaxfun.arguments import functionspacedict
 
         V = self.functionspace
         functionspacedict[V.name] = V
+        s = V.system.base_scalars()
+        args = self.get_args(Cartesian=False)
 
         if isinstance(V, CompositeMLP):
             raise RuntimeError
@@ -644,11 +689,10 @@ class FlaxFunction(Function):
                 rank_parent=V.rank,
                 module=self.module,
                 argument=2,
-            )(*V.system.base_scalars())
+            )(*args)
 
         if V.rank == 1:
             b = V.system.base_vectors()
-            s = V.system.base_scalars()
             return VectorAdd.fromiter(
                 Function(
                     self.fun_str + "_" + s[i].name,
@@ -657,7 +701,7 @@ class FlaxFunction(Function):
                     rank_parent=V.rank,
                     module=self.module,
                     argument=2,
-                )(*s)
+                )(*args)
                 * b[i]
                 for i in range(V.dims)
             )
@@ -686,9 +730,9 @@ class FlaxFunction(Function):
             (
                 name,
                 "(",
-                ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
+                ", ".join([i.name for i in self.args[:-1]]),
                 "; ",
-                self.functionspace.name,
+                self.args[-1].name,
                 ")",
             )
         )
@@ -699,9 +743,9 @@ class FlaxFunction(Function):
             (
                 name,
                 "(",
-                ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
+                ", ".join([i.name for i in self.args[:-1]]),
                 "; ",
-                self.functionspace.name,
+                self.args[-1].name,
                 ")",
             )
         )
@@ -718,8 +762,14 @@ class FlaxFunction(Function):
         if self.rank == 0:
             return y[:, V.offset]
         elif self.rank == 1:
-            return y[:, V.offset : V.offset + V.dims]
+            return y[:, V.offset : V.offset + V.out_size]
         return y
+
+
+def get_args(a: sp.Expr) -> tuple[sp.Symbol | BaseScalar, ...]:
+    for p in sp.core.traversal.iterargs(a):
+        if getattr(p, "argument", -1) == 2:
+            return p.args
 
 
 def get_flaxfunctions(
@@ -738,7 +788,7 @@ def eval_flaxfunction(expr, x: Array):
     f = f.pop()
     du = jacn(f.module, expr.derivative_count)(x)
     V = f.functionspace
-    offset = V.offset if f.rank == 0 else slice(V.offset, V.offset + V.dims)
+    offset = V.offset if f.rank == 0 else slice(V.offset, V.offset + V.out_size)
     var: tuple[int] = tuple((slice(None), offset)) + tuple(
         int(s._id[0]) for s in expr.variables
     )
@@ -781,10 +831,7 @@ class Residual:
     def __init__(
         self, f: sp.Expr, x: Array, target: Array = 0, weights: Array = 1
     ) -> None:
-        from jaxfun.forms import get_system
-
-        sys = get_system(f.doit())
-        s = sys.base_scalars()
+        s = get_args(f.doit())
         t, expr = expand(f)
         self.eqs = [get_fn(h, s) for h in expr]
         self.x = x
@@ -794,6 +841,7 @@ class Residual:
             self.target = target - lambdify(s, t, modules="jax")(*x.T)
         elif t != 0:
             self.target = target - t
+        self.target = jnp.squeeze(self.target)
         self.weights = weights
 
     def __call__(self, Js) -> Array:

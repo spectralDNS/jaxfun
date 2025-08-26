@@ -90,7 +90,9 @@ def lambdify(
     cse: bool = False,
     doctring_limit: int = 1000,
 ) -> Callable[[Iterable[Array]], Array]:
-    system = expr.free_symbols.pop()._system
+    from jaxfun.forms import get_system
+    
+    system = get_system(expr)
     expr = system.expr_base_scalar_to_psi(expr)
     args = system.expr_base_scalar_to_psi(args)
     modules_default = ["jax", {'Ynm': Ynm}]

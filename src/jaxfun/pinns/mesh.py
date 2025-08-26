@@ -8,6 +8,7 @@ import sympy as sp
 from flax import nnx
 from jax.typing import ArrayLike
 
+from jaxfun.typing import Array
 from jaxfun.utils import leggauss
 
 
@@ -134,6 +135,11 @@ class Rectangle(UnitSquare):
         return jnp.array([x, y]).T
 
 
+def points_along_axis(a: Number | Array, b: Array | Number) -> Array:
+    a = jnp.atleast_1d(a)
+    b = jnp.atleast_1d(b)
+    return jnp.array(jnp.meshgrid(a, b, indexing="ij")).reshape((2, -1)).T
+
 class AnnulusPolar(Rectangle):
     def __init__(self, Nx: int, Ny: int, radius_inner: Number, radius_outer: Number):
         self.radius_inner = radius_inner
@@ -159,8 +165,8 @@ class AnnulusPolar(Rectangle):
             xy[self.Nx : 2 * self.Nx, 0] = 1
             x = self.left + (self.right - self.left) * xy[:, 0]
             y = self.bottom + (self.top - self.bottom) * xy[:, 1]
-            return jnp.array((x, y)).T 
-        
+            return jnp.array((x, y)).T
+
         return super().get_points_on_domain(kind, False)[2 * self.Nx :]
 
 

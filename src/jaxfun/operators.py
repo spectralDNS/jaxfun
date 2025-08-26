@@ -664,7 +664,7 @@ class Dot(sympy_Dot):
         return dot(self._expr1.doit(**hints), self._expr2.doit(**hints))
 
 
-# Note: Sympy subclasses Cross(Vector), which breaks operators for unevaluated expressions
+# Note: Sympy subclasses like Cross(Vector), which breaks operators for unevaluated expressions
 class Cross(Expr):
     """
     Represents unevaluated Cross product.

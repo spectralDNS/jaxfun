@@ -58,6 +58,41 @@ class defaultdict(UserDict):
 latex_symbols = defaultdict(latex_sym_dict)
 
 
+class BaseTime(Symbol):
+    """
+    A symbol for time.
+
+    """
+
+    def __new__(cls, sys: CoordSys) -> BaseTime:
+        
+        index: int = _sympify(sys.dims)
+        obj = super().__new__(cls, 't')
+        # The _id is used for equating purposes, and for hashing
+        obj._id = (index,)
+        return obj
+
+    is_commutative = True
+    is_symbol = True
+    is_Symbol = True
+    is_real = True
+
+    @property
+    def free_symbols(self) -> set:
+        return {self}
+
+    _diff_wrt = True
+
+    def _eval_derivative(self, s: Symbol) -> sp.Number:
+        if self == s:
+            return sp.S.One
+        return sp.S.Zero
+
+    precedence = PRECEDENCE["Atom"]
+
+    def doit(self, **hints: dict) -> BaseScalar:
+        return self
+
 class BaseScalar(AtomicExpr):
     """
     A coordinate symbol/base scalar.
@@ -435,6 +470,9 @@ class CoordSys(Basic):
 
     def base_dyadics(self) -> tuple[BaseDyadic]:
         return self._base_dyadics
+    
+    def base_time(self) -> BaseTime:
+        return BaseTime(self)
 
     @property
     def rv(self) -> tuple[Expr]:

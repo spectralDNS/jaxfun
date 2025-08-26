@@ -47,17 +47,8 @@ xyp = jnp.array([[0.0, 0.0]])
 wqi = mesh.get_weights_inside_domain()
 wqb = mesh.get_weights_on_domain()
 
-V = PirateSpace([20], dims=2, rank=1, name="V")  # Vector space for velocity
-Q = PirateSpace([20], dims=2, rank=0, name="Q")  # Scalar space for pressure
-# VQ = CompositeMLP((V, Q))  # Coupled space V x Q
-# up = FlaxFunction(
-#    VQ,
-#    "up",
-#    rngs=nnx.Rngs(2002),
-#    kernel_init=nnx.initializers.xavier_normal(dtype=float),
-# )
-# u, p = up
-# module = up.module
+V = PirateSpace([20], dims=2, rank=1, name="V")     # Vector space for velocity
+Q = PirateSpace([20], dims=2, rank=0, name="Q")     # Scalar space for pressure
 
 u = FlaxFunction(V, "u", rngs=nnx.Rngs(2002), bias_init=nnx.initializers.normal())
 p = FlaxFunction(Q, "p", rngs=nnx.Rngs(2002), bias_init=nnx.initializers.normal())
@@ -73,16 +64,16 @@ eq1 = Dot(Grad(u), u) - nu * Div(Grad(u)) + Grad(p)
 eq2 = Div(u)
 
 ub = DirichletBC(
-    u, xyb, ((sp.Piecewise((0, y < 1), ((1 - x) ** 2 * (1 + x) ** 2, True))), 0)
-)
+    u, xyb, sp.Piecewise((0, y < 1), ((1 - x) ** 2 * (1 + x) ** 2, True)), 0
+) # No-slip on walls, u=(1-x)**2*(1+x)**2 on lid
 
 # Each item is (equation, points, target, optional weights)
 loss_fn = LSQR(
-    (eq1, xyi),  # momentum vector equation
-    (eq2, xyi),  # Divergence constraint
+    (eq1, xyi),    # momentum vector equation
+    (eq2, xyi),    # Divergence constraint
     (u, xyb, ub),  # Boundary conditions on u
-    (p, xyp, 0),  # Pressure pin-point,
-    alpha=0.8,
+    (p, xyp, 0),   # Pressure pin-point
+    alpha=0.8,     # Global weights update parameter
 )
 
 opt = optax.adam(optax.linear_schedule(1e-3, 1e-4, 10000))

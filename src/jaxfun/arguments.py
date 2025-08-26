@@ -15,9 +15,9 @@ from jaxfun.composite import DirectSum
 from jaxfun.coordinates import BaseScalar, CoordSys, latex_symbols
 from jaxfun.tensorproductspace import TensorProductSpace, VectorTensorProductSpace
 
-x, y, z = sp.symbols("x,y,z", real=True)
+t, x, y, z = sp.symbols("t,x,y,z", real=True)
 
-CartCoordSys = lambda name, t: CoordSys(name, sp.Lambda(t, t))
+CartCoordSys = lambda name, s: CoordSys(name, sp.Lambda(s, s))
 
 functionspacedict = {}
 

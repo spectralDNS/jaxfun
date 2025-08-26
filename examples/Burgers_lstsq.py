@@ -34,7 +34,6 @@ xb = jnp.vstack(
 
 V = PirateSpace([20], dims=1, transient=True, rank=0, name="V")
 x, t = V.base_variables()
-i = V.system.base_vectors()[0]
 
 u = FlaxFunction(V, name="u")
 

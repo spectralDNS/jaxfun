@@ -29,6 +29,7 @@ from jaxfun.utils.common import lambdify, ulp
 
 default_kernel_init = nnx.initializers.glorot_normal()
 default_bias_init = nnx.initializers.zeros_init()
+default_rngs = nnx.Rngs(101)
 
 
 # Differs from jaxfun.utils.common.jacn in the last if else
@@ -88,6 +89,7 @@ class NNSpace(BaseSpace):
         else:
             return self.system.base_scalars()
 
+
 class MLPSpace(NNSpace):
     """Multilayer perceptron functionspace"""
 
@@ -98,7 +100,6 @@ class MLPSpace(NNSpace):
         rank: int = 0,
         system: CoordSys = None,
         transient: bool = False,
-        offset: int = 0,
         act_fun: Callable[[Array], Array] = nnx.tanh,
         *,
         name: str,
@@ -121,19 +122,14 @@ class MLPSpace(NNSpace):
                 system will be Cartesian
             transient:
                 Whether to include the variable time or not. Defaults to False.
-            offset: If part of a CompositeMLP, then the offset tells how many
-                outputs there are before this space. The accumulated sum of all
-                out_sizes of all prior spaces. Defaults to 0.
             act_fun:
                 Activation function for all except the output layer
             name: Name of MLPSpace
 
-        """        
+        """
         NNSpace.__init__(self, dims, rank, transient, system, name)
         self.hidden_size = hidden_size
-        self.offset = offset
         self.act_fun = act_fun
-
 
 
 MLPVectorSpace = partial(MLPSpace, rank=1)
@@ -150,7 +146,6 @@ class PirateSpace(NNSpace):
         system: CoordSys = None,
         name: str = "PirateNet",
         transient: bool = False,
-        offset: int = 0,
         act_fun: Callable[[Array], Array] = nnx.tanh,
         act_fun_hidden: Callable[[Array], Array] = nnx.tanh,
         # PirateNet specific parameters
@@ -159,114 +154,19 @@ class PirateSpace(NNSpace):
         fourier_emb: dict | None = None,
         pi_init: jnp.ndarray | None = None,
     ) -> None:
-        
         NNSpace.__init__(self, dims, rank, transient, system, name)
 
         # PirateSpace requires at least one hidden layer, so change integer hidden_size to [hidden_size]
         self.hidden_size = (
             hidden_size if isinstance(hidden_size, list | tuple) else [hidden_size]
         )
-        self.offset = offset
         self.act_fun = act_fun
         self.act_fun_hidden = act_fun_hidden
-        
+
         self.nonlinearity = nonlinearity
         self.periodicity = periodicity
         self.fourier_emb = fourier_emb
         self.pi_init = pi_init
-
-
-class CompositeMLP:
-    """Multilayer perceptron composite functionspace
-
-    To be used for multiple outputs, or multiple coupled
-    equations.
-    """
-
-    def __init__(self, mlpspaces: list[MLPSpace]) -> None:
-        offset = 0
-        newspaces = []
-        self.name = "".join([V.name for V in mlpspaces])
-        self.system = mlpspaces[0].system
-        for i, mlp in enumerate(mlpspaces):
-            newmlp = MLPSpace(
-                mlp.hidden_size,
-                mlp.dims,
-                mlp.rank,
-                system=self.system,
-                transient=mlp.transient,
-                offset=offset,
-                name=self.name + "_" + str(i),
-            )
-            offset += newmlp.out_size
-            newspaces.append(newmlp)
-        self.mlp = newspaces
-        self.in_size = self.mlp[0].in_size
-        self.hidden_size = self.mlp[0].hidden_size
-        self.out_size = sum([p.out_size for p in self.mlp])
-
-    def __getitem__(self, i: int):
-        return self.mlp[i]
-
-    def __len__(self):
-        return len(self.mlp)
-
-
-# Note: We should probably get rid of this?
-class CompositeNetwork:
-    def __init__(self, spaces: tuple[BaseSpace, ...], name: str = "C") -> None:
-        offset = 0
-        # TODO: should refactor name from mlp to something more general
-        self.mlp = []
-        self.name = name  # Prefix, not name
-        self.system = spaces[0].system
-
-        has_pirate = any(isinstance(s, PirateSpace) for s in spaces)
-        if has_pirate:
-            p_params = {"period": (), "axis": (), "trainable": ()}
-            f_params = {"embed_dim": 0, "embed_scale": 1.0}
-            self.nonlinearity = 0.0
-
-        for i, space in enumerate(spaces):
-            # Is there any point in initializing a brand new space,
-            # instead of just correcting the existing one?
-            # With this, it's easier to be agnostic about the space type.
-            space.system = self.system
-            space.name = f"{name}{space.name}_{i}"
-            space.offset = offset
-
-            if isinstance(space, PirateSpace):
-                if space.periodicity is not None:
-                    prev_p = space.periodicity
-                    p_params["period"] += prev_p["period"]
-                    p_params["axis"] += (a + offset for a in prev_p["axis"])
-                    p_params["trainable"] += prev_p["trainable"]
-                if space.fourier_emb is not None:
-                    f_params["embed_dim"] += space.fourier_emb["embed_dim"]
-                    f_params["embed_scale"] = space.fourier_emb["embed_scale"]
-                self.nonlinearity = max(self.nonlinearity, space.nonlinearity)
-
-            offset += space.out_size
-            self.mlp.append(space)
-        self.in_size = self.mlp[0].in_size
-
-        if has_pirate:
-            self.periodicity = p_params if p_params["axis"] else None
-            if f_params["embed_dim"] > 0:
-                f_params["in_dim"] = self.in_size
-                self.fourier_emb = f_params
-            else:
-                self.fourier_emb = None
-            self.pi_init = None
-
-        self.hidden_size = self.mlp[0].hidden_size
-        self.out_size = sum([p.out_size for p in self.mlp])
-
-    def __getitem__(self, i: int) -> BaseSpace:
-        return self.mlp[i]
-
-    def __len__(self) -> int:
-        return len(self.mlp)
 
 
 class Count(nnx.Variable):
@@ -370,7 +270,7 @@ class RWFLinear(nnx.Module):
 class MLP(nnx.Module):
     def __init__(
         self,
-        V: BaseSpace | CompositeMLP,
+        V: BaseSpace,
         *,
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,
@@ -480,7 +380,7 @@ class PIModifiedBottleneck(nnx.Module):
 class PirateNet(nnx.Module):
     def __init__(
         self,
-        V: PirateSpace | CompositeNetwork,
+        V: PirateSpace,
         *,
         kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
         bias_init: Initializer = nnx.nn.linear.default_bias_init,
@@ -575,7 +475,6 @@ class SpectralModule(nnx.Module):
     ) -> None:
         self.kernel = nnx.Param(kernel_init(rngs(), (1, basespace.N)))
         self.space = basespace
-        self.space.offset = 0
 
     @property
     def dim(self) -> int:
@@ -596,19 +495,19 @@ class SpectralModule(nnx.Module):
 class FlaxFunction(Function):
     def __new__(
         cls,
-        V: BaseSpace | CompositeMLP,
+        V: BaseSpace,
         name: str,
         *,
         module: nnx.Module = None,
         fun_str: str = None,
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,
-        rngs: nnx.Rngs = nnx.Rngs(101),
+        rngs: nnx.Rngs = default_rngs,
     ) -> Function:
         from jaxfun.coordinates import BaseTime
 
         coors = V.system
-        args = list(coors._cartesian_xyz) 
+        args = list(coors._cartesian_xyz)
         t = BaseTime(V.system)
         args = args + [t] if V.is_transient else args
         args = args + [sp.Symbol(V.name)]
@@ -619,15 +518,13 @@ class FlaxFunction(Function):
             obj.get_flax_module(
                 V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs
             )
-            if module is None  # and not isinstance(V, CompositeNetwork)
+            if module is None
             else module
         )
         obj.name = name
         obj.fun_str = fun_str if fun_str is not None else name
         obj.argument = 2
         obj.rngs = rngs
-        if isinstance(V, CompositeMLP):
-            assert len(name) == len(V)
         return obj
 
     def __getitem__(self, i: int):
@@ -637,11 +534,7 @@ class FlaxFunction(Function):
 
     @property
     def rank(self):
-        return (
-            None
-            if isinstance(self.functionspace, CompositeMLP | CompositeNetwork)
-            else self.functionspace.rank
-        )
+        return self.functionspace.rank
 
     @property
     def dim(self):
@@ -655,9 +548,9 @@ class FlaxFunction(Function):
         bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs,
     ) -> MLP | PirateNet | SpectralModule:
-        if isinstance(V, MLPSpace | CompositeMLP):
+        if isinstance(V, MLPSpace):
             return MLP(V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)
-        elif isinstance(V, PirateSpace | CompositeNetwork):
+        elif isinstance(V, PirateSpace):
             return PirateNet(V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)
         return SpectralModule(
             V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs
@@ -678,13 +571,10 @@ class FlaxFunction(Function):
         s = V.system.base_scalars()
         args = self.get_args(Cartesian=False)
 
-        if isinstance(V, CompositeMLP):
-            raise RuntimeError
-
         if V.rank == 0:
             return Function(
                 self.fun_str,
-                global_index=V.offset,
+                global_index=0,
                 functionspace_name=V.name,
                 rank_parent=V.rank,
                 module=self.module,
@@ -696,7 +586,7 @@ class FlaxFunction(Function):
             return VectorAdd.fromiter(
                 Function(
                     self.fun_str + "_" + s[i].name,
-                    global_index=V.offset + i,
+                    global_index=i,
                     functionspace_name=V.name,
                     rank_parent=V.rank,
                     module=self.module,
@@ -758,11 +648,8 @@ class FlaxFunction(Function):
 
     def __call__(self, x):
         y = self.module(x)
-        V = self.functionspace
         if self.rank == 0:
-            return y[:, V.offset]
-        elif self.rank == 1:
-            return y[:, V.offset : V.offset + V.out_size]
+            return y[:, 0]
         return y
 
 
@@ -787,15 +674,12 @@ def eval_flaxfunction(expr, x: Array):
     assert len(f) == 1
     f = f.pop()
     du = jacn(f.module, expr.derivative_count)(x)
-    V = f.functionspace
-    offset = V.offset if f.rank == 0 else slice(V.offset, V.offset + V.out_size)
-    var: tuple[int] = tuple((slice(None), offset)) + tuple(
+    var: tuple[int] = tuple((slice(None), slice(None))) + tuple(
         int(s._id[0]) for s in expr.variables
     )
     return du[var]
 
 
-# Experimental...
 class Comp(nnx.Module):
     def __init__(self, flaxfunctions: list[FlaxFunction]) -> None:
         self.flaxfunctions = flaxfunctions
@@ -812,7 +696,9 @@ def expand(forms: sp.Expr) -> list[sp.Expr]:
         forms: Sympy expression
 
     Returns:
-        A list of sp.Exprs as arguments to Add
+        A tuple, where first item is a sympy expression that does not contain 
+        flax functions and second item is a list of sp.Exprs containing flax
+        functions, used as arguments to Add
     """
     f = sp.Add.make_args(forms.doit().expand())
     # return f
@@ -839,8 +725,8 @@ class Residual:
         self.target = target
         if len(t.free_symbols) > 0:
             self.target = target - lambdify(s, t, modules="jax")(*x.T)
-        elif t != 0:
-            self.target = target - t
+        elif isinstance(t, Number):
+            self.target = target - float(t)
         self.target = jnp.squeeze(self.target)
         self.weights = weights
 

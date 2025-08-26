@@ -1,4 +1,6 @@
 # ruff: noqa: E402
+import os
+import sys
 import time
 
 import jax
@@ -7,13 +9,11 @@ jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-import numpy as np
 import optax
 from flax import nnx
 from soap_jax import soap
 
-from jaxfun import Div, Dot, Grad
-from jaxfun.pinns.hessoptimizer import hess
+from jaxfun import Div, Grad
 from jaxfun.pinns.mesh import Rectangle
 from jaxfun.pinns.module import (
     LSQR,
@@ -23,6 +23,7 @@ from jaxfun.pinns.module import (
     run_optimizer,
 )
 from jaxfun.utils import lambdify
+from jaxfun.utils.common import ulp
 
 print("JAX running on", jax.devices()[0].platform.upper())
 
@@ -37,7 +38,7 @@ V = PirateSpace(
 w = FlaxFunction(V, name="w")
 
 x, y = V.system.base_scalars()
-ue = (1 - x**2) * (1 - y**2) # manufactured solution
+ue = (1 - x**2) * (1 - y**2)  # manufactured solution
 
 f = (
     Div(Grad(w))
@@ -64,16 +65,8 @@ opt_lbfgs = nnx.Optimizer(
 run_optimizer(
     loss_fn, w.module, opt_lbfgs, 10000, "LBFGS", 1000, update_global_weights=10
 )
-opt_hess = nnx.Optimizer(
-    w.module,
-    hess(
-        use_lstsq=False,
-        cg_max_iter=100,
-        linesearch=optax.scale_by_zoom_linesearch(25, max_learning_rate=1.0),
-    ),
-)
-run_optimizer(loss_fn, w.module, opt_hess, 10, "Hess", 1, update_global_weights=10)
 print("time", time.time() - t0)
+
 uj = lambdify((x, y), ue)(*xyi.T)
 plt.contourf(
     xyi[:, 0].reshape((N, N)),
@@ -82,7 +75,9 @@ plt.contourf(
 )
 plt.colorbar()
 
-print(
-    "Error",
-    jnp.linalg.norm(w.module(xyi)[:, 0] - uj) / jnp.sqrt(len(xyi)),
-)
+error = jnp.linalg.norm(w.module(xyi)[:, 0] - uj) / jnp.sqrt(len(xyi))
+print("Error", error)
+
+if "pytest" in os.environ:
+    assert error < ulp(1000), error
+    sys.exit(1)

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from functools import partial
 
 import jax
@@ -12,6 +10,8 @@ n = sp.Symbol("n", integer=True, positive=True)  # index
 
 
 class BaseSpace:
+    is_transient = False
+
     def __init__(
         self,
         system: CoordSys = None,
@@ -21,8 +21,6 @@ class BaseSpace:
         self.name = name
         self.fun_str = fun_str
         self.system = CartCoordSys("N", (x,)) if system is None else system
-
-    is_transient = False
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:

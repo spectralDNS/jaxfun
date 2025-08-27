@@ -9,9 +9,10 @@ import sympy as sp
 from flax import nnx
 
 from jaxfun.coordinates import BaseScalar, get_system
-from jaxfun.pinns.module import Comp, Function
 from jaxfun.typing import Array, LSQR_Tuple
 from jaxfun.utils import jacn, lambdify
+
+from .module import Comp, Function
 
 
 def get_args(a: sp.Expr) -> tuple[sp.Symbol | BaseScalar, ...]:

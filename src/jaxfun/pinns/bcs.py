@@ -4,8 +4,9 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 
-from jaxfun.pinns import FlaxFunction
 from jaxfun.utils import lambdify
+
+from . import FlaxFunction
 
 
 def DirichletBC(

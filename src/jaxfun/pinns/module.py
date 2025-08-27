@@ -20,9 +20,10 @@ from sympy.vector import VectorAdd
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseTime
-from jaxfun.pinns.embeddings import Embedding
-from jaxfun.pinns.nnspaces import MLPSpace, PirateSpace
 from jaxfun.utils.common import lambdify
+
+from .embeddings import Embedding
+from .nnspaces import MLPSpace, PirateSpace
 
 default_kernel_init = nnx.initializers.glorot_normal()
 default_bias_init = nnx.initializers.zeros_init()

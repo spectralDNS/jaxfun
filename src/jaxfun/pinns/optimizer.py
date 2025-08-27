@@ -3,8 +3,9 @@ from collections.abc import Callable
 import jax
 from flax import nnx
 
-from jaxfun.pinns.loss import LSQR
 from jaxfun.utils.common import ulp
+
+from .loss import LSQR
 
 
 def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:

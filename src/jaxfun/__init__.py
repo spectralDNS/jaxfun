@@ -1,6 +1,7 @@
-from jaxfun.basespace import BaseSpace as BaseSpace
-from jaxfun.coordinates import CoordSys as CoordSys, get_CoordSys as get_CoordSys
-from jaxfun.operators import (
+from . import galerkin as galerkin, pinns as pinns
+from .basespace import BaseSpace as BaseSpace
+from .coordinates import CoordSys as CoordSys, get_CoordSys as get_CoordSys
+from .operators import (
     Cross as Cross,
     Curl as Curl,
     Div as Div,
@@ -14,4 +15,4 @@ from jaxfun.operators import (
     gradient as gradient,
     outer as outer,
 )
-from jaxfun.utils import Domain as Domain, common as common, fastgl as fastgl
+from .utils import Domain as Domain, common as common, fastgl as fastgl

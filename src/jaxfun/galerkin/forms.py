@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 import sympy as sp
 
-from jaxfun.coordinates import CoordSys
+from jaxfun.coordinates import CoordSys, get_system
 from jaxfun.galerkin.arguments import Jaxf, JAXFunction
 
 
@@ -29,13 +29,6 @@ def get_basisfunctions(
             return test_found, trial_found
         case _:
             return None, None
-
-
-def get_system(a: sp.Expr) -> CoordSys:
-    for p in sp.core.traversal.iterargs(a):
-        if isinstance(p, CoordSys):
-            return p
-    raise RuntimeError("CoordSys not found")
 
 
 def split_coeff(c0: sp.Expr) -> dict:

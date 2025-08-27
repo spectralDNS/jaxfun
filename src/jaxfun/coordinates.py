@@ -62,6 +62,13 @@ class defaultdict(UserDict):
 latex_symbols = defaultdict(latex_sym_dict)
 
 
+def get_system(a: sp.Expr) -> CoordSys:
+    for p in sp.core.traversal.iterargs(a):
+        if isinstance(p, CoordSys):
+            return p
+    raise RuntimeError("CoordSys not found")
+
+
 class BaseTime(Symbol):
     """
     A symbol for time.

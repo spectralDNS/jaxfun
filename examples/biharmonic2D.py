@@ -7,14 +7,14 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from scipy import sparse as scipy_sparse
 
-from jaxfun.arguments import TestFunction, TrialFunction, x, y
-from jaxfun.basespace import n
-from jaxfun.Chebyshev import Chebyshev
-from jaxfun.functionspace import FunctionSpace
-from jaxfun.inner import inner
+from jaxfun.coordinates import x, y
+from jaxfun.galerkin.arguments import TestFunction, TrialFunction
+from jaxfun.galerkin.Chebyshev import Chebyshev
+from jaxfun.galerkin.functionspace import FunctionSpace
+from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
 from jaxfun.operators import Div, Grad
-from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
-from jaxfun.utils.common import lambdify, ulp
+from jaxfun.utils.common import lambdify, n, ulp
 
 # Method of manufactured solution
 #ue = sp.exp(sp.cos(2 * sp.pi * (x - sp.S.Half / 2))) * sp.exp(

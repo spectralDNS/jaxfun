@@ -6,9 +6,9 @@ import sympy as sp
 from jax import Array
 from sympy import Expr, Symbol
 
-from jaxfun.basespace import Domain
 from jaxfun.coordinates import CoordSys
-from jaxfun.Jacobi import Jacobi
+from jaxfun.galerkin.Jacobi import Jacobi
+from jaxfun.utils.common import Domain
 
 
 class Chebyshev(Jacobi):
@@ -66,7 +66,7 @@ class Chebyshev(Jacobi):
 
         c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (c0, c1))
         return c0 + c1 * X
-    
+
     @partial(jax.jit, static_argnums=0)
     def evaluate2(self, X: float, c: Array) -> float:
         """Alternative implementation of evaluate

@@ -49,6 +49,10 @@ latex_sym_dict = {
     "omega": r"\omega",
 }
 
+t, x, y, z = sp.symbols("t,x,y,z", real=True)
+
+CartCoordSys = lambda name, s: CoordSys(name, sp.Lambda(s, s))
+
 
 class defaultdict(UserDict):
     def __missing__(self, key) -> str:
@@ -65,9 +69,8 @@ class BaseTime(Symbol):
     """
 
     def __new__(cls, sys: CoordSys) -> BaseTime:
-        
         index: int = _sympify(sys.dims)
-        obj = super().__new__(cls, 't')
+        obj = super().__new__(cls, "t")
         # The _id is used for equating purposes, and for hashing
         obj._id = (index,)
         return obj
@@ -92,6 +95,7 @@ class BaseTime(Symbol):
 
     def doit(self, **hints: dict) -> BaseScalar:
         return self
+
 
 class BaseScalar(AtomicExpr):
     """
@@ -470,7 +474,7 @@ class CoordSys(Basic):
 
     def base_dyadics(self) -> tuple[BaseDyadic]:
         return self._base_dyadics
-    
+
     def base_time(self) -> BaseTime:
         return BaseTime(self)
 
@@ -857,8 +861,6 @@ def get_CoordSys(
             return count
 
     """
-    from jaxfun.arguments import CartCoordSys, x, y, z
-
     return CoordSys(
         name,
         transformation,

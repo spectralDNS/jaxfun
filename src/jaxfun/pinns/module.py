@@ -426,10 +426,7 @@ class FlaxFunction(Function):
         return s + (self.t,) if V.is_transient else s
 
     def doit(self, **hints: dict) -> sp.Expr:
-        from jaxfun.arguments import functionspacedict
-
         V = self.functionspace
-        functionspacedict[V.name] = V
         s = V.system.base_scalars()
         args = self.get_args(Cartesian=False)
 

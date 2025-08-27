@@ -7,15 +7,15 @@ import sympy as sp
 from jax import Array
 from jax.experimental.sparse import BCOO
 
-from jaxfun.arguments import (
+from jaxfun.coordinates import CoordSys
+from jaxfun.galerkin.arguments import (
     TestFunction,
     TrialFunction,
 )
-from jaxfun.basespace import OrthogonalSpace
-from jaxfun.composite import BCGeneric, Composite
-from jaxfun.coordinates import CoordSys
-from jaxfun.forms import get_basisfunctions, split, split_coeff
-from jaxfun.tensorproductspace import (
+from jaxfun.galerkin.composite import BCGeneric, Composite
+from jaxfun.galerkin.forms import get_basisfunctions, split, split_coeff
+from jaxfun.galerkin.orthogonal import OrthogonalSpace
+from jaxfun.galerkin.tensorproductspace import (
     DirectSumTPS,
     TensorMatrix,
     TensorProductSpace,
@@ -276,7 +276,11 @@ def process_results(
 
 
 def inner_bilinear(
-    ai: sp.Expr, v: OrthogonalSpace, u: OrthogonalSpace, sc: float | complex, multivar: bool
+    ai: sp.Expr,
+    v: OrthogonalSpace,
+    u: OrthogonalSpace,
+    sc: float | complex,
+    multivar: bool,
 ) -> Array:
     vo = v.orthogonal
     uo = u.orthogonal
@@ -287,15 +291,15 @@ def inner_bilinear(
     for aii in ai.args:
         found_basis = False
         for p in sp.core.traversal.preorder_traversal(aii):
-            if hasattr(p, 'argument'):
+            if hasattr(p, "argument"):
                 found_basis = True
                 break
         if found_basis:
             if isinstance(aii, sp.Derivative):
-                if getattr(aii.args[0], 'argument', -1) == 0:
+                if getattr(aii.args[0], "argument", -1) == 0:
                     assert i == 0
                     i = int(aii.derivative_count)
-                elif getattr(aii.args[0], 'argument', -1) == 1:
+                elif getattr(aii.args[0], "argument", -1) == 1:
                     assert j == 0
                     j = int(aii.derivative_count)
             continue
@@ -358,7 +362,7 @@ def inner_linear(
     df = float(vo.domain_factor)
     i = 0
     uj = jnp.array([sc])  # incorporate scalar coefficient into first vector
-    if getattr(bi, 'argument', -1) == 0:
+    if getattr(bi, "argument", -1) == 0:
         pass
     elif isinstance(bi, sp.Derivative):
         i = int(bi.derivative_count)
@@ -366,7 +370,7 @@ def inner_linear(
         for bii in bi.args:
             found_basis = False
             for p in sp.core.traversal.preorder_traversal(bii):
-                if getattr(p, 'argument', -1) == 0:
+                if getattr(p, "argument", -1) == 0:
                     found_basis = True
                     break
             if found_basis:

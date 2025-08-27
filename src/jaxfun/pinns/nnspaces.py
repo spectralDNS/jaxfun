@@ -4,13 +4,13 @@ from functools import partial
 import jax.numpy as jnp
 from flax import nnx
 
-from jaxfun.arguments import (
-    Array,
+from jaxfun.basespace import BaseSpace
+from jaxfun.coordinates import (
     BaseScalar,
-    BaseSpace,
+    BaseTime,
     CoordSys,
 )
-from jaxfun.coordinates import BaseTime
+from jaxfun.typing import Array
 
 
 class NNSpace(BaseSpace):
@@ -38,7 +38,7 @@ class NNSpace(BaseSpace):
             name: Name of NN space
 
         """
-        from jaxfun.arguments import CartCoordSys, x, y, z
+        from jaxfun.coordinates import CartCoordSys, x, y, z
 
         self.in_size = dims + int(transient)
         self.out_size = dims**rank
@@ -54,7 +54,7 @@ class NNSpace(BaseSpace):
 
     def base_variables(self) -> tuple[BaseScalar | BaseTime, ...]:
         """Return the base variables, including time if transient."""
-        if self.transient:
+        if self.is_transient:
             return self.system.base_scalars() + (self.system.base_time(),)
         else:
             return self.system.base_scalars()

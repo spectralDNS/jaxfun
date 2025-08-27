@@ -6,17 +6,16 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
 
-from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.basespace import n
+from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 
-# from jaxfun.Legendre import Legendre as space
-from jaxfun.Chebyshev import Chebyshev as space
-from jaxfun.functionspace import FunctionSpace
-from jaxfun.inner import inner
+# from jaxfun.galerkin.Legendre import Legendre as space
+from jaxfun.galerkin.Chebyshev import Chebyshev as space
+from jaxfun.galerkin.functionspace import FunctionSpace
+from jaxfun.galerkin.inner import inner
 
 # from jaxfun.Jacobi import Jacobi as space
 from jaxfun.operators import Div, Grad
-from jaxfun.utils.common import lambdify, ulp
+from jaxfun.utils.common import lambdify, n, ulp
 
 M = 30
 bcs = {"left": {"D": 0}, "right": {"D": 0}}

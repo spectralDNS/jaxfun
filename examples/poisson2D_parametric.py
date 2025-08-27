@@ -7,13 +7,13 @@ import matplotlib.pyplot as plt
 import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
-from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.Chebyshev import Chebyshev
 from jaxfun.coordinates import get_CoordSys
-from jaxfun.functionspace import FunctionSpace
-from jaxfun.inner import inner
+from jaxfun.galerkin.arguments import TestFunction, TrialFunction
+from jaxfun.galerkin.Chebyshev import Chebyshev
+from jaxfun.galerkin.functionspace import FunctionSpace
+from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
-from jaxfun.tensorproductspace import TensorProduct
 from jaxfun.utils.common import lambdify, ulp
 
 # Some quadrilateral

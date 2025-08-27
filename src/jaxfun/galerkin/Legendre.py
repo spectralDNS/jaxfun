@@ -5,9 +5,9 @@ import jax.numpy as jnp
 import sympy as sp
 from jax import Array
 
-from jaxfun.basespace import Domain, n
 from jaxfun.coordinates import CoordSys
-from jaxfun.Jacobi import Jacobi
+from jaxfun.galerkin.Jacobi import Jacobi
+from jaxfun.utils.common import Domain, n
 from jaxfun.utils.fastgl import leggauss
 
 
@@ -90,7 +90,7 @@ class Legendre(Jacobi):
 
         _, xs = jax.lax.scan(inner_loop, (x0, X), jnp.arange(2, self.N + 1))
 
-        return jnp.sum(xs, axis=0) + c[0] 
+        return jnp.sum(xs, axis=0) + c[0]
 
     @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:

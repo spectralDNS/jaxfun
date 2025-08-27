@@ -3,8 +3,8 @@ import numpy as np
 import pytest
 
 from jaxfun import BaseSpace
-from jaxfun.Chebyshev import Chebyshev
-from jaxfun.Legendre import Legendre
+from jaxfun.galerkin.Chebyshev import Chebyshev
+from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.utils.common import ulp
 
 

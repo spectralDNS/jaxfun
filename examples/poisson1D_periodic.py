@@ -6,10 +6,10 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
 
-from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.Fourier import Fourier
-from jaxfun.functionspace import FunctionSpace
-from jaxfun.inner import inner
+from jaxfun.galerkin.arguments import TestFunction, TrialFunction
+from jaxfun.galerkin.Fourier import Fourier
+from jaxfun.galerkin.functionspace import FunctionSpace
+from jaxfun.galerkin.inner import inner
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, ulp
 

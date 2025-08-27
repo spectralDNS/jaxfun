@@ -9,7 +9,7 @@ import sympy as sp
 from flax import nnx
 from soap_jax import soap
 
-from jaxfun.arguments import Constant
+from jaxfun.galerkin.arguments import Constant
 from jaxfun.pinns.bcs import DirichletBC
 from jaxfun.pinns.loss import LSQR
 from jaxfun.pinns.mesh import Rectangle, points_along_axis

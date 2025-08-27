@@ -8,15 +8,14 @@ import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from scipy import sparse as scipy_sparse
 
-from jaxfun.arguments import TestFunction, TrialFunction, x, y
-from jaxfun.basespace import n
-from jaxfun.Chebyshev import Chebyshev
-from jaxfun.Fourier import Fourier
-from jaxfun.functionspace import FunctionSpace
-from jaxfun.inner import inner
+from jaxfun.galerkin.arguments import TestFunction, TrialFunction, x, y
+from jaxfun.galerkin.Chebyshev import Chebyshev
+from jaxfun.galerkin.Fourier import Fourier
+from jaxfun.galerkin.functionspace import FunctionSpace
+from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
 from jaxfun.operators import Div, Grad
-from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
-from jaxfun.utils.common import lambdify, ulp
+from jaxfun.utils.common import lambdify, n, ulp
 
 ue = (1-y**2)*(sp.cos(2 * x)) * sp.exp(sp.cos(sp.pi * y))
 

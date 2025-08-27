@@ -8,18 +8,18 @@ import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from scipy import sparse as scipy_sparse
 
-from jaxfun.arguments import TestFunction, TrialFunction, x, y
-from jaxfun.basespace import n
-from jaxfun.Chebyshev import Chebyshev as space
-from jaxfun.functionspace import FunctionSpace
+from jaxfun.coordinates import x, y
+from jaxfun.galerkin.arguments import TestFunction, TrialFunction
+from jaxfun.galerkin.Chebyshev import Chebyshev as space
+from jaxfun.galerkin.functionspace import FunctionSpace
 
 # from jaxfun.Jacobi import Jacobi as space
-from jaxfun.inner import inner
+from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
 
-# from jaxfun.Legendre import Legendre as space
+# from jaxfun.galerkin.Legendre import Legendre as space
 from jaxfun.operators import Div, Grad
-from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
-from jaxfun.utils.common import lambdify, ulp
+from jaxfun.utils.common import lambdify, n, ulp
 
 M = 50
 ue = sp.exp(sp.cos(2 * sp.pi * (x - sp.S.Half / 2))) * sp.exp(

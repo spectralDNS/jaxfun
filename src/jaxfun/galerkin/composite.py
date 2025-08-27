@@ -13,12 +13,13 @@ from jax.experimental.sparse import BCOO
 from scipy import sparse as scipy_sparse
 from sympy import Number
 
-from jaxfun.basespace import Domain, OrthogonalSpace, n
-from jaxfun.Chebyshev import Chebyshev
 from jaxfun.coordinates import CoordSys
-from jaxfun.Jacobi import Jacobi
-from jaxfun.Legendre import Legendre
-from jaxfun.utils.common import matmat
+from jaxfun.utils.common import Domain, matmat, n
+
+from .Chebyshev import Chebyshev
+from .Jacobi import Jacobi
+from .Legendre import Legendre
+from .orthogonal import OrthogonalSpace
 
 direct_sum_symbol = "\u2295"
 
@@ -95,7 +96,9 @@ class Composite(OrthogonalSpace):
         scaling: sp.Expr = sp.S.One,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
-        OrthogonalSpace.__init__(self, N, domain, system=system, name=name, fun_str=fun_str)
+        OrthogonalSpace.__init__(
+            self, N, domain, system=system, name=name, fun_str=fun_str
+        )
         self.orthogonal = orthogonal(
             N, domain=domain, alpha=alpha, beta=beta, system=system
         )
@@ -256,7 +259,9 @@ class BCGeneric(Composite):
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
         bcs = BoundaryConditions(bcs, domain=domain)
-        OrthogonalSpace.__init__(self, N, domain, system=system, name=name, fun_str=fun_str)
+        OrthogonalSpace.__init__(
+            self, N, domain, system=system, name=name, fun_str=fun_str
+        )
         self.bcs = bcs
         self.stencil = None
         self.M = M
@@ -292,7 +297,7 @@ class DirectSum:
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
         self.system = a.system
-        
+
     def __getitem__(self, i: int) -> OrthogonalSpace:
         return self.basespaces[i]
 
@@ -464,9 +469,9 @@ if __name__ == "__main__":
     from Chebyshev import Chebyshev
     from Legendre import Legendre
 
-    from jaxfun.arguments import TestFunction, TrialFunction
-    from jaxfun.composite import Composite
-    from jaxfun.inner import inner
+    from jaxfun.galerkin.arguments import TestFunction, TrialFunction
+    from jaxfun.galerkin.composite import Composite
+    from jaxfun.galerkin.inner import inner
 
     n = sp.Symbol("n", positive=True, integer=True)
     N = 50

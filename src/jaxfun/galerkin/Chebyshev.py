@@ -6,9 +6,10 @@ import sympy as sp
 from jax import Array
 from sympy import Expr, Symbol
 
-from jaxfun.basespace import Domain
 from jaxfun.coordinates import CoordSys
-from jaxfun.Jacobi import Jacobi
+from jaxfun.utils.common import Domain
+
+from .Jacobi import Jacobi
 
 
 class Chebyshev(Jacobi):
@@ -66,7 +67,7 @@ class Chebyshev(Jacobi):
 
         c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (c0, c1))
         return c0 + c1 * X
-    
+
     @partial(jax.jit, static_argnums=0)
     def evaluate2(self, X: float, c: Array) -> float:
         """Alternative implementation of evaluate
@@ -90,7 +91,6 @@ class Chebyshev(Jacobi):
         _, xs = jax.lax.scan(inner_loop, (x0, X), jnp.arange(2, self.N + 1))
 
         return jnp.sum(xs, axis=0) + c[0]
-
 
     @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
@@ -129,7 +129,7 @@ class Chebyshev(Jacobi):
 
         _, xs = jax.lax.scan(inner_loop, init=(x0, X), xs=None, length=self.N - 1)
 
-        #return jnp.hstack((x0, xs))
+        # return jnp.hstack((x0, xs))
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
     def norm_squared(self) -> Array:

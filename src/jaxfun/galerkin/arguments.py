@@ -10,14 +10,17 @@ from sympy import Expr, Function
 from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
-from jaxfun.basespace import BaseSpace, OrthogonalSpace
-from jaxfun.composite import DirectSum
+from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseScalar, CoordSys, latex_symbols
-from jaxfun.tensorproductspace import TensorProductSpace, VectorTensorProductSpace
+
+from .composite import DirectSum
+from .orthogonal import OrthogonalSpace
+from .tensorproductspace import (
+    TensorProductSpace,
+    VectorTensorProductSpace,
+)
 
 t, x, y, z = sp.symbols("t,x,y,z", real=True)
-
-CartCoordSys = lambda name, s: CoordSys(name, sp.Lambda(s, s))
 
 functionspacedict = {}
 
@@ -355,7 +358,7 @@ class VectorFunction(Function):
         return obj
 
     def __str__(self) -> str:
-        return "\033[1m%s\033[0m" % (self.name,) + str(self.args[:-1])
+        return "\033[1m%s\033[0m" % (self.name,) + str(self.args[:-1])  # noqa: UP031
 
     def doit(self, **hints: dict) -> Function:
         """Return function in computational domain"""
@@ -506,23 +509,3 @@ class JAXFunction(Function):
     @partial(jax.jit, static_argnums=0)
     def __rmatmul__(self, a: Array) -> Array:
         return a @ self.array
-
-
-class Constant(sp.Symbol):
-    def __new__(cls, name: str, val: Number, **assumptions):
-        obj = super().__new__(cls, name, **assumptions)
-        obj.val = val
-        return obj
-
-    def doit(self) -> Number:
-        return self.val
-
-
-class Identity(sp.Expr):
-    def __init__(self, sys: CoordSys):
-        self.sys = sys
-
-    def doit(self):
-        return sum(
-            self.sys.base_dyadics()[:: self.sys.dims + 1], sp.vector.DyadicZero()
-        )

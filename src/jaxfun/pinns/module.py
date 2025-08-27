@@ -20,9 +20,10 @@ from sympy.vector import VectorAdd
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseTime
-from jaxfun.pinns.embeddings import Embedding
-from jaxfun.pinns.nnspaces import MLPSpace, PirateSpace
 from jaxfun.utils.common import lambdify
+
+from .embeddings import Embedding
+from .nnspaces import MLPSpace, PirateSpace
 
 default_kernel_init = nnx.initializers.glorot_normal()
 default_bias_init = nnx.initializers.zeros_init()
@@ -426,10 +427,7 @@ class FlaxFunction(Function):
         return s + (self.t,) if V.is_transient else s
 
     def doit(self, **hints: dict) -> sp.Expr:
-        from jaxfun.arguments import functionspacedict
-
         V = self.functionspace
-        functionspacedict[V.name] = V
         s = V.system.base_scalars()
         args = self.get_args(Cartesian=False)
 

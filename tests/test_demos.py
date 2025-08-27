@@ -19,7 +19,7 @@ import pytest
         "helmholtz2D",
     ],
 )
-def test_demos(demo):
+def test_demos(demo) -> None:
     with contextlib.suppress(SystemExit):
         runpy.run_path(f"examples/{demo}.py", run_name="__main__")
 

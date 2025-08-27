@@ -1,8 +1,9 @@
 import jax.numpy as jnp
 import sympy as sp
 
-from jaxfun.arguments import Jaxf, JAXFunction
-from jaxfun.coordinates import CoordSys
+from jaxfun.coordinates import CoordSys, get_system as get_system
+
+from .arguments import Jaxf, JAXFunction
 
 
 def get_basisfunctions(
@@ -13,9 +14,9 @@ def get_basisfunctions(
 ]:
     test_found, trial_found = set(), set()
     for p in sp.core.traversal.iterargs(a):
-        if getattr(p, 'argument', -1) == 1:
+        if getattr(p, "argument", -1) == 1:
             trial_found.add(p)
-        if getattr(p, 'argument', -1) == 0:
+        if getattr(p, "argument", -1) == 0:
             test_found.add(p)
 
     match (len(test_found), len(trial_found)):
@@ -30,11 +31,6 @@ def get_basisfunctions(
         case _:
             return None, None
 
-def get_system(a: sp.Expr) -> CoordSys:
-    for p in sp.core.traversal.iterargs(a):
-        if isinstance(p, CoordSys):
-            return p
-    raise RuntimeError("CoordSys not found")
 
 def split_coeff(c0: sp.Expr) -> dict:
     coeffs = {}
@@ -85,7 +81,7 @@ def split(forms: sp.Expr) -> dict:
             rest = []
             jfun = []
             for arg in ms.args:
-                if isinstance(arg, sp.Derivative) or hasattr(arg, 'argument'):
+                if isinstance(arg, sp.Derivative) or hasattr(arg, "argument"):
                     rest.append(arg)
                 elif isinstance(arg, JAXFunction | Jaxf):
                     jfun.append(arg)

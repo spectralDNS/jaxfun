@@ -2,12 +2,11 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
-from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.Chebyshev import Chebyshev
-from jaxfun.composite import Composite
-from jaxfun.inner import inner
-from jaxfun.Legendre import Legendre
-from jaxfun.utils.common import ulp
+from jaxfun.galerkin import Composite, TestFunction, TrialFunction
+from jaxfun.galerkin.Chebyshev import Chebyshev
+from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.Legendre import Legendre
+from jaxfun.utils import ulp
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))

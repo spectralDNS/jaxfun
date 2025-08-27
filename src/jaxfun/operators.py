@@ -3,13 +3,14 @@ Here we extend the Sympy operators Divergence, Gradient, Curl, Cross and Dot
 using curvilinear coordinates. The expressions used for computing the operators
 have been collected from the online book
 
-[1] Kelly, PA. Mechanics Lecture Notes: An introduction to Solid Mechanics.  
+[1] Kelly, PA. Mechanics Lecture Notes: An introduction to Solid Mechanics.
 Available from http://homepages.engineering.auckland.ac.nz/~pkel015/SolidMechanicsBooks/index.html
 
 """
 
 import collections
 from itertools import product
+from numbers import Number
 from typing import Any
 
 import numpy as np
@@ -17,16 +18,14 @@ import sympy as sp
 from sympy import Expr
 from sympy.core import preorder_traversal
 from sympy.core.add import Add
-from sympy.core.function import Derivative
-from sympy.core.function import diff as df
+from sympy.core.function import Derivative, diff as df
 from sympy.core.mul import Mul
 from sympy.printing.latex import LatexPrinter
 from sympy.printing.pretty.stringpict import prettyForm
-from sympy.vector import Dot as sympy_Dot
-from sympy.vector import VectorAdd, VectorMul, VectorZero
+from sympy.vector import Dot as sympy_Dot, VectorAdd, VectorMul, VectorZero
 from sympy.vector.dyadic import Dyadic, DyadicAdd, DyadicMul, DyadicZero
-from sympy.vector.operators import Curl as sympy_Curl
 from sympy.vector.operators import (
+    Curl as sympy_Curl,
     Divergence,
     Gradient,
 )
@@ -664,7 +663,8 @@ class Dot(sympy_Dot):
         return dot(self._expr1.doit(**hints), self._expr2.doit(**hints))
 
 
-# Note: Sympy subclasses like Cross(Vector), which breaks operators for unevaluated expressions
+# Note: Sympy subclasses like Cross(Vector), which breaks operators for
+# unevaluated expressions
 class Cross(Expr):
     """
     Represents unevaluated Cross product.
@@ -672,7 +672,7 @@ class Cross(Expr):
     Examples
     ========
 
-    >>> from jaxfun.arguments import CartCoordSys, x, y, z
+    >>> from jaxfun.coordinates import CartCoordSys, x, y, z
     >>> from jaxfun.operators import Cross
     >>> N = CartCoordSys("N", (x, y, z))
     >>> v1 = N.i + N.j + N.k
@@ -703,7 +703,7 @@ class Outer(Expr):
     Examples
     ========
 
-    >>> from jaxfun.arguments import CartCoordSys, x, y
+    >>> from jaxfun.coordinates import CartCoordSys, x, y
     >>> from jaxfun.operators import Outer
     >>> N = CartCoordSys("N", (x, y))
     >>> v1 = N.i
@@ -735,15 +735,35 @@ class Outer(Expr):
 
 
 class Source(Expr):
-
     def __new__(cls, expr):
         expr = sp.sympify(expr)
         obj = Expr.__new__(cls, expr)
         obj._expr = expr
-        return obj 
-    
+        return obj
+
     def doit(self, **hints):
         return self._expr.doit(**hints)
+
+
+class Constant(sp.Symbol):
+    def __new__(cls, name: str, val: Number, **assumptions):
+        obj = super().__new__(cls, name, **assumptions)
+        obj.val = val
+        return obj
+
+    def doit(self) -> Number:
+        return self.val
+
+
+class Identity(sp.Expr):
+    def __init__(self, sys: CoordSys):
+        self.sys = sys
+
+    def doit(self):
+        return sum(
+            self.sys.base_dyadics()[:: self.sys.dims + 1], sp.vector.DyadicZero()
+        )
+
 
 def diff(self, *args, **kwargs):
     """
@@ -756,7 +776,8 @@ def diff(self, *args, **kwargs):
     for x in args:
         if isinstance(x, sp.vector.basisdependent.BasisDependent):
             raise TypeError("Invalid arg for differentiation")
-    # Move to Cartesian because the basis vectors are then constant and non-differentiable
+    # Move to Cartesian because the basis vectors are then constant
+    # and non-differentiable
     # Alternatively use Christoffel symbols, but this gets messy for more than one args.
     v0 = self._sys.to_cartesian(self)
     diff_components = [df(v, *args, **kwargs) * k for k, v in v0.components.items()]
@@ -771,18 +792,18 @@ def diff(self, *args, **kwargs):
 # f = N.x*N.y
 # h = 4*Gradient(f)
 # z = h.doit()
-## -> z = 4*N.x*N.j + 4*N.y*N.i
+# # -> z = 4*N.x*N.j + 4*N.y*N.i
 # z.is_Vector
-## -> False
-# z is now a type Add and not VectorAdd as it should be. 
+# # -> False
+# z is now a type Add and not VectorAdd as it should be.
 # Using the doit function below is a hack around it
-# from jaxfun.arguments import CartCoordSys, x, y, z
+# from jaxfun.coordinates import CartCoordSys, x, y, z
 # from jaxfun.operators import Grad
 # N = CartCoordSys("N", (x, y, z))
 # f = N.x*N.y
 # h = 4*Grad(f)
 # h.doit().is_Vector
-## -> True
+# # -> True
 
 
 def doit(self, **hints):

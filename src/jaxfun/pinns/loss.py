@@ -8,10 +8,11 @@ import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
 
-from jaxfun.coordinates import BaseScalar
-from jaxfun.pinns.module import Comp, Function
+from jaxfun.coordinates import BaseScalar, get_system
 from jaxfun.typing import Array, LSQR_Tuple
 from jaxfun.utils import jacn, lambdify
+
+from .module import Comp, Function
 
 
 def get_args(a: sp.Expr) -> tuple[sp.Symbol | BaseScalar, ...]:
@@ -130,7 +131,6 @@ class LSQR:
             >>> xb = jnp.array([[-1.0], [1.0]])
             >>> loss_fn = LSQR((eq, xj, 0, 1), (u, xb, 0, 10))
         """
-        from jaxfun.forms import get_system
         from jaxfun.operators import Dot
 
         self.alpha = alpha

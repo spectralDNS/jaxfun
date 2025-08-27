@@ -8,15 +8,14 @@ import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from scipy import sparse as scipy_sparse
 
-from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.basespace import n
 from jaxfun.coordinates import get_CoordSys
-from jaxfun.functionspace import FunctionSpace
-from jaxfun.inner import inner
-from jaxfun.Legendre import Legendre
+from jaxfun.galerkin.arguments import TestFunction, TrialFunction
+from jaxfun.galerkin.functionspace import FunctionSpace
+from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.Legendre import Legendre
+from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
 from jaxfun.operators import Div, Grad
-from jaxfun.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
-from jaxfun.utils.common import lambdify, ulp
+from jaxfun.utils.common import lambdify, n, ulp
 
 M = 40
 bcs = {"left": {"D": 0}, "right": {"D": 0}}

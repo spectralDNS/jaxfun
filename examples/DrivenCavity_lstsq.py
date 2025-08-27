@@ -19,7 +19,7 @@ except ImportError:
 import sympy as sp
 from flax import nnx
 
-from jaxfun import Div, Dot, Grad, Outer
+from jaxfun.operators import Div, Dot, Grad, Outer
 from jaxfun.pinns.bcs import DirichletBC
 from jaxfun.pinns.loss import LSQR
 from jaxfun.pinns.mesh import Rectangle

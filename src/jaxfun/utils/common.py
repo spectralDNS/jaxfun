@@ -12,6 +12,8 @@ from scipy import sparse as scipy_sparse
 from scipy.special import sph_harm
 from sympy import Expr, Number, Symbol
 
+from jaxfun.coordinates import get_system
+
 Ynm = lambda n, m, x, y: sph_harm(m, n, y, x)
 n = Symbol("n", positive=True, integer=True)
 
@@ -90,8 +92,6 @@ def lambdify(
     cse: bool = False,
     doctring_limit: int = 1000,
 ) -> Callable[[Iterable[Array]], Array]:
-    from jaxfun.forms import get_system
-
     system = get_system(expr)
     expr = system.expr_base_scalar_to_psi(expr)
     args = system.expr_base_scalar_to_psi(args)

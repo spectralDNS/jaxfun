@@ -9,10 +9,8 @@ import sympy as sp
 from flax import nnx
 from jax.typing import ArrayLike
 
-from jaxfun.typing import Array
+from jaxfun.typing import Array, SampleMethod
 from jaxfun.utils import leggauss
-
-type SampleMethod = Literal["uniform", "legendre", "random"]
 
 
 @dataclass

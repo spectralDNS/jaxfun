@@ -8,12 +8,12 @@ from jax import Array
 from scipy.special import roots_jacobi
 from sympy import Expr, Number, Symbol
 
-from jaxfun.basespace import Domain, OrthogonalSpace, n
 from jaxfun.coordinates import CoordSys
+from jaxfun.utils.common import Domain, n
+
+from .orthogonal import OrthogonalSpace
 
 alf, bet = sp.symbols("a,b", real=True)
-
-# ruff: noqa: F706
 
 
 class Jacobi(OrthogonalSpace):

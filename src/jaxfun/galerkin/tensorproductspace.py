@@ -13,10 +13,11 @@ from jax import Array
 from scipy import sparse as scipy_sparse
 
 from jaxfun.basespace import BaseSpace
-from jaxfun.composite import BCGeneric, Composite, DirectSum
 from jaxfun.coordinates import CoordSys
-from jaxfun.Fourier import Fourier
 from jaxfun.utils.common import eliminate_near_zeros, lambdify
+
+from .composite import BCGeneric, Composite, DirectSum
+from .Fourier import Fourier
 
 tensor_product_symbol = "\u2297"
 multiplication_sign = "\u00d7"
@@ -29,7 +30,7 @@ class TensorProductSpace:
         system: CoordSys = None,
         name: str = "TPS",
     ) -> None:
-        from jaxfun.arguments import CartCoordSys, x, y, z
+        from jaxfun.coordinates import CartCoordSys, x, y, z
 
         system = (
             CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[len(basespaces)])
@@ -283,14 +284,14 @@ class VectorTensorProductSpace:
 def TensorProduct(
     basespaces: list[BaseSpace | DirectSum], system: CoordSys = None, name: str = "T"
 ) -> TensorProductSpace | list[TensorProductSpace]:
-    from jaxfun.arguments import CartCoordSys, x, y, z
+    from jaxfun.coordinates import CartCoordSys, x, y, z
 
     system = (
         CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[len(basespaces)])
         if system is None
         else system
     )
-        
+
     # Make copy of all 1D spaces since they will use different coordinates
     # Add index to name if some names of spaces are equal
     # Not sure this is the best approach..
@@ -336,14 +337,14 @@ class DirectSumTPS(TensorProductSpace):
         system: CoordSys = None,
         name: str = "DSTPS",
     ) -> None:
-        from jaxfun.inner import project1D
+        from jaxfun.galerkin.inner import project1D
 
         self.basespaces = basespaces
         self.system = system
         self.name = name
         self.bndvals = {}
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
-        
+
         for space in basespaces:
             if space.bcs is None:
                 continue
@@ -528,17 +529,17 @@ class TPMatrix:  # noqa: B903
     @partial(jax.jit, static_argnums=0)
     def precond(self, u: Array):
         return self.M * u
-    
-    @partial(jax.jit, static_argnums=0) 
-    def __matmul__(self, u: Array) -> Array:
-        return self.mats[0] @ u @ self.mats[1].T 
 
-    @partial(jax.jit, static_argnums=0) 
+    @partial(jax.jit, static_argnums=0)
+    def __matmul__(self, u: Array) -> Array:
+        return self.mats[0] @ u @ self.mats[1].T
+
+    @partial(jax.jit, static_argnums=0)
     def __rmatmul__(self, u: Array) -> Array:
         return self.mats[0].T @ u @ self.mats[1]
 
 
-class TensorMatrix:
+class TensorMatrix:  # noqa: B903
     def __init__(
         self,
         mat: Array,

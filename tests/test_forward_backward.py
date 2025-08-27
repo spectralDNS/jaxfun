@@ -2,8 +2,15 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
-from jaxfun import Chebyshev, Fourier, FunctionSpace, Jacobi, Legendre, TensorProduct
-from jaxfun.inner import project, project1D
+from jaxfun.galerkin import (
+    Chebyshev,
+    Fourier,
+    FunctionSpace,
+    Jacobi,
+    Legendre,
+    TensorProduct,
+)
+from jaxfun.galerkin.inner import project, project1D
 from jaxfun.utils.common import ulp
 
 

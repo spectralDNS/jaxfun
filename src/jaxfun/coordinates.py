@@ -49,6 +49,10 @@ latex_sym_dict = {
     "omega": r"\omega",
 }
 
+t, x, y, z = sp.symbols("t,x,y,z", real=True)
+
+CartCoordSys = lambda name, s: CoordSys(name, sp.Lambda(s, s))
+
 
 class defaultdict(UserDict):
     def __missing__(self, key) -> str:
@@ -58,6 +62,13 @@ class defaultdict(UserDict):
 latex_symbols = defaultdict(latex_sym_dict)
 
 
+def get_system(a: sp.Expr) -> CoordSys:
+    for p in sp.core.traversal.iterargs(a):
+        if isinstance(p, CoordSys):
+            return p
+    raise RuntimeError("CoordSys not found")
+
+
 class BaseTime(Symbol):
     """
     A symbol for time.
@@ -65,9 +76,8 @@ class BaseTime(Symbol):
     """
 
     def __new__(cls, sys: CoordSys) -> BaseTime:
-        
         index: int = _sympify(sys.dims)
-        obj = super().__new__(cls, 't')
+        obj = super().__new__(cls, "t")
         # The _id is used for equating purposes, and for hashing
         obj._id = (index,)
         return obj
@@ -92,6 +102,7 @@ class BaseTime(Symbol):
 
     def doit(self, **hints: dict) -> BaseScalar:
         return self
+
 
 class BaseScalar(AtomicExpr):
     """
@@ -234,7 +245,7 @@ class BaseDyadic(Dyadic, AtomicExpr):
         if not isinstance(vector1, BaseVector | VectorZero) or not isinstance(
             vector2, BaseVector | VectorZero
         ):
-            raise TypeError("BaseDyadic cannot be composed of non-base " + "vectors")
+            raise TypeError("BaseDyadic cannot be composed of non-base vectors")
         # Handle special case of zero vector
         elif vector1 == Vector.zero or vector2 == Vector.zero:
             return Dyadic.zero
@@ -261,16 +272,20 @@ class BaseDyadic(Dyadic, AtomicExpr):
 
         return obj
 
-    def _sympystr(self, printer):
-        return f"({printer._print(self.args[0])}{tensor_product_symbol}{printer._print(self.args[1])})"
+    def _sympystr(self, printer) -> str:
+        arg0 = printer._print(self.args[0])
+        arg1 = printer._print(self.args[1])
+        return f"({arg0}{tensor_product_symbol}{arg1})"
 
-    def _sympyrepr(self, printer):
-        return f"BaseDyadic({printer._print(self.args[0])}, {printer._print(self.args[1])})"
+    def _sympyrepr(self, printer) -> str:
+        arg0 = printer._print(self.args[0])
+        arg1 = printer._print(self.args[1])
+        return f"BaseDyadic({arg0}, {arg1})"
 
     def to_cartesian(self):
-        return self._sys.to_cartesian(self.args[0]) | self._sys.to_cartesian(
-            self.args[1]
-        )
+        cart_arg0 = self._sys.to_cartesian(self.args[0])
+        cart_arg1 = self._sys.to_cartesian(self.args[1])
+        return cart_arg0 | cart_arg1
 
 
 class CoordSys(Basic):
@@ -470,7 +485,7 @@ class CoordSys(Basic):
 
     def base_dyadics(self) -> tuple[BaseDyadic]:
         return self._base_dyadics
-    
+
     def base_time(self) -> BaseTime:
         return BaseTime(self)
 
@@ -857,8 +872,6 @@ def get_CoordSys(
             return count
 
     """
-    from jaxfun.arguments import CartCoordSys, x, y, z
-
     return CoordSys(
         name,
         transformation,

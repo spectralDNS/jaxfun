@@ -1,22 +1,17 @@
-from typing import NamedTuple, Optional, Union
-from optax.tree_utils import tree_vdot
-from optax._src import base
-from optax._src import combine
-from optax._src import transform
-from optax._src import linesearch as _linesearch
 import jax
-import jax.numpy as jnp
-from jax.tree_util import tree_map
+from optax import OptState, Params, Updates
+from optax._src import base, combine, linesearch as _linesearch, transform
+from optax.tree_utils import tree_vdot
+
+default_linesearch = _linesearch.scale_by_zoom_linesearch(max_linesearch_steps=15)
 
 
 def hess(
-    learning_rate: Optional[base.ScalarOrSchedule] = None,
+    learning_rate: base.ScalarOrSchedule | None = None,
     use_lstsq: bool = False,
     cg_max_iter: int = 100,
     cg_tol: float = 1e-5,
-    linesearch: Optional[
-        base.GradientTransformationExtraArgs
-    ] = _linesearch.scale_by_zoom_linesearch(max_linesearch_steps=15),
+    linesearch: base.GradientTransformationExtraArgs | None = default_linesearch,
 ) -> base.GradientTransformationExtraArgs:
     r"""Hessian optimizer.
 
@@ -59,7 +54,9 @@ def scale_by_hessian(
       A :class:`optax.GradientTransformation` object.
     """
 
-    def update_fn(updates, state, params=None, **extra_args):
+    def update_fn(
+        updates: Updates, state: OptState, params: Params | None = None, **extra_args
+    ) -> tuple[Updates, OptState]:
         hvp = lambda v: jax.jvp(jax.grad(extra_args["value_fn"]), (params,), (v,))[1]  # noqa: E731, F821
 
         if use_lstsq:

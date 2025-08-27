@@ -144,7 +144,8 @@ class MLP(nnx.Module):
         Args:
             V: Functionspace with detailed layer structure for the MLP
             rngs: Seed
-            kernel_init (optional): Initializer for kernel. Defaults to default_kernel_init.
+            kernel_init (optional): Initializer for kernel. Defaults
+                to default_kernel_init.
             bias_init (optional): Initializer for bias. Defaults to default_bias_init.
         """
         hidden_size = (

@@ -39,7 +39,7 @@ def run_optimizer(
     print_final_loss: bool = False,
     update_global_weights: int = -1,
     print_global_weights: bool = False,
-):
+) -> None:
     train_step = train(loss_fn)
     loss_old = 1.0
     for epoch in range(1, num + 1):

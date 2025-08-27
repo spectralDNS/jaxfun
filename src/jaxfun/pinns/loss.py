@@ -30,7 +30,7 @@ def get_flaxfunctions(
     return flax_found
 
 
-def eval_flaxfunction(expr, x: Array):
+def eval_flaxfunction(expr, x: Array) -> Array:
     f = get_flaxfunctions(expr)
     assert len(f) == 1
     f = f.pop()
@@ -83,7 +83,8 @@ class Residual:
         t, expr = expand(f)
         self.eqs = [get_fn(h, s) for h in expr]
         self.x = x
-        # Place all terms without flaxfunctions in the target, because these will not need to be computed more than once
+        # Place all terms without flaxfunctions in the target,
+        # because these will not need to be computed more than once
         self.target = target
         if len(t.free_symbols) > 0:
             self.target = target - lambdify(s, t, modules="jax")(*x.T)

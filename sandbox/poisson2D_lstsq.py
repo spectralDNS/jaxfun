@@ -14,14 +14,14 @@ from flax import nnx
 from soap_jax import soap
 
 from jaxfun import Div, Grad
-from jaxfun.pinns.mesh import Rectangle
-from jaxfun.pinns.module import (
+from jaxfun.pinns import (
     LSQR,
     FlaxFunction,
     MLPSpace,
     PirateSpace,
     run_optimizer,
 )
+from jaxfun.pinns.mesh import Rectangle
 from jaxfun.utils import lambdify
 from jaxfun.utils.common import ulp
 

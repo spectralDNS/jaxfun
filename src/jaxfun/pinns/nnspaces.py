@@ -54,7 +54,7 @@ class NNSpace(BaseSpace):
 
     def base_variables(self) -> tuple[BaseScalar | BaseTime, ...]:
         """Return the base variables, including time if transient."""
-        if self.transient:
+        if self.is_transient:
             return self.system.base_scalars() + (self.system.base_time(),)
         else:
             return self.system.base_scalars()

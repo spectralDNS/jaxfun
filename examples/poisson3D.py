@@ -34,7 +34,7 @@ uj = T.backward(uh, kind="uniform", N=(20, 20, 20))
 xj = T.mesh(kind="uniform", N=(20, 20, 20))
 uej = lambdify((x, y, z), ue)(*xj)
 error = jnp.linalg.norm(uj - uej)
-if "pytest" in os.environ:
+if "PYTEST" in os.environ:
     assert error < ulp(1000), error
 else:
     print("Error =", error)

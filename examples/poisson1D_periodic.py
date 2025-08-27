@@ -30,7 +30,7 @@ uj = D.backward(uh)
 xj = D.mesh()
 uej = lambdify(x, ue)(xj)
 error = jnp.linalg.norm(uj - uej)
-if "pytest" in os.environ:
+if "PYTEST" in os.environ:
     assert error < ulp(1000), error
     sys.exit(1)
 

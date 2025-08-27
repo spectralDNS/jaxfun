@@ -50,7 +50,7 @@ uj = T.backward(uh, kind="uniform", N=(N, N))
 uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
-if "pytest" in os.environ:
+if "PYTEST" in os.environ:
     assert error < ulp(C.max()), error
     sys.exit(1)
 

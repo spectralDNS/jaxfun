@@ -41,7 +41,7 @@ def run_vandermonde(space) -> None:
     )
     print(f"{'Numpy':20s} {time_np:.4e}")
 
-    assert jnp.linalg.norm(jnp.array(npfun(xn, N)) - space.vandermonde(x)) < ulp(1000)
+    assert jnp.linalg.norm(jnp.array(npfun(xn, N-1)) - space.vandermonde(x)) < ulp(1000)
 
 
 def run_evaluate(space) -> None:
@@ -90,7 +90,7 @@ np_res = npfuns[0](xn, {N})
 P = np_res.shape[-1]
 D = np.zeros((P, P))
 D[:-{k}] = npfuns[1](np.eye(P, P), {k})
-np_res = np.dot(np_res, D)    
+np_res = np.dot(np_res, D)
         """,
         number=M,
         globals={**globals(), **locals()},

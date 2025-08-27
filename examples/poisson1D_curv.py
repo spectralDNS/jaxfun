@@ -57,7 +57,7 @@ xj = D.orthogonal.quad_points_and_weights()[0]
 uj = D.evaluate(xj, u_hat)
 uq = lambdify(t, ue)(xj)
 error = np.linalg.norm(uj - uq)
-if "pytest" in os.environ:
+if "PYTEST" in os.environ:
     assert error < 1000 * ulp(1)
     sys.exit(1)
 

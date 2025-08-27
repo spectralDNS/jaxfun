@@ -43,7 +43,7 @@ xj = T.mesh(kind="uniform", N=(N, N), broadcast=True)
 uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
-if "pytest" in os.environ:
+if "PYTEST" in os.environ:
     assert error < ulp(1000), error
     sys.exit(1)
 

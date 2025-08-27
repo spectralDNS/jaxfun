@@ -1,8 +1,9 @@
 import jax.numpy as jnp
 import sympy as sp
 
-from jaxfun.coordinates import CoordSys, get_system
-from jaxfun.galerkin.arguments import Jaxf, JAXFunction
+from jaxfun.coordinates import CoordSys
+
+from .arguments import Jaxf, JAXFunction
 
 
 def get_basisfunctions(

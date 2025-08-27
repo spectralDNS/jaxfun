@@ -14,9 +14,10 @@ from scipy import sparse as scipy_sparse
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.composite import BCGeneric, Composite, DirectSum
-from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.utils.common import eliminate_near_zeros, lambdify
+
+from .composite import BCGeneric, Composite, DirectSum
+from .Fourier import Fourier
 
 tensor_product_symbol = "\u2297"
 multiplication_sign = "\u00d7"
@@ -538,7 +539,7 @@ class TPMatrix:  # noqa: B903
         return self.mats[0].T @ u @ self.mats[1]
 
 
-class TensorMatrix:
+class TensorMatrix:  # noqa: B903
     def __init__(
         self,
         mat: Array,

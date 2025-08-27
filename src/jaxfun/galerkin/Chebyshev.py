@@ -91,7 +91,6 @@ class Chebyshev(Jacobi):
 
         return jnp.sum(xs, axis=0) + c[0]
 
-
     @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
         N = self.M if N == 0 else N
@@ -129,7 +128,7 @@ class Chebyshev(Jacobi):
 
         _, xs = jax.lax.scan(inner_loop, init=(x0, X), xs=None, length=self.N - 1)
 
-        #return jnp.hstack((x0, xs))
+        # return jnp.hstack((x0, xs))
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
     def norm_squared(self) -> Array:

@@ -14,11 +14,12 @@ from scipy import sparse as scipy_sparse
 from sympy import Number
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.Chebyshev import Chebyshev
-from jaxfun.galerkin.Jacobi import Jacobi
-from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.utils.common import Domain, matmat, n
+
+from .Chebyshev import Chebyshev
+from .Jacobi import Jacobi
+from .Legendre import Legendre
+from .orthogonal import OrthogonalSpace
 
 direct_sum_symbol = "\u2295"
 

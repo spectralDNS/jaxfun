@@ -6,9 +6,10 @@ import sympy as sp
 from jax import Array
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.Jacobi import Jacobi
 from jaxfun.utils.common import Domain, n
 from jaxfun.utils.fastgl import leggauss
+
+from .Jacobi import Jacobi
 
 
 class Legendre(Jacobi):
@@ -123,7 +124,7 @@ class Legendre(Jacobi):
 
         _, xs = jax.lax.scan(inner_loop, (x0, X), jnp.arange(2, self.N + 1))
 
-        #return jnp.hstack((x0, xs))
+        # return jnp.hstack((x0, xs))
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
     def norm_squared(self) -> Array:

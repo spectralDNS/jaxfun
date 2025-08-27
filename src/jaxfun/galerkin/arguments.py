@@ -12,9 +12,10 @@ from sympy.vector import VectorAdd
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseScalar, CoordSys, latex_symbols
-from jaxfun.galerkin.composite import DirectSum
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
-from jaxfun.galerkin.tensorproductspace import (
+
+from .composite import DirectSum
+from .orthogonal import OrthogonalSpace
+from .tensorproductspace import (
     TensorProductSpace,
     VectorTensorProductSpace,
 )
@@ -357,7 +358,7 @@ class VectorFunction(Function):
         return obj
 
     def __str__(self) -> str:
-        return "\033[1m%s\033[0m" % (self.name,) + str(self.args[:-1])
+        return "\033[1m%s\033[0m" % (self.name,) + str(self.args[:-1])  # noqa: UP031
 
     def doit(self, **hints: dict) -> Function:
         """Return function in computational domain"""

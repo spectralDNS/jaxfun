@@ -8,20 +8,21 @@ from jax import Array
 from jax.experimental.sparse import BCOO
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.arguments import (
+from jaxfun.utils.common import lambdify, matmat, tosparse
+
+from .arguments import (
     TestFunction,
     TrialFunction,
 )
-from jaxfun.galerkin.composite import BCGeneric, Composite
-from jaxfun.galerkin.forms import get_basisfunctions, split, split_coeff
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
-from jaxfun.galerkin.tensorproductspace import (
+from .composite import BCGeneric, Composite
+from .forms import get_basisfunctions, split, split_coeff
+from .orthogonal import OrthogonalSpace
+from .tensorproductspace import (
     DirectSumTPS,
     TensorMatrix,
     TensorProductSpace,
     TPMatrix,
 )
-from jaxfun.utils.common import lambdify, matmat, tosparse
 
 
 def inner(
@@ -403,7 +404,7 @@ def assemble_multivar(
     P0, P1 = mats[0]
     P2, P3 = mats[1]
     i, k = P0.shape[1], P1.shape[1]
-    j, l = P2.shape[1], P3.shape[1]
+    j, l = P2.shape[1], P3.shape[1]  # noqa: E741
     if len(sp.sympify(scale).free_symbols) > 0:
         s = test_space.system.base_scalars()
         xj = test_space.mesh()

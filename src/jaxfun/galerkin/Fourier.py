@@ -7,10 +7,9 @@ import sympy as sp
 from jax import Array
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.utils.common import Domain
 
-# ruff: noqa: F706
+from .orthogonal import OrthogonalSpace
 
 
 class Fourier(OrthogonalSpace):

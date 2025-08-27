@@ -1,12 +1,13 @@
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.composite import (
+from jaxfun.utils.common import Domain
+
+from .composite import (
     BCGeneric,
     BoundaryConditions,
     Composite,
     DirectSum,
 )
-from jaxfun.utils.common import Domain
 
 
 def FunctionSpace(

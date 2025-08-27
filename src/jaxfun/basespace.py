@@ -28,13 +28,13 @@ class BaseSpace:
         self.name = name
         self.fun_str = fun_str
         self.system = CartCoordSys("N", (x,)) if system is None else system
-    
-    is_transient = False 
-    
+
+    is_transient = False
+
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
         raise RuntimeError
-    
+
 
 class OrthogonalSpace(BaseSpace):
     def __init__(
@@ -45,7 +45,6 @@ class OrthogonalSpace(BaseSpace):
         name: str = "OrthogonalSpace",
         fun_str: str = "psi",
     ) -> None:
-        
         self.N = N
         self.M = N
         self._domain = Domain(*domain) if domain is not None else None

@@ -12,7 +12,7 @@ from scipy import sparse as scipy_sparse
 from scipy.special import sph_harm
 from sympy import Expr, Number, Symbol
 
-Ynm = lambda n, m, x, y : sph_harm(m, n, y, x)
+Ynm = lambda n, m, x, y: sph_harm(m, n, y, x)
 n = Symbol("n", positive=True, integer=True)
 
 
@@ -55,7 +55,7 @@ def diffx(
 
 def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
     for i in range(k):
-        fun = jax.jacrev(fun) if i % 2 else jax.jacfwd(fun) 
+        fun = jax.jacrev(fun) if i % 2 else jax.jacfwd(fun)
     return jax.vmap(fun, in_axes=0, out_axes=0)
 
 
@@ -91,12 +91,12 @@ def lambdify(
     doctring_limit: int = 1000,
 ) -> Callable[[Iterable[Array]], Array]:
     from jaxfun.forms import get_system
-    
+
     system = get_system(expr)
     expr = system.expr_base_scalar_to_psi(expr)
     args = system.expr_base_scalar_to_psi(args)
-    modules_default = ["jax", {'Ynm': Ynm}]
-    modules = modules_default if modules is None else [modules]+modules_default
+    modules_default = ["jax", {"Ynm": Ynm}]
+    modules = modules_default if modules is None else [modules] + modules_default
     return sp.lambdify(
         args,
         expr,

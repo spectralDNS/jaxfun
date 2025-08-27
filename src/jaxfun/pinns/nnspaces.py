@@ -126,7 +126,8 @@ class PirateSpace(NNSpace):
     ) -> None:
         NNSpace.__init__(self, dims, rank, transient, system, name)
 
-        # PirateSpace requires at least one hidden layer, so change integer hidden_size to [hidden_size]
+        # PirateSpace requires at least one hidden layer, so change integer hidden_size
+        # to [hidden_size]
         self.hidden_size = (
             hidden_size if isinstance(hidden_size, list | tuple) else [hidden_size]
         )

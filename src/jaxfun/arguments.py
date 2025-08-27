@@ -10,7 +10,7 @@ from sympy import Expr, Function
 from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
-from jaxfun.Basespace import BaseSpace, OrthogonalSpace
+from jaxfun.basespace import BaseSpace, OrthogonalSpace
 from jaxfun.composite import DirectSum
 from jaxfun.coordinates import BaseScalar, CoordSys, latex_symbols
 from jaxfun.tensorproductspace import TensorProductSpace, VectorTensorProductSpace

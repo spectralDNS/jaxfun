@@ -10,21 +10,22 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import optax
-import pyvista
+
+try:
+    import pyvista
+except ImportError:
+    print("pyvista not found, skipping some parts of the example")
+    pyvista = None
 import sympy as sp
 from flax import nnx
 
 from jaxfun import Div, Dot, Grad, Outer
 from jaxfun.pinns.bcs import DirichletBC
+from jaxfun.pinns.loss import LSQR
 from jaxfun.pinns.mesh import Rectangle
-from jaxfun.pinns.module import (
-    LSQR,
-    Comp,
-    FlaxFunction,
-    MLPSpace,
-    PirateSpace,
-    run_optimizer,
-)
+from jaxfun.pinns.module import Comp, FlaxFunction
+from jaxfun.pinns.nnspaces import MLPSpace, PirateSpace
+from jaxfun.pinns.optimizer import run_optimizer
 
 print("JAX running on", jax.devices()[0].platform.upper())
 
@@ -96,22 +97,22 @@ plt.contourf(xx, yy, uvp[:, 1].reshape(xx.shape), 100)
 plt.figure()
 plt.contourf(xx, yy, uvp[:, 2].reshape(xx.shape), 100)
 plt.colorbar()
-
-m = pyvista.read("./data/cavity_5000.vtk")
-cen = m.cell_centers()
-pts = cen.points
-xO = jnp.array(pts[:, 0], dtype=float)
-yO = jnp.array(pts[:, 1], dtype=float)
-zO = jnp.column_stack((xO, yO))
-U0 = module(zO)
-U1 = jnp.array(m.cell_data["U"], dtype=float)
-UC = jnp.array(
-    np.load(
-        "./data/drivencavity_Re10_N100.npy",
-        allow_pickle=True,
-    )
-)
-print("U0", jnp.linalg.norm(UC.T - U0[:, :2].reshape((100, 100, 2))))
-print("U1", jnp.linalg.norm(UC.T - U1[:, :2].reshape((100, 100, 2))))
-
 # plt.show()
+
+if pyvista is not None:
+    m = pyvista.read("./data/cavity_5000.vtk")
+    cen = m.cell_centers()
+    pts = cen.points
+    xO = jnp.array(pts[:, 0], dtype=float)
+    yO = jnp.array(pts[:, 1], dtype=float)
+    zO = jnp.column_stack((xO, yO))
+    U0 = module(zO)
+    U1 = jnp.array(m.cell_data["U"], dtype=float)
+    UC = jnp.array(
+        np.load(
+            "./data/drivencavity_Re10_N100.npy",
+            allow_pickle=True,
+        )
+    )
+    print("U0", jnp.linalg.norm(UC.T - U0[:, :2].reshape((100, 100, 2))))
+    print("U1", jnp.linalg.norm(UC.T - U1[:, :2].reshape((100, 100, 2))))

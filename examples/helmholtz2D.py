@@ -9,7 +9,7 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from scipy import sparse as scipy_sparse
 
 from jaxfun.arguments import TestFunction, TrialFunction, x, y
-from jaxfun.Basespace import n
+from jaxfun.basespace import n
 from jaxfun.Chebyshev import Chebyshev as space
 from jaxfun.functionspace import FunctionSpace
 

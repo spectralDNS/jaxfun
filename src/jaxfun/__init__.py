@@ -1,6 +1,8 @@
+# ruff: noqa: F401
+
 from jaxfun import Chebyshev, Fourier, Jacobi, Legendre
 from jaxfun.arguments import JAXFunction, TestFunction, TrialFunction
-from jaxfun.Basespace import BaseSpace, Domain
+from jaxfun.basespace import BaseSpace, Domain
 from jaxfun.coordinates import CoordSys, get_CoordSys
 from jaxfun.functionspace import FunctionSpace
 from jaxfun.inner import inner

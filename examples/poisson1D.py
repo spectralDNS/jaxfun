@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import sympy as sp
 
 from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.Basespace import n
+from jaxfun.basespace import n
 
 # from jaxfun.Legendre import Legendre as space
 from jaxfun.Chebyshev import Chebyshev as space

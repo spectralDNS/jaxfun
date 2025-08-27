@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import sympy as sp
 from jax import Array
 
-from jaxfun.Basespace import Domain, n
+from jaxfun.basespace import Domain, n
 from jaxfun.coordinates import CoordSys
 from jaxfun.Jacobi import Jacobi
 from jaxfun.utils.fastgl import leggauss

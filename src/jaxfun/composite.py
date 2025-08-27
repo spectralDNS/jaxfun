@@ -13,7 +13,7 @@ from jax.experimental.sparse import BCOO
 from scipy import sparse as scipy_sparse
 from sympy import Number
 
-from jaxfun.Basespace import Domain, OrthogonalSpace, n
+from jaxfun.basespace import Domain, OrthogonalSpace, n
 from jaxfun.Chebyshev import Chebyshev
 from jaxfun.coordinates import CoordSys
 from jaxfun.Jacobi import Jacobi

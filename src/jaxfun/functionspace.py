@@ -1,4 +1,4 @@
-from jaxfun.Basespace import BaseSpace, Domain
+from jaxfun.basespace import BaseSpace, Domain
 from jaxfun.composite import BCGeneric, BoundaryConditions, Composite, DirectSum
 from jaxfun.coordinates import CoordSys
 

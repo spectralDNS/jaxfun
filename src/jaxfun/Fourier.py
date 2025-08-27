@@ -6,7 +6,7 @@ import numpy as np
 import sympy as sp
 from jax import Array
 
-from jaxfun.Basespace import Domain, OrthogonalSpace
+from jaxfun.basespace import Domain, OrthogonalSpace
 from jaxfun.coordinates import CoordSys
 
 # ruff: noqa: F706

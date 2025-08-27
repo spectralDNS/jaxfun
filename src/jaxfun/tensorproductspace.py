@@ -12,7 +12,7 @@ import sympy as sp
 from jax import Array
 from scipy import sparse as scipy_sparse
 
-from jaxfun.Basespace import BaseSpace
+from jaxfun.basespace import BaseSpace
 from jaxfun.composite import BCGeneric, Composite, DirectSum
 from jaxfun.coordinates import CoordSys
 from jaxfun.Fourier import Fourier

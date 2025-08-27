@@ -11,7 +11,7 @@ from jaxfun.arguments import (
     TestFunction,
     TrialFunction,
 )
-from jaxfun.Basespace import OrthogonalSpace
+from jaxfun.basespace import OrthogonalSpace
 from jaxfun.composite import BCGeneric, Composite
 from jaxfun.coordinates import CoordSys
 from jaxfun.forms import get_basisfunctions, split, split_coeff

@@ -6,7 +6,7 @@ from scipy import sparse as scipy_sparse
 from scipy.sparse import kron
 
 from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.Basespace import n
+from jaxfun.basespace import n
 from jaxfun.functionspace import FunctionSpace
 from jaxfun.inner import inner
 from jaxfun.Legendre import Legendre

@@ -6,7 +6,7 @@ import sympy as sp
 from jax import Array
 from sympy import Expr, Symbol
 
-from jaxfun.Basespace import Domain
+from jaxfun.basespace import Domain
 from jaxfun.coordinates import CoordSys
 from jaxfun.Jacobi import Jacobi
 

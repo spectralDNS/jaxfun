@@ -8,7 +8,7 @@ from jax import Array
 from scipy.special import roots_jacobi
 from sympy import Expr, Number, Symbol
 
-from jaxfun.Basespace import Domain, OrthogonalSpace, n
+from jaxfun.basespace import Domain, OrthogonalSpace, n
 from jaxfun.coordinates import CoordSys
 
 alf, bet = sp.symbols("a,b", real=True)

@@ -26,7 +26,7 @@ import sympy as sp
 from sympy.plotting import plot3d_parametric_line
 
 from jaxfun.arguments import TestFunction, TrialFunction
-from jaxfun.Basespace import n
+from jaxfun.basespace import n
 from jaxfun.coordinates import get_CoordSys
 from jaxfun.functionspace import FunctionSpace
 from jaxfun.inner import inner

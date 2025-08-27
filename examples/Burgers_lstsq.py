@@ -11,8 +11,11 @@ from soap_jax import soap
 
 from jaxfun.arguments import Constant
 from jaxfun.pinns.bcs import DirichletBC
+from jaxfun.pinns.loss import LSQR
 from jaxfun.pinns.mesh import Rectangle, points_along_axis
-from jaxfun.pinns.module import LSQR, FlaxFunction, MLPSpace, PirateSpace, run_optimizer
+from jaxfun.pinns.module import FlaxFunction
+from jaxfun.pinns.nnspaces import MLPSpace, PirateSpace
+from jaxfun.pinns.optimizer import run_optimizer
 
 Nt = 40
 Nx = 40

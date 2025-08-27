@@ -6,7 +6,7 @@ import sympy as sp
 
 from jaxfun.utils import lambdify
 
-from . import FlaxFunction
+from .module import FlaxFunction
 
 
 def DirichletBC(

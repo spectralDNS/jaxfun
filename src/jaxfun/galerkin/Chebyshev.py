@@ -7,8 +7,9 @@ from jax import Array
 from sympy import Expr, Symbol
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.Jacobi import Jacobi
 from jaxfun.utils.common import Domain
+
+from .Jacobi import Jacobi
 
 
 class Chebyshev(Jacobi):

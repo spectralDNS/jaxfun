@@ -663,7 +663,8 @@ class Dot(sympy_Dot):
         return dot(self._expr1.doit(**hints), self._expr2.doit(**hints))
 
 
-# Note: Sympy subclasses like Cross(Vector), which breaks operators for unevaluated expressions
+# Note: Sympy subclasses like Cross(Vector), which breaks operators for
+# unevaluated expressions
 class Cross(Expr):
     """
     Represents unevaluated Cross product.
@@ -775,7 +776,8 @@ def diff(self, *args, **kwargs):
     for x in args:
         if isinstance(x, sp.vector.basisdependent.BasisDependent):
             raise TypeError("Invalid arg for differentiation")
-    # Move to Cartesian because the basis vectors are then constant and non-differentiable
+    # Move to Cartesian because the basis vectors are then constant
+    # and non-differentiable
     # Alternatively use Christoffel symbols, but this gets messy for more than one args.
     v0 = self._sys.to_cartesian(self)
     diff_components = [df(v, *args, **kwargs) * k for k, v in v0.components.items()]
@@ -790,9 +792,9 @@ def diff(self, *args, **kwargs):
 # f = N.x*N.y
 # h = 4*Gradient(f)
 # z = h.doit()
-## -> z = 4*N.x*N.j + 4*N.y*N.i
+# # -> z = 4*N.x*N.j + 4*N.y*N.i
 # z.is_Vector
-## -> False
+# # -> False
 # z is now a type Add and not VectorAdd as it should be.
 # Using the doit function below is a hack around it
 # from jaxfun.coordinates import CartCoordSys, x, y, z
@@ -801,7 +803,7 @@ def diff(self, *args, **kwargs):
 # f = N.x*N.y
 # h = 4*Grad(f)
 # h.doit().is_Vector
-## -> True
+# # -> True
 
 
 def doit(self, **hints):

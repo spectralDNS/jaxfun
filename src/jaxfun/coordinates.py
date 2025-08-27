@@ -245,7 +245,7 @@ class BaseDyadic(Dyadic, AtomicExpr):
         if not isinstance(vector1, BaseVector | VectorZero) or not isinstance(
             vector2, BaseVector | VectorZero
         ):
-            raise TypeError("BaseDyadic cannot be composed of non-base " + "vectors")
+            raise TypeError("BaseDyadic cannot be composed of non-base vectors")
         # Handle special case of zero vector
         elif vector1 == Vector.zero or vector2 == Vector.zero:
             return Dyadic.zero
@@ -272,16 +272,20 @@ class BaseDyadic(Dyadic, AtomicExpr):
 
         return obj
 
-    def _sympystr(self, printer):
-        return f"({printer._print(self.args[0])}{tensor_product_symbol}{printer._print(self.args[1])})"
+    def _sympystr(self, printer) -> str:
+        arg0 = printer._print(self.args[0])
+        arg1 = printer._print(self.args[1])
+        return f"({arg0}{tensor_product_symbol}{arg1})"
 
-    def _sympyrepr(self, printer):
-        return f"BaseDyadic({printer._print(self.args[0])}, {printer._print(self.args[1])})"
+    def _sympyrepr(self, printer) -> str:
+        arg0 = printer._print(self.args[0])
+        arg1 = printer._print(self.args[1])
+        return f"BaseDyadic({arg0}, {arg1})"
 
     def to_cartesian(self):
-        return self._sys.to_cartesian(self.args[0]) | self._sys.to_cartesian(
-            self.args[1]
-        )
+        cart_arg0 = self._sys.to_cartesian(self.args[0])
+        cart_arg1 = self._sys.to_cartesian(self.args[1])
+        return cart_arg0 | cart_arg1
 
 
 class CoordSys(Basic):

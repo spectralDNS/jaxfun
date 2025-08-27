@@ -5,7 +5,7 @@ import pytest
 from jaxfun import BaseSpace
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.utils.common import ulp
+from jaxfun.utils import ulp
 
 
 # Add pytest fixtures for constants
@@ -78,4 +78,3 @@ def test_evaluate_basis_derivative(
     jax_res = space.evaluate_basis_derivative(x, k=k)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < 10 ** (k + 2) * ulp(1.0)
-

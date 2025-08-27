@@ -4,8 +4,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxfun.Chebyshev import Chebyshev
-from jaxfun.Legendre import Legendre
+from jaxfun.galerkin.Chebyshev import Chebyshev
+from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.utils.common import ulp
 
 jnp.set_printoptions(4)

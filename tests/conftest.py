@@ -9,8 +9,8 @@ def pytest_addoption(parser):
 
 def pytest_configure(config):
     jax.config.update("jax_enable_x64", config.getoption("--float64"))
-    os.environ["pytest"] = "True"
+    os.environ["PYTEST"] = "True"
 
 
 def pytest_unconfigure(config):
-    del os.environ["pytest"]
+    del os.environ["PYTEST"]

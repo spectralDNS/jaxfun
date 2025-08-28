@@ -56,8 +56,8 @@ def diffx(
 
 
 def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
-    for i in range(k):
-        fun = jax.jacfwd(fun)# if i % 2 else jax.jacrev(fun)
+    for _ in range(k):
+        fun = jax.jacfwd(fun)  # if i % 2 else jax.jacrev(fun)
     return jax.vmap(fun, in_axes=0, out_axes=0)
 
 

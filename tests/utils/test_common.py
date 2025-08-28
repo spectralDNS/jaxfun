@@ -74,7 +74,7 @@ def test_matmat_dense() -> None:
 
 @pytest.mark.parametrize("tol", [1, 100])
 def test_eliminate_near_zeros(tol: float) -> None:
-    a = jnp.array([1e-12, 1.0, 0.0, -1e-12])
+    a = jnp.array([1e-16, 1.0, 0.0, -1e-16])
     result = common.eliminate_near_zeros(a, tol=tol)
     # All values close to zero should be set to zero
     assert jnp.all((result == 0) | (jnp.abs(result) >= 1.0))

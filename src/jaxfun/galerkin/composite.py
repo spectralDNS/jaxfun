@@ -466,12 +466,13 @@ def get_bc_basis(bcs: BoundaryConditions, orthogonal: Jacobi) -> sp.Matrix:
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
-    from Chebyshev import Chebyshev
-    from Legendre import Legendre
 
     from jaxfun.galerkin.arguments import TestFunction, TrialFunction
     from jaxfun.galerkin.composite import Composite
     from jaxfun.galerkin.inner import inner
+
+    from .Chebyshev import Chebyshev
+    from .Legendre import Legendre
 
     n = sp.Symbol("n", positive=True, integer=True)
     N = 50

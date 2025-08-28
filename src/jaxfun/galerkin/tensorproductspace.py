@@ -168,7 +168,9 @@ class TensorProductSpace:
             c0 = np.zeros(shape, dtype=c.dtype)
             sl = [slice(0, c.shape[ax]) for ax in range(dim)]
             for ax, space in enumerate(self.basespaces):
-                if isinstance(space, Fourier):
+                # Only replace slice with wavenumber indexing if axis is padded.
+                # Avoid advanced indexing on multiple axes (shrinks dims).
+                if isinstance(space, Fourier) and N[ax] > space.N:
                     sl[ax] = space.wavenumbers()
                 c0[tuple(sl)] = c
             c = jnp.array(c0)
@@ -528,7 +530,8 @@ class TPMatrix:  # noqa: B903
 
     @partial(jax.jit, static_argnums=0)
     def precond(self, u: Array):
-        return self.M * u
+        # self.M is an instance of precond class (callable)
+        return self.M(u)
 
     @partial(jax.jit, static_argnums=0)
     def __matmul__(self, u: Array) -> Array:

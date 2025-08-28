@@ -1,23 +1,25 @@
 import pytest
 import sympy as sp
 
-from jaxfun import (
+from jaxfun.coordinates import BaseDyadic, CartCoordSys, get_CoordSys
+from jaxfun.operators import (
+    Constant,
     Cross,
     Curl,
     Div,
     Dot,
     Grad,
+    Identity,
     Outer,
     cross,
     curl,
     divergence,
     dot,
-    get_CoordSys,
+    eijk,
     gradient,
     outer,
+    sign,
 )
-from jaxfun.coordinates import BaseDyadic, CartCoordSys
-from jaxfun.operators import Constant, Identity, eijk, sign
 
 x, y, z = sp.symbols("x y z", real=True)
 N = CartCoordSys("N", (x, y, z))

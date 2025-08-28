@@ -4,6 +4,7 @@ import runpy
 import pytest
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "demo",
     [

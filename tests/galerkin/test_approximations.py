@@ -15,16 +15,6 @@ def N() -> int:
 
 
 @pytest.fixture
-def M() -> int:
-    return 1000
-
-
-@pytest.fixture
-def C() -> int:
-    return 10
-
-
-@pytest.fixture
 def x(N: int) -> jnp.ndarray:
     return jnp.linspace(-1, 1, N + 1)
 
@@ -32,16 +22,6 @@ def x(N: int) -> jnp.ndarray:
 @pytest.fixture
 def xn(x: jnp.ndarray) -> np.ndarray:
     return np.array(x)
-
-
-@pytest.fixture
-def c(C: int) -> jnp.ndarray:
-    return jnp.ones(C)
-
-
-@pytest.fixture
-def cn(c: jnp.ndarray) -> np.ndarray:
-    return np.array(c)
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
@@ -56,7 +36,7 @@ def test_vandermonde(space: BaseSpace, x: jnp.ndarray, xn: np.ndarray, N: int) -
     assert diff < 10 * ulp(1.0)
 
 
-@pytest.mark.parametrize("k", (1, 2, 3))
+@pytest.mark.parametrize("k", (0, 1, 2, 3))
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
 def test_evaluate_basis_derivative(
     space: BaseSpace, x: jnp.ndarray, xn: np.ndarray, N: int, k: int

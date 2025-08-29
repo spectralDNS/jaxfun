@@ -14,8 +14,8 @@ from jaxfun.galerkin import (
 from jaxfun.galerkin.arguments import JAXFunction, ScalarFunction, VectorFunction
 from jaxfun.galerkin.forms import split_coeff
 from jaxfun.galerkin.inner import inner, project
-from jaxfun.galerkin.tensorproductspace import VectorTensorProductSpace
-from jaxfun.utils.common import Domain
+from jaxfun.galerkin.tensorproductspace import DirectSumTPS, VectorTensorProductSpace
+from jaxfun.utils.common import Domain, ulp
 
 
 def test_vector_tensor_product_space_and_jaxfunction_latex_and_matmul():
@@ -82,10 +82,10 @@ def test_directsum_tps_two_inhomogeneous():
     from jaxfun.galerkin.composite import DirectSum
 
     assert isinstance(F1, DirectSum) and isinstance(F2, DirectSum)
-    # This combination currently not supported by TensorProduct (attribute
-    # 'spaces'), so just verify boundary components
     # Access component spaces and ensure boundary values converted
     _ = F1[1].bcs.orderedvals(), F2[1].bcs.orderedvals()
+    T = TensorProduct((F1, F2))
+    assert isinstance(T, DirectSumTPS)
 
 
 def test_functionspace_variants():
@@ -98,7 +98,8 @@ def test_functionspace_variants():
     # Non-homogeneous returns DirectSum
     D = FunctionSpace(6, Legendre.Legendre, bcs={"left": {"D": 1}, "right": {"D": 2}})
     from jaxfun.galerkin.composite import DirectSum
-
+    assert D.evaluate(jnp.array([1.0]), jnp.zeros(4)) == 2.0
+    assert D.evaluate(jnp.array([-1.0]), jnp.zeros(4)) == 1.0
     assert isinstance(D, DirectSum)
 
 
@@ -171,8 +172,9 @@ def test_project_function():
     L = Legendre.Legendre(4)
     T = TensorProduct((C, L))
     x, y = T.system.base_scalars()
-    ue = sp.sin(x) * sp.cos(y)
+    ue = sp.chebyshevt(1, x) * sp.legendre(2, y)
     uh = project(ue, T)
+    assert abs(uh[1, 2] - 1.0) < ulp(100)
     assert uh.shape == T.dim()
 
 

@@ -769,29 +769,6 @@ class CoordSys(Basic):
             sc = sc.replace(a, b)
         return self.expr_psi_to_base_scalar(sc)
 
-    def subs(self, s0: Expr, s1: Expr) -> None:
-        b = self.get_covariant_basis()
-        for i in range(b.shape[0]):
-            for j in range(b.shape[1]):
-                b[i, j] = b[i, j].subs(s0, s1)
-
-        g = self.get_covariant_metric_tensor()
-        gt = self.get_contravariant_metric_tensor()
-        for i in range(g.shape[0]):
-            for j in range(g.shape[1]):
-                g[i, j] = g[i, j].subs(s0, s1)
-                gt[i, j] = gt[i, j].subs(s0, s1)
-
-        sg = self.get_sqrt_det_g().subs(s0, s1)
-        self._sqrt_det_g[True] = sg
-
-        hi = self.get_scaling_factors()
-        for i in range(len(hi)):
-            hi[i] = hi[i].subs(s0, s1)
-
-        self._psi = tuple([p.subs(s0, s1) for p in self._psi])
-        self._rv = tuple([r.subs(s0, s1) for r in self._rv])
-
 
 class SubCoordSys:
     def __init__(self, system: CoordSys, index: int = 0) -> None:

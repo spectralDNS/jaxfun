@@ -33,6 +33,15 @@ def get_basisfunctions(
 
 
 def split_coeff(c0: sp.Expr) -> dict:
+    """Split coefficients of bilinear form into parts
+
+    Args:
+        c0: Expression that may contain a JAXFunction, a number, or a product/sum of
+        these.
+
+    Returns:
+        dict: input split into bilinear and linear parts.
+    """
     coeffs = {}
     c0 = sp.sympify(c0)
 

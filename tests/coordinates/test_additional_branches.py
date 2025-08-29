@@ -2,7 +2,14 @@ import pytest
 import sympy as sp
 from sympy import Lambda
 
-from jaxfun.coordinates import BaseDyadic, CartCoordSys, get_CoordSys, get_system
+from jaxfun.coordinates import (
+    BaseDyadic,
+    BaseScalar,
+    BaseTime,
+    CartCoordSys,
+    get_CoordSys,
+    get_system,
+)
 
 
 def test_get_system_error():
@@ -15,6 +22,7 @@ def test_base_scalar_symbol_mapping_and_derivative():
     C = get_CoordSys("C", Lambda((r,), (r,)))
     s = C.r
     assert isinstance(s.to_symbol(), sp.Symbol)
+    assert isinstance(s, BaseScalar)
     assert sp.diff(s, s) == 1
     assert sp.diff(s, C.r.to_symbol()) == 0  # diff wrt mapped symbol
 
@@ -24,6 +32,7 @@ def test_base_time_and_subsystem_assertion():
     C = get_CoordSys("C", Lambda((r,), (r,)))
     t0 = C.base_time()
     assert t0._id[0] == 1  # dims used in id
+    assert isinstance(t0, BaseTime)
     with pytest.raises(AssertionError):
         # Cannot create sub system for 1D system
         C.sub_system()
@@ -37,6 +46,15 @@ def test_to_from_cartesian_cartesian_shortcuts_and_dyadic():
     dy = BaseDyadic(N.i, N.j)
     # from_cartesian returns unchanged for cartesian system
     assert N.from_cartesian(dy) == dy
+    r, theta, z = sp.symbols("r theta z", real=True, positive=True)
+    C = get_CoordSys(
+        "C", Lambda((r, theta, z), (r * sp.cos(theta), r * sp.sin(theta), z))
+    )
+    w = C.b_r
+    c = C.to_cartesian(w)
+    R = C._parent
+    assert c.components[R.i] == sp.cos(C.theta)
+    assert c.components[R.j] == sp.sin(C.theta)
 
 
 def test_get_contravariant_basis_vector_and_as_Vector():
@@ -47,6 +65,8 @@ def test_get_contravariant_basis_vector_and_as_Vector():
     b_contra = C.get_contravariant_basis(as_Vector=True)
     # Returns array of length 3 (each is Cartesian expansion vector)
     assert b_contra.shape == (3,)
+    assert b_contra[0].is_Vector
+    assert b_contra[0] == C.to_cartesian(C.b_r)
     e0 = C.get_contravariant_basis_vector(0)
     assert e0.is_Vector
 

@@ -14,7 +14,7 @@ def test_position_vector_forms():
     # Sympy Tuple
     from sympy import Tuple as SymTuple
 
-    assert isinstance(pv_tuple, (tuple, SymTuple))
+    assert isinstance(pv_tuple, tuple | SymTuple)
     pv_vec = C.position_vector(True)
     # Should be a VectorAdd with three components
     assert pv_vec.is_Vector
@@ -51,6 +51,5 @@ def test_gradient_and_divergence_in_system():
     # Gradient known components
     assert any(sp.simplify(val - C.theta) == 0 for k, val in g.components.items())
     assert any(val.has(C.r) for k, val in g.components.items())
-    # Divergence(grad(s)) symbolic expression should simplify
-    # (not necessarily constant here)
+    assert d - C.theta / C.r == 0
     assert isinstance(d, sp.Expr)

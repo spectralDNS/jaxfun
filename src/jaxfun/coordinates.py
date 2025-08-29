@@ -565,9 +565,9 @@ class CoordSys(Basic):
 
         v = v.doit()
         bt = self.get_contravariant_basis(True)
-        a = []
+        bv = self.base_vectors()
+        a: list = []
         if v.is_Vector:
-            bv = self.base_vectors()
             for i in range(len(bv)):
                 a.append(self.simplify(v & bt[i]) * bv[i])
             a = sp.vector.VectorAdd(*a)

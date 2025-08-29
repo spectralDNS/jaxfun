@@ -62,8 +62,19 @@ class TensorProductSpace:
     def shape(self) -> tuple[int]:
         return tuple([space.N for space in self.basespaces])
 
-    def dim(self):
-        return tuple([space.dim for space in self.basespaces])
+    def dim(self) -> tuple[int, ...]:
+        dims = []
+        for space in self.basespaces:
+            if hasattr(space, "dim"):
+                dims.append(space.dim)
+            elif isinstance(space, DirectSum):
+                # Use dimension of homogeneous component
+                dims.append(space.basespaces[0].dim)
+            else:
+                raise AttributeError(
+                    "Cannot determine dimension for space in TensorProductSpace"
+                )
+        return tuple(dims)
 
     def mesh(
         self,
@@ -168,7 +179,9 @@ class TensorProductSpace:
             c0 = np.zeros(shape, dtype=c.dtype)
             sl = [slice(0, c.shape[ax]) for ax in range(dim)]
             for ax, space in enumerate(self.basespaces):
-                if isinstance(space, Fourier):
+                # Only replace slice with wavenumber indexing if axis is padded.
+                # Avoid advanced indexing on multiple axes (shrinks dims).
+                if isinstance(space, Fourier) and N[ax] > space.N:
                     sl[ax] = space.wavenumbers()
                 c0[tuple(sl)] = c
             c = jnp.array(c0)
@@ -301,7 +314,8 @@ def TensorProduct(
     if jnp.any(jnp.array([name == names[0] for name in names[1:]])):
         for i, space in enumerate(basespaces):
             if isinstance(space, DirectSum):
-                for spi in space.spaces:
+                # DirectSum stores component spaces in 'basespaces'
+                for spi in space.basespaces:
                     spi.name = spi.name + str(i)
             else:
                 space.name = space.name + str(i)
@@ -444,9 +458,18 @@ class DirectSumTPS(TensorProductSpace):
         }
 
     def get_homogeneous(self):
-        return self.tpspaces[
-            (self.basespaces[0].basespaces[0], self.basespaces[1].basespaces[0])
-        ]
+        # Handle case where only first (or both) axes are DirectSum
+        a0 = (
+            self.basespaces[0].basespaces[0]
+            if isinstance(self.basespaces[0], DirectSum)
+            else self.basespaces[0]
+        )
+        a1 = (
+            self.basespaces[1].basespaces[0]
+            if isinstance(self.basespaces[1], DirectSum)
+            else self.basespaces[1]
+        )
+        return self.tpspaces[(a0, a1)]
 
     def backward(
         self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
@@ -460,7 +483,11 @@ class DirectSumTPS(TensorProductSpace):
         return jnp.sum(jnp.array(a), axis=0)
 
     def forward(self, c: Array) -> Array:
-        from jaxfun import TestFunction, TrialFunction, inner
+        # Local import to avoid circular top-level imports; import directly from
+        # galerkin submodule instead of package root (which does not re-export
+        # these symbols)
+        from . import TestFunction, TrialFunction
+        from .inner import inner
 
         v = TestFunction(self)
         u = TrialFunction(self)
@@ -528,7 +555,8 @@ class TPMatrix:  # noqa: B903
 
     @partial(jax.jit, static_argnums=0)
     def precond(self, u: Array):
-        return self.M * u
+        # self.M is an instance of precond class (callable)
+        return self.M(u)
 
     @partial(jax.jit, static_argnums=0)
     def __matmul__(self, u: Array) -> Array:

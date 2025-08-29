@@ -2,9 +2,9 @@ name: Test jaxfun
 
 on:
   push:
-    branches: [ "**" ]
+    branches: ["**"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 permissions:
   contents: read
@@ -15,17 +15,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v3
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version-file: "pyproject.toml"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml"
 
-    - name: Test with pytest
-      run: |
-        uv run pytest
-        uv run pytest --float64
+      - name: Run fast tests (default, excludes slow)
+        run: |
+          uv run pytest -m 'not slow'
+          uv run pytest --float64 -m 'not slow'
+
+      - name: Run slow demo tests
+        run: |
+          uv run pytest -m slow tests/test_demos.py
+          uv run pytest --float64 -m slow tests/test_demos.py

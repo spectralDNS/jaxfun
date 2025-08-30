@@ -295,7 +295,7 @@ class VectorTensorProductSpace:
 
 
 def TensorProduct(
-    basespaces: list[BaseSpace | DirectSum], system: CoordSys = None, name: str = "T"
+    *basespaces: BaseSpace | DirectSum, system: CoordSys = None, name: str = "T"
 ) -> TensorProductSpace | list[TensorProductSpace]:
     from jaxfun.coordinates import CartCoordSys, x, y, z
 

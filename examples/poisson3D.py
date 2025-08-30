@@ -16,7 +16,7 @@ from jaxfun.utils.common import lambdify, n, ulp
 M = 20
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
 D = FunctionSpace(M, Legendre, bcs, scaling=n + 1, name="D", fun_str="psi")
-T = TensorProduct((D, D, D), name="T")
+T = TensorProduct(D, D, D, name="T")
 v = TestFunction(T)
 u = TrialFunction(T)
 

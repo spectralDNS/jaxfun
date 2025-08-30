@@ -49,7 +49,7 @@ def test_forward_backward_2d(
     space: Legendre.Legendre | Chebyshev.Chebyshev | Fourier.Fourier | Chebyshev.Jacobi,
 ) -> None:
     D = space(8)
-    T = TensorProduct((D, D))
+    T = TensorProduct(D, D)
     x, y = T.system.base_scalars()
     ue = project(sp.sin(x) * sp.sin(y), T)
     uj = T.backward(ue)

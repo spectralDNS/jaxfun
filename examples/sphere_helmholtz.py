@@ -41,7 +41,7 @@ C = get_CoordSys(
 )
 D0 = FunctionSpace(N, Chebyshev, domain=(0, np.pi), name="D0", fun_str="theta")
 D1 = FunctionSpace(M, Fourier, name="D1", fun_str="phi")
-T = TensorProduct((D0, D1), system=C, name="T")
+T = TensorProduct(D0, D1, system=C, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 

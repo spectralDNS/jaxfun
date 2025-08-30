@@ -27,7 +27,7 @@ def test_legendre_evaluate_variants_and_domain_mapping():
     assert jnp.linalg.norm(u1 - u2) < 100 * ulp(1.0)
     # Mapping check: reference domain is (-1,1)
     Xref = jnp.array([L.map_reference_domain(xi) for xi in x])
-    assert Xref.min() >= -1 - 1e-12 and Xref.max() <= 1 + 1e-12
+    assert Xref.min() >= -1 - ulp(1) and Xref.max() <= 1 + ulp(1)
 
 
 def test_jacobi_general_parameters():

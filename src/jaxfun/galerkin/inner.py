@@ -122,7 +122,8 @@ def inner(
                 continue
             if "linear" in coeffs and test_space.dims == 1:
                 sign = 1 if all_linear else -1
-                bresults.append(sign * (z @ coeffs["linear"]["jaxfunction"].array))
+                scale = coeffs["linear"].get("scale", 1) * sign
+                bresults.append(scale * (z @ coeffs["linear"]["jaxfunction"].array))
 
             sc = 1
             mats.append(z)

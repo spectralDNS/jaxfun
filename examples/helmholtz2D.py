@@ -34,7 +34,7 @@ Dx = FunctionSpace(
 Dy = FunctionSpace(
     M, space, bcs=bcsy, name="Dy", fun_str="phi", scaling=n + 1, domain=(0, 1)
 )
-T = TensorProduct((Dx, Dy), name="T")
+T = TensorProduct(Dx, Dy, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 

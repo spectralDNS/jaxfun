@@ -24,7 +24,7 @@ def test_directsum_two_inhomogeneous_bnd_assembly_and_backward():
     bcs2 = {"left": {"D": 3}, "right": {"D": 4}}
     F1 = FunctionSpace(5, Legendre.Legendre, bcs=bcs1)
     F2 = FunctionSpace(6, Legendre.Legendre, bcs=bcs2)
-    T = TensorProduct((F1, F2))
+    T = TensorProduct(F1, F2)
     assert isinstance(T, DirectSumTPS)
     # Coefficient array for homogeneous parts
     hom0 = F1[0]
@@ -38,7 +38,7 @@ def test_tensorproduct_get_homogeneous_and_tpmatrices_precond():
     bcs = {"left": {"D": 1}, "right": {"D": 2}}
     F = FunctionSpace(5, Chebyshev.Chebyshev, bcs=bcs)
     L = Legendre.Legendre(5)
-    T = TensorProduct((F, L))
+    T = TensorProduct(F, L)
     assert isinstance(T, DirectSumTPS)
     H = T.get_homogeneous()
     assert isinstance(H, type(next(iter(T.tpspaces.values()))))
@@ -58,7 +58,7 @@ def test_multivar_and_linear_bcs_branch():
     bcs = {"left": {"D": 1}, "right": {"D": 2}}
     F = FunctionSpace(4, Legendre.Legendre, bcs=bcs)
     L = Legendre.Legendre(4)
-    T = TensorProduct((F, L))
+    T = TensorProduct(F, L)
     x, y = T.system.base_scalars()
     v = TestFunction(T)
     u = TrialFunction(T)
@@ -75,7 +75,7 @@ def test_multivar_and_linear_bcs_branch():
 def test_tpmats_to_scipy_sparse():
     C = Chebyshev.Chebyshev(4)
     L = Legendre.Legendre(4)
-    T = TensorProduct((C, L))
+    T = TensorProduct(C, L)
     v = TestFunction(T)
     u = TrialFunction(T)
     A = inner(v * u)

@@ -25,6 +25,7 @@ def test_orthogonal_mapping_and_uniform_mesh():
     # uniform mesh branch
     mesh_uniform = L.mesh(kind="uniform", N=7)
     assert mesh_uniform.shape[0] == 7
+    assert jnp.allclose(mesh_uniform, jnp.linspace(-2.0, 3.0, 7))
 
 
 def test_chebyshev_uniform_mesh_and_reference_roundtrip():
@@ -35,3 +36,4 @@ def test_chebyshev_uniform_mesh_and_reference_roundtrip():
     assert jnp.allclose(Xtrue, pts)
     umesh = C.mesh(kind="uniform", N=5)
     assert umesh.shape[0] == 5
+    assert jnp.allclose(umesh, jnp.linspace(-3.0, 1.0, 5))

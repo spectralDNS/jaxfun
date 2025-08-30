@@ -34,7 +34,7 @@ bcsy = {
 
 Dx = FunctionSpace(M, Chebyshev, scaling=n + 1, bcs=bcsx, name="Dx", fun_str="psi")
 Dy = FunctionSpace(M, Chebyshev, scaling=n + 1, bcs=bcsy, name="Dy", fun_str="phi")
-T = TensorProduct((Dx, Dy), name="T")
+T = TensorProduct(Dx, Dy, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 ue = T.system.expr_psi_to_base_scalar(ue)

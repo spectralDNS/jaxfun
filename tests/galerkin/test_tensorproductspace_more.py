@@ -1,4 +1,5 @@
 import jax
+import jax.numpy as jnp
 
 from jaxfun.galerkin import (
     Chebyshev,
@@ -14,7 +15,7 @@ from jaxfun.galerkin.tensorproductspace import TPMatrices, tpmats_to_scipy_kron
 def test_tensorproductspace_broadcast_and_evaluate_2d():
     C = Chebyshev.Chebyshev(4)
     L = Legendre.Legendre(5)
-    T = TensorProduct((C, L))
+    T = TensorProduct(C, L)
     mesh = T.mesh()
     coeffs = jax.random.normal(jax.random.PRNGKey(0), shape=T.dim())
     T.backward(coeffs)
@@ -35,19 +36,20 @@ def test_tensorproductspace_forward_directsum():
     from jaxfun.galerkin import FunctionSpace
 
     DS = FunctionSpace(5, Legendre.Legendre, bcs=bcs)
-    T = TensorProduct((DS, F))
+    T = TensorProduct(DS, F)
     # Make a simple physical array in homogeneous shape (first subspace dim,
     # second plain dim)
     hom0 = DS[0]
     U = jax.random.normal(jax.random.PRNGKey(1), shape=(hom0.dim, F.dim))
     c = T.forward(T.backward(U))  # round trip through forward/backward on DirectSumTPS
     assert c.shape == U.shape
+    assert jnp.allclose(c, U)
 
 
 def test_tpmatrices_call_and_kron_3d():
     C = Chebyshev.Chebyshev(3)
     L = Legendre.Legendre(3)
-    T3 = TensorProduct((C, L, C))
+    T3 = TensorProduct(C, L, C)
     v = TestFunction(T3)
     u = TrialFunction(T3)
     A = inner(v * u)
@@ -62,7 +64,7 @@ def test_tpmatrices_call_and_kron_3d():
 def test_inner_linear_form_3d_outer_products():
     C = Chebyshev.Chebyshev(3)
     L = Legendre.Legendre(3)
-    T3 = TensorProduct((C, L, C))
+    T3 = TensorProduct(C, L, C)
     v = TestFunction(T3)
     x, y, z = T3.system.base_scalars()
     b = inner((x + y + z) * v)
@@ -73,7 +75,7 @@ def test_inner_sparse_multivar_path():
     # multivar coeff with sparse=True to trigger sparse conversion in process_results
     C = Chebyshev.Chebyshev(4)
     L = Legendre.Legendre(4)
-    T = TensorProduct((C, L))
+    T = TensorProduct(C, L)
     v = TestFunction(T)
     u = TrialFunction(T)
     x, y = T.system.base_scalars()

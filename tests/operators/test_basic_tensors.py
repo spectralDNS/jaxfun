@@ -60,7 +60,7 @@ def test_sign(i, j):
 def test_outer_basic_and_linear():
     v1, v2 = N.i, N.j
     o = outer(v1, v2)
-    assert isinstance(o, (BaseDyadic, sp.vector.DyadicAdd))
+    assert isinstance(o, BaseDyadic | sp.vector.DyadicAdd)
     if isinstance(o, BaseDyadic):
         assert o.args == (v1, v2)
     else:
@@ -105,6 +105,8 @@ def test_cross_cartesian_basis(a, b, expected):
 
 def test_cross_same_vectors_zero():
     assert cross(N.i, N.i) == sp.vector.VectorZero()
+    assert cross(N.j, N.j) == sp.vector.VectorZero()
+    assert cross(N.k, N.k) == sp.vector.VectorZero()
 
 
 def test_cross_cylindrical():
@@ -176,6 +178,9 @@ def test_dot_vector_base_dyadic():
     # zero vector (VectorZero)
     assert getattr(res, "is_Vector", False)
     assert getattr(res, "components", {}) == {}
+    res = dot(dy, C.b_theta)
+    assert getattr(res, "is_Vector", False)
+    assert getattr(res, "components", {}) == {C.b_r: C.r**2}
 
 
 def test_dot_dyadic_dyadic():
@@ -184,6 +189,7 @@ def test_dot_dyadic_dyadic():
     res = dot(dy1, dy2)
     # Expect C.r**2 * (b_r|b_r) inside expression
     assert C.r**2 in list(sp.preorder_traversal(res))
+    assert getattr(res, "components", {}) == {(C.b_r | C.b_r): C.r**2}
 
 
 def test_dot_zero_cases():
@@ -215,6 +221,7 @@ def test_gradient_vector_cartesian_transpose():
 def test_divergence_doc_example():
     v = C.r * C.b_r + C.theta * C.b_theta
     assert sp.simplify(divergence(v) - 3) == 0
+    assert sp.simplify(divergence(v + C.z * C.b_z) - 4) == 0
 
 
 def test_curl_doc_example():
@@ -253,7 +260,7 @@ def test_constant_and_identity():
 def test_vector_diff_override():
     f = N.x * N.i + N.y * N.j
     df_dx = f.diff(N.x)
-    assert N.i in df_dx.components
+    assert df_dx == N.i
 
 
 def test_doit_vector_expression():

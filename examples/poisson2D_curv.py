@@ -27,7 +27,7 @@ D0 = FunctionSpace(
 D1 = FunctionSpace(
     M, Legendre, bcs, scaling=n + 1, domain=(0, sp.pi / 2), name="D1", fun_str="phi"
 )
-T = TensorProduct((D0, D1), system=C, name="T")
+T = TensorProduct(D0, D1, system=C, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 

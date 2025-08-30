@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 
 from jaxfun.galerkin import Fourier
+from jaxfun.utils.common import ulp
 
 
 def test_fourier_truncation_and_padding():
@@ -15,4 +16,4 @@ def test_fourier_truncation_and_padding():
     assert up.shape[0] == 12
     # Forward/backward consistency (energy)
     cf = F.forward(u)
-    assert jnp.linalg.norm(cf[:8] - c) < 1e-6
+    assert jnp.linalg.norm(cf[:8] - c) < ulp(100)

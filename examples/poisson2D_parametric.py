@@ -49,7 +49,7 @@ bcsx = {"left": {"D": ue.subs(xi, -1)}, "right": {"D": ue.subs(xi, 1)}}
 bcsy = {"left": {"D": ue.subs(eta, -1)}, "right": {"D": ue.subs(eta, 1)}}
 D0 = FunctionSpace(M, Chebyshev, bcsx, name="D0", fun_str="phi")
 D1 = FunctionSpace(M, Chebyshev, bcsy, name="D1", fun_str="psi")
-T = TensorProduct((D0, D1), system=C, name="T")
+T = TensorProduct(D0, D1, system=C, name="T")
 
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")

@@ -33,7 +33,7 @@ def test_vandermonde(space: BaseSpace, x: jnp.ndarray, xn: np.ndarray, N: int) -
     }[space.__class__.__name__]
     jax_res = space.vandermonde(x)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
-    assert diff < 10 * ulp(1.0)
+    assert diff < ulp(10.0)
 
 
 @pytest.mark.parametrize("k", (0, 1, 2, 3))
@@ -57,4 +57,4 @@ def test_evaluate_basis_derivative(
         np_res = np.dot(np_res, D)
     jax_res = space.evaluate_basis_derivative(x, k=k)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
-    assert diff < 10 ** (k + 2) * ulp(1.0)
+    assert diff < ulp(10 ** (k + 2))

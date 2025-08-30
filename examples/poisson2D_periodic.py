@@ -23,7 +23,7 @@ M, N = 80, 20
 bcs = {"left": {"D": ue.subs(y, -1)}, "right": {"D": ue.subs(y, 1)}}
 D = FunctionSpace(M, Chebyshev, bcs, scaling=n + 1, name="D", fun_str="psi")
 F = FunctionSpace(N, Fourier, name="F", fun_str="E")
-T = TensorProduct((F, D), name="T")
+T = TensorProduct(F, D, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 

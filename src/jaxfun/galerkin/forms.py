@@ -36,7 +36,7 @@ def split_coeff(c0: sp.Expr) -> dict:
     """Split coefficients of bilinear form into parts
 
     Args:
-        c0: Expression that may contain a JAXFunction, a number, or a product/sum of
+        c0: Expression that may contain a Jaxf, a number, or a product/sum of
         these.
 
     Returns:
@@ -44,6 +44,9 @@ def split_coeff(c0: sp.Expr) -> dict:
     """
     coeffs = {}
     c0 = sp.sympify(c0)
+    assert get_basisfunctions(c0) == (None, None), (
+        "Basis functions found in coefficient"
+    )
 
     if c0.is_number:
         coeffs["bilinear"] = float(c0) if c0.is_real else complex(c0)

@@ -19,7 +19,7 @@ from jaxfun.utils.common import ulp
 def test_tensorproduct_forward_backward_padding_fourier():
     # Padding path for Fourier
     F = Fourier.Fourier(8)
-    T = TensorProduct((F, F))
+    T = TensorProduct(F, F)
     x, y = T.system.base_scalars()
     u = TrialFunction(T)
     v = TestFunction(T)
@@ -37,7 +37,7 @@ def test_tensorproduct_directsum_tps_forward_backward():
     bcs = {"left": {"D": 1}, "right": {"D": 2}}
     C = FunctionSpace(6, Legendre.Legendre, bcs=bcs)
     L = Legendre.Legendre(6)
-    T = TensorProduct((C, L))
+    T = TensorProduct(C, L)
     assert hasattr(T, "tpspaces")  # DirectSumTPS
     # Build form (Poisson like)
     x, y = T.system.base_scalars()
@@ -59,7 +59,7 @@ def test_tensorproduct_directsum_tps_forward_backward():
 def test_tp_matrix_and_preconditioner():
     C = Chebyshev.Chebyshev(6)
     L = Legendre.Legendre(6)
-    T = TensorProduct((C, L))
+    T = TensorProduct(C, L)
     v = TestFunction(T)
     u = TrialFunction(T)
     A = inner(v * u)
@@ -80,7 +80,7 @@ def test_inner_multivar_expression():
     # Multivariable coefficient sqrt(x+y) * u * v
     C = Chebyshev.Chebyshev(5)
     L = Legendre.Legendre(5)
-    T = TensorProduct((C, L))
+    T = TensorProduct(C, L)
     x, y = T.system.base_scalars()
     u = TrialFunction(T)
     v = TestFunction(T)

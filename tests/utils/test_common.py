@@ -118,7 +118,7 @@ def test_lambdify_basic() -> None:
         name="Dy",
         fun_str="phi",
     )
-    T = TensorProduct((Dx, Dy), name="T")
+    T = TensorProduct(Dx, Dy, name="T")
     expr = T.system.expr_psi_to_base_scalar(expr)
 
     f = common.lambdify((x, y), expr)

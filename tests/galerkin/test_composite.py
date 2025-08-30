@@ -12,11 +12,11 @@ from jaxfun.galerkin.composite import (
 
 
 def test_boundary_conditions_basic():
-    bc = BoundaryConditions({"left": {"D": 0, "N": 0}, "right": {"D": 0}})
+    bc = BoundaryConditions({"left": {"D": 1, "N": 0}, "right": {"D": 0}})
     assert bc.orderednames() == ["LD", "LN", "RD"]
     assert bc.num_bcs() == 3
     assert bc.num_derivatives() == 1  # One N contributes one derivative order
-    assert bc.is_homogeneous()
+    assert not bc.is_homogeneous()
     h = bc.get_homogeneous()
     assert h.is_homogeneous()
 

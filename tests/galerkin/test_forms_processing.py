@@ -1,4 +1,5 @@
 import jax
+import pytest
 import sympy as sp
 
 from jaxfun.galerkin import Chebyshev, TestFunction, TrialFunction
@@ -13,27 +14,21 @@ def test_split_coeff_number_and_add():
     # Add of number and JAXFunction
     V = Chebyshev.Chebyshev(4)
     coeffs = jax.random.normal(jax.random.PRNGKey(0), shape=(V.N,))
-    jf = JAXFunction(coeffs, V)
-    # Using raw JAXFunction (not .doit()), implementation does not treat it as Jaxf
-    c2_raw = split_coeff(sp.Integer(2) + jf)
-    assert c2_raw["bilinear"] == 2.0 and c2_raw["linear"]["jaxfunction"] is None
+    jf = JAXFunction(coeffs, V).doit()
+    with pytest.raises(AssertionError):
+        _ = split_coeff(sp.Integer(2) + jf)
+    f = jf.args[0]
+    c2_raw = split_coeff(sp.Integer(2) + f)
+    assert c2_raw["bilinear"] == 2.0 and c2_raw["linear"]["jaxfunction"] is f
 
-    # Skip jf.doit() path; split_coeff currently expects pure numbers
-    # or an Add with JAXFunction placeholder
 
-
-def test_split_and_add_result_multivar():
+def test_split_and_add_result():
     V = Chebyshev.Chebyshev(4)
     u = TrialFunction(V)
     v = TestFunction(V)
     x = V.system.x
-    expr = x * u * v + (1 + x) * u * v  # multivar + simple
+    expr = x * u * v + (1 + x) * u * v
     res = split(expr)
     # Should have only bilinear contributions
     assert len(res["bilinear"]) >= 1
-    # Combine coefficients properly
-    coeffs = [
-        d["coeff"] for d in res["bilinear"] if isinstance(d["coeff"], (int, float))
-    ]
-    if coeffs:
-        assert all(isinstance(ci, (int, float, float)) for ci in coeffs)
+    assert len(res["linear"]) == 0

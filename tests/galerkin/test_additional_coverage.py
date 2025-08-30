@@ -21,7 +21,7 @@ from jaxfun.utils.common import Domain, ulp
 def test_vector_tensor_product_space_and_jaxfunction_latex_and_matmul():
     C = Chebyshev.Chebyshev(4)
     # Need at least 2D tensorspace for sub_system logic
-    TP = TensorProduct((C, C))
+    TP = TensorProduct(C, C)
     _VT = VectorTensorProductSpace(TP)  # rank 1 space
     coeffs = jax.random.normal(jax.random.PRNGKey(0), shape=(C.N, C.N))
     jf = JAXFunction(coeffs, TP, name="U")
@@ -53,7 +53,7 @@ def test_inner_return_all_items_and_sparse_paths():
     b = inner(sp.sin(x) * v)
     assert b.shape[0] == C.N
     # 2D sparse path (matrices become sparse individually)
-    T = TensorProduct((Chebyshev.Chebyshev(4), Chebyshev.Chebyshev(4)))
+    T = TensorProduct(Chebyshev.Chebyshev(4), Chebyshev.Chebyshev(4))
     v2 = TestFunction(T)
     u2 = TrialFunction(T)
     A2 = inner(v2 * u2, sparse=True)
@@ -84,7 +84,7 @@ def test_directsum_tps_two_inhomogeneous():
     assert isinstance(F1, DirectSum) and isinstance(F2, DirectSum)
     # Access component spaces and ensure boundary values converted
     _ = F1[1].bcs.orderedvals(), F2[1].bcs.orderedvals()
-    T = TensorProduct((F1, F2))
+    T = TensorProduct(F1, F2)
     assert isinstance(T, DirectSumTPS)
 
 
@@ -144,7 +144,7 @@ def test_chebyshev_matrices_branches():
 
 def test_tensorproductspace_3d_paths_and_mapping():
     C = Chebyshev.Chebyshev(3)
-    T3 = TensorProduct((C, C, C))
+    T3 = TensorProduct(C, C, C)
     # Random coefficients
     u = jax.random.normal(jax.random.PRNGKey(3), shape=T3.dim())
     # forward/backward roundtrip (approximate due to quadrature discretization)
@@ -170,7 +170,7 @@ def test_project_function():
     # cover project (2D) path
     C = Chebyshev.Chebyshev(4)
     L = Legendre.Legendre(4)
-    T = TensorProduct((C, L))
+    T = TensorProduct(C, L)
     x, y = T.system.base_scalars()
     ue = sp.chebyshevt(1, x) * sp.legendre(2, y)
     uh = project(ue, T)

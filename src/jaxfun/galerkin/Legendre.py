@@ -33,8 +33,8 @@ class Legendre(Jacobi):
             beta=0,
         )
 
-    @jit_vmap(in_axes=(None, 0, None))
-    def evaluate2(self, X: float | Array, c: Array) -> float | Array:
+    @jit_vmap(in_axes=(0, None))
+    def evaluate2(self, X: float | Array, c: Array) -> Array:
         """Alternative evaluate a Legendre series at points X.
 
         .. math:: p(X) = c_0 * L_0(X) + c_1 * L_1(X) + ... + c_{N-1} * L_{N-1}(X)
@@ -69,8 +69,8 @@ class Legendre(Jacobi):
         _, c0, c1 = jax.lax.fori_loop(3, nd + 1, body_fun, (nd, c0, c1))
         return c0 + c1 * X
 
-    @jit_vmap(in_axes=(None, 0, None))
-    def evaluate3(self, X: float | Array, c: Array) -> float | Array:
+    @jit_vmap(in_axes=(0, None))
+    def evaluate3(self, X: float | Array, c: Array) -> Array:
         """Alternative implementation of evaluate
 
         Args:
@@ -98,8 +98,8 @@ class Legendre(Jacobi):
         N = self.M if N == 0 else N
         return leggauss(N)
 
-    @jit_vmap(in_axes=(None, 0, None))
-    def eval_basis_function(self, X: float | Array, i: int) -> float | Array:
+    @jit_vmap(in_axes=(0, None))
+    def eval_basis_function(self, X: float | Array, i: int) -> Array:
         x0 = X * 0 + 1
         if i == 0:
             return x0
@@ -111,7 +111,7 @@ class Legendre(Jacobi):
 
         return jax.lax.fori_loop(2, i + 1, body_fun, (x0, X))[-1]
 
-    @jit_vmap(in_axes=(None, 0))
+    @jit_vmap(in_axes=0)
     def eval_basis_functions(self, X: float | Array) -> Array:
         x0 = X * 0 + 1
 

@@ -29,12 +29,14 @@ __all__ = (
 
 
 def jit_vmap(
-    in_axes: int | None | tuple[Any] = (None, 0),
+    in_axes: int | None | tuple[Any] = 0,
     out_axes: Any = 0,
     static_argnums: int | tuple[int] | None = 0,
 ):
     """Decorator that JIT compiles a function and applies vmap if the first argument is
     an array.
+
+    The decorator can only be used with class methods.
 
     Args:
         in_axes (optional): An integer, None, or sequence of values specifying which
@@ -45,6 +47,7 @@ def jit_vmap(
             collection of ints that specify which positional arguments to treat as
             static (trace- and compile-time constant). Defaults to 0.
     """
+    in_axes = (None,)+in_axes if isinstance(in_axes, tuple) else (None, in_axes)
 
     def wrap(func):
         @partial(jax.jit, static_argnums=static_argnums)

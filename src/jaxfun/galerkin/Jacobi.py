@@ -36,8 +36,8 @@ class Jacobi(OrthogonalSpace):
         self.alpha = alpha
         self.beta = beta
 
-    @jit_vmap(in_axes=(None, 0, None))
-    def evaluate2(self, X: float | Array, c: Array) -> float | Array:
+    @jit_vmap(in_axes=(0, None))
+    def evaluate2(self, X: float | Array, c: Array) -> Array:
         """
         Evaluate a Jacobi series at points X.
 
@@ -85,8 +85,8 @@ class Jacobi(OrthogonalSpace):
         N = self.M if N == 0 else N
         return jnp.array(roots_jacobi(N, float(self.alpha), float(self.beta)))
 
-    @jit_vmap(in_axes=(None, 0, None))
-    def eval_basis_function(self, X: float | Array, i: int) -> float | Array:
+    @jit_vmap(in_axes=(0, None))
+    def eval_basis_function(self, X: float | Array, i: int) -> Array:
         x0 = X * 0 + 1
         if i == 0:
             return x0
@@ -105,7 +105,7 @@ class Jacobi(OrthogonalSpace):
 
         return jax.lax.fori_loop(2, i + 1, body_fun, (x0, X))[-1]
 
-    @jit_vmap(in_axes=(None, 0))
+    @jit_vmap(in_axes=0)
     def eval_basis_functions(self, X: float | Array) -> Array:
         x0 = X * 0 + 1
 

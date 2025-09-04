@@ -30,8 +30,8 @@ class Fourier(OrthogonalSpace):
         )
         self._k = {k: self.wavenumbers()[k].item() for k in range(N)}
 
-    @jit_vmap(in_axes=(None, 0, None))
-    def evaluate2(self, X: float, c: Array) -> float:
+    @jit_vmap(in_axes=(0, None))
+    def evaluate2(self, X: float | Array, c: Array) -> Array:
         r"""
         Alternative evaluate a Fourier series at points X that are not
         necessarily on a uniform grid.
@@ -59,12 +59,12 @@ class Fourier(OrthogonalSpace):
         points = jnp.arange(N, dtype=float) * 2 * jnp.pi / N
         return points, jnp.array([2 * jnp.pi / N] * N)
 
-    @jit_vmap(in_axes=(None, 0, None))
-    def eval_basis_function(self, X: float, i: int) -> complex:
+    @jit_vmap(in_axes=(0, None))
+    def eval_basis_function(self, X: float | Array, i: int) -> Array:
         return jax.lax.exp(1j * self._k[i] * X)
 
-    @jit_vmap(in_axes=(None, 0, None))
-    def eval_basis_functions(self, X: float) -> Array:
+    @jit_vmap(in_axes=0)
+    def eval_basis_functions(self, X: float | Array) -> Array:
         return jax.lax.exp(1j * self.wavenumbers() * X)
 
     # Cannot jax.jit in case of padding

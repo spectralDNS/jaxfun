@@ -36,7 +36,7 @@ class OrthogonalSpace(BaseSpace):
     def quad_points_and_weights(self, N: int = 0) -> Array:
         raise RuntimeError
 
-    @jit_vmap(in_axes=(None, 0, None))
+    @jit_vmap(in_axes=(0, None))
     def evaluate(self, X: float | Array, c: Array) -> Array:
         """Evaluate series at points X
 
@@ -72,10 +72,10 @@ class OrthogonalSpace(BaseSpace):
         """
         return self.evaluate_basis_derivative(X, 0)
 
-    def eval_basis_function(self, X: float, i: int) -> float:
+    def eval_basis_function(self, X: float | Array, i: int) -> Array:
         raise RuntimeError
 
-    def eval_basis_functions(self, X: float) -> Array:
+    def eval_basis_functions(self, X: float | Array) -> Array:
         raise RuntimeError
 
     @partial(jax.jit, static_argnums=(0, 2))

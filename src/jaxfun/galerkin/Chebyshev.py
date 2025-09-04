@@ -33,8 +33,8 @@ class Chebyshev(Jacobi):
             beta=-sp.S.Half,
         )
 
-    @jit_vmap(in_axes=(None, 0, None))
-    def evaluate2(self, X: float, c: Array) -> float:
+    @jit_vmap(in_axes=(0, None))
+    def evaluate2(self, X: float | Array, c: Array) -> Array:
         """
         Alternative evaluate a Chebyshev series at point X
 
@@ -45,7 +45,7 @@ class Chebyshev(Jacobi):
             c: Expansion coefficients
 
         Returns:
-            float: Chebyshev series evaluated at X.
+            Chebyshev series evaluated at X.
         """
         if len(c) == 1:
             # Multiply by 0 * x for shape
@@ -68,8 +68,8 @@ class Chebyshev(Jacobi):
         c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (c0, c1))
         return c0 + c1 * X
 
-    @jit_vmap(in_axes=(None, 0, None))
-    def evaluate3(self, X: float, c: Array) -> float:
+    @jit_vmap(in_axes=(0, None))
+    def evaluate3(self, X: float | Array, c: Array) -> Array:
         """Alternative implementation of evaluate
 
         Args:
@@ -77,7 +77,7 @@ class Chebyshev(Jacobi):
             c: Expansion coefficients
 
         Returns:
-            float: Chebyshev series evaluated at X.
+            Chebyshev series evaluated at X.
         """
         x0 = jnp.ones_like(X)
 
@@ -102,8 +102,8 @@ class Chebyshev(Jacobi):
             )
         )
 
-    @jit_vmap(in_axes=(None, 0, None))
-    def eval_basis_function(self, X: float, i: int) -> float:
+    @jit_vmap(in_axes=(0, None))
+    def eval_basis_function(self, X: float | Array, i: int) -> Array:
         # return jnp.cos(i * jnp.acos(x))
         x0 = X * 0 + 1
         if i == 0:
@@ -116,7 +116,7 @@ class Chebyshev(Jacobi):
 
         return jax.lax.fori_loop(1, i, body_fun, (x0, X))[-1]
 
-    @jit_vmap(in_axes=(None, 0))
+    @jit_vmap(in_axes=0)
     def eval_basis_functions(self, X: float) -> Array:
         x0 = X * 0 + 1
 

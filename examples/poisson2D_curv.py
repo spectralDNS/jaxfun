@@ -32,8 +32,8 @@ v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 
 # Method of manufactured solution
+r, theta = C.base_scalars()
 ue = (1 - r) * (sp.S.Half - r) * theta * (sp.pi / 2 - theta)
-ue = C.expr_psi_to_base_scalar(ue)
 
 # Assemble linear system of equations
 # A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
@@ -49,7 +49,6 @@ un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 
 assert jnp.linalg.norm(uh - un) < ulp(1000)
 
-r, theta = C.base_scalars()
 rj, tj = T.mesh(kind="uniform", N=(100, 100))
 xc, yc = T.cartesian_mesh(kind="uniform", N=(100, 100))
 uj = T.backward(uh, kind="uniform", N=(100, 100))

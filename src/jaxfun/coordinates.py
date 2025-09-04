@@ -167,6 +167,9 @@ class BaseScalar(AtomicExpr):
     def _sympystr(self, printer: Any) -> str:
         return self._name
 
+    def _jaxcode(self, printer: Any) -> str:
+        return self._name
+
     def doit(self, **hints: dict) -> BaseScalar:
         return self
 

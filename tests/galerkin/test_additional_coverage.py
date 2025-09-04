@@ -146,7 +146,7 @@ def test_tensorproductspace_3d_paths_and_mapping():
     C = Chebyshev.Chebyshev(3)
     T3 = TensorProduct(C, C, C)
     # Random coefficients
-    u = jax.random.normal(jax.random.PRNGKey(3), shape=T3.dim())
+    u = jax.random.normal(jax.random.PRNGKey(3), shape=T3.dim)
     # forward/backward roundtrip (approximate due to quadrature discretization)
     c = T3.forward(u)
     uh = T3.backward(c)
@@ -175,7 +175,7 @@ def test_project_function():
     ue = sp.chebyshevt(1, x) * sp.legendre(2, y)
     uh = project(ue, T)
     assert abs(uh[1, 2] - 1.0) < ulp(100)
-    assert uh.shape == T.dim()
+    assert uh.shape == T.dim
 
 
 def test_scalar_vector_function_pretty_and_sympy():

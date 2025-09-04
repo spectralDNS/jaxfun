@@ -1,5 +1,5 @@
 from collections.abc import Callable, Iterable
-from functools import partial
+from functools import partial, wraps
 from typing import Any, NamedTuple
 
 import jax
@@ -11,8 +11,6 @@ from jax.experimental.sparse import BCOO
 from scipy import sparse as scipy_sparse
 from scipy.special import sph_harm
 from sympy import Expr, Number, Symbol
-
-from jaxfun.coordinates import get_system
 
 Ynm = lambda n, m, x, y: sph_harm(m, n, y, x)
 n = Symbol("n", positive=True, integer=True)
@@ -28,6 +26,39 @@ __all__ = (
     "fromdense",
     "lambdify",
 )
+
+
+def jit_vmap(
+    in_axes: int | None | tuple[Any] = (None, 0),
+    out_axes: Any = 0,
+    static_argnums: int | tuple[int] | None = 0,
+):
+    """Decorator that JIT compiles a function and applies vmap if the first argument is
+    an array.
+
+    Args:
+        in_axes (optional): An integer, None, or sequence of values specifying which
+            input array axes to map over. Defaults to (None, 0).
+        out_axes (optional): Standard Python container (tuple/list/dict) thereof
+            indicating where the mapped axis should appear in the output. Defaults to 0.
+        static_argnums (optional): optional, an int or
+            collection of ints that specify which positional arguments to treat as
+            static (trace- and compile-time constant). Defaults to 0.
+    """
+
+    def wrap(func):
+        @partial(jax.jit, static_argnums=static_argnums)
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            if args[0].shape == ():
+                return func(self, *args, **kwargs)
+            return jax.vmap(func, in_axes=in_axes, out_axes=out_axes)(
+                self, *args, **kwargs
+            )
+
+        return wrapper
+
+    return wrap
 
 
 class Domain(NamedTuple):
@@ -92,9 +123,9 @@ def lambdify(
     cse: bool = False,
     doctring_limit: int = 1000,
 ) -> Callable[[Iterable[Array]], Array]:
-    system = get_system(expr)
-    expr = system.expr_base_scalar_to_psi(expr)
-    args = system.expr_base_scalar_to_psi(args)
+    # system = get_system(expr)
+    # expr = system.expr_base_scalar_to_psi(expr)
+    # args = system.expr_base_scalar_to_psi(args)
     modules_default = ["jax", {"Ynm": Ynm}]
     modules = modules_default if modules is None else [modules] + modules_default
     return sp.lambdify(

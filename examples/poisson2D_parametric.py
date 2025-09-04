@@ -65,7 +65,6 @@ H = jnp.sum(jnp.array([a.mat for a in A]), axis=0)
 uh = jnp.linalg.solve(H, b.flatten()).reshape(b.shape)
 
 N = 100
-xi, eta = C.base_scalars()
 xij, etaj = T.mesh(kind="uniform", N=(N, N))
 xc, yc = T.cartesian_mesh(kind="uniform", N=(N, N))
 uj = T.backward(uh, kind="uniform", N=(N, N))

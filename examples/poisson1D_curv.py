@@ -38,13 +38,13 @@ rv = (sp.sin(2 * sp.pi * t), sp.cos(2 * sp.pi * t), 2 * t)
 
 N = 50
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
-coors = get_CoordSys("C", sp.Lambda((t,), rv))
-D = FunctionSpace(N, space, bcs, scaling=n + 1, system=coors, name="D", fun_str="phi")
+C = get_CoordSys("C", sp.Lambda((t,), rv))
+D = FunctionSpace(N, space, bcs, scaling=n + 1, system=C, name="D", fun_str="phi")
 v = TestFunction(D)
 u = TrialFunction(D)
 
 # Method of manufactured solution
-t = D.system.t  # use the same coordinate as u and v
+t = C.t  # use the same coordinate as u and v
 
 ue = sp.sin(4 * sp.pi * t)
 b = inner(-v * Div(Grad(ue)))
@@ -63,8 +63,8 @@ if "PYTEST" in os.environ:
 
 print(f"poisson1D_curv l2 error = {error:2.6e}")
 
-# For plotting, transform base_scalars to pure sympy symbols
-x, y, z = D.system.expr_base_scalar_to_psi(coors.rv)
-t = t.to_symbol()
-ue = D.system.expr_base_scalar_to_psi(ue)
-ax = plot3d_parametric_line((x, y, z, (t, -1, 1)), (x, y, z + ue, (t, -1, 1)))
+# Plot solution
+x, y, z = C.position_vector()
+ax = plot3d_parametric_line(
+    (x, y, z, (t, -1, 1)), (x, y, z + ue, (t, -1, 1)), modules="jax"
+)

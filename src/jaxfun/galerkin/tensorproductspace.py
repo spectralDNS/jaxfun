@@ -62,19 +62,9 @@ class TensorProductSpace:
     def shape(self) -> tuple[int]:
         return tuple([space.N for space in self.basespaces])
 
+    @property
     def dim(self) -> tuple[int, ...]:
-        dims = []
-        for space in self.basespaces:
-            if hasattr(space, "dim"):
-                dims.append(space.dim)
-            elif isinstance(space, DirectSum):
-                # Use dimension of homogeneous component
-                dims.append(space.basespaces[0].dim)
-            else:
-                raise AttributeError(
-                    "Cannot determine dimension for space in TensorProductSpace"
-                )
-        return tuple(dims)
+        return tuple(space.dim for space in self.basespaces)
 
     def mesh(
         self,
@@ -129,7 +119,7 @@ class TensorProductSpace:
                 axi: int = dim - 1 - ax
                 c = jax.vmap(
                     self.basespaces[i].evaluate, in_axes=(None, axi), out_axes=axi
-                )(self.basespaces[i].map_reference_domain(xi), c)
+                )(self.basespaces[i].map_reference_domain(xi).squeeze(), c)
         else:
             for i, (xi, ax) in enumerate(zip(x, range(dim), strict=False)):
                 ax0, ax1 = set(range(dim)) - set((ax,))
@@ -139,7 +129,7 @@ class TensorProductSpace:
                     ),
                     in_axes=(None, ax1),
                     out_axes=ax1,
-                )(self.basespaces[i].map_reference_domain(xi), c)
+                )(self.basespaces[i].map_reference_domain(xi).squeeze(), c)
         return c
 
     def get_padded(self, N: tuple[int]) -> TensorProductSpace:
@@ -493,7 +483,7 @@ class DirectSumTPS(TensorProductSpace):
         u = TrialFunction(self)
         A, b = inner(u * v)
         b += v.functionspace.scalar_product(c)
-        return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.dim())
+        return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.dim)
 
     def scalar_product(self, c: Array):
         raise RuntimeError(

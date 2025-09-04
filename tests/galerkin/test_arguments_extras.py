@@ -8,13 +8,13 @@ from jaxfun.galerkin.arguments import JAXFunction, ScalarFunction, VectorFunctio
 def test_jaxfunction_doit_and_matmul_rank1():
     C = Chebyshev.Chebyshev(4)
     T = TensorProduct(C, C)
-    coeffs = jax.random.normal(jax.random.PRNGKey(10), shape=T.dim())
+    coeffs = jax.random.normal(jax.random.PRNGKey(10), shape=T.dim)
     jf = JAXFunction(coeffs, T, name="A")
     expr = jf.doit()
     # Should produce Jaxf * TrialFunction structure
     assert hasattr(expr, "args")
     assert expr.args[0].__class__.__name__ == "Jaxf"
-    a = jnp.ones(T.dim())
+    a = jnp.ones(T.dim)
     _ = jf @ a
     _ = a @ jf
 

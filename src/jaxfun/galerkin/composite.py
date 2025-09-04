@@ -14,12 +14,11 @@ from scipy import sparse as scipy_sparse
 from sympy import Number
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.galerkin.Chebyshev import Chebyshev
+from jaxfun.galerkin.Jacobi import Jacobi
+from jaxfun.galerkin.Legendre import Legendre
+from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.utils.common import Domain, matmat, n
-
-from .Chebyshev import Chebyshev
-from .Jacobi import Jacobi
-from .Legendre import Legendre
-from .orthogonal import OrthogonalSpace
 
 direct_sum_symbol = "\u2295"
 
@@ -225,11 +224,10 @@ class Composite(OrthogonalSpace):
         )
 
     def get_padded(self, N: int) -> Composite:
-        bc = self.bcs.get_homogeneous()
         return Composite(
             N=N,
             orthogonal=self.orthogonal.__class__,
-            bcs=bc,
+            bcs=self.bcs,
             domain=self.domain,
             name=self.name + "p",
             fun_str=self.fun_str + "p",
@@ -291,14 +289,16 @@ class BCGeneric(Composite):
 
 
 class DirectSum:
-    def __init__(self, a: OrthogonalSpace, b: OrthogonalSpace) -> None:
+    """Direct sum of a Composite space and a boundary condition space
+    """
+    def __init__(self, a: Composite, b: BCGeneric) -> None:
         assert isinstance(b, BCGeneric)
-        self.basespaces: list[OrthogonalSpace] = [a, b]
+        self.basespaces = [a, b]
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
         self.system = a.system
 
-    def __getitem__(self, i: int) -> OrthogonalSpace:
+    def __getitem__(self, i: int) -> Composite | BCGeneric:
         return self.basespaces[i]
 
     def __len__(self) -> int:
@@ -309,6 +309,10 @@ class DirectSum:
 
     def bnd_vals(self) -> Array:
         return self.basespaces[1].bnd_vals()
+
+    @property
+    def dim(self) -> int:
+        return self.basespaces[0].dim
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
@@ -468,11 +472,10 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     from jaxfun.galerkin.arguments import TestFunction, TrialFunction
+    from jaxfun.galerkin.Chebyshev import Chebyshev
     from jaxfun.galerkin.composite import Composite
     from jaxfun.galerkin.inner import inner
-
-    from .Chebyshev import Chebyshev
-    from .Legendre import Legendre
+    from jaxfun.galerkin.Legendre import Legendre
 
     n = sp.Symbol("n", positive=True, integer=True)
     N = 50

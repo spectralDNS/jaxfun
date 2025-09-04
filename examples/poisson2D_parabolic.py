@@ -37,8 +37,8 @@ v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 
 # Method of manufactured solution
+tau, sigma = C.base_scalars()
 ue = (tau * (1 - tau)) ** 2 * (1 - sigma**2) ** 1 * sp.sin(4 * sp.pi * sigma)
-ue = C.expr_psi_to_base_scalar(ue)
 
 # Assemble linear system of equations
 A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue)))*C.sg, sparse=False)
@@ -48,7 +48,6 @@ A0 = tpmats_to_scipy_kron(A)
 un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 
 N = 100
-tau, sigma = C.base_scalars()
 rj, tj = T.mesh(kind="uniform", N=(N, N))
 xc, yc = T.cartesian_mesh(kind="uniform", N=(N, N))
 uj = T.backward(un, kind="uniform", N=(N, N))

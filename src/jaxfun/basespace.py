@@ -1,8 +1,4 @@
-from functools import partial
-
-import jax
 import sympy as sp
-from jax import Array
 
 from jaxfun.coordinates import CartCoordSys, CoordSys, x
 
@@ -21,7 +17,3 @@ class BaseSpace:
         self.name = name
         self.fun_str = fun_str
         self.system = CartCoordSys("N", (x,)) if system is None else system
-
-    @partial(jax.jit, static_argnums=0)
-    def evaluate(self, X: float, c: Array) -> float:
-        raise RuntimeError

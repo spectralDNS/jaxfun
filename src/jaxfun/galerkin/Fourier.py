@@ -7,7 +7,7 @@ import sympy as sp
 from jax import Array
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.utils.common import Domain
+from jaxfun.utils.common import Domain, jit_vmap
 
 from .orthogonal import OrthogonalSpace
 
@@ -30,10 +30,11 @@ class Fourier(OrthogonalSpace):
         )
         self._k = {k: self.wavenumbers()[k].item() for k in range(N)}
 
-    @partial(jax.jit, static_argnums=0)
-    def evaluate(self, X: float, c: Array) -> float:
+    @jit_vmap(in_axes=(None, 0, None))
+    def evaluate2(self, X: float, c: Array) -> float:
         r"""
-        Evaluate a Fourier series at points x.
+        Alternative evaluate a Fourier series at points X that are not
+        necessarily on a uniform grid.
 
         .. math:: p(x) = \sum_{j=-N/2+1}^{N/2} c_j exp(ijx)
 
@@ -58,9 +59,13 @@ class Fourier(OrthogonalSpace):
         points = jnp.arange(N, dtype=float) * 2 * jnp.pi / N
         return points, jnp.array([2 * jnp.pi / N] * N)
 
-    @partial(jax.jit, static_argnums=(0, 2))
-    def eval_basis_function(self, x: float, i: int) -> complex:
-        return jax.lax.exp(1j * self._k[i] * x)
+    @jit_vmap(in_axes=(None, 0, None))
+    def eval_basis_function(self, X: float, i: int) -> complex:
+        return jax.lax.exp(1j * self._k[i] * X)
+
+    @jit_vmap(in_axes=(None, 0, None))
+    def eval_basis_functions(self, X: float) -> Array:
+        return jax.lax.exp(1j * self.wavenumbers() * X)
 
     # Cannot jax.jit in case of padding
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
@@ -83,10 +88,6 @@ class Fourier(OrthogonalSpace):
     @partial(jax.jit, static_argnums=0)
     def scalar_product(self, c: Array) -> Array:
         return jnp.fft.fft(c, norm="forward") * 2 * jnp.pi / self.domain_factor
-
-    @partial(jax.jit, static_argnums=0)
-    def eval_basis_functions(self, x: float) -> Array:
-        return jax.lax.exp(1j * self.wavenumbers() * x)
 
     @property
     def reference_domain(self) -> Domain:

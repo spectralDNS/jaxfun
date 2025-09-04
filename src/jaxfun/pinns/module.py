@@ -33,7 +33,7 @@ default_rngs = nnx.Rngs(101)
 # Differs from jaxfun.utils.common.jacn in the last if else
 def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
     for i in range(k):
-        fun = jax.jacfwd(fun)# if i % 2 else jax.jacrev(fun)
+        fun = jax.jacfwd(fun)  # if i % 2 else jax.jacrev(fun)
     return jax.vmap(fun, in_axes=0, out_axes=0) if k > 0 else fun
 
 
@@ -346,14 +346,8 @@ class SpectralModule(nnx.Module):
         return self.space.dim
 
     def __call__(self, x: Array) -> Array:
-        # return self.space.evaluate2(
-        #    self.space.map_reference_domain(x), self.kernel.value[0]
-        # )
-        return (
-            jax.vmap(self.space.eval_basis_functions)(
-                self.space.map_reference_domain(x)
-            ).squeeze()
-            @ self.kernel.value.T
+        return self.space.evaluate(
+            self.space.map_reference_domain(x), self.kernel.value[0]
         )
 
 

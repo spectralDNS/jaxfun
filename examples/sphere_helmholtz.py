@@ -46,9 +46,9 @@ v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 
 # Method of manufactured solution
+theta, phi = C.base_scalars()
 sph = sp.functions.special.spherical_harmonics.Ynm
 ue = sph(6, 3, theta, phi)
-ue = C.expr_psi_to_base_scalar(ue)
 
 # Assemble linear system of equations
 A, b = inner(
@@ -61,7 +61,6 @@ A, b = inner(
 A0 = tpmats_to_scipy_kron(A)
 un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 
-theta, phi = C.base_scalars()
 rj, tj = T.mesh(N=(100, 00))
 xc, yc, zc = T.cartesian_mesh(N=(100, 00))
 uj = T.backward(un, N=(100, 00))

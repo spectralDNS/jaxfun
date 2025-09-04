@@ -9,7 +9,7 @@ from scipy.special import roots_jacobi
 from sympy import Expr, Number, Symbol
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.utils.common import Domain, n
+from jaxfun.utils.common import Domain, jit_vmap, n
 
 from .orthogonal import OrthogonalSpace
 
@@ -36,19 +36,19 @@ class Jacobi(OrthogonalSpace):
         self.alpha = alpha
         self.beta = beta
 
-    @partial(jax.jit, static_argnums=0)
-    def evaluate(self, X: float, c: Array) -> float:
+    @jit_vmap(in_axes=(None, 0, None))
+    def evaluate2(self, X: float | Array, c: Array) -> float | Array:
         """
         Evaluate a Jacobi series at points X.
 
         .. math:: p(X) = c_0 * P_0(X) + c_1 * P_1(X) + ... + c_n * P_n(X)
 
         Args:
-            X (float): Evaluation point in reference space
-            c (Array): Expansion coefficients
+            X: Evaluation point in reference space
+            c: Expansion coefficients
 
         Returns:
-            float: Jacobi series evaluated at X.
+            Jacobi series evaluated at X.
         """
         a, b = float(self.alpha), float(self.beta)
 
@@ -85,8 +85,8 @@ class Jacobi(OrthogonalSpace):
         N = self.M if N == 0 else N
         return jnp.array(roots_jacobi(N, float(self.alpha), float(self.beta)))
 
-    @partial(jax.jit, static_argnums=(0, 2))
-    def eval_basis_function(self, X: float, i: int) -> float:
+    @jit_vmap(in_axes=(None, 0, None))
+    def eval_basis_function(self, X: float | Array, i: int) -> float | Array:
         x0 = X * 0 + 1
         if i == 0:
             return x0
@@ -105,8 +105,8 @@ class Jacobi(OrthogonalSpace):
 
         return jax.lax.fori_loop(2, i + 1, body_fun, (x0, X))[-1]
 
-    @partial(jax.jit, static_argnums=0)
-    def eval_basis_functions(self, X: float) -> Array:
+    @jit_vmap(in_axes=(None, 0))
+    def eval_basis_functions(self, X: float | Array) -> Array:
         x0 = X * 0 + 1
 
         a, b = float(self.alpha), float(self.beta)
@@ -129,7 +129,7 @@ class Jacobi(OrthogonalSpace):
             jnp.arange(2, self.N + 1),
         )
 
-        return jnp.hstack((x0, xs))
+        return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
     def norm_squared(self) -> Array:
         return sp.lambdify(n, self.h(n, 0), modules="jax")(jnp.arange(self.N))

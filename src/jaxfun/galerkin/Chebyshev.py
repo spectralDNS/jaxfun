@@ -7,7 +7,7 @@ from jax import Array
 from sympy import Expr, Symbol
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.utils.common import Domain
+from jaxfun.utils.common import Domain, jit_vmap
 
 from .Jacobi import Jacobi
 
@@ -33,16 +33,16 @@ class Chebyshev(Jacobi):
             beta=-sp.S.Half,
         )
 
-    @partial(jax.jit, static_argnums=0)
-    def evaluate(self, X: float, c: Array) -> float:
+    @jit_vmap(in_axes=(None, 0, None))
+    def evaluate2(self, X: float, c: Array) -> float:
         """
-        Evaluate a Chebyshev series at points X.
+        Alternative evaluate a Chebyshev series at point X
 
         .. math:: p(X) = c_0 * T_0(X) + c_1 * T_1(X) + ... + c_{N-1} * T_{N-1}(X)
 
         Args:
-            X (float): Evaluation point in reference space
-            c (Array): Expansion coefficients
+            X: Evaluation point in reference space
+            c: Expansion coefficients
 
         Returns:
             float: Chebyshev series evaluated at X.
@@ -68,13 +68,13 @@ class Chebyshev(Jacobi):
         c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (c0, c1))
         return c0 + c1 * X
 
-    @partial(jax.jit, static_argnums=0)
-    def evaluate2(self, X: float, c: Array) -> float:
+    @jit_vmap(in_axes=(None, 0, None))
+    def evaluate3(self, X: float, c: Array) -> float:
         """Alternative implementation of evaluate
 
         Args:
-            X (float): Evaluation point in reference space
-            c (Array): Expansion coefficients
+            X: Evaluation point in reference space
+            c: Expansion coefficients
 
         Returns:
             float: Chebyshev series evaluated at X.
@@ -102,7 +102,7 @@ class Chebyshev(Jacobi):
             )
         )
 
-    @partial(jax.jit, static_argnums=(0, 2))
+    @jit_vmap(in_axes=(None, 0, None))
     def eval_basis_function(self, X: float, i: int) -> float:
         # return jnp.cos(i * jnp.acos(x))
         x0 = X * 0 + 1
@@ -116,7 +116,7 @@ class Chebyshev(Jacobi):
 
         return jax.lax.fori_loop(1, i, body_fun, (x0, X))[-1]
 
-    @partial(jax.jit, static_argnums=0)
+    @jit_vmap(in_axes=(None, 0))
     def eval_basis_functions(self, X: float) -> Array:
         x0 = X * 0 + 1
 
@@ -129,7 +129,6 @@ class Chebyshev(Jacobi):
 
         _, xs = jax.lax.scan(inner_loop, init=(x0, X), xs=None, length=self.N - 1)
 
-        # return jnp.hstack((x0, xs))
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
     def norm_squared(self) -> Array:

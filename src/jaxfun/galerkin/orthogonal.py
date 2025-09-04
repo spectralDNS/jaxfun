@@ -9,8 +9,8 @@ from jax.experimental.sparse import BCOO
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
-from jaxfun.typing import Array
-from jaxfun.utils.common import Domain, jacn, lambdify
+from jaxfun.typing import Array, ArrayLike
+from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
 
 
 class OrthogonalSpace(BaseSpace):
@@ -33,13 +33,21 @@ class OrthogonalSpace(BaseSpace):
         )
         BaseSpace.__init__(self, system, name, fun_str)
 
-    @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
         raise RuntimeError
 
-    @partial(jax.jit, static_argnums=(0, 2))
-    def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
-        return jacn(self.eval_basis_functions, k)(X)
+    @jit_vmap(in_axes=(None, 0, None))
+    def evaluate(self, X: float | Array, c: Array) -> Array:
+        """Evaluate series at points X
+
+        Args:
+            X: Evaluation point in reference space
+            c: Expansion coefficients
+
+        Returns:
+            Series evaluated at X.
+        """
+        return self.eval_basis_functions(X)[: c.shape[0]] @ c
 
     @partial(jax.jit, static_argnums=0)
     def vandermonde(self, X: Array) -> Array:
@@ -64,13 +72,15 @@ class OrthogonalSpace(BaseSpace):
         """
         return self.evaluate_basis_derivative(X, 0)
 
-    @partial(jax.jit, static_argnums=(0, 2))
     def eval_basis_function(self, X: float, i: int) -> float:
         raise RuntimeError
 
-    @partial(jax.jit, static_argnums=0)
     def eval_basis_functions(self, X: float) -> Array:
         raise RuntimeError
+
+    @partial(jax.jit, static_argnums=(0, 2))
+    def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
+        return jacn(self.eval_basis_functions, k)(X)
 
     # backward is wrapped because padding may require non-jitable code
     @partial(jax.jit, static_argnums=(0, 2, 3))

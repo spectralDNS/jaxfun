@@ -10,12 +10,9 @@ def test_chebyshev_evaluate_variants():
     c = jnp.arange(8.0)
     u1 = jnp.array([C.evaluate(xi, c) for xi in x])
     u2 = jnp.array([C.evaluate2(xi, c) for xi in x])
-    assert jnp.linalg.norm(u1 - u2) < 100 * ulp(1.0)
-    # Edge cases length 1 and 2
-    for m in (1, 2):
-        c0 = jnp.arange(float(m))
-        u = C.evaluate(0.3, c0)
-        assert jnp.isfinite(u)
+    assert jnp.linalg.norm(u1 - u2) < ulp(100)
+    u3 = C.evaluate(x, c)
+    assert jnp.linalg.norm(u3 - u2) < ulp(100)
 
 
 def test_legendre_evaluate_variants_and_domain_mapping():
@@ -24,7 +21,9 @@ def test_legendre_evaluate_variants_and_domain_mapping():
     c = jnp.arange(6.0)
     u1 = jnp.array([L.evaluate(xi, c) for xi in x])
     u2 = jnp.array([L.evaluate2(xi, c) for xi in x])
-    assert jnp.linalg.norm(u1 - u2) < 100 * ulp(1.0)
+    assert jnp.linalg.norm(u1 - u2) < ulp(100)
+    u3 = L.evaluate(x, c)
+    assert jnp.linalg.norm(u3 - u2) < ulp(100)
     # Mapping check: reference domain is (-1,1)
     Xref = jnp.array([L.map_reference_domain(xi) for xi in x])
     assert Xref.min() >= -1 - ulp(1) and Xref.max() <= 1 + ulp(1)

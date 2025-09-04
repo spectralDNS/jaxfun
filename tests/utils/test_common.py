@@ -5,9 +5,7 @@ import numpy as np
 import pytest
 from jax.experimental.sparse import BCOO
 
-from jaxfun.coordinates import x as _x, y as _y
-from jaxfun.galerkin import FunctionSpace, TensorProduct
-from jaxfun.galerkin.Chebyshev import Chebyshev
+from jaxfun.coordinates import CartCoordSys, x, y
 from jaxfun.typing import Array, ArrayLike
 from jaxfun.utils import common
 
@@ -99,28 +97,9 @@ def test_Domain_namedtuple() -> None:
 
 
 def test_lambdify_basic() -> None:
-    x, y = _x, _y
     expr = x**2 + y**2
-    M = 4
-    Dx = FunctionSpace(
-        M,
-        Chebyshev,
-        scaling=common.n + 1,
-        # bcs=bcsx,
-        name="Dx",
-        fun_str="psi",
-    )
-    Dy = FunctionSpace(
-        M,
-        Chebyshev,
-        scaling=common.n + 1,
-        # bcs=bcsy,
-        name="Dy",
-        fun_str="phi",
-    )
-    T = TensorProduct(Dx, Dy, name="T")
-    expr = T.system.expr_psi_to_base_scalar(expr)
-
+    N = CartCoordSys("N", (x, y))
+    expr = N.expr_psi_to_base_scalar(expr)
     f = common.lambdify((x, y), expr)
     result = f(jnp.array([1.0, 2.0]), jnp.array([1.0, 2.0]))
     np.testing.assert_allclose(result, jnp.array([2.0, 8.0]))

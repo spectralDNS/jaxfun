@@ -93,7 +93,7 @@ def test_directsum_two_inhomogeneous_bnd_evaluate_points():
     from jaxfun.coordinates import x, y
 
     ue = sp.exp(-(x**2 + y**2))
-    N = 12
+    N = 16
     bcsx = {"left": {"D": ue.subs(x, 0)}, "right": {"D": ue.subs(x, 1)}}
     bcsy = {"left": {"D": ue.subs(y, 0)}, "right": {"D": ue.subs(y, 1)}}
     Dx = FunctionSpace(N, Legendre.Legendre, bcs=bcsx, name="Dx", domain=(0, 1))

@@ -10,12 +10,15 @@ from jax.experimental.sparse import BCOO
 from jaxfun.coordinates import CoordSys
 from jaxfun.utils.common import lambdify, matmat, tosparse
 
-from .arguments import (
-    TestFunction,
-    TrialFunction,
-)
+from .arguments import JAXArray, TestFunction, TrialFunction
 from .composite import BCGeneric, Composite
-from .forms import get_basisfunctions, split, split_coeff
+from .forms import (
+    get_basisfunctions,
+    get_jaxarrays,
+    split,
+    split_coeff,
+    split_linear_coeff,
+)
 from .orthogonal import OrthogonalSpace
 from .tensorproductspace import (
     DirectSumTPS,
@@ -34,15 +37,17 @@ def inner(
     r"""Compute inner products
 
     Assemble bilinear and linear forms. The expr input needs to represent one of the following
-    three combinations
+    three combinations::
 
-        a(u, v) - L(v)
-        a(u, v)
-        L(v)
+        a(u, v) - L(v)  # Bilinear and linear forms
+        a(u, v)         # Bilinear form only
+        L(v)            # Linear form only
 
-    where a(u, v) and L(v) are bilinear and linear forms, respectively. In addition to test and
-    trial functions, the forms may also contain regular spectral functions (:class:`.JAXFunction`)
-    and Sympy functions of spatial coordinates (e.g., :class:`.ScalarFunction`).
+
+    where a(u, v) and L(v) are bilinear and linear forms, respectively. In addition to test v and
+    trial functions u, the forms may also contain regular spectral functions (:class:`.JAXFunction`),
+    JAXArrays (:class:`.JAXArray`), and Sympy functions of spatial coordinates
+    (e.g., :class:`.ScalarFunction`).
 
     For a(u, v) - L(v) we return both matrices and a vector, where the vector represents the right
     hand side of the linear system Ax = b. If only a(u, v), then we return only matrices unless there
@@ -192,8 +197,18 @@ def inner(
                         )
                     )
 
-    # Pure linear forms: (no JAXFunctions, but could be unseparable in coefficients)
+    # Pure linear forms: (no JAXFunctions, but could be unseparable in coefficients and
+    # contain JAXArrays)
     for b0 in b_forms:
+        jaxarrays = get_jaxarrays(b0["coeff"])
+        if len(jaxarrays) == 1:
+            jaxarrays = split_linear_coeff(b0["coeff"])
+            b0["coeff"] = 1
+        elif len(jaxarrays) > 1:
+            raise NotImplementedError(
+                "Only one JAXArray allowed in linear form at present"
+            )
+
         sc = sp.sympify(b0["coeff"])
         sc = float(sc) if sc.is_real else complex(sc)
         if len(a_forms) > 0:
@@ -206,7 +221,12 @@ def inner(
 
             v, _ = get_basisfunctions(bi)
 
-            z = inner_linear(bi, v.functionspace, sc, "multivar" in b0)
+            z = inner_linear(
+                bi,
+                v.functionspace,
+                sc,
+                "multivar" in b0 or isinstance(jaxarrays, Array),
+            )
 
             sc = 1
             bs.append(z)
@@ -215,9 +235,12 @@ def inner(
         elif len(test_space) == 2:
             if isinstance(bs[0], tuple):
                 # multivar
-                s = test_space.system.base_scalars()
-                xj = test_space.mesh()
-                uj = lambdify(s, b0["multivar"], modules="jax")(*xj)
+                if 'multivar' in b0:
+                    s = test_space.system.base_scalars()
+                    xj = test_space.mesh()
+                    uj = lambdify(s, b0["multivar"], modules="jax")(*xj)
+                else:
+                    uj = jaxarrays
                 bresults.append(bs[0][0].T @ uj @ bs[1][0])
             else:
                 bresults.append(jnp.multiply.outer(bs[0], bs[1]))

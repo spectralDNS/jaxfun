@@ -32,9 +32,10 @@ def jit_vmap(
     in_axes: int | None | tuple[Any] = 0,
     out_axes: Any = 0,
     static_argnums: int | tuple[int] | None = 0,
+    ndim: int = 0,
 ):
     """Decorator that JIT compiles a function and applies vmap if the first argument is
-    an array.
+    an array. If the first argument is a scalar, then the functions is merely jitted.
 
     The decorator can only be used with class methods.
 
@@ -53,7 +54,7 @@ def jit_vmap(
         @partial(jax.jit, static_argnums=static_argnums)
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            if args[0].shape == ():
+            if args[0].ndim == ndim:
                 return func(self, *args, **kwargs)
             return jax.vmap(func, in_axes=in_axes, out_axes=out_axes)(
                 self, *args, **kwargs

@@ -1,15 +1,18 @@
 import jax
 import jax.numpy as jnp
+import sympy as sp
 
 from jaxfun.galerkin import (
     Chebyshev,
+    FunctionSpace,
     Legendre,
     TensorProduct,
     TestFunction,
     TrialFunction,
 )
-from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.inner import inner, project
 from jaxfun.galerkin.tensorproductspace import TPMatrices, tpmats_to_scipy_kron
+from jaxfun.utils.common import ulp
 
 
 def test_tensorproductspace_broadcast_and_evaluate_2d():
@@ -32,7 +35,7 @@ def test_tensorproductspace_broadcast_and_evaluate_2d():
 def test_tensorproductspace_forward_directsum():
     bcs = {"left": {"D": 1}, "right": {"D": 2}}
     F = Legendre.Legendre(5)
-    #Chebyshev.Chebyshev(5)
+    # Chebyshev.Chebyshev(5)
     from jaxfun.galerkin import FunctionSpace
 
     DS = FunctionSpace(5, Legendre.Legendre, bcs=bcs)
@@ -84,3 +87,32 @@ def test_inner_sparse_multivar_path():
     # Expect list of TPMatrix with sparse mats
     for tp in A:
         assert all(hasattr(m, "data") for m in tp.mats)
+
+
+def test_directsum_two_inhomogeneous_bnd_evaluate_points():
+    from jaxfun.coordinates import x, y
+
+    ue = sp.exp(-(x**2 + y**2))
+    N = 12
+    bcsx = {"left": {"D": ue.subs(x, 0)}, "right": {"D": ue.subs(x, 1)}}
+    bcsy = {"left": {"D": ue.subs(y, 0)}, "right": {"D": ue.subs(y, 1)}}
+    Dx = FunctionSpace(N, Legendre.Legendre, bcs=bcsx, name="Dx", domain=(0, 1))
+    Dy = FunctionSpace(N, Legendre.Legendre, bcs=bcsy, name="Dy", domain=(0, 1))
+    T = TensorProduct(Dx, Dy, name="T")
+    v = TestFunction(T, name="v")
+    u = TrialFunction(T, name="u")
+    ue = T.system.expr_psi_to_base_scalar(ue)
+    uf = project(ue, T)
+    x, y = T.system.base_scalars()
+    u0 = T.evaluate_points(jnp.array([0.5, 0.5]), uf)  # triggers boundary reconstruction path
+    assert abs(u0 - ue.subs({x: 0.5, y: 0.5})) < ulp(100)
+    u1 = T.evaluate([jnp.array([[0.5]]), jnp.array([[0.5]])], uf)
+    assert abs(u1[0, 0] - ue.subs({x: 0.5, y: 0.5})) < ulp(100)
+    u0 = T.evaluate_points(jnp.array([[0.5, 0.5], [0.6, 0.6]]), uf)
+    assert abs(u0[0] - ue.subs({x: 0.5, y: 0.5})) < ulp(100)
+    assert abs(u0[1] - ue.subs({x: 0.6, y: 0.6})) < ulp(100)
+    u1 = T.evaluate([jnp.array([[0.5, 0.6]]), jnp.array([[0.5, 0.6]])], uf)
+    assert abs(u1[0, 0] - ue.subs({x: 0.5, y: 0.5})) < ulp(100)
+    assert abs(u1[0, 1] - ue.subs({x: 0.5, y: 0.6})) < ulp(100)
+    assert abs(u1[1, 0] - ue.subs({x: 0.6, y: 0.5})) < ulp(100)
+    assert abs(u1[1, 1] - ue.subs({x: 0.6, y: 0.6})) < ulp(100)

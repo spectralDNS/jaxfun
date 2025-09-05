@@ -3,7 +3,7 @@ import sympy as sp
 
 from jaxfun.coordinates import CoordSys, get_system as get_system
 
-from .arguments import Jaxf, JAXFunction
+from .arguments import JAXArray, Jaxf, JAXFunction
 
 
 def get_basisfunctions(
@@ -13,7 +13,7 @@ def get_basisfunctions(
     set[sp.Function] | sp.Function | None,
 ]:
     test_found, trial_found = set(), set()
-    for p in sp.core.traversal.iterargs(a):
+    for p in sp.core.traversal.iterargs(sp.sympify(a)):
         if getattr(p, "argument", -1) == 1:
             trial_found.add(p)
         if getattr(p, "argument", -1) == 0:
@@ -30,6 +30,15 @@ def get_basisfunctions(
             return test_found, trial_found
         case _:
             return None, None
+
+def get_jaxarrays(
+    a: sp.Expr,
+) -> tuple[set[JAXArray]]:
+    array_found = set()
+    for p in sp.core.traversal.iterargs(sp.sympify(a)):
+        if getattr(p, "argument", -1) == 3:
+            array_found.add(p)
+    return array_found
 
 
 def split_coeff(c0: sp.Expr) -> dict:
@@ -74,11 +83,56 @@ def split_coeff(c0: sp.Expr) -> dict:
                     if isinstance(ci, Jaxf):
                         coeffs["linear"]["jaxfunction"] = ci
                     else:
-                        print(ci, c0, type(c0.free_symbols.pop()))
                         coeffs["linear"]["scale"] *= (
                             float(ci) if ci.is_real else complex(ci)
                         )
     return coeffs
+
+def split_linear_coeff(c0: sp.Expr) -> dict:
+    """Split coefficients of linear form into parts
+
+    Args:
+        c0: Expression that may contain a JAXArray, a number, or a product of
+        these.
+
+    Returns:
+        scale: input computed as number or array.
+    """
+    c0 = sp.sympify(c0)
+    jaxarrays = get_jaxarrays(c0)
+    assert len(jaxarrays) <= 1, "Multiple JAXArrays found in coefficient"
+
+    scale = jnp.array(1.0)
+    if c0.is_number:
+        scale = float(c0) if c0.is_real else complex(c0)
+
+    elif isinstance(c0, JAXArray):
+        scale = c0.array
+
+    elif isinstance(c0, sp.Mul):
+        for ci in c0.args:
+            if isinstance(ci, JAXArray):
+                scale *= ci.array
+            elif isinstance(ci, sp.Pow):
+                base, exp = ci.args
+                if isinstance(base, JAXArray) and exp.is_number:
+                    scale *= base.array**int(exp)
+                else:
+                    raise NotImplementedError(
+                        "Only power of JAXArray with integer exponent allowed in linear form at present"
+                    )
+            else:
+                scale *= float(ci) if ci.is_real else complex(ci)
+
+    elif isinstance(c0, sp.Pow):
+        base, exp = c0.args
+        if isinstance(base, JAXArray) and exp.is_number:
+            scale *= base.array**int(exp)
+        else:
+            raise NotImplementedError(
+                "Only power of JAXArray with integer exponent allowed in linear form at present"
+            )
+    return scale
 
 
 def split(forms: sp.Expr) -> dict:

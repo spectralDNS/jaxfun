@@ -20,7 +20,7 @@ from sympy.vector import VectorAdd
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseTime
-from jaxfun.utils.common import lambdify
+from jaxfun.utils.common import jit_vmap, lambdify
 
 from .embeddings import Embedding
 from .nnspaces import MLPSpace, PirateSpace
@@ -32,7 +32,7 @@ default_rngs = nnx.Rngs(101)
 
 # Differs from jaxfun.utils.common.jacn in the last if else
 def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
-    for i in range(k):
+    for _ in range(k):
         fun = jax.jacfwd(fun)  # if i % 2 else jax.jacrev(fun)
     return jax.vmap(fun, in_axes=0, out_axes=0) if k > 0 else fun
 
@@ -338,16 +338,28 @@ class SpectralModule(nnx.Module):
         bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs,
     ) -> None:
-        self.kernel = nnx.Param(kernel_init(rngs(), (1, basespace.N)))
+        if basespace.dims == 1:
+            self.kernel = nnx.Param(kernel_init(rngs(), (1, basespace.dim)))
+        else:
+            self.kernel = nnx.Param(kernel_init(rngs(), basespace.dim))
         self.space = basespace
 
     @property
     def dim(self) -> int:
         return self.space.dim
 
+    @property
+    def dims(self) -> int:
+        return self.space.dims
+
     def __call__(self, x: Array) -> Array:
-        return self.space.evaluate(
-            self.space.map_reference_domain(x), self.kernel.value[0]
+        if self.dims == 1:
+            return self.space.evaluate(
+                self.space.map_reference_domain(x), self.kernel.value[0]
+            )
+
+        return jnp.expand_dims(
+            self.space.evaluate_points(x, self.kernel.value, True), -1
         )
 
 

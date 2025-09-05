@@ -392,6 +392,7 @@ class JAXArray(Function):
         obj = Function.__new__(cls, sp.Dummy())
         obj.array = array
         obj.functionspace = V
+        obj.argument = 3
         obj.name = name if name is not None else "JAXArray"
         return obj
 
@@ -399,6 +400,8 @@ class JAXArray(Function):
         return self.functionspace.forward(self.array)
 
     def doit(self, **hints: dict) -> Function:
+        if hints.get("deep", False):
+            return self.array
         return self
 
     def __str__(self) -> str:
@@ -457,6 +460,7 @@ class JAXFunction(Function):
         obj = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)]))
         obj.array = array
         obj.functionspace = V
+        obj.argument = 2
         obj.name = name if name is not None else "JAXFunction"
         return obj
 

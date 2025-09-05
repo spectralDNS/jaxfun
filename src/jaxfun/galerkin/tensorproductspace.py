@@ -14,7 +14,7 @@ from scipy import sparse as scipy_sparse
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
-from jaxfun.utils.common import eliminate_near_zeros, lambdify
+from jaxfun.utils.common import eliminate_near_zeros, jit_vmap, lambdify
 
 from .composite import BCGeneric, Composite, DirectSum
 from .Fourier import Fourier
@@ -24,6 +24,8 @@ multiplication_sign = "\u00d7"
 
 
 class TensorProductSpace:
+    is_transient = False
+
     def __init__(
         self,
         basespaces: list[BaseSpace],
@@ -110,26 +112,81 @@ class TensorProductSpace:
             u = space.map_expr_reference_domain(u)
         return u
 
-    @partial(jax.jit, static_argnums=0)
-    def evaluate(self, x: list[Array], c: Array) -> Array:
+    # Cannot jit_vmap since tensor product mesh.
+    @partial(jax.jit, static_argnums=(0, 3))
+    def evaluate(self, x: list[Array], c: Array, use_einsum: bool = False) -> Array:
         """Evaluate on a given tensor product mesh"""
         dim: int = len(self)
         if dim == 2:
-            for i, (xi, ax) in enumerate(zip(x, range(dim), strict=False)):
-                axi: int = dim - 1 - ax
-                c = jax.vmap(
-                    self.basespaces[i].evaluate, in_axes=(None, axi), out_axes=axi
-                )(self.basespaces[i].map_reference_domain(xi).squeeze(), c)
+            if not use_einsum:
+                for i, (xi, ax) in enumerate(zip(x, range(dim), strict=False)):
+                    axi: int = dim - 1 - ax
+                    c = jax.vmap(
+                        self.basespaces[i].evaluate, in_axes=(None, axi), out_axes=axi
+                    )(
+                        jnp.atleast_1d( # Ensure 1D input to allow mesh with one point
+                            self.basespaces[i].map_reference_domain(xi).squeeze()
+                        ),
+                        c,
+                    )
+            else:
+                T0, T1 = self.basespaces
+                C0 = T0.eval_basis_functions(
+                    jnp.atleast_1d(T0.map_reference_domain(x[0]).squeeze())
+                )
+                C1 = T1.eval_basis_functions(
+                    jnp.atleast_1d(T1.map_reference_domain(x[1]).squeeze())
+                )
+                return jnp.einsum("ij,jk,lk->il", C0, c, C1)
         else:
-            for i, (xi, ax) in enumerate(zip(x, range(dim), strict=False)):
-                ax0, ax1 = set(range(dim)) - set((ax,))
-                c = jax.vmap(
-                    jax.vmap(
-                        self.basespaces[i].evaluate, in_axes=(None, ax0), out_axes=ax0
-                    ),
-                    in_axes=(None, ax1),
-                    out_axes=ax1,
-                )(self.basespaces[i].map_reference_domain(xi).squeeze(), c)
+            if not use_einsum:
+                for i, (xi, ax) in enumerate(zip(x, range(dim), strict=False)):
+                    ax0, ax1 = set(range(dim)) - set((ax,))
+                    c = jax.vmap(
+                        jax.vmap(
+                            self.basespaces[i].evaluate,
+                            in_axes=(None, ax0),
+                            out_axes=ax0,
+                        ),
+                        in_axes=(None, ax1),
+                        out_axes=ax1,
+                    )(
+                        jnp.atleast_1d(
+                            self.basespaces[i].map_reference_domain(xi).squeeze()
+                        ),
+                        c,
+                    )
+            else:
+                T0, T1, T2 = self.basespaces
+                C0 = T0.eval_basis_functions(
+                    jnp.atleast_1d(T0.map_reference_domain(x[0]).squeeze())
+                )
+                C1 = T1.eval_basis_functions(
+                    jnp.atleast_1d(T1.map_reference_domain(x[1]).squeeze())
+                )
+                C2 = T2.eval_basis_functions(
+                    jnp.atleast_1d(T2.map_reference_domain(x[2]).squeeze())
+                )
+                c = jnp.einsum("ik,jl,nm,klm->ijn", C0, C1, C2, c)
+        return c
+
+    @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
+    def evaluate_points(self, x: Array, c: Array, use_einsum: bool) -> Array:
+        """Evaluate on a set of points"""
+        dim = len(self)
+
+        T = self.basespaces
+        C = [
+            T[i].eval_basis_functions(T[i].map_reference_domain(x[i]))
+            for i in range(dim)
+        ]
+        if not use_einsum:
+            c = C[0] @ c @ C[1] if dim == 2 else C[2] @ (C[1] @ (C[0] @ c))
+
+        else:
+            path = "i,j,ij" if dim == 2 else "i,j,k,ijk"
+            c = jnp.einsum(path, *C, c)
+
         return c
 
     def get_padded(self, N: tuple[int]) -> TensorProductSpace:
@@ -473,22 +530,37 @@ class DirectSumTPS(TensorProductSpace):
         return jnp.sum(jnp.array(a), axis=0)
 
     def forward(self, c: Array) -> Array:
-        # Local import to avoid circular top-level imports; import directly from
-        # galerkin submodule instead of package root (which does not re-export
-        # these symbols)
-        from . import TestFunction, TrialFunction
-        from .inner import inner
+        from jaxfun.galerkin import TestFunction, TrialFunction, inner
+        from jaxfun.galerkin.arguments import JAXArray
 
         v = TestFunction(self)
         u = TrialFunction(self)
-        A, b = inner(u * v)
-        b += v.functionspace.scalar_product(c)
+        c = JAXArray(c, v.functionspace)
+        A, b = inner((u - c) * v)
         return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.dim)
 
     def scalar_product(self, c: Array):
         raise RuntimeError(
             "Scalar product needs to use a homogeneous test space and should not be called on this direct sum TensorProductSpace"  # noqa: E501
         )
+
+    def evaluate_points(self, x: Array, c: Array, use_einsum: bool = False) -> Array:
+        a = []
+        for f, v in self.tpspaces.items():
+            if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
+                a.append(v.evaluate_points(x, self.bndvals[f], use_einsum))
+            else:
+                a.append(v.evaluate_points(x, c, use_einsum))
+        return jnp.sum(jnp.array(a), axis=0)
+
+    def evaluate(self, x: list[Array], c: Array, use_einsum: bool = False) -> Array:
+        a = []
+        for f, v in self.tpspaces.items():
+            if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
+                a.append(v.evaluate(x, self.bndvals[f], use_einsum))
+            else:
+                a.append(v.evaluate(x, c, use_einsum))
+        return jnp.sum(jnp.array(a), axis=0)
 
 
 class TPMatrices:

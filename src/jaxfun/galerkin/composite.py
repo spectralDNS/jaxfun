@@ -297,6 +297,10 @@ class DirectSum:
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
         self.system = a.system
+        self.N = a.N
+        self.M = a.M
+        self.map_reference_domain = a.map_reference_domain
+        self.map_true_domain = a.map_true_domain
 
     def __getitem__(self, i: int) -> Composite | BCGeneric:
         return self.basespaces[i]

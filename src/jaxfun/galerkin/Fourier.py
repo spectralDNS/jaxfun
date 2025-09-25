@@ -28,7 +28,8 @@ class Fourier(OrthogonalSpace):
         OrthogonalSpace.__init__(
             self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
-        self._k = {k: self.wavenumbers()[k].item() for k in range(N)}
+        w = self.wavenumbers()
+        self._k = {k: w[k].item() for k in range(N)} # map index to wavenumber
 
     @jit_vmap(in_axes=(0, None))
     def evaluate2(self, X: float | Array, c: Array) -> Array:
@@ -36,7 +37,7 @@ class Fourier(OrthogonalSpace):
         Alternative evaluate a Fourier series at points X that are not
         necessarily on a uniform grid.
 
-        .. math:: p(x) = \sum_{j=-N/2+1}^{N/2} c_j exp(ijx)
+        .. math:: p(X) = \sum_{k=-N/2+1}^{N/2} c_j exp(ikX)
 
         Args:
             X (float) : Evaluation point in reference space
@@ -57,7 +58,7 @@ class Fourier(OrthogonalSpace):
     def quad_points_and_weights(self, N: int = 0) -> Array:
         N = self.N if N == 0 else N
         points = jnp.arange(N, dtype=float) * 2 * jnp.pi / N
-        return points, jnp.array([2 * jnp.pi / N] * N)
+        return points, jnp.full(N, 2 * jnp.pi / N)
 
     @jit_vmap(in_axes=(0, None))
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
@@ -88,6 +89,10 @@ class Fourier(OrthogonalSpace):
     @partial(jax.jit, static_argnums=0)
     def scalar_product(self, c: Array) -> Array:
         return jnp.fft.fft(c, norm="forward") * 2 * jnp.pi / self.domain_factor
+
+    @partial(jax.jit, static_argnums=0)
+    def forward(self, c: Array) -> Array:
+        return jnp.fft.fft(c, norm="forward")
 
     @property
     def reference_domain(self) -> Domain:

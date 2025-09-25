@@ -10,4 +10,4 @@ type LSQR_Tuple = (
     | tuple[sp.Expr, Array, Array, Array]
 )
 
-type SampleMethod = Literal["uniform", "legendre", "random"]
+type SampleMethod = Literal["uniform", "legendre", "chebyshev", "random"]

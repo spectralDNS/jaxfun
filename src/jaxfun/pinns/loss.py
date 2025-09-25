@@ -15,7 +15,7 @@ from jaxfun.utils import jacn, lambdify
 from .module import Comp, Function
 
 
-def get_args(a: sp.Expr) -> tuple[sp.Symbol | BaseScalar, ...]:
+def get_flaxfunction_args(a: sp.Expr) -> tuple[sp.Symbol | BaseScalar, ...]:
     for p in sp.core.traversal.iterargs(a):
         if getattr(p, "argument", -1) == 2:
             return p.args
@@ -69,7 +69,11 @@ class Residual:
     """Residual of a single equation"""
 
     def __init__(
-        self, f: sp.Expr, x: Array, target: Array = 0, weights: Array = 1
+        self,
+        f: sp.Expr,
+        x: Array,
+        target: Number | Array = 0,
+        weights: Number | Array = 1,
     ) -> None:
         """Residual of a single equation evaluated at collocation points
 
@@ -80,21 +84,26 @@ class Residual:
             target: Target value of the residual. Defaults to 0.
             weights: Weights for the residual. Defaults to 1.
         """
-        s = get_args(f.doit())
         t, expr = expand(f)
+        s = get_flaxfunction_args(f.doit())
         self.eqs = [get_fn(h, s) for h in expr]
         self.x = x
         # Place all terms without flaxfunctions in the target,
         # because these will not need to be computed more than once
+        assert isinstance(target, Number | Array)
         self.target = target
         if len(t.free_symbols) > 0:
-            self.target = target - lambdify(s, t, modules="jax")(*x.T)
-        elif isinstance(t, Number):
-            self.target = target - float(t)
+            assert s is not None, "Could not find base scalars in expression"
+            self.target = target - lambdify(s, t)(*x.T)
+        else:
+            assert isinstance(t, Number)
+            t = float(t) if t.is_real else complex(t)
+            self.target = target - t
         self.target = jnp.squeeze(self.target)
+        assert isinstance(weights, Number | Array)
         self.weights = weights
 
-    def __call__(self, Js) -> Array:
+    def __call__(self, Js: dict[tuple[int, int, int], Array]) -> Array:
         return sum([eq(self.x, Js) for eq in self.eqs]) - self.target
 
 
@@ -112,7 +121,7 @@ class LSQR:
                 are to be solved. The subproblems are defined by the equation
                 residuals (first item) and the collocation points (second item)
                 used to evaluate the residuals. The third item is the target,
-                which is zero by defauls, whereas the last item is an optional
+                which is zero by default, whereas the last item is an optional
                 weight. The weight needs to be a number or an array of the same
                 shape as the collocation points.
             alpha:
@@ -168,11 +177,12 @@ class LSQR:
             for s in sp.core.traversal.preorder_traversal(f0):
                 if isinstance(s, sp.Derivative):
                     func = s.args[0]
-                    if hasattr(func, "module"):
-                        key = (id(f[1]), id(func.module), s.derivative_count)
-                        if key not in Js:
-                            Js[key] = jacn(func.module, s.derivative_count)(f[1])
-                        self.Jres[i].add(key)
+                    ki: int = int(s.derivative_count)
+                    assert hasattr(func, "module")
+                    key = (id(f[1]), id(func.module), ki)
+                    if key not in Js:
+                        Js[key] = jacn(func.module, ki)(f[1])
+                    self.Jres[i].add(key)
 
                 if hasattr(s, "module"):
                     key = (id(f[1]), id(s.module), 0)
@@ -183,7 +193,9 @@ class LSQR:
             if id(f[1]) not in xs:
                 xs[id(f[1])] = f[1]
 
-    def update_arrays(self, model: nnx.Module, Js: dict) -> None:
+    def update_arrays(
+        self, model: nnx.Module, Js: dict[tuple[int, int, int], Array]
+    ) -> None:
         for k in Js:
             mod = (
                 model.__getattribute__(str(k[1])) if isinstance(model, Comp) else model
@@ -206,7 +218,7 @@ class LSQR:
         x = self.compute_residual_i(model, i)
         return (self.residuals[i].weights * x**2).mean()
 
-    def norm_grad_loss_i(self, model: nnx.Module, i: int) -> float:
+    def norm_grad_loss_i(self, model: nnx.Module, i: int) -> Array:
         return jnp.linalg.norm(
             jax.flatten_util.ravel_pytree(nnx.grad(self.compute_Li)(model, i))[0]
         )
@@ -220,7 +232,7 @@ class LSQR:
     @partial(nnx.jit, static_argnums=0)
     def compute_global_weights(self, model: nnx.Module) -> Array:
         norms = self.norm_grad_loss(model)
-        return jnp.sum(norms) / jnp.where(norms < 1e-6, 1e-6, norms)
+        return jnp.sum(norms) / jnp.where(norms < 1e-16, 1e-16, norms)
 
     def update_global_weights(self, model: nnx.Module) -> None:
         new = self.compute_global_weights(model)
@@ -253,10 +265,10 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar, ...]) -> Callable[[Array, dict], Arr
     if len(v) == 0:
         # Coefficient independent of basis function
         if len(f.free_symbols) > 0:
-            return lambda x, Js, s0=s, bi0=f: lambdify(s0, bi0, modules="jax")(*x.T)
+            return lambda x, Js, s=s, f=f: lambdify(s, f)(*x.T)
         else:
-            s1 = copy.copy(float(f))
-            return lambda x, Js, s0=s1: jnp.array(s0)
+            f0 = float(f) if f.is_real else complex(f)
+            return lambda x, Js, f=f0: jnp.array(f)
 
     if isinstance(f, sp.Mul):
         # Multiplication of terms that either contain the basis function or not
@@ -271,14 +283,14 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar, ...]) -> Callable[[Array, dict], Arr
             gi.append(bii)
         gc = sp.Mul(*gc)
 
-        return lambda x, Js, gc0=gc, gi0=gi: get_fn(gc0, s)(x, Js) * jnp.prod(
-            jnp.array([get_fn(gii, s)(x, Js) for gii in gi0]), axis=0
+        return lambda x, Js, s=s, f=gc, f0=gi: get_fn(f, s)(x, Js) * jnp.prod(
+            jnp.array([get_fn(fi, s)(x, Js) for fi in f0]), axis=0
         )
 
     elif isinstance(f, sp.Pow):
-        bii = f.args[0]
+        fi = f.args[0]
         p = int(f.args[1])
-        return lambda x, Js, bi0=bii, p0=p: get_fn(bi0, s)(x, Js) ** p0
+        return lambda x, Js, s=s, f=fi, p=p: get_fn(f, s)(x, Js) ** p
 
     assert len(v) == 1
     v = v.pop()
@@ -293,7 +305,7 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar, ...]) -> Callable[[Array, dict], Arr
 
 def lookup_array(
     x: Array,
-    Js: dict,
+    Js: dict[tuple[int, int, int], Array],
     mod: int = 0,
     i: int = 0,
     k: int = 1,

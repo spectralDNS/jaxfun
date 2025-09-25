@@ -25,7 +25,7 @@ from jaxfun.pinns.loss import LSQR
 from jaxfun.pinns.mesh import Rectangle
 from jaxfun.pinns.module import Comp, FlaxFunction
 from jaxfun.pinns.nnspaces import MLPSpace, PirateSpace
-from jaxfun.pinns.optimizer import run_optimizer
+from jaxfun.pinns.optimizer import adam, lbfgs, run_optimizer
 
 print("JAX running on", jax.devices()[0].platform.upper())
 
@@ -69,22 +69,15 @@ loss_fn = LSQR(
     alpha=0.8,  # Global weights update parameter
 )
 
-opt = optax.adam(optax.linear_schedule(1e-3, 1e-4, 10000))
-optlbfgs = optax.lbfgs(
-    memory_size=100,
-    linesearch=optax.scale_by_zoom_linesearch(20, max_learning_rate=1.0),
-)
-opt_adam = nnx.Optimizer(module, opt)
+opt_adam = adam(module)
+opt_lbfgs = lbfgs(module, memory_size=100)
 
 t0 = time.time()
-run_optimizer(loss_fn, module, opt_adam, 1000, "Adam", 100, update_global_weights=10)
+run_optimizer(loss_fn, opt_adam, 1000, 100, update_global_weights=10)
 print("Time Adam", time.time() - t0)
 
-opt_lbfgs = nnx.Optimizer(module, optlbfgs)
 t1 = time.time()
-run_optimizer(
-    loss_fn, module, opt_lbfgs, 10000, "LBFGS", 1000, update_global_weights=10
-)
+run_optimizer(loss_fn, opt_lbfgs, 10000, 1000, update_global_weights=10)
 print("Time LBFGS", time.time() - t1)
 
 yj = jnp.linspace(-1, 1, 50)

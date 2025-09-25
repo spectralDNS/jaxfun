@@ -25,6 +25,12 @@ class UnitLine:
         elif kind == "legendre":
             return (1 + leggauss(self.N)[0][:, None]) / 2
 
+        elif kind == "chebyshev":
+            return (
+                1
+                + jnp.cos(jnp.pi + (2 * jnp.arange(self.N) + 1) * jnp.pi / (2 * self.N))
+            )[:, None] / 2
+
         elif kind == "random":
             return jax.random.uniform(self.key, (self.N, 1))
 
@@ -38,7 +44,11 @@ class UnitLine:
     ) -> Array | Literal[1]:
         if kind in ("uniform", "random"):
             return 1
-        return leggauss(self.N)[1] * self.N
+        elif kind == "legendre":
+            return leggauss(self.N)[1] * self.N
+        elif kind == "chebyshev":
+            return jnp.pi / self.N * jnp.ones(self.N)
+        raise NotImplementedError
 
     def get_weights_on_domain(self, kind: SampleMethod = "uniform") -> Literal[1]:
         return 1
@@ -72,7 +82,22 @@ class UnitSquare:
             x = (1 + leggauss(self.Nx)[0]) / 2
             y = (1 + leggauss(self.Ny)[0]) / 2
 
-        elif kind == "random":
+        elif kind == "chebyshev":
+            x = (
+                1
+                + jnp.cos(
+                    jnp.pi + (2 * jnp.arange(self.Nx) + 1) * jnp.pi / (2 * self.Nx)
+                )
+            ) / 2
+            y = (
+                1
+                + jnp.cos(
+                    jnp.pi + (2 * jnp.arange(self.Ny) + 1) * jnp.pi / (2 * self.Ny)
+                )
+            ) / 2
+
+        else:
+            assert kind == "random", "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
             return jax.random.uniform(self.key, (self.Nx * self.Ny, 2))
 
         return jnp.array(jnp.meshgrid(x, y, indexing="ij")).reshape((2, -1)).T
@@ -90,7 +115,23 @@ class UnitSquare:
             y = (1 + leggauss(self.Ny)[0]) / 2
             xy = np.vstack((np.hstack((x, x, y, y)),) * 2).T
 
-        elif kind == "random":
+        elif kind == "chebyshev":
+            x = (
+                1
+                + np.cos(
+                    np.pi + (2 * np.arange(self.Nx) + 1) * np.pi / (2 * self.Nx)
+                )
+            ) / 2
+            y = (
+                1
+                + np.cos(
+                    np.pi + (2 * np.arange(self.Ny) + 1) * np.pi / (2 * self.Ny)
+                )
+            ) / 2
+            xy = np.vstack((np.hstack((x, x, y, y)),) * 2).T
+
+        else:
+            assert kind == "random", "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
             xy = np.array(jax.random.uniform(self.key, (2 * (self.Nx + self.Ny), 2)))
 
         if corners:
@@ -108,22 +149,36 @@ class UnitSquare:
     ) -> Array | Literal[1]:
         if kind in ("uniform", "random"):
             return 1
-        wx = np.polynomial.legendre.leggauss(self.Nx)[1] * self.Nx
-        wy = np.polynomial.legendre.leggauss(self.Ny)[1] * self.Ny
-        return jnp.outer(wx, wy).flatten()
+        elif kind == "legendre":
+            wx = leggauss(self.Nx)[1] * self.Nx
+            wy = leggauss(self.Ny)[1] * self.Ny
+            return jnp.outer(wx, wy).flatten()
+        else:
+            assert kind == "chebyshev", "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
+            wx = jnp.pi / self.Nx * jnp.ones(self.Nx)
+            wy = jnp.pi / self.Ny * jnp.ones(self.Ny)
+            return jnp.outer(wx, wy).flatten()
 
     def get_weights_on_domain(
         self, kind: SampleMethod = "uniform", corners: bool = True
     ) -> Array | Literal[1]:
         if kind in ("uniform", "random"):
             return 1
-        wx = np.polynomial.legendre.leggauss(self.Nx)[1] * (2 * self.Nx + 2 * self.Ny)
-        wy = np.polynomial.legendre.leggauss(self.Ny)[1] * (2 * self.Nx + 2 * self.Ny)
-        w = jnp.hstack((wx, wx, wy, wy))
-        if corners:
-            w = jnp.hstack((w, jnp.ones(4)))
-        return w
-
+        elif kind == "legendre":
+            wx = leggauss(self.Nx)[1] * (2 * self.Nx + 2 * self.Ny)
+            wy = leggauss(self.Ny)[1] * (2 * self.Nx + 2 * self.Ny)
+            w = jnp.hstack((wx, wx, wy, wy))
+            if corners:
+                w = jnp.hstack((w, jnp.ones(4)))
+            return w
+        else:
+            assert kind == "chebyshev", "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
+            wx = jnp.pi / self.Nx * (2 * self.Nx + 2 * self.Ny) * jnp.ones(self.Nx)
+            wy = jnp.pi / self.Ny * (2 * self.Nx + 2 * self.Ny) * jnp.ones(self.Ny)
+            w = jnp.hstack((wx, wx, wy, wy))
+            if corners:
+                w = jnp.hstack((w, jnp.ones(4)))
+            return w
 
 @dataclass
 class Rectangle(UnitSquare):

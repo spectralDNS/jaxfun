@@ -1,7 +1,9 @@
 from collections.abc import Callable
 from functools import partial
+from numbers import Number
 
 import jax.numpy as jnp
+import sympy as sp
 from flax import nnx
 
 from jaxfun.basespace import BaseSpace
@@ -11,6 +13,7 @@ from jaxfun.coordinates import (
     CoordSys,
 )
 from jaxfun.typing import Array
+from jaxfun.utils.common import Domain, jit_vmap
 
 
 class NNSpace(BaseSpace):
@@ -79,17 +82,17 @@ class MLPSpace(NNSpace):
         Args:
             hidden_size:
                 If list of integers, like hidden_size = [X, Y, Z], then there will be
-                len(hidden_size) hidden layer of size X, Y and Z, respectively.
+                len(hidden_size) hidden layers of size X, Y and Z, respectively.
                 If integer, like hidden_size = X, then there will be no hidden layers,
-                but the size of the weights in the input layer will be dims * X and the
-                output will be of shape X * self.out_size
+                but the size of the weights in the input layer will be (dims, X) and the
+                output will be of shape (X, self.out_size)
             dims: Spatial dimensions. Defaults to 1.
             rank:
-                Scalars, vectors and dyadics have rank if 0, 1 and 2, respectively.
-                Defaults to 0.
+                Rank of the MLP. Scalars, vectors and dyadics have rank 0, 1 and 2,
+                respectively. Defaults to 0.
             system:
                 Coordinate system. Defaults to None, in which case the coordinate
-                system will be Cartesian
+                system will be Cartesian.
             transient:
                 Whether to include the variable time or not. Defaults to False.
             act_fun:

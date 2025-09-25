@@ -4,7 +4,6 @@ from .embeddings import (
     PeriodEmbs as PeriodEmbs,
 )
 from .freeze import freeze_layer as freeze_layer, unfreeze_layer as unfreeze_layer
-from .hessoptimizer import hess as hess
 from .loss import LSQR as LSQR
 from .mesh import (
     Annulus as Annulus,
@@ -24,8 +23,11 @@ from .nnspaces import (
     PirateSpace as PirateSpace,
 )
 from .optimizer import (
+    GaussNewton as GaussNewton,
+    adam as adam,
+    lbfgs as lbfgs,
     run_optimizer as run_optimizer,
-    train as train,
+    soap as soap,
 )
 
 # from .bcs import DirichletBC

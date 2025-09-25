@@ -27,7 +27,7 @@ def test_tensorproductspace_broadcast_and_evaluate_2d():
     by = T.broadcast_to_ndims(mesh[1], 1)
     assert bx.shape[0] == mesh[0].shape[0] and by.shape[1] == mesh[1].shape[0]
     # evaluate 2D path
-    val = T.evaluate(mesh, coeffs)
+    val = T.evaluate_mesh(mesh, coeffs)
     # evaluate inserts singleton axis for second dimension order (shape (N0,1,N1))
     assert val.shape[0] == coeffs.shape[0] and val.shape[-1] == coeffs.shape[1]
 
@@ -89,7 +89,7 @@ def test_inner_sparse_multivar_path():
         assert all(hasattr(m, "data") for m in tp.mats)
 
 
-def test_directsum_two_inhomogeneous_bnd_evaluate_points():
+def test_directsum_two_inhomogeneous_bnd_evaluate():
     from jaxfun.coordinates import x, y
 
     ue = sp.exp(-(x**2 + y**2))
@@ -104,14 +104,14 @@ def test_directsum_two_inhomogeneous_bnd_evaluate_points():
     ue = T.system.expr_psi_to_base_scalar(ue)
     uf = project(ue, T)
     x, y = T.system.base_scalars()
-    u0 = T.evaluate_points(jnp.array([0.5, 0.5]), uf)  # triggers boundary reconstruction path
+    u0 = T.evaluate(jnp.array([0.5, 0.5]), uf)  # triggers boundary reconstruction path
     assert abs(u0 - ue.subs({x: 0.5, y: 0.5})) < ulp(100)
-    u1 = T.evaluate([jnp.array([[0.5]]), jnp.array([[0.5]])], uf)
+    u1 = T.evaluate_mesh([jnp.array([[0.5]]), jnp.array([[0.5]])], uf)
     assert abs(u1[0, 0] - ue.subs({x: 0.5, y: 0.5})) < ulp(100)
-    u0 = T.evaluate_points(jnp.array([[0.5, 0.5], [0.6, 0.6]]), uf)
+    u0 = T.evaluate(jnp.array([[0.5, 0.5], [0.6, 0.6]]), uf)
     assert abs(u0[0] - ue.subs({x: 0.5, y: 0.5})) < ulp(100)
     assert abs(u0[1] - ue.subs({x: 0.6, y: 0.6})) < ulp(100)
-    u1 = T.evaluate([jnp.array([[0.5, 0.6]]), jnp.array([[0.5, 0.6]])], uf)
+    u1 = T.evaluate_mesh([jnp.array([[0.5, 0.6]]), jnp.array([[0.5, 0.6]])], uf)
     assert abs(u1[0, 0] - ue.subs({x: 0.5, y: 0.5})) < ulp(100)
     assert abs(u1[0, 1] - ue.subs({x: 0.5, y: 0.6})) < ulp(100)
     assert abs(u1[1, 0] - ue.subs({x: 0.6, y: 0.5})) < ulp(100)

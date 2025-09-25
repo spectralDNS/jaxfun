@@ -4,10 +4,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-import optax
 import sympy as sp
-from flax import nnx
-from soap_jax import soap
 
 from jaxfun.operators import Constant
 from jaxfun.pinns.bcs import DirichletBC
@@ -15,7 +12,12 @@ from jaxfun.pinns.loss import LSQR
 from jaxfun.pinns.mesh import Rectangle, points_along_axis
 from jaxfun.pinns.module import FlaxFunction
 from jaxfun.pinns.nnspaces import MLPSpace, PirateSpace
-from jaxfun.pinns.optimizer import run_optimizer
+from jaxfun.pinns.optimizer import (
+    adam,
+    lbfgs,
+    run_optimizer,
+    soap,
+)
 
 Nt = 40
 Nx = 40
@@ -49,18 +51,17 @@ eq = u.diff(t) + u * u.diff(x) - nu * u.diff(x, 2)
 
 loss_fn = LSQR((eq, xi), (u, xb, ub))
 
-opt_soap = nnx.Optimizer(u.module, soap(optax.linear_schedule(1e-3, 1e-4, 10000)))
-run_optimizer(loss_fn, u.module, opt_soap, 1000, "Soap", abs_limit_change=0)
-#opt_adam = nnx.Optimizer(u.module, optax.adam(optax.linear_schedule(1e-3, 1e-4, 10000)))
-#run_optimizer(loss_fn, u.module, opt_adam, 1000, "Adam")
+opt_soap = soap(u.module)
+run_optimizer(loss_fn, opt_soap, 1000, abs_limit_change=0)
 
-optlbfgs = optax.lbfgs(
-    memory_size=100,
-    linesearch=optax.scale_by_zoom_linesearch(20, max_learning_rate=1.0),
-)
-opt_lbfgs = nnx.Optimizer(u.module, optlbfgs)
+opt_lbfgs = lbfgs(u.module, memory_size=20)
 run_optimizer(
-    loss_fn, u.module, opt_lbfgs, 1000, "LBFGS", 100, update_global_weights=10
+    loss_fn,
+    opt_lbfgs,
+    1000,
+    100,
+    update_global_weights=10,
+    print_final_loss=True,
 )
 
 xj = jnp.linspace(left, right, 50)

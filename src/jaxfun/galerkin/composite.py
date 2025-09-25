@@ -146,6 +146,9 @@ class Composite(OrthogonalSpace):
     def get_stencil_row(self, i: int) -> Array:
         return self.S[i].data[: len(self.stencil)]
 
+    def stencil_width(self) -> int:
+        return max(self.stencil) - min(self.stencil)
+
     def stencil_to_scipy_sparse(self) -> scipy_sparse.spmatrix:
         k = jnp.arange(self.N - 1)
         return scipy_sparse.diags(
@@ -158,7 +161,7 @@ class Composite(OrthogonalSpace):
                 for val in self.stencil.values()
             ],
             [key for key in self.stencil],
-            shape=(self.N - self.bcs.num_bcs(), self.N),
+            shape=(self.N - self.stencil_width(), self.N),
         )
 
     @property
@@ -206,12 +209,12 @@ class Composite(OrthogonalSpace):
 
     @property
     def dim(self) -> int:
-        return self.N - self.bcs.num_bcs()
+        return self.orthogonal.dim - self.stencil_width()
 
     def get_homogeneous(self) -> Composite:
         bc = self.bcs.get_homogeneous()
         return Composite(
-            N=self.N,
+            N=self.orthogonal.dim,
             orthogonal=self.orthogonal.__class__,
             bcs=bc,
             domain=self.domain,

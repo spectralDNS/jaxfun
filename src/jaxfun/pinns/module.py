@@ -27,7 +27,7 @@ from .nnspaces import MLPSpace, PirateSpace
 
 default_kernel_init = nnx.initializers.glorot_normal()
 default_bias_init = nnx.initializers.zeros_init()
-default_rngs = nnx.Rngs(101)
+default_rngs = nnx.Rngs(11)
 
 
 # Differs from jaxfun.utils.common.jacn in the last if else
@@ -343,6 +343,7 @@ class SpectralModule(nnx.Module):
         else:
             self.kernel = nnx.Param(kernel_init(rngs(), basespace.dim))
         self.space = basespace
+        self.domain_factor = getattr(basespace, "domain_factor", 1)
 
     @property
     def dim(self) -> int:
@@ -354,14 +355,19 @@ class SpectralModule(nnx.Module):
 
     def __call__(self, x: Array) -> Array:
         if self.dims == 1:
-            return self.space.evaluate(
-                self.space.map_reference_domain(x), self.kernel.value[0]
-            )
+            X = self.space.map_reference_domain(x)
+            return self.space.evaluate(X, self.kernel.value[0])
 
-        return jnp.expand_dims(
-            self.space.evaluate_points(x, self.kernel.value, True), -1
-        )
+        return jnp.expand_dims(self.space.evaluate(x, self.kernel.value, True), -1)
 
+class KANModule(SpectralModule):
+
+    def __call__(self, x: Array) -> Array:
+        if self.dims == 1:
+            X = nnx.tanh(x)
+            return self.space.evaluate(X, self.kernel.value[0])
+
+        return jnp.expand_dims(self.space.evaluate(nnx.tanh(x), self.kernel.value, True), -1)
 
 class FlaxFunction(Function):
     def __new__(
@@ -421,6 +427,7 @@ class FlaxFunction(Function):
             return MLP(V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)
         elif isinstance(V, PirateSpace):
             return PirateNet(V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)
+
         return SpectralModule(
             V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs
         )
@@ -434,7 +441,6 @@ class FlaxFunction(Function):
 
     def doit(self, **hints: dict) -> sp.Expr:
         V = self.functionspace
-        s = V.system.base_scalars()
         args = self.get_args(Cartesian=False)
 
         if V.rank == 0:
@@ -448,6 +454,7 @@ class FlaxFunction(Function):
             )(*args)
 
         if V.rank == 1:
+            s = V.system.base_scalars()
             b = V.system.base_vectors()
             return VectorAdd.fromiter(
                 Function(
@@ -467,10 +474,10 @@ class FlaxFunction(Function):
         """Return mesh in Cartesian (physical) domain
 
         Args:
-            xs (Array): Coordinates in computational domain
+            xs: Coordinates in computational domain
 
         Returns:
-            Array: Coordinates in real space
+            Coordinates in real space
         """
         system = self.functionspace.system
         rv = system.position_vector(False)
@@ -523,8 +530,7 @@ class Comp(nnx.Module):
     def __init__(self, *flaxfunctions: FlaxFunction) -> None:
         """Collection of FlaxFunctions to be evaluated and stacked
 
-        Args:
-            flaxfunctions: FlaxFunctions to be evaluated and stacked
+        Args: FlaxFunctions to be evaluated and stacked
         """
         self.flaxfunctions = list(flaxfunctions)
         [setattr(self, str(id(p.module)), p.module) for p in flaxfunctions]

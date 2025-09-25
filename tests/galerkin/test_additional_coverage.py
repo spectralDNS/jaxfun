@@ -153,7 +153,7 @@ def test_tensorproductspace_3d_paths_and_mapping():
     assert uh.shape == u.shape
     # Evaluate path
     mesh = T3.mesh()
-    val = T3.evaluate(mesh, c)
+    val = T3.evaluate_mesh(mesh, c)
     # evaluation returns broadcasted shape (dim interleaved); collapse via squeeze
     assert jnp.squeeze(val).shape == u.shape
     # Padded path

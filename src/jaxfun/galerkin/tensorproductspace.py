@@ -83,6 +83,17 @@ class TensorProductSpace:
             mesh.append(self.broadcast_to_ndims(X, ax) if broadcast else X)
         return tuple(mesh)
 
+    def flatmesh(
+        self,
+        kind: str = "quadrature",
+        N: tuple[int] | None = None,
+    ) -> Array:
+        """Return flattened mesh in the domain of self"""
+        mesh = self.mesh(kind, N, broadcast=False)
+        return jnp.array(
+            list(itertools.product(*[m.flatten() for m in mesh])), dtype=mesh[0].dtype
+        )
+
     def cartesian_mesh(
         self, kind: str = "quadrature", N: tuple[int] | None = None
     ) -> tuple[Array]:
@@ -114,7 +125,7 @@ class TensorProductSpace:
 
     # Cannot jit_vmap since tensor product mesh.
     @partial(jax.jit, static_argnums=(0, 3))
-    def evaluate(self, x: list[Array], c: Array, use_einsum: bool = False) -> Array:
+    def evaluate_mesh(self, x: list[Array], c: Array, use_einsum: bool = False) -> Array:
         """Evaluate on a given tensor product mesh"""
         dim: int = len(self)
         if dim == 2:
@@ -171,7 +182,7 @@ class TensorProductSpace:
         return c
 
     @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
-    def evaluate_points(self, x: Array, c: Array, use_einsum: bool) -> Array:
+    def evaluate(self, x: Array, c: Array, use_einsum: bool) -> Array:
         """Evaluate on a set of points"""
         dim = len(self)
 
@@ -544,22 +555,22 @@ class DirectSumTPS(TensorProductSpace):
             "Scalar product needs to use a homogeneous test space and should not be called on this direct sum TensorProductSpace"  # noqa: E501
         )
 
-    def evaluate_points(self, x: Array, c: Array, use_einsum: bool = False) -> Array:
-        a = []
-        for f, v in self.tpspaces.items():
-            if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
-                a.append(v.evaluate_points(x, self.bndvals[f], use_einsum))
-            else:
-                a.append(v.evaluate_points(x, c, use_einsum))
-        return jnp.sum(jnp.array(a), axis=0)
-
-    def evaluate(self, x: list[Array], c: Array, use_einsum: bool = False) -> Array:
+    def evaluate(self, x: Array, c: Array, use_einsum: bool = False) -> Array:
         a = []
         for f, v in self.tpspaces.items():
             if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
                 a.append(v.evaluate(x, self.bndvals[f], use_einsum))
             else:
                 a.append(v.evaluate(x, c, use_einsum))
+        return jnp.sum(jnp.array(a), axis=0)
+
+    def evaluate_mesh(self, x: list[Array], c: Array, use_einsum: bool = False) -> Array:
+        a = []
+        for f, v in self.tpspaces.items():
+            if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
+                a.append(v.evaluate_mesh(x, self.bndvals[f], use_einsum))
+            else:
+                a.append(v.evaluate_mesh(x, c, use_einsum))
         return jnp.sum(jnp.array(a), axis=0)
 
 

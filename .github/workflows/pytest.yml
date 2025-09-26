@@ -20,11 +20,6 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: "pyproject.toml"
-
       - name: Run fast tests (default, excludes slow)
         run: |
           uv run pytest -m 'not slow'

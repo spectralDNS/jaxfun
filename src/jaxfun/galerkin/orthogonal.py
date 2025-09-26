@@ -9,7 +9,7 @@ from jax.experimental.sparse import BCOO
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
-from jaxfun.typing import Array, ArrayLike
+from jaxfun.typing import Array
 from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
 
 
@@ -34,7 +34,7 @@ class OrthogonalSpace(BaseSpace):
         BaseSpace.__init__(self, system, name, fun_str)
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        raise RuntimeError
+        raise NotImplementedError
 
     @jit_vmap(in_axes=(0, None))
     def evaluate(self, X: float | Array, c: Array) -> Array:
@@ -73,10 +73,10 @@ class OrthogonalSpace(BaseSpace):
         return self.evaluate_basis_derivative(X, 0)
 
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
-        raise RuntimeError
+        raise NotImplementedError
 
     def eval_basis_functions(self, X: float | Array) -> Array:
-        raise RuntimeError
+        raise NotImplementedError
 
     @partial(jax.jit, static_argnums=(0, 2))
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
@@ -157,7 +157,7 @@ class OrthogonalSpace(BaseSpace):
 
     @property
     def reference_domain(self) -> Domain:
-        raise RuntimeError
+        raise NotImplementedError
 
     @property
     def domain_factor(self) -> Number:

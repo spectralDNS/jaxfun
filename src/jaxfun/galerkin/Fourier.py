@@ -29,7 +29,7 @@ class Fourier(OrthogonalSpace):
             self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
         w = self.wavenumbers()
-        self._k = {k: w[k].item() for k in range(N)} # map index to wavenumber
+        self._k = {k: w[k].item() for k in range(N)}  # map index to wavenumber
 
     @jit_vmap(in_axes=(0, None))
     def evaluate2(self, X: float | Array, c: Array) -> Array:

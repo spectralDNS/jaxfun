@@ -9,22 +9,17 @@ jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-import optax
-from flax import nnx
 
 from jaxfun import Div, Grad
 from jaxfun.galerkin import FunctionSpace, TensorProduct
 from jaxfun.galerkin.Chebyshev import Chebyshev
-from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.pinns import (
     LSQR,
     FlaxFunction,
-    MLPSpace,
-    PirateSpace,
     run_optimizer,
 )
 from jaxfun.pinns.mesh import Rectangle
-from jaxfun.pinns.optimizer import adam, GaussNewton, get_lbfgs_opt
+from jaxfun.pinns.optimizer import GaussNewton, adam, get_lbfgs_opt
 from jaxfun.utils import lambdify
 from jaxfun.utils.common import ulp
 

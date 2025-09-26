@@ -97,7 +97,9 @@ class UnitSquare:
             ) / 2
 
         else:
-            assert kind == "random", "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
+            assert kind == "random", (
+                "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
+            )
             return jax.random.uniform(self.key, (self.Nx * self.Ny, 2))
 
         return jnp.array(jnp.meshgrid(x, y, indexing="ij")).reshape((2, -1)).T
@@ -117,21 +119,17 @@ class UnitSquare:
 
         elif kind == "chebyshev":
             x = (
-                1
-                + np.cos(
-                    np.pi + (2 * np.arange(self.Nx) + 1) * np.pi / (2 * self.Nx)
-                )
+                1 + np.cos(np.pi + (2 * np.arange(self.Nx) + 1) * np.pi / (2 * self.Nx))
             ) / 2
             y = (
-                1
-                + np.cos(
-                    np.pi + (2 * np.arange(self.Ny) + 1) * np.pi / (2 * self.Ny)
-                )
+                1 + np.cos(np.pi + (2 * np.arange(self.Ny) + 1) * np.pi / (2 * self.Ny))
             ) / 2
             xy = np.vstack((np.hstack((x, x, y, y)),) * 2).T
 
         else:
-            assert kind == "random", "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
+            assert kind == "random", (
+                "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
+            )
             xy = np.array(jax.random.uniform(self.key, (2 * (self.Nx + self.Ny), 2)))
 
         if corners:
@@ -154,7 +152,9 @@ class UnitSquare:
             wy = leggauss(self.Ny)[1] * self.Ny
             return jnp.outer(wx, wy).flatten()
         else:
-            assert kind == "chebyshev", "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
+            assert kind == "chebyshev", (
+                "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
+            )
             wx = jnp.pi / self.Nx * jnp.ones(self.Nx)
             wy = jnp.pi / self.Ny * jnp.ones(self.Ny)
             return jnp.outer(wx, wy).flatten()
@@ -172,13 +172,16 @@ class UnitSquare:
                 w = jnp.hstack((w, jnp.ones(4)))
             return w
         else:
-            assert kind == "chebyshev", "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
+            assert kind == "chebyshev", (
+                "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
+            )
             wx = jnp.pi / self.Nx * (2 * self.Nx + 2 * self.Ny) * jnp.ones(self.Nx)
             wy = jnp.pi / self.Ny * (2 * self.Nx + 2 * self.Ny) * jnp.ones(self.Ny)
             w = jnp.hstack((wx, wx, wy, wy))
             if corners:
                 w = jnp.hstack((w, jnp.ones(4)))
             return w
+
 
 @dataclass
 class Rectangle(UnitSquare):

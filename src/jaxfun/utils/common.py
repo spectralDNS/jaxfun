@@ -48,7 +48,7 @@ def jit_vmap(
             collection of ints that specify which positional arguments to treat as
             static (trace- and compile-time constant). Defaults to 0.
     """
-    in_axes = (None,)+in_axes if isinstance(in_axes, tuple) else (None, in_axes)
+    in_axes = (None,) + in_axes if isinstance(in_axes, tuple) else (None, in_axes)
 
     def wrap(func):
         @partial(jax.jit, static_argnums=static_argnums)

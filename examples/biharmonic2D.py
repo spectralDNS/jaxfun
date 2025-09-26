@@ -17,10 +17,10 @@ from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
 # Method of manufactured solution
-#ue = sp.exp(sp.cos(2 * sp.pi * (x - sp.S.Half / 2))) * sp.exp(
+# ue = sp.exp(sp.cos(2 * sp.pi * (x - sp.S.Half / 2))) * sp.exp(
 #    sp.sin(2 * (y - sp.S.Half))
-#)
-ue = (x-x**2)**2*(x-y**2)**2
+# )
+ue = (x - x**2) ** 2 * (x - y**2) ** 2
 M = 20
 
 bcsx = {
@@ -39,7 +39,7 @@ v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 ue = T.system.expr_psi_to_base_scalar(ue)
 
-A, b = inner(Div(Grad(Div(Grad(u))))*v - Div(Grad(Div(Grad(ue))))*v, sparse=False)
+A, b = inner(Div(Grad(Div(Grad(u)))) * v - Div(Grad(Div(Grad(ue)))) * v, sparse=False)
 
 C = tpmats_to_scipy_kron(A)
 uh = jnp.array(scipy_sparse.linalg.spsolve(C, b.flatten()).reshape(b.shape))

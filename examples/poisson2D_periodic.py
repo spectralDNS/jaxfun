@@ -17,7 +17,7 @@ from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_scipy_kr
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
-ue = (1-y**2)*(sp.cos(2 * x)) * sp.exp(sp.cos(sp.pi * y))
+ue = (1 - y**2) * (sp.cos(2 * x)) * sp.exp(sp.cos(sp.pi * y))
 
 M, N = 80, 20
 bcs = {"left": {"D": ue.subs(y, -1)}, "right": {"D": ue.subs(y, 1)}}

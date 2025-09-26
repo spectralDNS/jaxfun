@@ -98,6 +98,7 @@ def test_functionspace_variants():
     # Non-homogeneous returns DirectSum
     D = FunctionSpace(6, Legendre.Legendre, bcs={"left": {"D": 1}, "right": {"D": 2}})
     from jaxfun.galerkin.composite import DirectSum
+
     assert D.evaluate(jnp.array([1.0]), jnp.zeros(4)) == 2.0
     assert D.evaluate(jnp.array([-1.0]), jnp.zeros(4)) == 1.0
     assert isinstance(D, DirectSum)

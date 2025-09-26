@@ -1,4 +1,3 @@
-import copy
 from collections.abc import Callable
 from functools import partial
 from numbers import Number

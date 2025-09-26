@@ -42,6 +42,7 @@ def test_cross_add_branch_and_vector_mul():
     assert c.is_Vector
     assert c.components[C.b_zz] == C.r
 
+
 def test_dot_various_combinations():
     dy = BaseDyadic(C.b_r, C.b_theta)
     # BaseVector·BaseDyadic (non-diagonal metric gives zero vector)

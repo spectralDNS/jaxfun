@@ -22,7 +22,7 @@ from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
 M = 50
-ue = sp.exp(-(x**2+y**2))
+ue = sp.exp(-(x**2 + y**2))
 
 bcsx = {"left": {"D": ue.subs(x, 0)}, "right": {"D": ue.subs(x, 1)}}
 bcsy = {"left": {"D": ue.subs(y, 0)}, "right": {"D": ue.subs(y, 1)}}

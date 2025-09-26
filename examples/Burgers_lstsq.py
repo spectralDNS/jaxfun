@@ -11,9 +11,8 @@ from jaxfun.pinns.bcs import DirichletBC
 from jaxfun.pinns.loss import LSQR
 from jaxfun.pinns.mesh import Rectangle, points_along_axis
 from jaxfun.pinns.module import FlaxFunction
-from jaxfun.pinns.nnspaces import MLPSpace, PirateSpace
+from jaxfun.pinns.nnspaces import MLPSpace
 from jaxfun.pinns.optimizer import (
-    adam,
     lbfgs,
     run_optimizer,
     soap,

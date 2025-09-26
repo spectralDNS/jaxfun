@@ -30,8 +30,8 @@ ue = (1 - x**2) * (1 - y**2)  # * sp.exp(sp.cos(sp.pi * x)) * sp.exp(sp.sin(sp.p
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 
 # jax can only do kron for dense matrices
-#C = jnp.kron(*A[0].mats) + jnp.kron(*A[1].mats)
-#uh = jnp.linalg.solve(C, b.flatten()).reshape(b.shape)
+# C = jnp.kron(*A[0].mats) + jnp.kron(*A[1].mats)
+# uh = jnp.linalg.solve(C, b.flatten()).reshape(b.shape)
 
 # Alternative scipy sparse implementation
 A0 = tpmats_to_scipy_kron(A)

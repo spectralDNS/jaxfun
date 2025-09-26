@@ -9,7 +9,6 @@ jax.config.update("jax_default_matmul_precision", "highest")
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
-import optax
 
 try:
     import pyvista
@@ -19,12 +18,12 @@ except ImportError:
 import sympy as sp
 from flax import nnx
 
-from jaxfun.operators import Div, Dot, Grad, Outer
+from jaxfun.operators import Div, Grad, Outer
 from jaxfun.pinns.bcs import DirichletBC
 from jaxfun.pinns.loss import LSQR
 from jaxfun.pinns.mesh import Rectangle
 from jaxfun.pinns.module import Comp, FlaxFunction
-from jaxfun.pinns.nnspaces import MLPSpace, PirateSpace
+from jaxfun.pinns.nnspaces import MLPSpace
 from jaxfun.pinns.optimizer import adam, lbfgs, run_optimizer
 
 print("JAX running on", jax.devices()[0].platform.upper())

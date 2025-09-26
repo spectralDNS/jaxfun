@@ -36,7 +36,9 @@ def test_mlpspace_sets_hidden_and_activation_callable():
     def my_act(x):
         return jnp.tanh(x) * 2.0
 
-    mlp = MLPSpace(hidden_size=[8, 4], dims=2, rank=0, transient=False, act_fun=my_act, name="mlp")
+    mlp = MLPSpace(
+        hidden_size=[8, 4], dims=2, rank=0, transient=False, act_fun=my_act, name="mlp"
+    )
     assert mlp.hidden_size == [8, 4]
     # act_fun should be the same callable object passed in
     assert mlp.act_fun is my_act

@@ -1,9 +1,7 @@
 from collections.abc import Callable
 from functools import partial
-from numbers import Number
 
 import jax.numpy as jnp
-import sympy as sp
 from flax import nnx
 
 from jaxfun.basespace import BaseSpace
@@ -13,7 +11,6 @@ from jaxfun.coordinates import (
     CoordSys,
 )
 from jaxfun.typing import Array
-from jaxfun.utils.common import Domain, jit_vmap
 
 
 class NNSpace(BaseSpace):

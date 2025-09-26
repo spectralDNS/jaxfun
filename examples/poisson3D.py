@@ -3,7 +3,6 @@ import os
 
 import jax.numpy as jnp
 from scipy import sparse as scipy_sparse
-from scipy.sparse import kron
 
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.functionspace import FunctionSpace

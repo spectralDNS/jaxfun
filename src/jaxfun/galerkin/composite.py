@@ -292,8 +292,8 @@ class BCGeneric(Composite):
 
 
 class DirectSum:
-    """Direct sum of a Composite space and a boundary condition space
-    """
+    """Direct sum of a Composite space and a boundary condition space"""
+
     def __init__(self, a: Composite, b: BCGeneric) -> None:
         assert isinstance(b, BCGeneric)
         self.basespaces = [a, b]

@@ -41,7 +41,9 @@ def run_vandermonde(space) -> None:
     )
     print(f"{'Numpy':20s} {time_np:.4e}")
 
-    assert jnp.linalg.norm(jnp.array(npfun(xn, N-1)) - space.vandermonde(x)) < ulp(1000)
+    assert jnp.linalg.norm(jnp.array(npfun(xn, N - 1)) - space.vandermonde(x)) < ulp(
+        1000
+    )
 
 
 def run_evaluate(space) -> None:

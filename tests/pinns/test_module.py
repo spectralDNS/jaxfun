@@ -1,8 +1,7 @@
 import jax.numpy as jnp
-import pytest
 from flax import nnx
 
-from jaxfun.galerkin import FunctionSpace, Legendre, TensorProduct
+from jaxfun.galerkin import Legendre, TensorProduct
 from jaxfun.pinns.module import (
     MLP,
     Comp,
@@ -33,7 +32,14 @@ def test_rwflinear_forward_shapes_and_bias():
 
 def test_mlp_forward_and_dim_with_mlpspace():
     rngs = nnx.Rngs(0)
-    V = MLPSpace(hidden_size=[8, 4], dims=2, rank=0, transient=False, act_fun=nnx.tanh, name="MLP")
+    V = MLPSpace(
+        hidden_size=[8, 4],
+        dims=2,
+        rank=0,
+        transient=False,
+        act_fun=nnx.tanh,
+        name="MLP",
+    )
     mlp = MLP(V, rngs=rngs)
 
     x = jnp.zeros((10, V.in_size))
@@ -45,8 +51,14 @@ def test_mlp_forward_and_dim_with_mlpspace():
 
 def test_pimodifiedbottleneck_alpha_zero_returns_identity():
     rngs = nnx.Rngs(0)
-    pib = PIModifiedBottleneck(in_dim=4, hidden_dim=6, output_dim=4,
-                               nonlinearity=0.0, rngs=rngs, act_fun=nnx.tanh)
+    pib = PIModifiedBottleneck(
+        in_dim=4,
+        hidden_dim=6,
+        output_dim=4,
+        nonlinearity=0.0,
+        rngs=rngs,
+        act_fun=nnx.tanh,
+    )
     x = jnp.linspace(-1.0, 1.0, 12).reshape(3, 4)
     # u and v with compatible shapes
     u = jnp.tanh(jnp.linspace(-0.5, 0.5, 18)).reshape(3, 6)
@@ -114,7 +126,9 @@ def test_kanmodule_matches_tanh_featurization_1d():
 
 def test_flaxfunction_builds_mlp_and_call():
     rngs = nnx.Rngs(0)
-    V = MLPSpace(hidden_size=[4], dims=2, rank=0, transient=False, act_fun=nnx.tanh, name="MLP")
+    V = MLPSpace(
+        hidden_size=[4], dims=2, rank=0, transient=False, act_fun=nnx.tanh, name="MLP"
+    )
     f = FlaxFunction(V, "u", rngs=rngs)
 
     x = jnp.zeros((3, V.in_size))
@@ -152,7 +166,8 @@ def test_comp_stacks_multiple_flaxfunctions():
     x = jnp.zeros((5, V1.in_size))  # both take same x arity in tests
     y = comp(x)
 
-    # f1.module(x) -> (N, out1) = (N,1), f2.module(x) -> (N,) => expanded by Comp stacking
+    # f1.module(x) -> (N, out1) = (N,1)
+    # f2.module(x) -> (N,) => expanded by Comp stacking
     assert y.shape[0] == 5
     assert y.ndim == 2
     assert comp.dim == f1.module.dim + f2.module.dim

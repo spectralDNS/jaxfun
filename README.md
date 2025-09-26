@@ -44,7 +44,7 @@ from jaxfun.galerkin import Chebyshev, TensorProduct, TestFunction, TrialFunctio
 from jaxfun.galerkin.inner import inner
 
 C = Chebyshev.Chebyshev(16)
-T = TensorProduct((C,))
+T = TensorProduct((C, C))
 v = TestFunction(T)
 u = TrialFunction(T)
 A = inner(u * v)

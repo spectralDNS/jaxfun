@@ -49,7 +49,7 @@ C = Chebyshev.Chebyshev(16)
 T = TensorProduct((C, C))
 v = TestFunction(T)
 u = TrialFunction(T)
-A = inner(Div(Grad(u) * v)
+A = inner(Div(Grad(u)) * v)
 ```
 
 See the [`examples`](examples/) for more patterns.

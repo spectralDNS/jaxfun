@@ -16,6 +16,8 @@ Spectral / Galerkin experimentation toolkit built on top of JAX for fast differe
 - Orthogonal polynomial and Fourier bases (Chebyshev, Legendre, Jacobi, etc.)
 - Tensor product and direct sum spaces with boundary conditions
 - Assembly of bilinear / linear forms with symbolic (SymPy) coefficients
+- Curvilinear coordinates
+- A Sympy-based form-language for desribing PDEs 
 - JAX-backed forward/backward transforms and differentiation
 - Utilities for sparse conversion, preconditioning, and projection
 - A friendly interface for experimenting with PINNs
@@ -40,14 +42,14 @@ uv sync
 ## Quickstart
 
 ```python
-from jaxfun.galerkin import Chebyshev, TensorProduct, TestFunction, TrialFunction
+from jaxfun.galerkin import Chebyshev, TensorProduct, TestFunction, TrialFunction, Div, Grad
 from jaxfun.galerkin.inner import inner
 
 C = Chebyshev.Chebyshev(16)
 T = TensorProduct((C, C))
 v = TestFunction(T)
 u = TrialFunction(T)
-A = inner(u * v)
+A = inner(Div(Grad(u) * v)
 ```
 
 See the [`examples`](examples/) for more patterns.

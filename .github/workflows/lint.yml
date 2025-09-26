@@ -1,0 +1,25 @@
+name: Lint
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["**"]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: Install dependencies
+        run: uv sync
+      - name: Ruff lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Pre-commit (selected hooks)
+        run: |
+          uv run pre-commit install
+          uv run pre-commit run --all-files --show-diff-on-failure

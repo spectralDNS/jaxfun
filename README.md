@@ -17,7 +17,7 @@ Spectral / Galerkin experimentation toolkit built on top of JAX for fast differe
 - Tensor product and direct sum spaces with boundary conditions
 - Assembly of bilinear / linear forms with symbolic (SymPy) coefficients
 - Curvilinear coordinates
-- A Sympy-based form-language for desribing PDEs 
+- A Sympy-based form-language for describing PDEs 
 - JAX-backed forward/backward transforms and differentiation
 - Utilities for sparse conversion, preconditioning, and projection
 - A friendly interface for experimenting with PINNs

@@ -5,7 +5,7 @@ Spectral / Galerkin experimentation toolkit built on top of JAX for fast differe
 ## Status & Badges
 
 [![Tests](https://github.com/spectralDNS/jaxfun/actions/workflows/pytest.yml/badge.svg)](https://github.com/spectralDNS/jaxfun/actions/workflows/pytest.yml)
-[![pre-commit](https://github.com/spectralDNS/jaxfun/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/spectralDNS/jaxfun/actions/workflows/pre-commit.yml)
+[![Linting](https://github.com/spectralDNS/jaxfun/actions/workflows/lint.yml/badge.svg)](https://github.com/spectralDNS/jaxfun/actions/workflows/lint.yml)
 [![License](https://img.shields.io/badge/License-BSD_2--Clause-orange.svg)](https://opensource.org/licenses/BSD-2-Clause)
 [![Python 3.12](https://img.shields.io/badge/python-3.12+-brightgreen.svg)](pyproject.toml)
 

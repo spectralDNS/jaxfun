@@ -24,4 +24,3 @@ def test_simplify_vector_and_dyadic():
     simp = C.simplify(v)
     # Should not alter structure, but ensure mapping back to base scalars
     assert all(hasattr(k, "_system") for k in simp.components)
-

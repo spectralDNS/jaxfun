@@ -14,7 +14,6 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, ulp

@@ -116,7 +116,8 @@ def test_run_optimizer_early_stop_on_abs_limit_loss(monkeypatch, capsys):
 
 
 def test_run_optimizer_calls_update_global_weights(monkeypatch):
-    # Make a train stub that returns decreasing losses to avoid "small change" early stop
+    # Make a train stub that returns decreasing losses to avoid "small change"
+    # early stop
     seq = {"vals": [10.0, 9.0, 8.0], "i": 0}
 
     def fake_train(loss_fn):

@@ -147,6 +147,7 @@ def test_lsqr_vector_equation():
     # Should create residuals for each component
     assert len(lsqr.residuals) == 2  # 2D vector = 2 components
 
+
 def test_lsqr_vector_equation_with_target():
     # Test LSQR with vector equations
     mlp = MLPSpace([4, 4], dims=2, rank=1, name="MLP")
@@ -196,7 +197,7 @@ def test_lsqr_norm_grad_loss():
     u = FlaxFunction(V, "u", kernel_init=nnx.initializers.ones)
     x1 = jnp.array([[0.2, 0.5]])
     x2 = jnp.array([[0.3, 0.4]])
-    lsqr = LSQR((u, x1, u(x1)), (u - 1, x2, u(x2)-1))
+    lsqr = LSQR((u, x1, u(x1)), (u - 1, x2, u(x2) - 1))
     norms = lsqr.norm_grad_loss(u.module)
     assert norms.shape == (2,)  # Two residuals
     assert jnp.all(norms == 0)
@@ -217,7 +218,7 @@ def test_lsqr_update_global_weights():
     mlp = MLPSpace(4, dims=2, rank=0, name="MLP")
     u = FlaxFunction(mlp, "u")
     x = jnp.array([[1.0, 2.0]])
-    lsqr = LSQR((u, x), (u-1, x, -1), alpha=0.5)
+    lsqr = LSQR((u, x), (u - 1, x, -1), alpha=0.5)
     old_weights = lsqr.global_weights.copy()
     lsqr.update_global_weights(u.module)
     # Weights should have been updated
@@ -289,7 +290,7 @@ def test_lsqr_with_derivative_terms():
     x = jnp.array([[1.0, 2.0]])
     lsqr = LSQR((du, x))
     # Should have derivative terms in Js
-    derivative_keys = [k for k in lsqr.Js.keys() if k[2] > 0]
+    derivative_keys = [k for k in lsqr.Js if k[2] > 0]
     assert len(derivative_keys) > 0
 
 
@@ -361,7 +362,7 @@ def test_lsqr_compute_residuals_simple():
     lsqr = LSQR((f, x))
 
     # Create a dummy model
-    mlp = MLPSpace(4, dims=1, rank=0, name="dummy")
+    _mlp = MLPSpace(4, dims=1, rank=0, name="dummy")
     model = nnx.Module()
 
     residuals = lsqr.compute_residuals(model)

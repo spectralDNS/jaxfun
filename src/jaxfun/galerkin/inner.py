@@ -10,7 +10,7 @@ from jax.experimental.sparse import BCOO
 from jaxfun.coordinates import CoordSys
 from jaxfun.utils.common import lambdify, matmat, tosparse
 
-from .arguments import JAXArray, TestFunction, TrialFunction
+from .arguments import TestFunction, TrialFunction
 from .composite import BCGeneric, Composite
 from .forms import (
     get_basisfunctions,
@@ -40,8 +40,8 @@ def inner(
     three combinations::
 
         a(u, v) - L(v)  # Bilinear and linear forms
-        a(u, v)         # Bilinear form only
-        L(v)            # Linear form only
+        a(u, v)  # Bilinear form only
+        L(v)  # Linear form only
 
 
     where a(u, v) and L(v) are bilinear and linear forms, respectively. In addition to test v and
@@ -235,7 +235,7 @@ def inner(
         elif len(test_space) == 2:
             if isinstance(bs[0], tuple):
                 # multivar
-                if 'multivar' in b0:
+                if "multivar" in b0:
                     s = test_space.system.base_scalars()
                     xj = test_space.mesh()
                     uj = lambdify(s, b0["multivar"], modules="jax")(*xj)

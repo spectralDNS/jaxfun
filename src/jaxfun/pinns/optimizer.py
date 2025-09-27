@@ -10,28 +10,57 @@ from jaxfun.utils.common import ulp
 from .loss import LSQR
 
 
+class NamedOptimizer[M: nnx.Module](nnx.Optimizer[M]):
+    """A temporary subclass of nnx.Optimizer to allow adding attributes."""
+
+    def __init__(
+        self,
+        model: M,
+        tx: optax.GradientTransformation,
+        wrt: nnx.filterlib.Filter = nnx.Param,
+        *,
+        name: str = "Optimizer",
+    ) -> None:
+        super().__init__(model, tx, wrt)
+        self.name = name
+        self.module = model
+
+
+def _gradient_descent_based_optimizer(
+    module: nnx.Module,
+    learning_rate: float,
+    end_learning_rate: float | None,
+    decay_steps: int | None,
+    opt_constructor: Callable[..., optax.GradientTransformation],
+) -> NamedOptimizer:
+    lr_str = f"lr={learning_rate}"
+    if decay_steps is None:
+        lr = learning_rate
+    else:
+        end_learning_rate = end_learning_rate or learning_rate / 10
+        lr = optax.linear_schedule(learning_rate, end_learning_rate, decay_steps)
+        lr_str += f"->{end_learning_rate} in {decay_steps} steps"
+    opt = opt_constructor(lr)
+
+    base_name = opt_constructor.__name__.capitalize()
+    name = f"{base_name}({lr_str})"
+    opt = NamedOptimizer(module, opt, name=name)
+    return opt
+
+
 def adam(
     module: nnx.Module,
     learning_rate: float = 1e-3,
     end_learning_rate: float = None,
     decay_steps: int = None,
-) -> nnx.Optimizer:
-    if decay_steps is None:
-        opt = optax.adam(learning_rate)
-    else:
-        end_learning_rate = end_learning_rate or learning_rate / 10
-        opt = optax.adam(
-            optax.linear_schedule(learning_rate, end_learning_rate, decay_steps)
-        )
-    opt = nnx.Optimizer(module, opt)
-    if decay_steps is None:
-        opt.name = f"Adam(lr={learning_rate})"
-    else:
-        opt.name = (
-            f"Adam(lr={learning_rate}->{end_learning_rate} in {decay_steps} steps)"
-        )
-    opt.module = module
-    return opt
+) -> NamedOptimizer:
+    return _gradient_descent_based_optimizer(
+        module,
+        learning_rate,
+        end_learning_rate,
+        decay_steps,
+        optax.adam,
+    )
 
 
 def soap(
@@ -39,24 +68,16 @@ def soap(
     learning_rate: float = 1e-3,
     end_learning_rate: float = None,
     decay_steps: int = None,
-) -> nnx.Optimizer:
+) -> NamedOptimizer:
     from soap_jax import soap
 
-    if decay_steps is None:
-        opt = soap(learning_rate)
-    else:
-        end_learning_rate = end_learning_rate or learning_rate / 10
-        opt = soap(optax.linear_schedule(learning_rate, end_learning_rate, decay_steps))
-
-    opt = nnx.Optimizer(module, opt)
-    if decay_steps is None:
-        opt.name = f"Soap(lr={learning_rate})"
-    else:
-        opt.name = (
-            f"Soap(lr={learning_rate}->{end_learning_rate} in {decay_steps} steps)"
-        )
-    opt.module = module
-    return opt
+    return _gradient_descent_based_optimizer(
+        module,
+        learning_rate,
+        end_learning_rate,
+        decay_steps,
+        soap,
+    )
 
 
 def lbfgs(
@@ -68,9 +89,7 @@ def lbfgs(
             max_linesearch_steps, max_learning_rate=1.0
         ),
     )
-    opt = nnx.Optimizer(module, opt)
-    opt.name = f"LBFGS(memory_size={memory_size})"
-    opt.module = module
+    opt = NamedOptimizer(module, opt, name=f"LBFGS(memory_size={memory_size})")
     return opt
 
 
@@ -83,15 +102,13 @@ def GaussNewton(
     from jaxfun.pinns.hessoptimizer import hess
 
     opt = hess(
-        use_lstsq=True,
-        cg_max_iter=1000,
+        use_lstsq=use_lstsq,
+        cg_max_iter=cg_max_iter,
         linesearch=optax.scale_by_zoom_linesearch(
             max_linesearch_steps, max_learning_rate=1.0
         ),
     )
-    opt = nnx.Optimizer(module, opt)
-    opt.name = f"Hessian(lstsq={use_lstsq})"
-    opt.module = module
+    opt = NamedOptimizer(module, opt, name=f"Hessian(lstsq={use_lstsq})")
     return opt
 
 
@@ -128,15 +145,11 @@ def run_optimizer(
     update_global_weights: int = -1,
     print_global_weights: bool = False,
 ) -> None:
-    try:
-        longname = name if name is not None else opt.name
-    except AttributeError:
-        longname = "Optimizer"
-    try:
-        if module is None:
-            module = opt.module
-    except AttributeError:
-        raise ValueError("Module must be provided if opt is not an nnx.Optimizer")
+    longname = name if name is not None else getattr(opt, "name", "Optimizer")
+    if module is None:
+        if not isinstance(opt, NamedOptimizer):
+            raise ValueError("Module must be provided if opt is not a NamedOptimizer")
+        module = opt.module
 
     print(f"Running optimizer {longname}")
     name = re.sub(r"\([^)]*\)", "", longname)  # Remove parentheses content

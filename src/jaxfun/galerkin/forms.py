@@ -31,6 +31,7 @@ def get_basisfunctions(
         case _:
             return None, None
 
+
 def get_jaxarrays(
     a: sp.Expr,
 ) -> tuple[set[JAXArray]]:
@@ -88,6 +89,7 @@ def split_coeff(c0: sp.Expr) -> dict:
                         )
     return coeffs
 
+
 def split_linear_coeff(c0: sp.Expr) -> dict:
     """Split coefficients of linear form into parts
 
@@ -103,35 +105,23 @@ def split_linear_coeff(c0: sp.Expr) -> dict:
     assert len(jaxarrays) <= 1, "Multiple JAXArrays found in coefficient"
 
     scale = jnp.array(1.0)
-    if c0.is_number:
-        scale = float(c0) if c0.is_real else complex(c0)
+    args = c0.args if isinstance(c0, sp.Mul) else (c0,)
 
-    elif isinstance(c0, JAXArray):
-        scale = c0.array
-
-    elif isinstance(c0, sp.Mul):
-        for ci in c0.args:
-            if isinstance(ci, JAXArray):
-                scale *= ci.array
-            elif isinstance(ci, sp.Pow):
-                base, exp = ci.args
-                if isinstance(base, JAXArray) and exp.is_number:
-                    scale *= base.array**int(exp)
-                else:
-                    raise NotImplementedError(
-                        "Only power of JAXArray with integer exponent allowed in linear form at present"
-                    )
+    for ci in args:
+        if isinstance(ci, JAXArray):
+            scale *= ci.array
+        elif isinstance(ci, sp.Pow):
+            base, exp = ci.args
+            if isinstance(base, JAXArray) and exp.is_number:
+                scale = base.array ** int(exp)
             else:
-                scale *= float(ci) if ci.is_real else complex(ci)
-
-    elif isinstance(c0, sp.Pow):
-        base, exp = c0.args
-        if isinstance(base, JAXArray) and exp.is_number:
-            scale *= base.array**int(exp)
+                raise NotImplementedError(
+                    "Only power of JAXArray with integer exponent allowed in linear "
+                    "form at present"
+                )
         else:
-            raise NotImplementedError(
-                "Only power of JAXArray with integer exponent allowed in linear form at present"
-            )
+            scale *= float(ci) if ci.is_real else complex(ci)
+
     return scale
 
 

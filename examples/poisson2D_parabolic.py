@@ -26,7 +26,7 @@ tau, sigma = sp.symbols("tau, sigma", real=True)
 C = get_CoordSys(
     "C",
     sp.Lambda((tau, sigma), (tau * sigma, (tau**2 - sigma**2) / 2)),
-    assumptions=sp.Q.positive(tau)&sp.Q.positive(sigma+1)
+    assumptions=sp.Q.positive(tau) & sp.Q.positive(sigma + 1),
 )
 D0 = FunctionSpace(
     M, Legendre, bcs, scaling=n + 1, domain=(0, 1), name="D0", fun_str="tau"
@@ -41,7 +41,7 @@ tau, sigma = C.base_scalars()
 ue = (tau * (1 - tau)) ** 2 * (1 - sigma**2) ** 1 * sp.sin(4 * sp.pi * sigma)
 
 # Assemble linear system of equations
-A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue)))*C.sg, sparse=False)
+A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue))) * C.sg, sparse=False)
 
 # Alternative scipy sparse implementation
 A0 = tpmats_to_scipy_kron(A)

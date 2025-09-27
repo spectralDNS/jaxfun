@@ -1,7 +1,4 @@
-from numbers import Number
-
 import jax.numpy as jnp
-import pytest
 from flax import nnx
 
 from jaxfun.pinns.mesh import (

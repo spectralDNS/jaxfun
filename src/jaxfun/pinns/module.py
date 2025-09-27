@@ -20,7 +20,7 @@ from sympy.vector import VectorAdd
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseTime
-from jaxfun.utils.common import jit_vmap, lambdify
+from jaxfun.utils.common import lambdify
 
 from .embeddings import Embedding
 from .nnspaces import MLPSpace, PirateSpace
@@ -360,14 +360,17 @@ class SpectralModule(nnx.Module):
 
         return jnp.expand_dims(self.space.evaluate(x, self.kernel.value, True), -1)
 
-class KANModule(SpectralModule):
 
+class KANModule(SpectralModule):
     def __call__(self, x: Array) -> Array:
         if self.dims == 1:
             X = nnx.tanh(x)
             return self.space.evaluate(X, self.kernel.value[0])
 
-        return jnp.expand_dims(self.space.evaluate(nnx.tanh(x), self.kernel.value, True), -1)
+        return jnp.expand_dims(
+            self.space.evaluate(nnx.tanh(x), self.kernel.value, True), -1
+        )
+
 
 class FlaxFunction(Function):
     def __new__(

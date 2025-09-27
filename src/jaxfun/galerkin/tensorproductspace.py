@@ -125,7 +125,9 @@ class TensorProductSpace:
 
     # Cannot jit_vmap since tensor product mesh.
     @partial(jax.jit, static_argnums=(0, 3))
-    def evaluate_mesh(self, x: list[Array], c: Array, use_einsum: bool = False) -> Array:
+    def evaluate_mesh(
+        self, x: list[Array], c: Array, use_einsum: bool = False
+    ) -> Array:
         """Evaluate on a given tensor product mesh"""
         dim: int = len(self)
         if dim == 2:
@@ -135,7 +137,7 @@ class TensorProductSpace:
                     c = jax.vmap(
                         self.basespaces[i].evaluate, in_axes=(None, axi), out_axes=axi
                     )(
-                        jnp.atleast_1d( # Ensure 1D input to allow mesh with one point
+                        jnp.atleast_1d(  # Ensure 1D input to allow mesh with one point
                             self.basespaces[i].map_reference_domain(xi).squeeze()
                         ),
                         c,
@@ -564,7 +566,9 @@ class DirectSumTPS(TensorProductSpace):
                 a.append(v.evaluate(x, c, use_einsum))
         return jnp.sum(jnp.array(a), axis=0)
 
-    def evaluate_mesh(self, x: list[Array], c: Array, use_einsum: bool = False) -> Array:
+    def evaluate_mesh(
+        self, x: list[Array], c: Array, use_einsum: bool = False
+    ) -> Array:
         a = []
         for f, v in self.tpspaces.items():
             if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):

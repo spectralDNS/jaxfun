@@ -20,6 +20,7 @@ dependencies = [
   "flax>=0.10.2",
   "jax>=0.4.36,!=0.6.*",
   "matplotlib>=3.9.3",
+  "pre-commit>=4.3",
   "sympy>=1.13.3",
 ]
 

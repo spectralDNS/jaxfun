@@ -24,7 +24,7 @@ from jaxfun.pinns import (
     run_optimizer,
 )
 from jaxfun.pinns.mesh import Rectangle
-from jaxfun.pinns.optimizer import adam, GaussNewton, get_lbfgs_opt
+from jaxfun.pinns.optimizer import GaussNewton, adam, lbfgs
 from jaxfun.utils import lambdify
 from jaxfun.utils.common import ulp
 
@@ -58,10 +58,7 @@ run_optimizer(loss_fn, opt_adam, 1000, 100, update_global_weights=10)
 # opt_soap = soap(w.module, learning_rate=1e-3)
 # run_optimizer(loss_fn, opt_soap, 1000, 100, abs_limit_change=0)
 
-opt_lbfgs = get_lbfgs_opt(
-    w.module,
-    memory_size=20,
-)
+opt_lbfgs = lbfgs(w.module, memory_size=20)
 run_optimizer(loss_fn, opt_lbfgs, 1000, 100, update_global_weights=10)
 
 opt_hess = GaussNewton(w.module, use_lstsq=True, cg_max_iter=100)

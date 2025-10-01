@@ -10,6 +10,7 @@ import pytest
     [
         "poisson1D",
         "poisson1D_curv",
+        "poisson1D_spikan",
         "poisson2D",
         "poisson2D_curv",
         "poisson3D",

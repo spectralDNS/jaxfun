@@ -132,6 +132,123 @@ class RWFLinear(nnx.Module):
         return y
 
 
+class KANLayer(nnx.Module):
+    """A Kolomogorov-Arnold transformation applied over the last dimension of the input.
+
+    Args:
+        in_features: the number of input features.
+        out_features: the number of output features.
+        spectral_size: the number of spectral modes.
+        hidden: whether this is a hidden layer (default: False).
+        basespace: the spectral basis to use (default: Chebyshev).
+        domains: list of domains for each input dimension (default: (-1, 1) for all).
+        system: coordinate system (default: None).
+        dtype: the dtype of the computation (default: infer from input and params).
+        param_dtype: the dtype passed to parameter initializers (default: float32).
+        precision: numerical precision of the computation see ``jax.lax.Precision``
+            for details.
+        kernel_init: initializer function for the weight matrix.
+        bias_init: initializer function for the bias.
+        dot_general: dot product function.
+        promote_dtype: function to promote the dtype of the arrays to the desired
+            dtype. The function should accept a tuple of ``(inputs,)``
+            and a ``dtype`` keyword argument, and return a tuple of arrays with the
+            promoted dtype.
+        rngs: rng key.
+    """
+
+    __data__ = ("kernel",)
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        spectral_size: int,
+        *,
+        hidden: bool = False,
+        basespace: BaseSpace = Chebyshev.Chebyshev,
+        domains: list[Domain] | None = None,
+        system: CoordSys = None,
+        dtype: Dtype | None = None,
+        param_dtype: Dtype = jnp.float32,
+        precision: PrecisionLike = None,
+        kernel_init: Initializer = default_kernel_init,
+        promote_dtype=dtypes.promote_dtype,
+        rngs: nnx.Rngs,
+    ):
+        kernel_key = rngs.params()
+        w = kernel_init(
+            kernel_key, (in_features, spectral_size, out_features), param_dtype
+        )
+        self.kernel = nnx.Param(w)
+
+        self.in_features = in_features
+        self.out_features = out_features
+        self.spectral_size = spectral_size
+        self.hidden = hidden
+        self.dtype = dtype
+        self.param_dtype = param_dtype
+        self.precision = precision
+        self.kernel_init = kernel_init
+        self.promote_dtype = promote_dtype
+
+        # The input layer needs special attention since the input is from the spatial
+        # domain while the hidden layers are from the spectral domain. The input layer
+        # will map each input dimension from its own physical domain to the reference
+        # domain of the spectral basis, while the hidden layers will use the standard
+        # reference domain of the spectral basis. The hidden layers will also use
+        # only one basespace since the input is already transformed to the spectral
+        # domain using activation function tanh. The input layer will use one basespace
+        # per input dimension. The domains are only used in the input layer. The
+        # coordinate system is only used in the input layer. The hidden layers will not
+        # use the coordinate system.
+        subsystems = (
+            [system.sub_system(i) if system else None for i in range(in_features)]
+            if not hidden and in_features > 1
+            else [system]
+        )
+        domains = (
+            domains if domains is not None else [(-1, 1) for _ in range(in_features)]
+        )
+        self.basespaces = (
+            [
+                basespace(spectral_size, domain=domains[i], system=subsystems[i])
+                for i in range(in_features)
+            ]
+            if not hidden
+            else [basespace(spectral_size, domain=Domain(-1, 1))]
+        )
+
+    def __call__(self, inputs: Array) -> Array:
+        """Applies a linear transformation to the inputs along the last dimension.
+
+        Args:
+            inputs: The nd-array to be transformed.
+
+        Returns:
+            The transformed input.
+        """
+        kernel = self.kernel.value
+
+        inputs, kernel = self.promote_dtype((inputs, kernel), dtype=self.dtype)
+        weights = kernel
+
+        if not self.hidden:
+            T = [
+                self.basespaces[j].eval_basis_functions(
+                    self.basespaces[j].map_reference_domain(inputs[..., j])
+                )
+                for j in range(self.in_features)
+            ]
+        else:
+            T = [
+                self.basespaces[0].eval_basis_functions(inputs[..., j])
+                for j in range(self.in_features)
+            ]
+
+        return sum([matmat(T[i], weights[i]) for i in range(len(T))])
+
+
 class MLP(nnx.Module):
     def __init__(
         self,
@@ -360,123 +477,6 @@ class SpectralModule(nnx.Module):
             return self.space.evaluate(X, self.kernel.value[0])
 
         return jnp.expand_dims(self.space.evaluate(x, self.kernel.value, True), -1)
-
-
-class KANLayer(nnx.Module):
-    """A Kolomogorov-Arnold transformation applied over the last dimension of the input.
-
-    Args:
-        in_features: the number of input features.
-        out_features: the number of output features.
-        spectral_size: the number of spectral modes.
-        hidden: whether this is a hidden layer (default: False).
-        basespace: the spectral basis to use (default: Chebyshev).
-        domains: list of domains for each input dimension (default: (-1, 1) for all).
-        system: coordinate system (default: None).
-        dtype: the dtype of the computation (default: infer from input and params).
-        param_dtype: the dtype passed to parameter initializers (default: float32).
-        precision: numerical precision of the computation see ``jax.lax.Precision``
-            for details.
-        kernel_init: initializer function for the weight matrix.
-        bias_init: initializer function for the bias.
-        dot_general: dot product function.
-        promote_dtype: function to promote the dtype of the arrays to the desired
-            dtype. The function should accept a tuple of ``(inputs,)``
-            and a ``dtype`` keyword argument, and return a tuple of arrays with the
-            promoted dtype.
-        rngs: rng key.
-    """
-
-    __data__ = ("kernel",)
-
-    def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        spectral_size: int,
-        *,
-        hidden: bool = False,
-        basespace: BaseSpace = Chebyshev.Chebyshev,
-        domains: list[Domain] | None = None,
-        system: CoordSys = None,
-        dtype: Dtype | None = None,
-        param_dtype: Dtype = jnp.float32,
-        precision: PrecisionLike = None,
-        kernel_init: Initializer = default_kernel_init,
-        promote_dtype=dtypes.promote_dtype,
-        rngs: nnx.Rngs,
-    ):
-        kernel_key = rngs.params()
-        w = kernel_init(
-            kernel_key, (in_features, spectral_size, out_features), param_dtype
-        )
-        self.kernel = nnx.Param(w)
-
-        self.in_features = in_features
-        self.out_features = out_features
-        self.spectral_size = spectral_size
-        self.hidden = hidden
-        self.dtype = dtype
-        self.param_dtype = param_dtype
-        self.precision = precision
-        self.kernel_init = kernel_init
-        self.promote_dtype = promote_dtype
-
-        # The input layer needs special attention since the input is from the spatial
-        # domain while the hidden layers are from the spectral domain. The input layer
-        # will map each input dimension from its own physical domain to the reference
-        # domain of the spectral basis, while the hidden layers will use the standard
-        # reference domain of the spectral basis. The hidden layers will also use
-        # only one basespace since the input is already transformed to the spectral
-        # domain using activation function tanh. The input layer will use one basespace
-        # per input dimension. The domains are only used in the input layer. The
-        # coordinate system is only used in the input layer. The hidden layers will not
-        # use the coordinate system.
-        subsystems = (
-            [system.sub_system(i) if system else None for i in range(in_features)]
-            if not hidden and in_features > 1
-            else [system]
-        )
-        domains = (
-            domains if domains is not None else [(-1, 1) for _ in range(in_features)]
-        )
-        self.basespaces = (
-            [
-                basespace(spectral_size, domain=domains[i], system=subsystems[i])
-                for i in range(in_features)
-            ]
-            if not hidden
-            else [basespace(spectral_size, domain=Domain(-1, 1))]
-        )
-
-    def __call__(self, inputs: Array) -> Array:
-        """Applies a linear transformation to the inputs along the last dimension.
-
-        Args:
-            inputs: The nd-array to be transformed.
-
-        Returns:
-            The transformed input.
-        """
-        kernel = self.kernel.value
-
-        inputs, kernel = self.promote_dtype((inputs, kernel), dtype=self.dtype)
-        weights = kernel
-
-        if not self.hidden:
-            T = [
-                self.basespaces[j].eval_basis_functions(
-                    self.basespaces[j].map_reference_domain(inputs[..., j])
-                )
-                for j in range(self.in_features)
-            ]
-        else:
-            T = [
-                self.basespaces[0].eval_basis_functions(inputs[..., j])
-                for j in range(self.in_features)
-            ]
-
-        return sum([matmat(T[i], weights[i]) for i in range(len(T))])
 
 
 class KANMLPModule(nnx.Module):

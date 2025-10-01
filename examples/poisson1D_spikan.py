@@ -45,6 +45,7 @@ run_optimizer(
 )
 print(f"L-BFGS time {time.time() - t1:.1f}s")
 
+
 error = jnp.sqrt(loss_fn(w.module))
 if "PYTEST" in os.environ:
     assert error < 1e-2, error

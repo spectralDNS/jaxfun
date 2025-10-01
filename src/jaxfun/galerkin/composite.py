@@ -284,8 +284,8 @@ class BCGeneric(Composite):
 
     @property
     def num_dofs(self) -> int:
-        # Returns the number of free degrees of freedom after applying boundary constraints.
-        # For BCGeneric, all degrees of freedom are fixed by boundary conditions, so this is 0.
+        # Degrees of freedom after applying boundary constraints. For BCGeneric, all
+        # degrees of freedom are fixed by boundary conditions, so this is 0.
         return 0
 
     def bnd_vals(self) -> Array:

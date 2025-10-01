@@ -10,7 +10,9 @@ from jaxfun.coordinates import (
     BaseTime,
     CoordSys,
 )
+from jaxfun.galerkin import Chebyshev
 from jaxfun.typing import Array
+from jaxfun.utils.common import Domain
 
 
 class NNSpace(BaseSpace):
@@ -138,3 +140,96 @@ class PirateSpace(NNSpace):
         self.periodicity = periodicity
         self.fourier_emb = fourier_emb
         self.pi_init = pi_init
+
+
+class KANMLPSpace(NNSpace):
+    """Kolmogorov-Arnold Network in the input layer combined with MLP for the hidden
+    and output layers"""
+
+    def __init__(
+        self,
+        spectral_size: int,
+        hidden_size: int | list[int],
+        dims: int = 1,
+        rank: int = 0,
+        system: CoordSys = None,
+        name: str = "KANMLP",
+        transient: bool = False,
+        act_fun: Callable[[Array], Array] = nnx.tanh,
+        basespace: BaseSpace = Chebyshev.Chebyshev,
+        domains: list[tuple[float, float]] | None = None,
+    ) -> None:
+        """Class for the structure of a KANMLP
+
+        Args:
+            spectral_size: The number of spectral modes in input layer
+            hidden_size: If list of integers, like hidden_size = [X, Y, Z], then there
+                will be len(hidden_size) hidden layers of size X, Y and Z, respectively.
+                If integer, like hidden_size = X, then there will be no hidden layers,
+                but the size of the weights in the input layer will be (dims, X) and the
+                output will be of shape (X, self.out_size)
+            dims: The dimensions of the input. Defaults to 1.
+            rank: Rank of the output. Scalars, vectors and dyadics have rank 0, 1 and 2,
+                respectively. Defaults to 0.
+            system: Coordinate system. Defaults to None, in which case the
+                coordinate system will be Cartesian.
+            name: Name of KANMLP space. Defaults to "KANMLP".
+            transient: Whether to include the variable time or not. Defaults to False.
+            act_fun: Activation function for all except the output layer
+            basespace: Base space for the input layers. Defaults to Chebyshev.
+            domains: List of domains for each input dimension. If None, the domain
+                (-1, 1) will be used for all dimensions. Defaults to None. Only used
+                for the input layer.
+        """
+        NNSpace.__init__(self, dims, rank, transient, system, name)
+        self.spectral_size = spectral_size
+        self.hidden_size = hidden_size
+        self.act_fun = act_fun
+        self.basespace = basespace
+        self.domains = domains
+
+
+class sPIKANSpace(NNSpace):
+    """Kolmogorov-Arnold Network using spectral bases in all layers"""
+
+    def __init__(
+        self,
+        spectral_size: int,
+        hidden_size: list[int] | int,
+        dims: int = 1,
+        rank: int = 0,
+        system: CoordSys = None,
+        name: str = "sPIKAN",
+        transient: bool = False,
+        act_fun: Callable[[Array], Array] = nnx.tanh,
+        basespace: BaseSpace = Chebyshev.Chebyshev,
+        domains: list[Domain] | None = None,
+    ) -> None:
+        """Class for the structure of a spectral PIKAN
+
+        Args:
+            spectral_size: The number of spectral modes in each layer
+            hidden_size: If list of integers, like hidden_size = [X, Y, Z], then there
+                will be len(hidden_size) hidden layers of size X, Y and Z, respectively.
+                If integer, like hidden_size = X, then there will be no hidden layers,
+                but the size of the weights in the input layer will be (dims, X) and the
+                output will be of shape (X, self.out_size)
+            dims: The dimensions of the input. Defaults to 1.
+            rank: Rank of the output. Scalars, vectors and dyadics have rank 0, 1 and 2,
+                respectively. Defaults to 0.
+            system: Coordinate system. Defaults to None, in which case the
+                coordinate system will be Cartesian.
+            name: Name of sPIKAN space. Defaults to "sPIKAN".
+            transient: Whether to include the variable time or not. Defaults to False.
+            act_fun: Activation function for all except the output layer
+            basespace: Base space for the spectral layers. Defaults to Chebyshev.
+            domains: List of domains for each input dimension. If None, the domain
+                (-1, 1) will be used for all dimensions. Defaults to None. Only used
+                for the input layer.
+        """
+        NNSpace.__init__(self, dims, rank, transient, system, name)
+        self.spectral_size = spectral_size
+        self.hidden_size = hidden_size
+        self.act_fun = act_fun
+        self.basespace = basespace
+        self.domains = domains

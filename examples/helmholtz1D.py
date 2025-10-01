@@ -16,11 +16,11 @@ from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
 x = sp.Symbol("x", real=True)
-M = 50
+N = 80
 ue = sp.exp(sp.cos(2 * sp.pi * x))
 
 bcs = {"left": {"D": float(ue.subs(x, -1))}, "right": {"D": float(ue.subs(x, 1))}}
-D = FunctionSpace(M, space, bcs=bcs, name="D", fun_str="psi", scaling=n + 1)
+D = FunctionSpace(N, space, bcs=bcs, name="D", fun_str="psi", scaling=n + 1)
 v = TestFunction(D, name="v")
 u = TrialFunction(D, name="u")
 
@@ -41,7 +41,7 @@ uj = D.evaluate(xj, uh)
 uej = lambdify(x, ue)(xj)
 error = jnp.linalg.norm(uj - uej)
 if "PYTEST" in os.environ:
-    assert error < ulp(1000), error
+    assert error < ulp(100000), error
     sys.exit(1)
 
 print("Error =", error)

@@ -18,6 +18,7 @@ from .module import (
     FlaxFunction as FlaxFunction,
 )
 from .nnspaces import (
+    KANMLPSpace as KANMLPSpace,
     MLPSpace as MLPSpace,
     MLPVectorSpace as MLPVectorSpace,
     PirateSpace as PirateSpace,

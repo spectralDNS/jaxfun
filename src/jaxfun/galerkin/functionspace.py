@@ -35,12 +35,12 @@ def FunctionSpace(
         if bcs.is_homogeneous():
             return C
         B = BCGeneric(
-            bcs.num_bcs() - 1,
+            bcs.num_bcs(),
             space,
             bcs=bcs,
             domain=domain,
             system=system,
-            M=N,
+            num_quad_points=N,
             name=name + "_b",
             fun_str=fun_str + "_b",
         )

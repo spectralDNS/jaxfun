@@ -18,6 +18,7 @@ import pytest
         "poisson2D_parametric",
         "poisson2D_lstsq",
         "biharmonic2D",
+        "helmholtz1D",
         "helmholtz2D",
     ],
 )

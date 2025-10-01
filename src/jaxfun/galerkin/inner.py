@@ -145,7 +145,7 @@ def inner(
             if has_bcs:
                 bresults.append(
                     -(Am @ trial_space.bndvals[(tuple(trial))].flatten()).reshape(
-                        test_space.dim
+                        test_space.num_dofs
                     )
                 )
             else:
@@ -155,7 +155,7 @@ def inner(
                         sign
                         * (
                             Am @ coeffs["linear"]["jaxfunction"].array.flatten()
-                        ).reshape(test_space.dim)
+                        ).reshape(test_space.num_dofs)
                     )
                 if "bilinear" in coeffs:
                     assert coeffs["bilinear"] == 1
@@ -460,7 +460,7 @@ def project(ue: sp.Expr, V: OrthogonalSpace) -> Array:
     u = TrialFunction(V)
     v = TestFunction(V)
     M, b = inner(v * (u - ue))
-    uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(V.dim)
+    uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(V.num_dofs)
     return uh
 
 

@@ -147,7 +147,7 @@ def test_tensorproductspace_3d_paths_and_mapping():
     C = Chebyshev.Chebyshev(3)
     T3 = TensorProduct(C, C, C)
     # Random coefficients
-    u = jax.random.normal(jax.random.PRNGKey(3), shape=T3.dim)
+    u = jax.random.normal(jax.random.PRNGKey(3), shape=T3.num_dofs)
     # forward/backward roundtrip (approximate due to quadrature discretization)
     c = T3.forward(u)
     uh = T3.backward(c)

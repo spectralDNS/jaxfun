@@ -94,7 +94,7 @@ class Chebyshev(Jacobi):
 
     @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.M if N == 0 else N
+        N = self.num_quad_points if N == 0 else N
         return jnp.array(
             (
                 jnp.cos(jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)),

@@ -2,13 +2,22 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from jaxfun.coordinates import BaseTime
+from jaxfun.coordinates import BaseTime, CartCoordSys, x
 from jaxfun.pinns import module as mod, nnspaces as nns
 
 
 def test_kanlayer_forward_shape_and_params():
+    global x
     rngs = nnx.Rngs(0)
-    layer = mod.KANLayer(in_features=5, out_features=3, spectral_size=4, rngs=rngs)
+    system = CartCoordSys("N", (x,))
+    layer = mod.KANLayer(
+        in_features=5,
+        out_features=3,
+        spectral_size=4,
+        system=system,
+        rngs=rngs,
+        hidden=True,
+    )
     x = jnp.linspace(-1.0, 1.0, 15).reshape(3, 5)
     y = layer(x)
     assert y.shape == (3, 3)
@@ -17,14 +26,7 @@ def test_kanlayer_forward_shape_and_params():
 
 
 def test_kanmlpspace_basic_attributes():
-    V = nns.KANMLPSpace(
-        spectral_size=5,
-        hidden_size=[8, 4],
-        dims=2,
-        rank=0,
-        transient=False,
-        name="KANMLP",
-    )
+    V = nns.KANMLPSpace(spectral_size=5, hidden_size=[8, 4], dims=2)
     assert V.dims == 2
     assert V.rank == 0
     assert V.out_size == 1
@@ -121,6 +123,31 @@ def test_flaxfunction_with_kanmlpspace_hidden_list():
     y = f(x)
     assert y.shape == (4,)
     assert hasattr(f, "module")
+    assert f.module.layer_in.kernel.shape == (
+        V.in_size,
+        V.spectral_size,
+        V.hidden_size[0],
+    )
+    assert f.module.hidden[0].kernel.shape == (
+        V.hidden_size[0],
+        V.hidden_size[0],
+    )
+    assert f.module.layer_out.kernel.shape == (V.hidden_size[-1], 1)
+
+
+def test_flaxfunction_with_kanmlpspace_transient():
+    V = nns.KANMLPSpace(
+        spectral_size=5,
+        hidden_size=[6],
+        dims=1,
+        rank=0,
+        transient=True,
+        domains=[(-1, 1), (0, 1)],
+    )
+    f = mod.FlaxFunction(V, name="f")
+    x = jnp.zeros((4, V.in_size))
+    y = f(x)
+    assert y.shape == (4,)
     assert f.module.layer_in.kernel.shape == (
         V.in_size,
         V.spectral_size,

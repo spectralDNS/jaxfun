@@ -205,10 +205,13 @@ class KANLayer(nnx.Module):
         # coordinate system is only used in the input layer. The hidden layers will not
         # use the coordinate system.
         subsystems = (
-            [system.sub_system(i) if system else None for i in range(in_features)]
-            if not hidden and in_features > 1
+            [system.sub_system(i) if system else None for i in range(system.dims)]
+            if not hidden and system.dims > 1
             else [system]
         )
+        if in_features > system.dims and not hidden:  # Transient case
+            subsystems += [None]
+
         domains = (
             domains if domains is not None else [(-1, 1) for _ in range(in_features)]
         )
@@ -603,6 +606,7 @@ class sPIKANModule(nnx.Module):
                     V.spectral_size,
                     hidden=True,
                     basespace=V.basespace,
+                    system=V.system,
                     rngs=rngs,
                     kernel_init=kernel_init,
                     param_dtype=float,
@@ -621,6 +625,7 @@ class sPIKANModule(nnx.Module):
                 V.spectral_size,
                 hidden=True,
                 basespace=V.basespace,
+                system=V.system,
                 rngs=rngs,
                 kernel_init=kernel_init,
                 param_dtype=float,

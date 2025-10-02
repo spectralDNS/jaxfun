@@ -35,7 +35,8 @@ def jit_vmap(
     ndim: int = 0,
 ):
     """Decorator that JIT compiles a function and applies vmap if the first argument is
-    an array. If the first argument is a scalar, then the functions is merely jitted.
+    an array with dimensions > ndim. If the first argument is a scalar, or an array of
+    dimensions = ndim, then the function is merely jitted.
 
     The decorator can only be used with class methods.
 
@@ -47,6 +48,8 @@ def jit_vmap(
         static_argnums (optional): optional, an int or
             collection of ints that specify which positional arguments to treat as
             static (trace- and compile-time constant). Defaults to 0.
+        ndim (optional): Number of dimensions of the first argument that should not
+            trigger vmap. Defaults to 0 (scalar).
     """
     in_axes = (None,) + in_axes if isinstance(in_axes, tuple) else (None, in_axes)
 

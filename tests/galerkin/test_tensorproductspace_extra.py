@@ -31,7 +31,7 @@ def test_directsum_two_inhomogeneous_bnd_assembly_and_backward():
     hom1 = F2[0]
     c = jnp.zeros((hom0.dim, hom1.dim))
     u = T.backward(c)  # triggers boundary reconstruction path
-    assert u.shape[0] == hom0.M and u.shape[1] == hom1.M
+    assert u.shape[0] == hom0.num_quad_points and u.shape[1] == hom1.num_quad_points
 
 
 def test_tensorproduct_get_homogeneous_and_tpmatrices_precond():
@@ -47,7 +47,7 @@ def test_tensorproduct_get_homogeneous_and_tpmatrices_precond():
     u = TrialFunction(H)
     A = inner(v * u)
     mats = TPMatrices([m for m in A if hasattr(m, "M")])
-    X = jax.random.normal(jax.random.PRNGKey(0), shape=T.dim)
+    X = jax.random.normal(jax.random.PRNGKey(0), shape=T.num_dofs)
     Z = mats.precond(X)
     assert Z.shape == X.shape
 
@@ -63,7 +63,7 @@ def test_multivar_and_linear_bcs_branch():
     v = TestFunction(T)
     u = TrialFunction(T)
     # multivar coefficient (x+y) and linear JAXFunction coefficient in same expression
-    coeffs = jax.random.normal(jax.random.PRNGKey(1), shape=T.dim)
+    coeffs = jax.random.normal(jax.random.PRNGKey(1), shape=T.num_dofs)
     from jaxfun.galerkin.arguments import JAXFunction
 
     jf = JAXFunction(coeffs, T)

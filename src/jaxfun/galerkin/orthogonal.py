@@ -23,7 +23,7 @@ class OrthogonalSpace(BaseSpace):
         fun_str: str = "psi",
     ) -> None:
         self.N = N
-        self.M = N
+        self._num_quad_points = N
         self._domain = Domain(*domain) if domain is not None else None
         self.bcs = None
         self.orthogonal = self
@@ -35,6 +35,10 @@ class OrthogonalSpace(BaseSpace):
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
         raise NotImplementedError
+
+    @property
+    def num_quad_points(self) -> int:
+        return self._num_quad_points
 
     @jit_vmap(in_axes=(0, None))
     def evaluate(self, X: float | Array, c: Array) -> Array:
@@ -148,6 +152,10 @@ class OrthogonalSpace(BaseSpace):
         return 1
 
     @property
+    def num_dofs(self) -> int:
+        return self.dim
+
+    @property
     def rank(self):
         return 0
 
@@ -220,7 +228,7 @@ class OrthogonalSpace(BaseSpace):
             return self.map_true_domain(self.quad_points_and_weights(N)[0])
         elif kind == "uniform":
             a, b = self.domain
-            M = N if N != 0 else self.M
+            M = N if N != 0 else self.num_quad_points
             return jnp.linspace(float(a), float(b), M)
 
     def cartesian_mesh(self, kind: str = "quadrature", N: int = 0) -> tuple[Array, ...]:

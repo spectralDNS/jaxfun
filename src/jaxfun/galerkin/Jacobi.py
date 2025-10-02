@@ -82,7 +82,7 @@ class Jacobi(OrthogonalSpace):
 
     @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.M if N == 0 else N
+        N = self.num_quad_points if N == 0 else N
         return jnp.array(roots_jacobi(N, float(self.alpha), float(self.beta)))
 
     @jit_vmap(in_axes=(0, None))

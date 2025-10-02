@@ -4,20 +4,13 @@ import sys
 import time
 
 import jax
-
-jax.config.update("jax_enable_x64", True)
-
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
 from jaxfun import Div, Grad
 from jaxfun.galerkin import FunctionSpace, TensorProduct
 from jaxfun.galerkin.Chebyshev import Chebyshev
-from jaxfun.pinns import (
-    LSQR,
-    FlaxFunction,
-    run_optimizer,
-)
+from jaxfun.pinns import LSQR, FlaxFunction, run_optimizer
 from jaxfun.pinns.mesh import Rectangle
 from jaxfun.pinns.optimizer import GaussNewton, adam, lbfgs
 from jaxfun.utils import lambdify
@@ -28,7 +21,7 @@ print("JAX running on", jax.devices()[0].platform.upper())
 # V = PirateSpace(
 #    [20], dims=2, rank=0, name="V", act_fun=nnx.tanh, act_fun_hidden=nnx.swish
 # )
-C = FunctionSpace(20, Chebyshev, domain=(-1, 1), name="C")
+C = FunctionSpace(10, Chebyshev, domain=(-1, 1), name="C")
 V = TensorProduct(C, C, name="V")
 w = FlaxFunction(V, name="w")
 
@@ -56,7 +49,7 @@ run_optimizer(loss_fn, opt_adam, 1000, 100, update_global_weights=10)
 opt_lbfgs = lbfgs(w.module, memory_size=20)
 run_optimizer(loss_fn, opt_lbfgs, 1000, 100, update_global_weights=10)
 
-opt_hess = GaussNewton(w.module, use_lstsq=True, cg_max_iter=100)
+opt_hess = GaussNewton(w.module, use_lstsq=True)
 run_optimizer(loss_fn, opt_hess, 10, 1, abs_limit_change=0)
 
 print("time", time.time() - t0)
@@ -72,6 +65,6 @@ ax1.contourf(xyi[:, 0].reshape((N, N)), xyi[:, 1].reshape((N, N)), uj.reshape((N
 error = jnp.linalg.norm(w.module(xyi)[:, 0] - uj) / jnp.sqrt(len(xyi))
 print("Error", error)
 
-if "pytest" in os.environ:
+if "PYTEST" in os.environ:
     assert error < ulp(1000), error
     sys.exit(1)

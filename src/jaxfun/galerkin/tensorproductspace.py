@@ -68,6 +68,10 @@ class TensorProductSpace:
     def dim(self) -> tuple[int, ...]:
         return tuple(space.dim for space in self.basespaces)
 
+    @property
+    def num_dofs(self) -> tuple[int, ...]:
+        return tuple(space.num_dofs for space in self.basespaces)
+
     def mesh(
         self,
         kind: str = "quadrature",
@@ -259,7 +263,7 @@ class TensorProductSpace:
                 backward = partial(
                     self.basespaces[ax]._backward,
                     kind=kind,
-                    N=self.basespaces[ax].M if N is None else N[ax],
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
                 )
                 c = jax.vmap(backward, in_axes=axi, out_axes=axi)(c)
         else:
@@ -267,7 +271,7 @@ class TensorProductSpace:
                 backward = partial(
                     self.basespaces[ax]._backward,
                     kind=kind,
-                    N=self.basespaces[ax].M if N is None else N[ax],
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
                 )
                 ax0, ax1 = set(range(dim)) - set((ax,))
                 c = jax.vmap(
@@ -550,7 +554,7 @@ class DirectSumTPS(TensorProductSpace):
         u = TrialFunction(self)
         c = JAXArray(c, v.functionspace)
         A, b = inner((u - c) * v)
-        return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.dim)
+        return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.num_dofs)
 
     def scalar_product(self, c: Array):
         raise RuntimeError(

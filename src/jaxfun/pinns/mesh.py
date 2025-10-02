@@ -59,6 +59,14 @@ class Line(UnitLine):
     left: Number
     right: Number
 
+    def __post_init__(self):
+        self.left = float(self.left)
+        self.right = float(self.right)
+        if not self.right > self.left:
+            raise ValueError(
+                f"right ({self.right}) must be greater than left ({self.left})"
+            )
+
     def get_points_inside_domain(self, kind: SampleMethod = "uniform") -> Array:
         x = super().get_points_inside_domain(kind)
         return self.left + (self.right - self.left) * x
@@ -189,6 +197,20 @@ class Rectangle(UnitSquare):
     right: Number
     bottom: Number
     top: Number
+
+    def __post_init__(self):
+        self.left = float(self.left)
+        self.right = float(self.right)
+        self.bottom = float(self.bottom)
+        self.top = float(self.top)
+        if not self.right > self.left:
+            raise ValueError(
+                f"right ({self.right}) must be greater than left ({self.left})"
+            )
+        if not self.top > self.bottom:
+            raise ValueError(
+                f"top ({self.top}) must be greater than bottom ({self.bottom})"
+            )
 
     def get_points_inside_domain(self, kind: SampleMethod = "uniform") -> Array:
         mesh = super().get_points_inside_domain(kind)

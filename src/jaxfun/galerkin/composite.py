@@ -256,7 +256,7 @@ class BCGeneric(Composite):
         stencil: dict = None,
         alpha: Number = 0,
         beta: Number = 0,
-        M: int = 0,
+        num_quad_points: int = 0,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
         bcs = BoundaryConditions(bcs, domain=domain)
@@ -265,7 +265,7 @@ class BCGeneric(Composite):
         )
         self.bcs = bcs
         self.stencil = None
-        self.M = M
+        self._num_quad_points = num_quad_points
         self.orthogonal = orthogonal(
             bcs.num_bcs() + bcs.num_derivatives(),
             domain=domain,
@@ -275,19 +275,25 @@ class BCGeneric(Composite):
         )
         S = get_bc_basis(bcs, self.orthogonal)
         self.orthogonal.N = S.shape[1]
-        self.orthogonal.M = M
+        self.orthogonal._num_quad_points = num_quad_points
         self.S = BCOO.fromdense(S.__array__().astype(float))
 
     @property
     def dim(self) -> int:
-        return self.N
+        return self.S.shape[0]
+
+    @property
+    def num_dofs(self) -> int:
+        # Degrees of freedom after applying boundary constraints. For BCGeneric, all
+        # degrees of freedom are fixed by boundary conditions, so this is 0.
+        return 0
 
     def bnd_vals(self) -> Array:
         return jnp.array(self.bcs.orderedvals())
 
     @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.M if N == 0 else N
+        N = self.num_quad_points if N == 0 else N
         return self.orthogonal.quad_points_and_weights(N)
 
 
@@ -301,7 +307,7 @@ class DirectSum:
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
         self.system = a.system
         self.N = a.N
-        self.M = a.M
+        self._num_quad_points = a._num_quad_points
         self.map_reference_domain = a.map_reference_domain
         self.map_true_domain = a.map_true_domain
 
@@ -319,7 +325,11 @@ class DirectSum:
 
     @property
     def dim(self) -> int:
-        return self.basespaces[0].dim
+        return self.basespaces[0].dim + self.basespaces[1].dim
+
+    @property
+    def num_dofs(self) -> int:
+        return self.basespaces[0].num_dofs
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:

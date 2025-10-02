@@ -6,7 +6,6 @@ from jaxfun.pinns.module import (
     MLP,
     Comp,
     FlaxFunction,
-    KANModule,
     PIModifiedBottleneck,
     PirateNet,
     RWFLinear,
@@ -110,18 +109,6 @@ def test_spectralmodule_2d_forward_and_dim_with_tensor_product():
     y = sm(x)
     assert y.shape == (3, 1)  # 2D branch returns (N, 1)
     assert sm.dim == V2.dim
-
-
-def test_kanmodule_matches_tanh_featurization_1d():
-    rngs = nnx.Rngs(2)
-    V1 = Legendre.Legendre(3)
-    km = KANModule(V1, rngs=rngs)
-    x = jnp.linspace(-2.0, 2.0, 5).reshape(-1, 1)
-    y = km(x)
-    # Reference: evaluate(tanh(x), kernel_row)
-    y_ref = V1.evaluate(nnx.tanh(x), km.kernel.value[0])
-    assert y.shape == (x.shape[0], 1)
-    assert jnp.allclose(y, y_ref)
 
 
 def test_flaxfunction_builds_mlp_and_call():

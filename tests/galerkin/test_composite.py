@@ -52,11 +52,11 @@ def test_composite_and_mass_matrix():
 
 def test_bcgeneric_space():
     bcs = {"left": {"D": 0, "N": 1}, "right": {"D": 2}}
-    B = BCGeneric(5, Legendre.Legendre, bcs)
-    assert B.dim == 5
+    B = BCGeneric(3, Legendre.Legendre, bcs)
+    assert B.dim == 3
     # quad_points_and_weights should use M when N==0
     xw = B.quad_points_and_weights()
-    assert xw.shape[1] == B.orthogonal.M
+    assert xw.shape[1] == B.orthogonal.num_quad_points
 
 
 def test_direct_sum_evaluate_backward():
@@ -70,7 +70,7 @@ def test_direct_sum_evaluate_backward():
     assert jnp.isfinite(val)
     u = jnp.ones(C.dim)
     uh = FS.backward(u)
-    assert uh.shape[0] == C.M
+    assert uh.shape[0] == C.num_quad_points
 
 
 def test_get_bc_basis():

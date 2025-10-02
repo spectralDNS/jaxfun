@@ -56,7 +56,7 @@ class Fourier(OrthogonalSpace):
         return jax.lax.fori_loop(1, len(c), body_fun, c0)
 
     def quad_points_and_weights(self, N: int = 0) -> Array:
-        N = self.N if N == 0 else N
+        N = self.num_quad_points if N == 0 else N
         points = jnp.arange(N, dtype=float) * 2 * jnp.pi / N
         return points, jnp.full(N, 2 * jnp.pi / N)
 

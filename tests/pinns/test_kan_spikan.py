@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+import pytest
 from flax import nnx
 
 from jaxfun.coordinates import BaseTime
@@ -63,6 +64,34 @@ def test_spikanspace_basic_attributes():
     assert len(bv) == 2
 
 
+def test_spikanspace_hidden_size_1():
+    V = nns.sPIKANSpace(spectral_size=6, hidden_size=1, dims=1, rank=0)
+    assert V.dims == 1
+    assert V.rank == 0
+    assert V.out_size == 1
+    assert V.in_size == 1
+    assert V.act_fun(1) == 1
+
+
+def test_kanmplspace_hidden_size_1():
+    V = nns.KANMLPSpace(spectral_size=6, hidden_size=1, dims=1, rank=0)
+    assert V.dims == 1
+    assert V.rank == 0
+    assert V.out_size == 1
+    assert V.in_size == 1
+    assert V.act_fun(1) == 1
+
+
+def test_spikanspace_hidden_size_1_dim_2():
+    with pytest.raises(ValueError):
+        nns.sPIKANSpace(spectral_size=6, hidden_size=1, dims=2, rank=0)
+
+
+def test_kanmlpspace_hidden_size_1_dim_2():
+    with pytest.raises(ValueError):
+        nns.KANMLPSpace(spectral_size=6, hidden_size=1, dims=2, rank=0)
+
+
 def test_spikanspace_transient():
     V = nns.sPIKANSpace(
         spectral_size=3,
@@ -77,7 +106,7 @@ def test_spikanspace_transient():
     assert isinstance(bv[-1], BaseTime)
 
 
-def test_flaxfunction_with_kanmlpspace_builds_module():
+def test_flaxfunction_with_kanmlpspace_hidden_list():
     rngs = nnx.Rngs(5)
     V = nns.KANMLPSpace(
         spectral_size=5,
@@ -92,9 +121,42 @@ def test_flaxfunction_with_kanmlpspace_builds_module():
     y = f(x)
     assert y.shape == (4,)
     assert hasattr(f, "module")
+    assert f.module.layer_in.kernel.shape == (
+        V.in_size,
+        V.spectral_size,
+        V.hidden_size[0],
+    )
+    assert f.module.hidden[0].kernel.shape == (
+        V.hidden_size[0],
+        V.hidden_size[0],
+    )
+    assert f.module.layer_out.kernel.shape == (V.hidden_size[-1], 1)
 
 
-def test_flaxfunction_with_spikanspace_forward():
+def test_flaxfunction_with_kanmlpspace_hidden_int():
+    rngs = nnx.Rngs(5)
+    V = nns.KANMLPSpace(
+        spectral_size=5,
+        hidden_size=6,
+        dims=1,
+        rank=0,
+        transient=False,
+        name="KANMLP",
+    )
+    f = mod.FlaxFunction(V, "u", rngs=rngs)
+    x = jnp.zeros((4, V.in_size))
+    y = f(x)
+    assert y.shape == (4,)
+    assert hasattr(f, "module")
+    assert f.module.layer_in.kernel.shape == (
+        V.in_size,
+        V.spectral_size,
+        V.hidden_size,
+    )
+    assert f.module.layer_out.kernel.shape == (V.hidden_size, 1)
+
+
+def test_flaxfunction_with_spikanspace_hidden_list():
     rngs = nnx.Rngs(6)
     V = nns.sPIKANSpace(
         spectral_size=4,
@@ -108,6 +170,39 @@ def test_flaxfunction_with_spikanspace_forward():
     x = jnp.zeros((3, V.in_size))
     y = f(x)
     assert y.shape == (3,)
+    assert f.module.layer_in.kernel.shape == (
+        V.in_size,
+        V.spectral_size,
+        V.hidden_size[0],
+    )
+    assert f.module.hidden[0].kernel.shape == (
+        V.hidden_size[0],
+        V.spectral_size,
+        V.hidden_size[0],
+    )
+    assert f.module.layer_out.kernel.shape == (V.hidden_size[-1], V.spectral_size, 1)
+
+
+def test_flaxfunction_with_spikanspace_hidden_int():
+    rngs = nnx.Rngs(6)
+    V = nns.sPIKANSpace(
+        spectral_size=4,
+        hidden_size=5,
+        dims=2,
+        rank=0,
+        transient=False,
+        name="sPIKAN",
+    )
+    f = mod.FlaxFunction(V, "phi", rngs=rngs)
+    x = jnp.zeros((3, V.in_size))
+    y = f(x)
+    assert y.shape == (3,)
+    assert f.module.layer_in.kernel.shape == (
+        V.in_size,
+        V.spectral_size,
+        V.hidden_size,
+    )
+    assert f.module.layer_out.kernel.shape == (V.hidden_size, V.spectral_size, 1)
 
 
 def test_comp_with_kan_and_spikan_spaces():

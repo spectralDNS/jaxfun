@@ -21,7 +21,7 @@ from sympy.vector import VectorAdd
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseTime, CoordSys
 from jaxfun.galerkin import Chebyshev
-from jaxfun.utils.common import Domain, lambdify, matmat
+from jaxfun.utils.common import Domain, lambdify
 
 from .embeddings import Embedding
 from .nnspaces import KANMLPSpace, MLPSpace, PirateSpace, sPIKANSpace
@@ -173,6 +173,7 @@ class KANLayer(nnx.Module):
         param_dtype: Dtype = jnp.float32,
         precision: PrecisionLike = None,
         kernel_init: Initializer = default_kernel_init,
+        dot_general: DotGeneralT = lax.dot_general,
         promote_dtype=dtypes.promote_dtype,
         rngs: nnx.Rngs,
     ):
@@ -190,6 +191,7 @@ class KANLayer(nnx.Module):
         self.param_dtype = param_dtype
         self.precision = precision
         self.kernel_init = kernel_init
+        self.dot_general = dot_general
         self.promote_dtype = promote_dtype
 
         # The input layer needs special attention since the input is from the spatial
@@ -246,7 +248,17 @@ class KANLayer(nnx.Module):
                 for j in range(self.in_features)
             ]
 
-        return sum([matmat(T[i], weights[i]) for i in range(len(T))])
+        return sum(
+            [
+                self.dot_general(
+                    T[i],
+                    weights[i],
+                    (((T[i].ndim - 1,), (0,)), ((), ())),
+                    precision=self.precision,
+                )
+                for i in range(len(T))
+            ]
+        )
 
 
 class MLP(nnx.Module):
@@ -499,7 +511,7 @@ class KANMLPModule(nnx.Module):
             else [V.hidden_size]
         )
         self.act_fun = V.act_fun
-        self.layer_kan = KANLayer(
+        self.layer_in = KANLayer(
             V.in_size,
             hidden_size[0],
             V.spectral_size,
@@ -528,15 +540,18 @@ class KANMLPModule(nnx.Module):
             if isinstance(V.hidden_size, list | tuple)
             else []
         )
-        self.linear_out = RWFLinear(
-            hidden_size[-1],
-            V.out_size,
-            rngs=rngs,
-            bias_init=bias_init,
-            kernel_init=kernel_init,
-            param_dtype=float,
-            dtype=float,
-        )
+        if hidden_size[-1] > 1:
+            self.layer_out = RWFLinear(
+                hidden_size[-1],
+                V.out_size,
+                rngs=rngs,
+                bias_init=bias_init,
+                kernel_init=kernel_init,
+                param_dtype=float,
+                dtype=float,
+            )
+        else:
+            self.layer_out = lambda x: x
 
     @property
     def dim(self) -> int:
@@ -544,10 +559,10 @@ class KANMLPModule(nnx.Module):
         return jax.flatten_util.ravel_pytree(st)[0].shape[0]
 
     def __call__(self, x: Array) -> Array:
-        x = self.act_fun(self.layer_kan(x))
+        x = self.act_fun(self.layer_in(x))
         for z in self.hidden:
             x = self.act_fun(z(x))
-        return self.linear_out(x)
+        return self.layer_out(x)
 
 
 class sPIKANModule(nnx.Module):
@@ -599,17 +614,20 @@ class sPIKANModule(nnx.Module):
             else []
         )
 
-        self.layer_out = KANLayer(
-            hidden_size[-1],
-            V.out_size,
-            V.spectral_size,
-            hidden=True,
-            basespace=V.basespace,
-            rngs=rngs,
-            kernel_init=kernel_init,
-            param_dtype=float,
-            dtype=float,
-        )
+        if hidden_size[-1] > 1:
+            self.layer_out = KANLayer(
+                hidden_size[-1],
+                V.out_size,
+                V.spectral_size,
+                hidden=True,
+                basespace=V.basespace,
+                rngs=rngs,
+                kernel_init=kernel_init,
+                param_dtype=float,
+                dtype=float,
+            )
+        else:
+            self.layer_out = lambda x: x
 
     @property
     def dim(self) -> int:

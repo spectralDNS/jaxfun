@@ -166,8 +166,12 @@ class KANMLPSpace(NNSpace):
             hidden_size: If list of integers, like hidden_size = [X, Y, Z], then there
                 will be len(hidden_size) hidden layers of size X, Y and Z, respectively.
                 If integer, like hidden_size = X, then there will be no hidden layers,
-                but the size of the weights in the input layer will be (dims, X) and the
-                output will be of shape (X, self.out_size)
+                but the size of the weights in the input layer will be
+                (dims, spectral_size, X) and the output will be of shape
+                (X, self.out_size).
+                If hidden_size == 1, then there are no hidden layers or output layer,
+                and the network is purely spectral in 1D. The activation function is
+                not used in this case. This is only allowed for dims=1.
             dims: The dimensions of the input. Defaults to 1.
             rank: Rank of the output. Scalars, vectors and dyadics have rank 0, 1 and 2,
                 respectively. Defaults to 0.
@@ -187,6 +191,13 @@ class KANMLPSpace(NNSpace):
         self.act_fun = act_fun
         self.basespace = basespace
         self.domains = domains
+        if hidden_size == 1 and self.dims != 1:
+            raise ValueError(
+                "hidden_size=1 only allowed for dims=1. Consider using a "
+                "TensorProductSpace instead."
+            )
+        if hidden_size == 1:
+            self.act_fun = lambda x: x  # No activation if purely spectral in 1D
 
 
 class sPIKANSpace(NNSpace):
@@ -212,8 +223,12 @@ class sPIKANSpace(NNSpace):
             hidden_size: If list of integers, like hidden_size = [X, Y, Z], then there
                 will be len(hidden_size) hidden layers of size X, Y and Z, respectively.
                 If integer, like hidden_size = X, then there will be no hidden layers,
-                but the size of the weights in the input layer will be (dims, X) and the
-                output will be of shape (X, self.out_size)
+                but the size of the weights in the input layer will be
+                (dims, spectral_size, X) and the output weights will be of shape
+                (X, spectral_size, self.out_size).
+                If hidden_size == 1, then there are no hidden layers or output layer,
+                and the network is purely spectral in 1D. The activation function is
+                not used in this case. This is only allowed for dims=1.
             dims: The dimensions of the input. Defaults to 1.
             rank: Rank of the output. Scalars, vectors and dyadics have rank 0, 1 and 2,
                 respectively. Defaults to 0.
@@ -233,3 +248,10 @@ class sPIKANSpace(NNSpace):
         self.act_fun = act_fun
         self.basespace = basespace
         self.domains = domains
+        if hidden_size == 1 and self.dims != 1:
+            raise ValueError(
+                "hidden_size=1 only allowed for dims=1. Consider using a "
+                "TensorProductSpace instead."
+            )
+        if hidden_size == 1:
+            self.act_fun = lambda x: x  # No activation if purely spectral in 1D

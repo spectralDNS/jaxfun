@@ -1,11 +1,11 @@
 """
-Here we extend the Sympy operators Divergence, Gradient, Curl, Cross and Dot
-using curvilinear coordinates. The expressions used for computing the operators
-have been collected from the online book
+Extended differential operators (Divergence, Gradient, Curl, Cross, Dot, Outer)
+for curvilinear coordinate systems.
 
-[1] Kelly, PA. Mechanics Lecture Notes: An introduction to Solid Mechanics.
-Available from http://homepages.engineering.auckland.ac.nz/~pkel015/SolidMechanicsBooks/index.html
+The expressions follow the formulas collected from:
 
+[1] Kelly, P. A. Mechanics Lecture Notes: An introduction to Solid Mechanics.
+    http://homepages.engineering.auckland.ac.nz/~pkel015/SolidMechanicsBooks/index.html
 """
 
 import collections
@@ -79,24 +79,27 @@ def express(expr: Expr, system: CoordSys) -> Expr:
 
 
 def outer(vect1: Vector, vect2: Vector) -> Expr:
-    """
-    Returns outer product of two vectors.
+    """Return the (tensor / dyadic) outer product of two vectors.
 
-    Examples
-    ========
+    Args:
+        vect1: Left Vector operand.
+        vect2: Right Vector operand.
 
-    >>> from jaxfun import get_CoordSys
-    >>> from jaxfun.operators import outer
-    >>> import sympy as sp
-    >>> r, theta = sp.symbols("r,theta", real=True)
-    >>> P = get_CoordSys(
-    ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
-    ... )
-    >>> v1 = P.r * P.b_r
-    >>> v2 = P.theta * P.b_theta
-    >>> outer(v1, v2)
-    r*theta*(P.b_r⊗P.b_theta)
+    Returns:
+        A Dyadic (rank‑2 tensor) representing vect1 ⊗ vect2.
 
+    Examples:
+        >>> from jaxfun import get_CoordSys
+        >>> from jaxfun.operators import outer
+        >>> import sympy as sp
+        >>> r, theta = sp.symbols("r,theta", real=True)
+        >>> P = get_CoordSys(
+        ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
+        ... )
+        >>> v1 = P.r * P.b_r
+        >>> v2 = P.theta * P.b_theta
+        >>> outer(v1, v2)
+        r*theta*(P.b_r⊗P.b_theta)
     """
     if isinstance(vect1, Add | VectorAdd):
         return DyadicAdd.fromiter(outer(i, vect2) for i in vect1.args)
@@ -123,22 +126,33 @@ def outer(vect1: Vector, vect2: Vector) -> Expr:
 
 
 def cross(vect1: Vector, vect2: Vector) -> Vector:
-    """
-    Returns cross product of two vectors.
+    """Return the cross product of two vectors.
 
-    Examples
-    ========
+    Handles:
+      * Linear (Add) combinations
+      * Scalar multiples (VectorMul)
+      * Base vectors in Cartesian or curvilinear coordinates
 
-    >>> from jaxfun import get_CoordSys
-    >>> from jaxfun.operators import dot
-    >>> import sympy as sp
-    >>> r, theta, z = sp.symbols("r,theta,z", real=True, positive=True)
-    >>> C = get_CoordSys(
-    ...     "C", sp.Lambda((r, theta, z), (r * sp.cos(theta), r * sp.sin(theta), z))
-    ... )
-    >>> cross(C.b_r, C.b_theta)
-    r*C.b_z
+    Args:
+        vect1: First Vector.
+        vect2: Second Vector.
 
+    Returns:
+        Vector representing vect1 × vect2 (zero if colinear).
+
+    Raises:
+        AssertionError: If attempting cross outside 3D for non‑Cartesian bases.
+
+    Examples:
+        >>> from jaxfun import get_CoordSys
+        >>> from jaxfun.operators import cross
+        >>> import sympy as sp
+        >>> r, theta, z = sp.symbols("r,theta,z", real=True, positive=True)
+        >>> C = get_CoordSys(
+        ...     "C", sp.Lambda((r, theta, z), (r * sp.cos(theta), r * sp.sin(theta), z))
+        ... )
+        >>> cross(C.b_r, C.b_theta)
+        r*C.b_z
     """
     if isinstance(vect1, Add):
         return VectorAdd.fromiter(cross(i, vect2) for i in vect1.args)
@@ -181,24 +195,30 @@ def cross(vect1: Vector, vect2: Vector) -> Vector:
 
 
 def dot(vect1: Vector | Dyadic, vect2: Vector | Dyadic) -> Expr:
-    """
-    Returns dot product of two tensors.
+    """Return the (possibly contracted) inner product of two tensors.
 
-    Examples
-    ========
+    Supports Vector·Vector, Vector·Dyadic, Dyadic·Vector and Dyadic·Dyadic,
+    recursively distributing over sums and scalar multiples.
 
-    >>> from jaxfun import get_CoordSys
-    >>> from jaxfun.operators import dot
-    >>> import sympy as sp
-    >>> r, theta = sp.symbols("r,theta", real=True, positive=True)
-    >>> P = get_CoordSys(
-    ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
-    ... )
-    >>> v1 = P.b_r + P.b_theta
-    >>> v2 = P.r * P.b_r + P.theta * P.b_theta
-    >>> dot(v1, v2)
-    r**2*theta + r
+    Args:
+        vect1: First tensor (Vector or Dyadic).
+        vect2: Second tensor (Vector or Dyadic).
 
+    Returns:
+        Scalar, Vector, or Dyadic depending on contraction rank.
+
+    Examples:
+        >>> from jaxfun import get_CoordSys
+        >>> from jaxfun.operators import dot
+        >>> import sympy as sp
+        >>> r, theta = sp.symbols("r,theta", real=True, positive=True)
+        >>> P = get_CoordSys(
+        ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
+        ... )
+        >>> v1 = P.b_r + P.b_theta
+        >>> v2 = P.r * P.b_r + P.theta * P.b_theta
+        >>> dot(v1, v2)
+        r**2*theta + r
     """
     rank: int = 0
     if (isinstance(vect1, Vector) and isinstance(vect2, Dyadic)) or (
@@ -303,37 +323,32 @@ def dot(vect1: Vector | Dyadic, vect2: Vector | Dyadic) -> Expr:
 
 
 def divergence(vect: Vector | Dyadic, doit: bool = True) -> Expr:
-    """
-    Returns the divergence of a vector/dyadic field computed wrt the base
-    scalars of the given coordinate system.
+    """Return divergence of a Vector or Dyadic field.
 
-    Reference Eqs. (1.18.27), (1.18.28) and (1.18.18) in [1]
+    Implements:
+      * ∇·v for vectors
+      * (∇·T)_i for second‑order tensors (Dyadics)
+    using covariant formulations with Christoffel symbols when needed.
 
-    Parameters
-    ==========
+    Args:
+        vect: Vector or Dyadic expression.
+        doit: If True, evaluates derivatives; if False returns unevaluated Derivative
+        nodes.
 
-    vect : Vector | Dyadic
-        The vector/dyadic operand
+    Returns:
+        Scalar (for Vector input) or Vector (for Dyadic input).
 
-    doit : bool
-        If True, the result is returned after calling .doit() on
-        each component. Else, the returned expression contains
-        Derivative instances
-
-    Examples
-    ========
-
-    >>> from jaxfun import get_CoordSys
-    >>> from jaxfun.operators import divergence
-    >>> import sympy as sp
-    >>> r, theta = sp.symbols("r,theta", real=True, positive=True)
-    >>> P = get_CoordSys(
-    ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
-    ... )
-    >>> v = P.r * P.b_r + P.theta * P.b_theta
-    >>> divergence(v)
-    3
-
+    Examples:
+        >>> from jaxfun import get_CoordSys
+        >>> from jaxfun.operators import divergence
+        >>> import sympy as sp
+        >>> r, theta = sp.symbols("r,theta", real=True, positive=True)
+        >>> P = get_CoordSys(
+        ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
+        ... )
+        >>> v = P.r * P.b_r + P.theta * P.b_theta
+        >>> divergence(v)
+        3
     """
     coord_sys = _get_coord_systems(vect)
     if len(coord_sys) == 0:
@@ -415,40 +430,30 @@ def divergence(vect: Vector | Dyadic, doit: bool = True) -> Expr:
 
 
 def gradient(field: Expr, doit: bool = True, transpose: bool = False) -> Vector:
-    """
-    Returns the gradient of a scalar/vector field computed wrt the
-    base scalars of the given coordinate system.
+    """Return gradient of a scalar or (optionally transposed) gradient of a vector.
 
-    Reference [1] Eqs. (1.18.23), (1.18.25)
+    For scalar f: returns ∇f
+    For vector v: returns Dyadic sum (∂v_i/∂x_j) e^i ⊗ e^j (or its transpose).
 
-    Parameters
-    ==========
+    Args:
+        field: Scalar (Expr) or Vector expression.
+        doit: If True, evaluate derivatives immediately.
+        transpose: If True and field is a Vector, return (∇v)^T.
 
-    field : SymPy Expr
-        The field to compute the gradient of
+    Returns:
+        Vector if input is scalar, Dyadic if input is Vector.
 
-    doit : bool
-        If True, the result is returned after calling .doit() on
-        each component. Else, the returned expression contains
-        Derivative instances
-
-    transpose : bool
-        Whether to transpose the gradient of a vector
-
-    Examples
-    ========
-
-    >>> from jaxfun import get_CoordSys
-    >>> from jaxfun.operators import gradient
-    >>> import sympy as sp
-    >>> r, theta = sp.symbols("r,theta", real=True, positive=True)
-    >>> P = get_CoordSys(
-    ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
-    ... )
-    >>> s = P.r * P.theta
-    >>> gradient(s)
-    theta*P.b_r + 1/r*P.b_theta
-
+    Examples:
+        >>> from jaxfun import get_CoordSys
+        >>> from jaxfun.operators import gradient
+        >>> import sympy as sp
+        >>> r, theta = sp.symbols("r,theta", real=True, positive=True)
+        >>> P = get_CoordSys(
+        ...     "P", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta)))
+        ... )
+        >>> s = P.r * P.theta
+        >>> gradient(s)
+        theta*P.b_r + 1/r*P.b_theta
     """
     coord_sys = _get_coord_systems(field)
 
@@ -512,36 +517,29 @@ def gradient(field: Expr, doit: bool = True, transpose: bool = False) -> Vector:
 
 
 def curl(vect: Vector, doit: bool = True) -> Vector:
-    """
-    Returns the curl of a vector field computed wrt the base scalars
-    of the given coordinate system.
+    """Return curl of a 3D vector field.
 
-    Reference [1] Eq. (1.18.29)
+    Args:
+        vect: Vector expression (must lie in a 3D system).
+        doit: If True, evaluate derivatives; else return unevaluated form.
 
-    Parameters
-    ==========
+    Returns:
+        Vector representing ∇×vect.
 
-    vect : Vector
-        The vector operand
+    Raises:
+        AssertionError: If system dimension != 3 when required.
 
-    doit : bool
-        If True, the result is returned after calling .doit() on
-        each component. Else, the returned expression contains
-        Derivative instances
-
-    Examples
-    ========
-    >>> from jaxfun import get_CoordSys
-    >>> from jaxfun.operators import curl
-    >>> import sympy as sp
-    >>> r, theta, z = sp.symbols("r,theta,z", real=True, positive=True)
-    >>> P = get_CoordSys(
-    ...     "P", sp.Lambda((r, theta, z), (r * sp.cos(theta), r * sp.sin(theta), z))
-    ... )
-    >>> v = P.b_r + P.b_theta
-    >>> curl(v)
-    2*P.b_z
-
+    Examples:
+        >>> from jaxfun import get_CoordSys
+        >>> from jaxfun.operators import curl
+        >>> import sympy as sp
+        >>> r, theta, z = sp.symbols("r,theta,z", real=True, positive=True)
+        >>> P = get_CoordSys(
+        ...     "P", sp.Lambda((r, theta, z), (r * sp.cos(theta), r * sp.sin(theta), z))
+        ... )
+        >>> v = P.b_r + P.b_theta
+        >>> curl(v)
+        2*P.b_z
     """
     assert vect.is_Vector
 
@@ -602,6 +600,21 @@ def curl(vect: Vector, doit: bool = True) -> Vector:
 
 
 class Grad(Gradient):
+    """Unevaluated gradient wrapper with optional transpose flag.
+
+    Behaves like sympy.vector.Gradient but tracks a transpose state for
+    vector gradients without immediately expanding components. Works also
+    for vectors.
+
+    Args:
+        expr: Scalar or vector expression.
+        transpose: Whether to indicate transpose for vector gradients.
+
+    Attributes:
+        _expr: Stored expression.
+        _transpose: Internal flag (False for scalar fields).
+    """
+
     def __new__(cls, expr, transpose: bool = False):
         expr = sp.sympify(expr)
         obj = Expr.__new__(cls, expr)
@@ -641,16 +654,27 @@ class Grad(Gradient):
 
 
 class Div(Divergence):
+    """Unevaluated divergence wrapper using custom curvilinear implementation."""
+
     def doit(self, **hints: dict[Any]) -> Expr:
         return divergence(self._expr.doit(**hints), doit=True)
 
 
 class Curl(sympy_Curl):
+    """Unevaluated curl wrapper using custom curvilinear implementation."""
+
     def doit(self, **hints: dict[Any]) -> Expr:
         return curl(self._expr.doit(**hints), doit=True)
 
 
 class Dot(sympy_Dot):
+    """Unevaluated dot product wrapper delegating to custom dot().
+
+    Args:
+        expr1: Left tensor.
+        expr2: Right tensor.
+    """
+
     def __new__(cls, expr1, expr2):
         expr1 = sp.sympify(expr1)
         expr2 = sp.sympify(expr2)
@@ -666,22 +690,25 @@ class Dot(sympy_Dot):
 # Note: Sympy subclasses like Cross(Vector), which breaks operators for
 # unevaluated expressions
 class Cross(Expr):
-    """
-    Represents unevaluated Cross product.
+    """Unevaluated cross product.
 
-    Examples
-    ========
+    Args:
+        expr1: Left vector expression.
+        expr2: Right vector expression.
 
-    >>> from jaxfun.coordinates import CartCoordSys, x, y, z
-    >>> from jaxfun.operators import Cross
-    >>> N = CartCoordSys("N", (x, y, z))
-    >>> v1 = N.i + N.j + N.k
-    >>> v2 = N.x * N.i + N.y * N.j + N.z * N.k
-    >>> Cross(v1, v2)
-    Cross(N.i + N.j + N.k, x*N.i + y*N.j + z*N.k)
-    >>> Cross(v1, v2).doit()
-    (-y + z)*N.i + (x - z)*N.j + (-x + y)*N.k
+    Returns:
+        An unevaluated Cross object; use .doit() to compute.
 
+    Examples:
+        >>> from jaxfun.coordinates import CartCoordSys, x, y, z
+        >>> from jaxfun.operators import Cross
+        >>> N = CartCoordSys("N", (x, y, z))
+        >>> v1 = N.i + N.j + N.k
+        >>> v2 = N.x * N.i + N.y * N.j + N.z * N.k
+        >>> Cross(v1, v2)
+        Cross(N.i + N.j + N.k, x*N.i + y*N.j + z*N.k)
+        >>> Cross(v1, v2).doit()
+        (-y + z)*N.i + (x - z)*N.j + (-x + y)*N.k
     """
 
     def __new__(cls, expr1, expr2):
@@ -697,22 +724,25 @@ class Cross(Expr):
 
 
 class Outer(Expr):
-    """
-    Represents unevaluated Outer product.
+    """Unevaluated outer (dyadic) product.
 
-    Examples
-    ========
+    Args:
+        expr1: Left vector expression.
+        expr2: Right vector expression.
 
-    >>> from jaxfun.coordinates import CartCoordSys, x, y
-    >>> from jaxfun.operators import Outer
-    >>> N = CartCoordSys("N", (x, y))
-    >>> v1 = N.i
-    >>> v2 = N.j
-    >>> Outer(v1, v2)
-    Outer(N.i, N.j)
-    >>> Outer(v1, v2).doit()
-    (N.i⊗N.j)
+    Returns:
+        An unevaluated Outer object; call .doit() for the Dyadic result.
 
+    Examples:
+        >>> from jaxfun.coordinates import CartCoordSys, x, y
+        >>> from jaxfun.operators import Outer
+        >>> N = CartCoordSys("N", (x, y))
+        >>> v1 = N.i
+        >>> v2 = N.j
+        >>> Outer(v1, v2)
+        Outer(N.i, N.j)
+        >>> Outer(v1, v2).doit()
+        (N.i⊗N.j)
     """
 
     def __new__(cls, expr1, expr2):
@@ -766,12 +796,20 @@ class Identity(sp.Expr):
 
 
 def diff(self, *args, **kwargs):
-    """
-    Implements the SymPy diff routine, for vectors.
+    """Differentiate a vector (component‑wise) w.r.t. provided variables.
 
-    diff's documentation
-    ========================
+    Converts to Cartesian to avoid differentiating basis vectors, applies
+    SymPy diff to scalar components, then maps back.
 
+    Args:
+        *args: Differentiation variables / (variable, order) pairs.
+        **kwargs: Passed to sympy.diff.
+
+    Returns:
+        Vector with differentiated components.
+
+    Raises:
+        TypeError: If any differentiation target is itself a basis-dependent object.
     """
     for x in args:
         if isinstance(x, sp.vector.basisdependent.BasisDependent):

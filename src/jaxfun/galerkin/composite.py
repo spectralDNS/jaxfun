@@ -357,8 +357,8 @@ def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
 
     Example
     -------
-    >>> from jaxfun import Chebyshev
-    >>> from jaxfun.composite import Composite
+    >>> from jaxfun.galerkin import Chebyshev
+    >>> from jaxfun.galerkin.composite import Composite
     >>> C = Composite(10, Chebyshev.Chebyshev, {"left": {"N": 0}, "right": {"N": 0}})
     >>> C.stencil
     {0: 1, 2: -n**2/(n**2 + 4*n + 4)}

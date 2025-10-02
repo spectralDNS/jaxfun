@@ -4,7 +4,27 @@ from jax import Array
 
 
 class PeriodEmbs(nnx.Module):
-    """Per-axis cosine/sine embeddings with optionally trainable periods."""
+    """Per‑axis cosine/sine positional embeddings with optional trainable periods.
+
+    For each selected axis i we map scalar coordinate x_i to:
+        [cos(2π x_i / p_i), sin(2π x_i / p_i)]
+    If an axis is not selected it is passed through unchanged.
+
+    Periods can be fixed (stored as plain arrays) or trainable (stored as
+    nnx.Param). This enables learning optimal fundamental frequencies.
+
+    Args:
+        period: Tuple of periods p_i (same length as axis / trainable).
+        axis: Tuple of axis indices whose coordinates are embedded.
+        trainable: Tuple of bool flags indicating if corresponding period
+            is trainable.
+
+    Attributes:
+        axis: Stored axis indices (tuple).
+        _periods: Dict mapping 'period_{ordinal}' -> value or nnx.Param.
+                  Note: ordinal is the position inside the axis tuple, not
+                  the absolute axis index.
+    """
 
     def __init__(
         self,
@@ -22,6 +42,17 @@ class PeriodEmbs(nnx.Module):
         self._periods = store
 
     def __call__(self, x: Array) -> Array:
+        """Apply per-axis periodic embeddings.
+
+        Args:
+            x: Input coordinate vector (1D) or batch-unaware array. Expected
+                shape (D,) where D is at least max(axis)+1.
+
+        Returns:
+            Concatenated embedding vector consisting of:
+              - Original coordinates for non-embedded axes
+              - Cos/Sin pairs for embedded axes (doubling those dims)
+        """
         y = []
         for i, xi in enumerate(x):
             if i in self.axis:
@@ -39,7 +70,22 @@ class PeriodEmbs(nnx.Module):
 
 
 class FourierEmbs(nnx.Module):
-    """Gaussian RFFs with fixed projection matrix."""
+    """Gaussian random Fourier feature embeddings (RFF).
+
+    Projects input x ∈ R^{in_dim} using a fixed (non-trainable) random
+    Gaussian matrix W then applies cos/sin:
+        z = [cos(x W), sin(x W)]  giving dimension embed_dim.
+
+    Args:
+        embed_scale: Std deviation of Gaussian initializer for W.
+        embed_dim: Final embedding dimension (must be even).
+        in_dim: Input feature dimension.
+        rngs: RNG container (nnx.Rngs) for deterministic init.
+
+    Attributes:
+        kernel: Projection matrix (nnx.Param) of shape (in_dim, embed_dim/2).
+        embed_dim: Total output embedding size.
+    """
 
     def __init__(
         self, *, embed_scale: float, embed_dim: int, in_dim: int, rngs: nnx.Rngs
@@ -53,12 +99,38 @@ class FourierEmbs(nnx.Module):
         self.kernel = nnx.Param(k)
 
     def __call__(self, x: Array) -> Array:
+        """Apply random Fourier feature mapping.
+
+        Args:
+            x: Input array of shape (..., in_dim). Broadcasting over leading
+                dimensions is supported.
+
+        Returns:
+            Array of shape (..., embed_dim) containing concatenated cos/sin
+            embeddings.
+        """
         proj = x @ self.kernel
         return jnp.concatenate([jnp.cos(proj), jnp.sin(proj)], axis=-1)
 
 
 class Embedding(nnx.Module):
-    """Optionally apply PeriodEmbs then FourierEmbs."""
+    """Composite embedding applying PeriodEmbs then FourierEmbs (optional).
+
+    Workflow:
+        1. (Optional) PeriodEmbs expands selected axes with cos/sin.
+        2. (Optional) FourierEmbs maps result to random Fourier features.
+
+    Args:
+        periodicity: Dict of kwargs for PeriodEmbs or None.
+            Expected keys: period, axis, trainable.
+        fourier_emb: Dict of kwargs for FourierEmbs or None.
+            Expected keys: embed_scale, embed_dim, in_dim.
+        rngs: RNG container for FourierEmbs initialization.
+
+    Attributes:
+        periodic: PeriodEmbs module or None.
+        fourier: FourierEmbs module or None.
+    """
 
     def __init__(
         self,
@@ -71,6 +143,16 @@ class Embedding(nnx.Module):
         self.fourier = FourierEmbs(**fourier_emb, rngs=rngs) if fourier_emb else None
 
     def __call__(self, x: Array) -> Array:
+        """Apply configured embeddings sequentially.
+
+        Args:
+            x: Input array; shape depends on embedding configuration:
+                - For PeriodEmbs only: (D,)
+                - For FourierEmbs: (..., in_dim) after periodic expansion.
+
+        Returns:
+            Embedded array with additional feature dimensions.
+        """
         if self.periodic is not None:
             x = self.periodic(x)
         if self.fourier is not None:

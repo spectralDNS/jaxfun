@@ -24,6 +24,31 @@ multiplication_sign = "\u00d7"
 
 
 class TensorProductSpace:
+    """d‑dimensional tensor product of 1D BaseSpace instances.
+
+    Provides:
+      * Logical / Cartesian mesh generation
+      * Forward / backward spectral transforms (dimension-wise vmap)
+      * Series evaluation on tensor-product meshes or scattered points
+      * Support for heterogeneous underlying bases (Fourier / polynomial)
+      * Automatic mapping between true and reference domains per axis
+
+    Boundary condition handling:
+      Each 1D factor may itself be a Composite/DirectSum (BC aware). This
+      class itself stays agnostic; non-homogeneous BC logic is handled by
+      DirectSumTPS wrapper.
+
+    Attributes:
+        basespaces: Ordered list of 1D BaseSpace objects.
+        system: Coordinate system (created if None).
+        tensorname: Pretty tensor product name (e.g. "V0⊗V1").
+        name: User label.
+
+    Notes:
+        Returned coefficient/tensor shapes follow the ordering of
+        basespaces. Methods vectorize over trailing axes with vmap.
+    """
+
     is_transient = False
 
     def __init__(
@@ -45,31 +70,39 @@ class TensorProductSpace:
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
 
     def __len__(self) -> int:
+        """Return number of spatial dimensions."""
         return len(self.basespaces)
 
     def __iter__(self) -> Iterable[BaseSpace]:
+        """Iterate over factor spaces."""
         return iter(self.basespaces)
 
     def __getitem__(self, i: int) -> BaseSpace:
+        """Return i-th factor space."""
         return self.basespaces[i]
 
     @property
     def dims(self) -> int:
+        """Return number of spatial dimensions."""
         return len(self)
 
     @property
     def rank(self) -> int:
+        """Return tensor rank (0 for scalar-valued space)."""
         return 0
 
     def shape(self) -> tuple[int]:
+        """Return raw modal shape (N0, N1, ...)."""
         return tuple([space.N for space in self.basespaces])
 
     @property
     def dim(self) -> tuple[int, ...]:
+        """Return tuple of total modes per axis (may differ from N)."""
         return tuple(space.dim for space in self.basespaces)
 
     @property
     def num_dofs(self) -> tuple[int, ...]:
+        """Return tuple of active degrees of freedom per axis."""
         return tuple(space.num_dofs for space in self.basespaces)
 
     def mesh(
@@ -78,7 +111,16 @@ class TensorProductSpace:
         N: tuple[int] | None = None,
         broadcast: bool = True,
     ) -> Array:
-        """Return mesh in the domain of self"""
+        """Return tensor mesh (as tuple of arrays) in true domain.
+
+        Args:
+            kind: 'quadrature' or 'uniform'.
+            N: Optional per-axis counts (defaults each to space.N).
+            broadcast: If True broadcast each axis array to nd-grid shape.
+
+        Returns:
+            Tuple (X0, X1, ...) each either 1D or broadcasted.
+        """
         mesh = []
         if N is None:
             N = tuple([s.N for s in self.basespaces])
@@ -92,7 +134,15 @@ class TensorProductSpace:
         kind: str = "quadrature",
         N: tuple[int] | None = None,
     ) -> Array:
-        """Return flattened mesh in the domain of self"""
+        """Return flattened list of all coordinate tuples.
+
+        Args:
+            kind: Sampling kind.
+            N: Optional per-axis counts.
+
+        Returns:
+            Array (M, dims) with Cartesian products of mesh points.
+        """
         mesh = self.mesh(kind, N, broadcast=False)
         return jnp.array(
             list(itertools.product(*[m.flatten() for m in mesh])), dtype=mesh[0].dtype
@@ -101,6 +151,7 @@ class TensorProductSpace:
     def cartesian_mesh(
         self, kind: str = "quadrature", N: tuple[int] | None = None
     ) -> tuple[Array]:
+        """Return mapped Cartesian mesh (position vector evaluation)."""
         rv = self.system.position_vector(False)
         x = self.system.base_scalars()
         xj = self.mesh(kind, N, True)
@@ -110,19 +161,19 @@ class TensorProductSpace:
         return tuple(mesh)
 
     def broadcast_to_ndims(self, x: Array, axis: int = 0) -> Array:
-        """Return 1D array ``x`` as an array of shape according to self"""
+        """Return 1D array x expanded to full tensor-product shape."""
         s = [jnp.newaxis] * len(self)
         s[axis] = slice(None)
         return x[tuple(s)]
 
     def map_expr_true_domain(self, u: sp.Expr) -> sp.Expr:
-        """Return`u(X, Y, (Z))` mapped to true domain"""
+        """Map reference variables in expression u to true domain coords."""
         for space in self.basespaces:
             u = space.map_expr_true_domain(u)
         return u
 
     def map_expr_reference_domain(self, u: sp.Expr) -> sp.Expr:
-        """Return`u(x, y, (z))` mapped to reference domain"""
+        """Map true domain variables in expression u to reference coords."""
         for space in self.basespaces:
             u = space.map_expr_reference_domain(u)
         return u
@@ -132,7 +183,16 @@ class TensorProductSpace:
     def evaluate_mesh(
         self, x: list[Array], c: Array, use_einsum: bool = False
     ) -> Array:
-        """Evaluate on a given tensor product mesh"""
+        """Evaluate expansion on provided tensor-product mesh arrays.
+
+        Args:
+            x: List of per-axis coordinate arrays (broadcasted or 1D).
+            c: Coefficient tensor shaped (N0, N1, ...).
+            use_einsum: If True use einsum path; else iterative vmaps.
+
+        Returns:
+            Array of evaluated field values with broadcast shape.
+        """
         dim: int = len(self)
         if dim == 2:
             if not use_einsum:
@@ -141,7 +201,7 @@ class TensorProductSpace:
                     c = jax.vmap(
                         self.basespaces[i].evaluate, in_axes=(None, axi), out_axes=axi
                     )(
-                        jnp.atleast_1d(  # Ensure 1D input to allow mesh with one point
+                        jnp.atleast_1d(
                             self.basespaces[i].map_reference_domain(xi).squeeze()
                         ),
                         c,
@@ -189,9 +249,17 @@ class TensorProductSpace:
 
     @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
     def evaluate(self, x: Array, c: Array, use_einsum: bool) -> Array:
-        """Evaluate on a set of points"""
-        dim = len(self)
+        """Evaluate expansion at scattered points (per-axis samples).
 
+        Args:
+            x: Tuple-like array of per-axis coordinates stacked.
+            c: Coefficient tensor.
+            use_einsum: Whether to use einsum contraction.
+
+        Returns:
+            Evaluated values with shape determined by leading dims of x.
+        """
+        dim = len(self)
         T = self.basespaces
         C = [
             T[i].eval_basis_functions(T[i].map_reference_domain(x[i]))
@@ -199,14 +267,13 @@ class TensorProductSpace:
         ]
         if not use_einsum:
             c = C[0] @ c @ C[1] if dim == 2 else C[2] @ (C[1] @ (C[0] @ c))
-
         else:
             path = "i,j,ij" if dim == 2 else "i,j,k,ijk"
             c = jnp.einsum(path, *C, c)
-
         return c
 
     def get_padded(self, N: tuple[int]) -> TensorProductSpace:
+        """Return new tensor space with each axis padded/truncated to N."""
         paddedspaces = [
             s.get_padded(n) for s, n in zip(self.basespaces, N, strict=False)
         ]
@@ -217,16 +284,16 @@ class TensorProductSpace:
     def backward(
         self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
     ) -> Array:
+        """Transform coefficients -> samples (optional padding).
+
+        Fourier axes require special padding handling (FFT index order).
+        """
         dim: int = len(self)
         has_fft = jnp.any(
             jnp.array(
                 [isinstance(space.orthogonal, Fourier) for space in self.basespaces]
             )
         )
-
-        # padding in Fourier requires additional effort because we are using the FFT
-        # and padding with jnp.fft is not padding the highest wavenumbers, but simply
-        # the end of the array.
         if (
             N is not None
             and has_fft
@@ -238,24 +305,22 @@ class TensorProductSpace:
         ):
             shape = list(c.shape)
             for ax, space in enumerate(self.basespaces):
-                if isinstance(space, Fourier) and N[ax] > space.N:  # padding
+                if isinstance(space, Fourier) and N[ax] > space.N:
                     shape[ax] = N[ax]
             c0 = np.zeros(shape, dtype=c.dtype)
             sl = [slice(0, c.shape[ax]) for ax in range(dim)]
             for ax, space in enumerate(self.basespaces):
-                # Only replace slice with wavenumber indexing if axis is padded.
-                # Avoid advanced indexing on multiple axes (shrinks dims).
                 if isinstance(space, Fourier) and N[ax] > space.N:
                     sl[ax] = space.wavenumbers()
                 c0[tuple(sl)] = c
             c = jnp.array(c0)
-
         return self._backward(c, kind, N)
 
     @partial(jax.jit, static_argnums=(0, 2, 3))
     def _backward(
         self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
     ) -> Array:
+        """Jitted internal backward transform (no padding logic)."""
         dim: int = len(self)
         if dim == 2:
             for ax in range(dim):
@@ -283,12 +348,12 @@ class TensorProductSpace:
 
     @partial(jax.jit, static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
+        """Return tensor of inner products along each axis (separable)."""
         dim: int = len(self)
         sg = self.system.sg
         if sg != 1:
             sg = lambdify(self.system.base_scalars(), sg)(*self.mesh())
             u = u * sg
-
         if dim == 2:
             for ax in range(dim):
                 axi: int = dim - 1 - ax
@@ -309,8 +374,8 @@ class TensorProductSpace:
 
     @partial(jax.jit, static_argnums=0)
     def forward(self, u: Array) -> Array:
+        """Forward transform (samples -> coefficients) per axis."""
         dim: int = len(self)
-
         if dim == 2:
             for ax in range(dim):
                 axi: int = dim - 1 - ax
@@ -327,6 +392,18 @@ class TensorProductSpace:
 
 
 class VectorTensorProductSpace:
+    """Vector-valued tensor product space.
+
+    Represents a tuple of identical (or differing) TensorProductSpace
+    objects corresponding to vector components.
+
+    Attributes:
+        tensorspaces: Tuple of component tensor spaces.
+        system: Shared coordinate system.
+        name: Label.
+        tensorname: Joined printable representation.
+    """
+
     def __init__(
         self,
         tensorspace: TensorProductSpace | tuple[TensorProductSpace],
@@ -341,26 +418,48 @@ class VectorTensorProductSpace:
         self.tensorname = multiplication_sign.join([b.name for b in self.tensorspaces])
 
     def __len__(self) -> int:
+        """Return number of vector components."""
         return len(self.tensorspaces)
 
     def __iter__(self) -> Iterable[TensorProductSpace]:
+        """Iterate over component tensor spaces."""
         return iter(self.tensorspaces)
 
     def __getitem__(self, i: int) -> TensorProductSpace:
+        """Return component tensor space i."""
         return self.tensorspaces[i]
 
     @property
     def rank(self) -> int:
+        """Return tensor rank (1 for vector fields)."""
         return 1
 
     @property
     def dims(self) -> int:
+        """Return spatial dimension of each component space."""
         return len(self.tensorspaces[0])
 
 
 def TensorProduct(
     *basespaces: BaseSpace | DirectSum, system: CoordSys = None, name: str = "T"
 ) -> TensorProductSpace | list[TensorProductSpace]:
+    """Factory returning TensorProductSpace or DirectSumTPS.
+
+    Handles:
+      * Deep copy of bases to assign distinct coordinate subsystems
+      * Name disambiguation for repeated space names
+      * Propagation of subsystem coordinates into Composite / DirectSum
+
+    If any axis is a DirectSum (inhomogeneous BC), returns DirectSumTPS.
+
+    Args:
+        *basespaces: 1D BaseSpace / DirectSum instances.
+        system: Optional global coordinate system.
+        name: Base name for the tensor product space(s).
+
+    Returns:
+        TensorProductSpace or DirectSumTPS.
+    """
     from jaxfun.coordinates import CartCoordSys, x, y, z
 
     system = (
@@ -369,22 +468,17 @@ def TensorProduct(
         else system
     )
 
-    # Make copy of all 1D spaces since they will use different coordinates
-    # Add index to name if some names of spaces are equal
-    # Not sure this is the best approach..
     basespaces = [copy.deepcopy(space) for space in basespaces]
     names = [space.name for space in basespaces]
 
     if jnp.any(jnp.array([name == names[0] for name in names[1:]])):
         for i, space in enumerate(basespaces):
             if isinstance(space, DirectSum):
-                # DirectSum stores component spaces in 'basespaces'
                 for spi in space.basespaces:
                     spi.name = spi.name + str(i)
             else:
                 space.name = space.name + str(i)
 
-    # Use the same coordinates in BaseSpaces as in TensorProductSpace
     for i, space in enumerate(basespaces):
         space.system = system.sub_system(i)
         if isinstance(space, Composite):
@@ -402,11 +496,16 @@ def TensorProduct(
 
 
 class DirectSumTPS(TensorProductSpace):
-    """TensorProductSpace where one or more 1D space contains non-zero boundary
-    conditions and thus a DirectSum space.
+    """Tensor product where one/both axes are DirectSum spaces (BC lifting).
 
-    Creates a list of TensorProductSpaces.
+    Builds a dictionary of homogeneous tensor-product subspaces produced
+    by expanding DirectSum components. Also precomputes boundary lifting
+    contributions needed to evaluate / transform functions with
+    inhomogeneous boundary conditions in one or two dimensions.
 
+    Attributes:
+        tpspaces: Mapping from tuples of 1D spaces -> TensorProductSpace.
+        bndvals: Dict storing boundary lifting coefficient arrays.
     """
 
     def __init__(
@@ -423,6 +522,7 @@ class DirectSumTPS(TensorProductSpace):
         self.bndvals = {}
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
 
+        # Normalize symbolic BC expressions to base scalar form
         for space in basespaces:
             if space.bcs is None:
                 continue
@@ -446,7 +546,6 @@ class DirectSumTPS(TensorProductSpace):
             bc1bcs = copy.deepcopy(bc1.bcs)
 
             lr = lambda bcz, z: {"left": bcz.domain.lower, "right": bcz.domain.upper}[z]
-            # Set boundary values for boundary spaces
             bcall = []
             for bcthis, bcother, zother in zip(
                 [bc0bcs, bc1bcs], [bc1bcs, bc0bcs], [bc1, bc0], strict=False
@@ -476,11 +575,11 @@ class DirectSumTPS(TensorProductSpace):
                                     ).subs(var, z)
                                 )
                     bcall[-1].append(bcs)
-
             self.bndvals[bcspaces] = jnp.array([z.orderedvals() for z in bcall[0]])
 
         self.tpspaces = self.split(basespaces)
-        # Compute all the known coefficients of all spaces
+
+        # Precompute lifting coefficients
         for tensorspace in self.tpspaces:
             otherspaces = [p for p in tensorspace if not isinstance(p, BCGeneric)]
             bcspaces = [p for p in tensorspace if isinstance(p, BCGeneric)]
@@ -489,7 +588,6 @@ class DirectSumTPS(TensorProductSpace):
             ]
             if len(otherspaces) == 0:
                 continue
-
             elif len(otherspaces) == 1:
                 assert len(bcspaces) == 1
                 bcspace = bcspaces[0]
@@ -502,13 +600,13 @@ class DirectSumTPS(TensorProductSpace):
                         bco.bcs = bcall[bcsindex[0]][j]
                         otherspace = otherspace + bco
                     uh.append(project1D(bc, otherspace))
-
                 if bcsindex[0] == 0:
                     self.bndvals[tensorspace] = jnp.array(uh)
                 else:
                     self.bndvals[tensorspace] = jnp.array(uh).T
 
     def split(self, spaces: list[BaseSpace | DirectSum]) -> dict:
+        """Return dict of all homogeneous tensor combinations."""
         f = []
         for space in spaces:
             if isinstance(space, DirectSum):
@@ -522,7 +620,7 @@ class DirectSumTPS(TensorProductSpace):
         }
 
     def get_homogeneous(self):
-        # Handle case where only first (or both) axes are DirectSum
+        """Return tensor space built from homogeneous components only."""
         a0 = (
             self.basespaces[0].basespaces[0]
             if isinstance(self.basespaces[0], DirectSum)
@@ -538,6 +636,7 @@ class DirectSumTPS(TensorProductSpace):
     def backward(
         self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
     ) -> Array:
+        """Evaluate total (homogeneous + lifting) backward transform."""
         a = []
         for f, v in self.tpspaces.items():
             if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
@@ -547,6 +646,7 @@ class DirectSumTPS(TensorProductSpace):
         return jnp.sum(jnp.array(a), axis=0)
 
     def forward(self, c: Array) -> Array:
+        """Solve projection for homogeneous coefficients (lifting removed)."""
         from jaxfun.galerkin import TestFunction, TrialFunction, inner
         from jaxfun.galerkin.arguments import JAXArray
 
@@ -557,11 +657,13 @@ class DirectSumTPS(TensorProductSpace):
         return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.num_dofs)
 
     def scalar_product(self, c: Array):
+        """Disabled scalar product (non-homogeneous test space)."""
         raise RuntimeError(
-            "Scalar product needs to use a homogeneous test space and should not be called on this direct sum TensorProductSpace"  # noqa: E501
+            "Scalar product requires homogeneous test space (call on get_homogeneous())"
         )
 
     def evaluate(self, x: Array, c: Array, use_einsum: bool = False) -> Array:
+        """Evaluate direct sum tensor product expansion at scattered points."""
         a = []
         for f, v in self.tpspaces.items():
             if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
@@ -573,6 +675,7 @@ class DirectSumTPS(TensorProductSpace):
     def evaluate_mesh(
         self, x: list[Array], c: Array, use_einsum: bool = False
     ) -> Array:
+        """Evaluate expansion on tensor mesh (summing lifting parts)."""
         a = []
         for f, v in self.tpspaces.items():
             if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
@@ -583,28 +686,51 @@ class DirectSumTPS(TensorProductSpace):
 
 
 class TPMatrices:
+    """Container for list of TPMatrix bilinear operator tensors.
+
+    Provides vectorized application (sum of individual tensor products)
+    and a combined diagonal preconditioner (sum of per-matrix M(u)).
+    """
+
     def __init__(self, tpmats: list[TPMatrix]):
         self.tpmats: list[TPMatrix] = tpmats
 
     @partial(jax.jit, static_argnums=0)
     def __call__(self, u: Array):
+        """Apply summed tensor product operator to u."""
         return jnp.sum(jnp.array([mat(u) for mat in self.tpmats]), axis=0)
 
     @partial(jax.jit, static_argnums=0)
     def precond(self, u: Array):
+        """Apply summed diagonal preconditioner to u."""
         return jnp.sum(jnp.array([mat.M(u) for mat in self.tpmats]), axis=0)
 
 
 class precond:
+    """Simple element-wise diagonal preconditioner wrapper."""
+
     def __init__(self, M):
         self.M = M
 
     @partial(jax.jit, static_argnums=0)
     def __call__(self, u):
+        """Return M * u (element-wise scaling)."""
         return self.M * u
 
 
 class TPMatrix:  # noqa: B903
+    """Rank-d separable tensor product operator A = kron(A0, A1, ...).
+
+    Provides efficient matvec via successive multiplications instead of
+    forming the full Kronecker product explicitly.
+
+    Attributes:
+        mats: List of per-axis sparse/dense matrices.
+        scale: Scalar scaling (multiplicative).
+        test_space, trial_space: TensorProductSpace descriptors.
+        M: Preconditioner (diagonal inverse of kron diagonals).
+    """
+
     def __init__(
         self,
         mats: list[Array],
@@ -616,7 +742,6 @@ class TPMatrix:  # noqa: B903
         self.scale = scale
         self.test_space = test_space
         self.trial_space = trial_space
-        # self.M = None
         self.M = precond(
             (1.0 / self.mats[0].diagonal())[:, None]
             * (1.0 / self.mats[1].diagonal())[None, :]
@@ -624,31 +749,46 @@ class TPMatrix:  # noqa: B903
 
     @property
     def dims(self) -> int:
+        """Return number of factor matrices."""
         return len(self.mats)
 
     @property
     def mat(self) -> Array:
+        """Return explicit Kronecker product (dense)."""
         return jnp.kron(*self.mats)
 
     @partial(jax.jit, static_argnums=0)
     def __call__(self, u: Array):
+        """Apply matrix to rank-2 coefficient array u."""
         return self.mats[0] @ u @ self.mats[1].T
 
     @partial(jax.jit, static_argnums=0)
     def precond(self, u: Array):
-        # self.M is an instance of precond class (callable)
+        """Apply diagonal preconditioner to u."""
         return self.M(u)
 
     @partial(jax.jit, static_argnums=0)
     def __matmul__(self, u: Array) -> Array:
+        """Alias to __call__ for @ operator."""
         return self.mats[0] @ u @ self.mats[1].T
 
     @partial(jax.jit, static_argnums=0)
     def __rmatmul__(self, u: Array) -> Array:
+        """Right matmul (u @ A) treating u as left factor."""
         return self.mats[0].T @ u @ self.mats[1]
 
 
 class TensorMatrix:  # noqa: B903
+    """Non-separable (fully assembled) tensor product matrix wrapper.
+
+    Stored when coefficient is non-separable in coordinates so Kron
+    factorization is unavailable.
+
+    Attributes:
+        mat: Dense (or sparse) global matrix.
+        test_space, trial_space: TensorProductSpace descriptors.
+    """
+
     def __init__(
         self,
         mat: Array,
@@ -663,6 +803,15 @@ class TensorMatrix:  # noqa: B903
 def tpmats_to_scipy_sparse(
     A: list[TPMatrix], tol: int = 100
 ) -> list[tuple[scipy_sparse.csc_array]]:
+    """Convert list of separable TPMatrix to scipy CSC factors.
+
+    Args:
+        A: List of TPMatrix objects.
+        tol: Near-zero elimination tolerance.
+
+    Returns:
+        List of tuples of per-axis scipy csc_array matrices.
+    """
     return [
         tuple(
             scipy_sparse.csc_array(
@@ -677,6 +826,15 @@ def tpmats_to_scipy_sparse(
 
 
 def tpmats_to_scipy_kron(A: list[TPMatrix], tol: int = 100) -> scipy_sparse.csc_matrix:
+    """Return summed global scipy sparse matrix (Kronecker expansion).
+
+    Args:
+        A: List of TPMatrix objects.
+        tol: Near-zero elimination tolerance.
+
+    Returns:
+        scipy.sparse.csc_matrix representing Σ kron(factors).
+    """
     a = tpmats_to_scipy_sparse(A)
     if len(a[0]) == 2:
         return np.sum([scipy_sparse.kron(b[0], b[1], format="csc") for b in a])

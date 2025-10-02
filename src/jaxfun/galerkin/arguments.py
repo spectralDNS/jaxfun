@@ -1,3 +1,15 @@
+"""Symbolic argument (test/trial) and basis function utilities for Galerkin.
+
+This module builds SymPy Function objects that encode basis functions,
+test/trial functions and JAX-backed coefficient arrays over different
+function space types (orthogonal, tensor product, vector, direct sums).
+
+Key constructs:
+    * TestFunction / TrialFunction: Weak form symbolic arguments.
+    * ScalarFunction / VectorFunction: Physical-domain symbolic fields.
+    * JAXArray / JAXFunction: Bridge between symbolic and JAX arrays.
+"""
+
 import itertools
 from functools import partial
 from numbers import Number
@@ -38,6 +50,25 @@ def get_BasisFunction(
     argument: int,
     arg: BaseScalar,
 ):
+    """Create a symbolic basis function with enriched printing.
+
+    Adds (monkey‑patches) __str__, _pretty and _latex methods so tensor
+    product / vector indices appear compactly (e.g. phi_i^{(k)}(x)).
+
+    Args:
+        name: Base name (usually space.fun_str).
+        global_index: Global component index for vector-valued spaces.
+        local_index: Local index within a 1D factor space.
+        rank: Tensor rank of the overall function space (0 or 1).
+        offset: Shift applied to index selection (test vs trial).
+        functionspace: Parent function space object.
+        argument: 0 for test, 1 for trial (stored on Function).
+        arg: Underlying BaseScalar symbol (coordinate).
+
+    Returns:
+        SymPy Function instance representing one factor basis function.
+    """
+
     # Need additional printing because of the tensor product structure of the basis
     # functions
 
@@ -115,6 +146,18 @@ def get_BasisFunction(
 def _get_computational_function(
     arg: str, V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
 ) -> Expr:
+    """Return symbolic test or trial function in computational coordinates.
+
+    Dispatches on space type and builds a product (scalar) or VectorAdd
+    (vector space) of factor basis functions.
+
+    Args:
+        arg: "test" or "trial".
+        V: Function space instance.
+
+    Returns:
+        SymPy Expr representing assembled test/trial function.
+    """
     base_scalars = V.system.base_scalars()
     functionspacedict[V.name] = V
     offset = V.dims if arg == "trial" else 0
@@ -179,6 +222,12 @@ def _get_computational_function(
 
 
 class TestFunction(Function):
+    """Symbolic test function T(x; V) for weak form assembly.
+
+    Holds a reference to its functionspace and lazily expands (via doit)
+    into computational (tensor product) factor basis functions.
+    """
+
     __test__ = False  # prevent pytest from considering this a test.
 
     def __new__(
@@ -243,6 +292,12 @@ class TestFunction(Function):
 
 
 class TrialFunction(Function):
+    """Symbolic trial function U(x; V) for weak form assembly.
+
+    Direct sums expand to sum of component spaces. Tensor product spaces
+    with direct-sum factors expand into additive combinations of products.
+    """
+
     def __new__(
         cls,
         V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
@@ -319,6 +374,12 @@ class TrialFunction(Function):
 
 
 class ScalarFunction(Function):
+    """Physical-domain scalar field placeholder u(x) with mapping support.
+
+    Calling .doit() returns the computational-domain representation
+    U(X) by replacing Cartesian symbols with base scalars.
+    """
+
     def __new__(cls, name: str, system: CoordSys) -> Function:
         obj = Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
         obj.system = system
@@ -351,6 +412,12 @@ class ScalarFunction(Function):
 
 
 class VectorFunction(Function):
+    """Physical-domain vector field placeholder v(x).
+
+    The .doit() method builds a VectorAdd of component scalar Functions
+    times basis vectors in the computational domain.
+    """
+
     def __new__(cls, name: str, system: CoordSys) -> Function:
         obj = Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
         obj.system = system
@@ -381,8 +448,13 @@ class VectorFunction(Function):
         return r"\mathbf{{%s}}" % (latex_symbols[self.name],) + str(self.args[:-1])  # noqa: UP031
 
 
-# Not sure this will be useful:
 class JAXArray(Function):
+    """Wrapper for a raw JAX array tied to a function space.
+
+    Primarily used as an intermediate symbolic handle that can forward
+    (apply) basis transforms through functionspace.forward().
+    """
+
     def __new__(
         cls,
         array: Array,
@@ -418,6 +490,12 @@ class JAXArray(Function):
 
 
 class Jaxf(Function):
+    """Symbolic wrapper for a JAX array interpreted in backward transform.
+
+    Used when converting coefficient arrays back to physical space via
+    functionspace.backward().
+    """
+
     def __new__(
         cls,
         array: Array,
@@ -450,6 +528,14 @@ class Jaxf(Function):
 
 
 class JAXFunction(Function):
+    """Symbolic + numeric hybrid representing coefficients in a space.
+
+    Represents a function on a given space with a JAX array of expansion coefficients.
+
+    Behaves like a symbolic trial expansion; .doit() returns the algebraic
+    product of coefficients (Jaxf) and test basis (TrialFunction).
+    """
+
     def __new__(
         cls,
         array: Array,

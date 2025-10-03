@@ -4,7 +4,7 @@ from jax import Array
 
 
 class PeriodEmbs(nnx.Module):
-    """Per‑axis cosine/sine positional embeddings with optional trainable periods.
+    """Per-axis cosine/sine positional embeddings with optional trainable periods.
 
     For each selected axis i we map scalar coordinate x_i to:
         [cos(2π x_i / p_i), sin(2π x_i / p_i)]

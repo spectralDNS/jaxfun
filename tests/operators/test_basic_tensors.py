@@ -224,6 +224,32 @@ def test_divergence_doc_example():
     assert sp.simplify(divergence(v + C.z * C.b_z) - 4) == 0
 
 
+def test_divergence_dyadic():
+    bb = C.base_dyadics()
+    r, theta, z = psi = C.base_scalars()
+    T = r * bb[0] + r**2 * bb[2] + theta * r * bb[3] + r * theta * bb[7]
+    dT0 = divergence(T)
+    # Use definition of divergence of dyadic to compute with alternative method
+    dT1 = sp.Add.fromiter(
+        Dot(T.diff(psi[i]), C.get_contravariant_basis_vector(i)).doit()
+        for i in range(len(psi))
+    )
+    assert dT0 == dT1
+
+
+def test_divergence_vector():
+    bb = C.base_vectors()
+    r, theta, z = psi = C.base_scalars()
+    v = r * bb[0] + r**2 * bb[1] + theta * r * bb[2]
+    dv0 = divergence(v)
+    # Use definition of divergence of vector to compute with alternative method
+    dv1 = sp.Add.fromiter(
+        Dot(v.diff(psi[i]), C.get_contravariant_basis_vector(i)).doit()
+        for i in range(len(psi))
+    )
+    assert dv0 == dv1
+
+
 def test_curl_doc_example():
     v = C.b_r + C.b_theta
     res = curl(v)

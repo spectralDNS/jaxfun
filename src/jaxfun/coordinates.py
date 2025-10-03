@@ -1,3 +1,12 @@
+"""
+Curvilinear coordinate systems.
+
+Much of the theory and notation is taken from:
+
+[1] Kelly, P. A. Mechanics Lecture Notes: Foundations of Continuum Mechanics.
+    http://homepages.engineering.auckland.ac.nz/~pkel015/SolidMechanicsBooks/index.html
+"""
+
 from __future__ import annotations
 
 import numbers
@@ -115,7 +124,9 @@ class BaseTime(Symbol):
 class BaseScalar(AtomicExpr):
     """Scalar coordinate symbol belonging to a coordinate system.
 
-    Each spatial coordinate (e.g. x0, x1, x2) is represented as a BaseScalar.
+    Represents contravariant curvilinear coordinates q^j. For Cartesian systems,
+    these BaseScalars are the regular spatial coordinates.
+
     Provides custom pretty/LaTeX printing and differentiation behavior.
 
     Args:
@@ -203,7 +214,12 @@ class BaseScalar(AtomicExpr):
 
 
 class BaseVector(Vector, AtomicExpr):
-    """Covariant base vector of a coordinate system.
+    """Covariant base vector of a coordinate system
+
+        b_j = ∂r/∂q^j
+
+    where r is the position vector and q^j the curvilinear coordinates.
+    For Cartesian systems, these are the regular constant unit vectors.
 
     Wraps a SymPy Vector basis element with additional metadata and pretty/LaTeX
     formats.
@@ -283,7 +299,9 @@ class BaseVector(Vector, AtomicExpr):
 class BaseDyadic(Dyadic, AtomicExpr):
     """Dyadic (tensor product) of two base vectors.
 
-    Represents a rank-2 basis tensor constructed from two covariant base vectors.
+    Represents a rank-2 basis tensor constructed from two covariant base vectors
+
+        b_i ⊗ b_j
 
     Args:
         vector1: First base vector (or zero vector).
@@ -685,7 +703,7 @@ class CoordSys(Basic):
         The covariant components are obtained by contracting with the covariant
         basis vectors (or dyadics):
             v_k = v · b_k
-            v_{k j} = b_k · v · b_j
+            v_{kj} = b_k · v · b_j
 
         Args:
             v: A SymPy Vector or Dyadic expressed in this coordinate system.
@@ -695,7 +713,7 @@ class CoordSys(Basic):
 
         Returns:
             The scalar SymPy expression for the covariant component v_k (vector)
-            or v_{k j} (dyadic).
+            or v_{kj} (dyadic).
 
         Raises:
             ValueError: If j is None when requesting a Dyadic component.
@@ -757,12 +775,18 @@ class CoordSys(Basic):
         return sg
 
     def get_scaling_factors(self) -> np.ndarray[Any, np.dtype[object]]:
-        """Returns orthogonal scaling factors h_i.
+        """Returns orthogonal scaling factors {h_i}.
+
+        Raises:
+            RuntimeError: If the coordinate system is not orthogonal.
 
         Returns:
             Numpy object array of SymPy expressions for each coordinate scale factor.
         """
         from jaxfun.operators import express
+
+        if not self.is_orthogonal:
+            raise RuntimeError("Scaling factors only defined for orthogonal systems")
 
         if self._hi is not None:
             return self._hi
@@ -783,7 +807,7 @@ class CoordSys(Basic):
 
         Args:
             as_Vector: If True, returns an array of SymPy Vectors (Cartesian).
-                If False, returns the Jacobian matrix entries (∂x_j/∂psi_i).
+                If False, returns the Jacobian matrix entries (∂x^j/∂q^i).
 
         Returns:
             Numpy object array representing covariant basis rows.
@@ -812,6 +836,8 @@ class CoordSys(Basic):
     def get_contravariant_basis_vector(self, i: int):
         """Returns contravariant basis vector i.
 
+            b^i = grad(q^i) = g^ij b_j
+
         Args:
             i: Basis index.
 
@@ -819,6 +845,19 @@ class CoordSys(Basic):
             SymPy Vector representing b^i.
         """
         return self.get_contravariant_metric_tensor()[i] @ self.base_vectors()
+
+    def get_covariant_basis_vector(self, i: int):
+        """Returns covariant basis vector i.
+
+            b_i = ∂r/∂q^i
+
+        Args:
+            i: Basis index.
+
+        Returns:
+            SymPy Vector representing b_i.
+        """
+        return self.base_vectors()[i]
 
     def get_contravariant_basis(
         self, as_Vector: bool = False
@@ -880,6 +919,8 @@ class CoordSys(Basic):
 
     def get_christoffel_second(self) -> np.ndarray[Any, np.dtype[object]]:
         """Returns Christoffel symbols Γ^k_{ij} (second kind).
+
+            Γ^k_{ij} = ∂b_i/∂q^j · b^k
 
         Returns:
             3D Numpy object array with shape (dim, dim, dim) containing SymPy
@@ -1045,14 +1086,8 @@ class SubCoordSys:
 
     @property
     def position_vector(self) -> tuple[Expr]:
-        """Return the refined positional expression along this axis.
-
-        Note:
-            Provided for symmetry with the parent CoordSys API. Unlike the
-            parent class, no additional simplification utilities are defined
-            here; refine/replace would need delegation if required.
-        """
-        return self.refine(self._position_vector)
+        """Return the positional expression along this axis."""
+        return self._position_vector
 
     @property
     def psi(self) -> tuple[Symbol]:

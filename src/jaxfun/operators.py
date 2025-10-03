@@ -35,6 +35,7 @@ from jaxfun.coordinates import BaseDyadic, BaseScalar, BaseVector, CoordSys
 
 
 def eijk(i: int, j: int, k: int) -> int:
+    """Levi-Civita symbol ε_{ijk}."""
     if (i, j, k) in ((0, 1, 2), (1, 2, 0), (2, 0, 1)):
         return 1
     elif (i, j, k) in ((2, 1, 0), (1, 0, 2), (0, 2, 1)):
@@ -125,7 +126,7 @@ def outer(vect1: Vector, vect2: Vector) -> Expr:
     return DyadicAdd(*args)
 
 
-def cross(vect1: Vector, vect2: Vector) -> Vector:
+def cross(v1: Vector, v2: Vector) -> Vector:
     """Return the cross product of two vectors.
 
         v1 × v2 = ε_{ijk} √g v1^i v2^j b^k
@@ -133,7 +134,7 @@ def cross(vect1: Vector, vect2: Vector) -> Vector:
     where {b^k} are the contravariant basis vectors, v1^i = v1·b^i and
     ε_{ijk} = ε^{ijk} is the Levi-Civita symbol, and √g the scale factor
     product (square root of determinant of the Jacobian of the coordinate
-    transformation).
+    transformation). Summation implied by repeating indices.
 
     Handles:
       * Linear (Add) combinations
@@ -141,11 +142,11 @@ def cross(vect1: Vector, vect2: Vector) -> Vector:
       * Base vectors in Cartesian or curvilinear coordinates
 
     Args:
-        vect1: First Vector.
-        vect2: Second Vector.
+        v1: First Vector.
+        v2: Second Vector.
 
     Returns:
-        Vector representing vect1 × vect2 (zero if colinear).
+        Vector representing v1 × v2 (zero if colinear).
 
     Raises:
         AssertionError: If attempting cross outside 3D.
@@ -161,56 +162,56 @@ def cross(vect1: Vector, vect2: Vector) -> Vector:
         >>> cross(C.b_r, C.b_theta)
         r*C.b_z
     """
-    if isinstance(vect1, Add):
-        return VectorAdd.fromiter(cross(i, vect2) for i in vect1.args)
-    if isinstance(vect2, Add):
-        return VectorAdd.fromiter(cross(vect1, i) for i in vect2.args)
-    if isinstance(vect1, BaseVector) and isinstance(vect2, BaseVector):
-        if vect1._sys == vect2._sys:
-            n1 = vect1.args[0]
-            n2 = vect2.args[0]
+    if isinstance(v1, Add):
+        return VectorAdd.fromiter(cross(i, v2) for i in v1.args)
+    if isinstance(v2, Add):
+        return VectorAdd.fromiter(cross(v1, i) for i in v2.args)
+    if isinstance(v1, BaseVector) and isinstance(v2, BaseVector):
+        if v1._sys == v2._sys:
+            n1 = v1.args[0]
+            n2 = v2.args[0]
             if n1 == n2:
                 return Vector.zero
 
-            assert len(vect1._sys.base_scalars()) == 3, (
+            assert len(v1._sys.base_scalars()) == 3, (
                 "Can only compute cross product in 3D"
             )
 
-            if vect1._sys.is_cartesian:
+            if v1._sys.is_cartesian:
                 n3 = ({0, 1, 2}.difference({n1, n2})).pop()
-                sign = 1 if ((n1 + 1) % 3 == n2) else -1
-                return sign * vect1._sys.base_vectors()[n3]
+                sgn = 1 if ((n1 + 1) % 3 == n2) else -1
+                return sgn * v1._sys.base_vectors()[n3]
             else:
-                gt = vect1._sys.get_contravariant_metric_tensor()
-                sg = vect1._sys.sg
+                gt = v1._sys.get_contravariant_metric_tensor()
+                sg = v1._sys.sg
                 n3 = ({0, 1, 2}.difference({n1, n2})).pop()
                 ei = eijk(n1, n2, n3)
-                b = vect1._sys.base_vectors()
+                b = v1._sys.base_vectors()
                 return sg * ei * gt[n3] @ b
 
-        return cross(vect1._sys.to_cartesian(vect1), vect2._sys.to_cartesian(vect2))
+        return cross(v1._sys.to_cartesian(v1), v2._sys.to_cartesian(v2))
 
-    if isinstance(vect1, VectorZero) or isinstance(vect2, VectorZero):
+    if isinstance(v1, VectorZero) or isinstance(v2, VectorZero):
         return Vector.zero
-    if isinstance(vect1, VectorMul):
-        v1, m1 = next(iter(vect1.components.items()))
-        return m1 * cross(v1, vect2)
-    if isinstance(vect2, VectorMul):
-        v2, m2 = next(iter(vect2.components.items()))
-        return m2 * cross(vect1, v2)
+    if isinstance(v1, VectorMul):
+        v1_inner, m1 = next(iter(v1.components.items()))
+        return m1 * cross(v1_inner, v2)
+    if isinstance(v2, VectorMul):
+        v2_inner, m2 = next(iter(v2.components.items()))
+        return m2 * cross(v1, v2_inner)
 
-    return Cross(vect1, vect2)
+    return Cross(v1, v2)
 
 
-def dot(vect1: Vector | Dyadic, vect2: Vector | Dyadic) -> Expr:
+def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> Expr:
     """Return the (possibly contracted) inner product of two tensors.
 
     Supports Vector·Vector, Vector·Dyadic, Dyadic·Vector and Dyadic·Dyadic,
     recursively distributing over sums and scalar multiples.
 
     Args:
-        vect1: First tensor (Vector or Dyadic).
-        vect2: Second tensor (Vector or Dyadic).
+        t1: First tensor (Vector or Dyadic).
+        t2: Second tensor (Vector or Dyadic).
 
     Returns:
         Scalar, Vector, or Dyadic depending on contraction rank.
@@ -229,115 +230,112 @@ def dot(vect1: Vector | Dyadic, vect2: Vector | Dyadic) -> Expr:
         r**2*theta + r
     """
     rank: int = 0
-    if (isinstance(vect1, Vector) and isinstance(vect2, Dyadic)) or (
-        isinstance(vect1, Dyadic) and isinstance(vect2, Vector)
+    if (isinstance(t1, Vector) and isinstance(t2, Dyadic)) or (
+        isinstance(t1, Dyadic) and isinstance(t2, Vector)
     ):
         rank = 1
-    elif isinstance(vect1, Dyadic) and isinstance(vect2, Dyadic):
+    elif isinstance(t1, Dyadic) and isinstance(t2, Dyadic):
         rank = 2
 
-    if isinstance(vect1, Add | VectorAdd | DyadicAdd):
+    if isinstance(t1, Add | VectorAdd | DyadicAdd):
         if rank == 0:
-            return Add.fromiter(dot(i, vect2) for i in vect1.args)
+            return Add.fromiter(dot(i, t2) for i in t1.args)
         elif rank == 1:
-            return VectorAdd.fromiter(dot(i, vect2) for i in vect1.args)
+            return VectorAdd.fromiter(dot(i, t2) for i in t1.args)
         else:
-            return DyadicAdd.fromiter(dot(i, vect2) for i in vect1.args)
-    if isinstance(vect2, Add | VectorAdd | DyadicAdd):
+            return DyadicAdd.fromiter(dot(i, t2) for i in t1.args)
+    if isinstance(t2, Add | VectorAdd | DyadicAdd):
         if rank == 0:
-            return Add.fromiter(dot(vect1, i) for i in vect2.args)
+            return Add.fromiter(dot(t1, i) for i in t2.args)
         elif rank == 1:
-            return VectorAdd.fromiter(dot(vect1, i) for i in vect2.args)
+            return VectorAdd.fromiter(dot(t1, i) for i in t2.args)
         else:
-            return DyadicAdd.fromiter(dot(vect1, i) for i in vect2.args)
+            return DyadicAdd.fromiter(dot(t1, i) for i in t2.args)
 
-    if isinstance(vect1, BaseVector) and isinstance(vect2, BaseVector):
-        if vect1._sys == vect2._sys:
-            if vect1._sys.is_cartesian:
-                return sp.S.One if vect1 == vect2 else sp.S.Zero
+    if isinstance(t1, BaseVector) and isinstance(t2, BaseVector):
+        if t1._sys == t2._sys:
+            if t1._sys.is_cartesian:
+                return sp.S.One if t1 == t2 else sp.S.Zero
             else:
-                g = vect1._sys.get_covariant_metric_tensor()
-                return g[vect1._id[0], vect2._id[0]]
+                g = t1._sys.get_covariant_metric_tensor()
+                return g[t1._id[0], t2._id[0]]
 
-        return dot(vect1._sys.to_cartesian(vect1), vect2._sys.to_cartesian(vect2))
+        return dot(t1._sys.to_cartesian(t1), t2._sys.to_cartesian(t2))
 
-    if isinstance(vect1, BaseDyadic) and isinstance(vect2, BaseVector):
-        if vect1._sys == vect2._sys:
-            if vect1._sys.is_cartesian:
-                return (
-                    vect1.args[0] if vect1.args[1] == vect2 else sp.vector.VectorZero()
-                )
+    if isinstance(t1, BaseDyadic) and isinstance(t2, BaseVector):
+        if t1._sys == t2._sys:
+            if t1._sys.is_cartesian:
+                return t1.args[0] if t1.args[1] == t2 else sp.vector.VectorZero()
             else:
-                g = vect1._sys.get_covariant_metric_tensor()
-                g0 = g[vect1.args[1]._id[0], vect2._id[0]]
+                g = t1._sys.get_covariant_metric_tensor()
+                g0 = g[t1.args[1]._id[0], t2._id[0]]
                 if g0 == 0:
                     return VectorZero()
                 else:
-                    return g0 * vect1.args[0]
+                    return g0 * t1.args[0]
 
-        return dot(vect1._sys.to_cartesian(vect1), vect2._sys.to_cartesian(vect2))
+        return dot(t1._sys.to_cartesian(t1), t2._sys.to_cartesian(t2))
 
-    if isinstance(vect1, BaseVector) and isinstance(vect2, BaseDyadic):
-        if vect1._sys == vect2._sys:
-            if vect1._sys.is_cartesian:
-                return (
-                    vect2.args[1] if vect1 == vect2.args[0] else sp.vector.VectorZero()
-                )
+    if isinstance(t1, BaseVector) and isinstance(t2, BaseDyadic):
+        if t1._sys == t2._sys:
+            if t1._sys.is_cartesian:
+                return t2.args[1] if t1 == t2.args[0] else sp.vector.VectorZero()
             else:
-                g = vect1._sys.get_covariant_metric_tensor()
-                g0 = g[vect1._id[0], vect2.args[0]._id[0]]
+                g = t1._sys.get_covariant_metric_tensor()
+                g0 = g[t1._id[0], t2.args[0]._id[0]]
                 if g0 == 0:
                     return VectorZero()
                 else:
-                    return g0 * vect2.args[1]
+                    return g0 * t2.args[1]
 
-        return dot(vect1._sys.to_cartesian(vect1), vect2._sys.to_cartesian(vect2))
+        return dot(t1._sys.to_cartesian(t1), t2._sys.to_cartesian(t2))
 
-    if isinstance(vect1, BaseDyadic) and isinstance(vect2, BaseDyadic):
-        if vect1._sys == vect2._sys:
-            if vect1._sys.is_cartesian:
+    if isinstance(t1, BaseDyadic) and isinstance(t2, BaseDyadic):
+        if t1._sys == t2._sys:
+            if t1._sys.is_cartesian:
                 return (
-                    vect1.args[0] | vect2.args[1]
-                    if vect1.args[1] == vect2.args[0]
+                    t1.args[0] | t2.args[1]
+                    if t1.args[1] == t2.args[0]
                     else DyadicZero()
                 )
             else:
-                g = vect1._sys.get_covariant_metric_tensor()
-                g0 = g[vect1.args[1]._id[0], vect2.args[0]._id[0]]
+                g = t1._sys.get_covariant_metric_tensor()
+                g0 = g[t1.args[1]._id[0], t2.args[0]._id[0]]
                 if g0 == 0:
                     return DyadicZero()
                 else:
-                    return g0 * vect1.args[0] | vect2.args[1]
+                    return g0 * t1.args[0] | t2.args[1]
 
-        return dot(vect1._sys.to_cartesian(vect1), vect2._sys.to_cartesian(vect2))
-    if isinstance(vect1, DyadicZero) and isinstance(vect2, BaseVector):
+        return dot(t1._sys.to_cartesian(t1), t2._sys.to_cartesian(t2))
+    if isinstance(t1, DyadicZero) and isinstance(t2, BaseVector):
         return VectorZero()
-    if isinstance(vect1, DyadicZero) and isinstance(vect2, BaseDyadic):
+    if isinstance(t1, DyadicZero) and isinstance(t2, BaseDyadic):
         return DyadicZero()
-    if isinstance(vect1, BaseVector) and isinstance(vect2, DyadicZero):
+    if isinstance(t1, BaseVector) and isinstance(t2, DyadicZero):
         return VectorZero()
-    if isinstance(vect1, BaseDyadic) and isinstance(vect2, DyadicZero):
+    if isinstance(t1, BaseDyadic) and isinstance(t2, DyadicZero):
         return DyadicZero()
-    if isinstance(vect1, VectorZero) or isinstance(vect2, VectorZero):
+    if isinstance(t1, VectorZero) or isinstance(t2, VectorZero):
         return sp.S.Zero
-    if isinstance(vect1, VectorMul | DyadicMul):
-        v1, m1 = next(iter(vect1.components.items()))
-        return m1 * dot(v1, vect2)
-    if isinstance(vect2, VectorMul | DyadicMul):
-        v2, m2 = next(iter(vect2.components.items()))
-        return m2 * dot(vect1, v2)
+    if isinstance(t1, VectorMul | DyadicMul):
+        v1, m1 = next(iter(t1.components.items()))
+        return m1 * dot(v1, t2)
+    if isinstance(t2, VectorMul | DyadicMul):
+        v2, m2 = next(iter(t2.components.items()))
+        return m2 * dot(t1, v2)
 
-    return Dot(vect1, vect2)
+    return Dot(t1, t2)
 
 
 def divergence(v: Vector | Dyadic, doit: bool = True) -> Expr:
-    """Return divergence of a Vector or Dyadic field.
+    """Return divergence of a Vector or Dyadic field
 
-    Implements:
-      * div(v) = ∇·v = ∂v/∂q^j·b^j for vectors
-      * div(T) = ∂T/∂q^j·b^j for second‑order tensors (Dyadics)
-      where {b^j} are the contravariant basis vectors and q^j the coordinates.
-      The dyadic result is transformed to a covariant basis before returning.
+        div(v) = ∂v/∂q^j·b^j
+
+    where {b^j} are the contravariant basis vectors and q^j the coordinates.
+    For vectors the result equals ∇·v and for dyadics the result equals ∇·v^T.
+    The dyadic result is transformed to a covariant basis before returning.
+
     Handles:
       * Linear (Add) combinations
       * Scalar multiples (Mul)
@@ -372,7 +370,7 @@ def divergence(v: Vector | Dyadic, doit: bool = True) -> Expr:
     elif len(coord_sys) == 1:
         if isinstance(v, Cross | Curl | Gradient):
             return Div(v)
-        # vect should be a vector/dyadic with Cartesian or covariant basis vectors
+        # v should be a vector/dyadic with Cartesian or covariant basis vectors
         # Note: In the formulas below we could also simply use the definition
         # bt = coord_sys.get_contravariant_basis(True)
         # res = sp.Add.fromiter(Dot(v.diff(x[i]), bt[i]).doit() for i in range(len(x)))
@@ -626,8 +624,8 @@ def curl(v: Vector, doit: bool = True) -> Vector:
 class Grad(Gradient):
     """Unevaluated gradient wrapper with optional transpose flag.
 
-    Behaves like sympy.vector.Gradient but works also for vectors and tracks a transpose
-    state for vector gradients without immediately expanding components.
+    Behaves like sympy.vector.Gradient but works also for vectors and tracks a
+    transpose state for vector gradients without immediately expanding components.
 
     Args:
         expr: Scalar or vector expression.

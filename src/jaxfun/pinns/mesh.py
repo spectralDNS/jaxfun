@@ -1,3 +1,20 @@
+"""Sampling meshes for 1D/2D reference domains and mapped geometric regions.
+
+Supported domains:
+- UnitLine / Line
+- UnitSquare / Rectangle
+- Annulus (polar -> Cartesian conversion)
+
+Sampling kinds (interior / boundary):
+- 'uniform'   : Equidistant interior points (excludes boundary)
+- 'legendre'  : Gauss–Legendre nodes (mapped to [0,1])
+- 'chebyshev' : Chebyshev nodes of the first kind (mapped to [0,1])
+- 'random'    : Pseudorandom uniform samples
+
+Weights:
+Return 1 when uniform (each point equal) or arrays for quadrature-based kinds.
+"""
+
 from dataclasses import dataclass, field
 from numbers import Number
 from typing import Literal
@@ -15,10 +32,25 @@ from jaxfun.utils import leggauss
 
 @dataclass
 class UnitLine:
+    """Reference 1D line domain [0, 1].
+
+    Attributes:
+        N: Number of interior sample points (excludes boundaries).
+        key: PRNG key (nnx Rngs) used for random sampling.
+    """
+
     N: int
     key: ArrayLike = field(kw_only=True, default_factory=nnx.rnglib.Rngs(101))
 
     def get_points_inside_domain(self, kind: SampleMethod = "uniform") -> Array:
+        """Return interior points (exclude 0 and 1).
+
+        Args:
+            kind: Sampling strategy: uniform | legendre | chebyshev | random.
+
+        Returns:
+            Array of shape (N, 1) with interior coordinates in (0,1).
+        """
         if kind == "uniform":
             return jnp.linspace(0, 1, self.N + 2)[1:-1, None]
 
@@ -37,11 +69,27 @@ class UnitLine:
         raise NotImplementedError
 
     def get_points_on_domain(self, kind: SampleMethod = "uniform") -> Array:
+        """Return boundary endpoints.
+
+        Args:
+            kind: Ignored (kept for API consistency).
+
+        Returns:
+            Array [[0.0],[1.0]].
+        """
         return jnp.array([[0.0], [1.0]])
 
     def get_weights_inside_domain(
         self, kind: SampleMethod = "uniform"
     ) -> Array | Literal[1]:
+        """Return quadrature weights for interior points.
+
+        Args:
+            kind: Sampling kind.
+
+        Returns:
+            1 for uniform/random (equal weights) or weight array otherwise.
+        """
         if kind in ("uniform", "random"):
             return 1
         elif kind == "legendre":
@@ -51,15 +99,24 @@ class UnitLine:
         raise NotImplementedError
 
     def get_weights_on_domain(self, kind: SampleMethod = "uniform") -> Literal[1]:
+        """Return weights for boundary points (always 1 placeholder)."""
         return 1
 
 
 @dataclass
 class Line(UnitLine):
+    """Affine-mapped 1D line [left, right].
+
+    Attributes:
+        left: Left boundary.
+        right: Right boundary.
+    """
+
     left: Number
     right: Number
 
     def __post_init__(self):
+        """Validate and coerce boundaries to float."""
         self.left = float(self.left)
         self.right = float(self.right)
         if not self.right > self.left:
@@ -68,20 +125,38 @@ class Line(UnitLine):
             )
 
     def get_points_inside_domain(self, kind: SampleMethod = "uniform") -> Array:
+        """Return interior points mapped from reference (0,1)."""
         x = super().get_points_inside_domain(kind)
         return self.left + (self.right - self.left) * x
 
     def get_points_on_domain(self, kind: SampleMethod = "uniform") -> Array:
+        """Return boundary endpoints [[left],[right]]."""
         return jnp.array([[self.left], [self.right]], dtype=float)
 
 
 @dataclass
 class UnitSquare:
+    """Reference unit square [0, 1]^2.
+
+    Attributes:
+        Nx: Number of interior points along x.
+        Ny: Number of interior points along y.
+        key: PRNG key for random sampling.
+    """
+
     Nx: int
     Ny: int
     key: ArrayLike = field(kw_only=True, default_factory=nnx.rnglib.Rngs(101))
 
     def get_points_inside_domain(self, kind: SampleMethod = "uniform") -> Array:
+        """Return interior points (exclude perimeter).
+
+        Args:
+            kind: uniform | legendre | chebyshev | random.
+
+        Returns:
+            Array (Nx*Ny, 2) of interior coordinates.
+        """
         if kind == "uniform":
             x = jnp.linspace(0, 1, self.Nx + 2)[1:-1]
             y = jnp.linspace(0, 1, self.Ny + 2)[1:-1]
@@ -115,6 +190,15 @@ class UnitSquare:
     def get_points_on_domain(
         self, kind: SampleMethod = "uniform", corners: bool = True
     ) -> Array:
+        """Return boundary points in counterclockwise order.
+
+        Args:
+            kind: uniform | legendre | chebyshev | random.
+            corners: If True, append the 4 corner points explicitly.
+
+        Returns:
+            Array (#boundary_pts, 2).
+        """
         if kind == "uniform":
             x = np.linspace(0, 1, self.Nx + 2)[1:-1]
             y = np.linspace(0, 1, self.Ny + 2)[1:-1]
@@ -153,6 +237,14 @@ class UnitSquare:
     def get_weights_inside_domain(
         self, kind: SampleMethod = "uniform"
     ) -> Array | Literal[1]:
+        """Return quadrature weights for interior nodes.
+
+        Args:
+            kind: Sampling kind.
+
+        Returns:
+            1 for uniform/random or flattened tensor-product weight array.
+        """
         if kind in ("uniform", "random"):
             return 1
         elif kind == "legendre":
@@ -170,6 +262,15 @@ class UnitSquare:
     def get_weights_on_domain(
         self, kind: SampleMethod = "uniform", corners: bool = True
     ) -> Array | Literal[1]:
+        """Return weights for boundary nodes.
+
+        Args:
+            kind: Sampling kind.
+            corners: Whether 4 corner points are present (affects length).
+
+        Returns:
+            1 for uniform/random else 1D weight array.
+        """
         if kind in ("uniform", "random"):
             return 1
         elif kind == "legendre":
@@ -193,12 +294,22 @@ class UnitSquare:
 
 @dataclass
 class Rectangle(UnitSquare):
+    """Affine-mapped rectangle [left, right] x [bottom, top].
+
+    Attributes:
+        left: Left x-bound.
+        right: Right x-bound.
+        bottom: Lower y-bound.
+        top: Upper y-bound.
+    """
+
     left: Number
     right: Number
     bottom: Number
     top: Number
 
     def __post_init__(self):
+        """Validate and coerce rectangle bounds."""
         self.left = float(self.left)
         self.right = float(self.right)
         self.bottom = float(self.bottom)
@@ -213,6 +324,7 @@ class Rectangle(UnitSquare):
             )
 
     def get_points_inside_domain(self, kind: SampleMethod = "uniform") -> Array:
+        """Return interior points mapped from UnitSquare."""
         mesh = super().get_points_inside_domain(kind)
         x = self.left + (self.right - self.left) * mesh[:, 0]
         y = self.bottom + (self.top - self.bottom) * mesh[:, 1]
@@ -221,6 +333,7 @@ class Rectangle(UnitSquare):
     def get_points_on_domain(
         self, kind: SampleMethod = "uniform", corners: bool = True
     ) -> Array:
+        """Return boundary points mapped from UnitSquare."""
         mesh = super().get_points_on_domain(kind, corners=corners)
         x = self.left + (self.right - self.left) * mesh[:, 0]
         y = self.bottom + (self.top - self.bottom) * mesh[:, 1]
@@ -228,12 +341,26 @@ class Rectangle(UnitSquare):
 
 
 def points_along_axis(a: Number | Array, b: Array | Number) -> Array:
+    """Return Cartesian product points between 1D arrays a and b.
+
+    Args:
+        a: Scalar or 1D array-like.
+        b: Scalar or 1D array-like.
+
+    Returns:
+        Array of shape (len(a)*len(b), 2) listing all (a_i, b_j) pairs.
+    """
     a = jnp.atleast_1d(a)
     b = jnp.atleast_1d(b)
     return jnp.array(jnp.meshgrid(a, b, indexing="ij")).reshape((2, -1)).T
 
 
 class AnnulusPolar(Rectangle):
+    """Annulus in polar coordinates: radius in [r_in, r_out], theta in [0, 2π).
+
+    Sampling in theta wraps for interior points (exclude duplicate 2π).
+    """
+
     def __init__(
         self, Nx: int, Ny: int, radius_inner: Number, radius_outer: Number
     ) -> None:
@@ -242,6 +369,7 @@ class AnnulusPolar(Rectangle):
         Rectangle.__init__(self, Nx, Ny, radius_inner, radius_outer, 0, 2 * jnp.pi)
 
     def get_points_inside_domain(self, kind: SampleMethod = "uniform") -> Array:
+        """Return interior polar points (r, θ)."""
         if kind == "uniform":
             x = jnp.linspace(0, 1, self.Nx + 2)[1:-1]
             y = jnp.linspace(0, 1, self.Ny + 1)[:-1]  # wrap around periodic
@@ -255,6 +383,7 @@ class AnnulusPolar(Rectangle):
     def get_points_on_domain(
         self, kind: SampleMethod = "uniform", corners: bool = False
     ) -> Array:
+        """Return boundary polar points (r=inner/outer)."""
         if kind == "uniform":
             y = np.linspace(0, 1, self.Ny + 1)[:-1]
             xy = np.vstack((np.hstack((y, y)),) * 2).T
@@ -268,6 +397,12 @@ class AnnulusPolar(Rectangle):
 
 
 class Annulus(AnnulusPolar):
+    """Cartesian annulus converted from polar samples.
+
+    Interior/boundary sampling occurs in polar coordinates and is then
+    mapped to Cartesian (x, y).
+    """
+
     def __init__(
         self, Nx: int, Ny: int, radius_inner: Number, radius_outer: Number
     ) -> None:
@@ -276,6 +411,7 @@ class Annulus(AnnulusPolar):
         AnnulusPolar.__init__(self, Nx, Ny, radius_inner, radius_outer)
 
     def convert_to_cartesian(self, xc) -> Array:
+        """Convert polar (r, θ) points to Cartesian (x, y)."""
         r, theta = sp.symbols("r,theta", real=True, positive=True)
         rv = (r * sp.cos(theta), r * sp.sin(theta))
         mesh = []
@@ -284,11 +420,13 @@ class Annulus(AnnulusPolar):
         return jnp.array(mesh).T
 
     def get_points_inside_domain(self, kind: SampleMethod = "uniform") -> Array:
+        """Return interior Cartesian points."""
         xc = AnnulusPolar.get_points_inside_domain(self, kind)
         return self.convert_to_cartesian(xc)
 
     def get_points_on_domain(
         self, kind: SampleMethod = "uniform", corners: bool = False
     ) -> Array:
+        """Return boundary Cartesian points."""
         xc = AnnulusPolar.get_points_on_domain(self, kind, False)
         return self.convert_to_cartesian(xc)

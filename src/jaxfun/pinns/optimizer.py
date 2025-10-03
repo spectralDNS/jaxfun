@@ -11,7 +11,7 @@ from .loss import LSQR
 
 
 class NamedOptimizer[M: nnx.Module](nnx.Optimizer[M]):
-    """Wrapper optimizer that stores a human‑readable name and module reference.
+    """Wrapper optimizer that stores a human-readable name and module reference.
 
     Extends nnx.Optimizer solely to attach:
       * name: A descriptive string (e.g. 'Adam(lr=1e-3->1e-4 in 100 steps)')

@@ -24,7 +24,7 @@ multiplication_sign = "\u00d7"
 
 
 class TensorProductSpace:
-    """d‑dimensional tensor product of 1D BaseSpace instances.
+    """d-dimensional tensor product of 1D BaseSpace instances.
 
     Provides:
       * Logical / Cartesian mesh generation

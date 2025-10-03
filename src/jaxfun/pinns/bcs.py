@@ -27,7 +27,7 @@ def DirichletBC(
         returned by u.get_args(Cartesian=False).
 
     The function evaluates every boundary expression at the coordinates
-    in bnd_mesh and stacks the results column‑wise.
+    in bnd_mesh and stacks the results column-wise.
 
     Args:
         u: FlaxFunction describing the unknown (used to get symbolic args).

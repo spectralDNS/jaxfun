@@ -838,6 +838,9 @@ class CoordSys(Basic):
 
             b^i = grad(q^i) = g^ij b_j
 
+        where g^ij is the contravariant metric tensor and b_j the covariant
+        basis vector.
+
         Args:
             i: Basis index.
 
@@ -850,6 +853,8 @@ class CoordSys(Basic):
         """Returns covariant basis vector i.
 
             b_i = ∂r/∂q^i
+
+        where r is the position vector and q^i the curvilinear coordinates.
 
         Args:
             i: Basis index.
@@ -892,6 +897,8 @@ class CoordSys(Basic):
     def get_covariant_metric_tensor(self) -> np.ndarray[Any, np.dtype[object]]:
         """Returns covariant metric tensor g_ij.
 
+            g_ij = b_i · b_j
+
         Returns:
             Numpy object array (square matrix) of SymPy expressions.
         """
@@ -904,6 +911,8 @@ class CoordSys(Basic):
 
     def get_contravariant_metric_tensor(self) -> np.ndarray[Any, np.dtype[object]]:
         """Returns contravariant metric tensor g^ij (inverse of g_ij).
+
+            g^ij = b^i · b^j
 
         Returns:
             Numpy object array of SymPy expressions.
@@ -1009,7 +1018,7 @@ class CoordSys(Basic):
 
 
 class SubCoordSys:
-    """One-dimensional sub–coordinate system extracted from a higher–dimensional system.
+    """One-dimensional sub-coordinate system extracted from a higher-dimensional system.
 
     A SubCoordSys provides a lightweight view of a single coordinate direction
     (and its associated base vector and Cartesian coordinate) from a parent
@@ -1017,7 +1026,7 @@ class SubCoordSys:
     problems, 1D quadrature, or directional derivatives) without constructing
     a brand new independent coordinate system.
 
-    The sub–system reuses:
+    The sub-system reuses:
       * The selected BaseScalar (coordinate)
       * The corresponding BaseVector
       * The associated Cartesian coordinate symbol
@@ -1045,14 +1054,14 @@ class SubCoordSys:
     """
 
     def __init__(self, system: CoordSys, index: int = 0) -> None:
-        """Initialize a one-dimensional sub–system.
+        """Initialize a one-dimensional sub-system.
 
         Args:
             system: The parent coordinate system.
             index: Coordinate / basis index to extract (0-based).
 
         Raises:
-            AssertionError: If the parent system is strictly 1D (no sub–extraction
+            AssertionError: If the parent system is strictly 1D (no sub-extraction
             needed).
         """
         assert system.dims > 1

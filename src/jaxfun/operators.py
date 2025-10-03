@@ -79,15 +79,15 @@ def express(expr: Expr, system: CoordSys) -> Expr:
     return expr.subs(subs_dict)
 
 
-def outer(vect1: Vector, vect2: Vector) -> Expr:
+def outer(v1: Vector, v2: Vector) -> Expr:
     """Return the (tensor / dyadic) outer product of two vectors.
 
     Args:
-        vect1: Left Vector operand.
-        vect2: Right Vector operand.
+        v1: Left Vector operand.
+        v2: Right Vector operand.
 
     Returns:
-        A Dyadic (rank‑2 tensor) representing vect1 ⊗ vect2.
+        A Dyadic (rank-2 tensor) representing v1 ⊗ v2.
 
     Examples:
         >>> from jaxfun import get_CoordSys
@@ -102,25 +102,23 @@ def outer(vect1: Vector, vect2: Vector) -> Expr:
         >>> outer(v1, v2)
         r*theta*(P.b_r⊗P.b_theta)
     """
-    if isinstance(vect1, Add | VectorAdd):
-        return DyadicAdd.fromiter(outer(i, vect2) for i in vect1.args)
-    if isinstance(vect2, Add | VectorAdd):
-        return DyadicAdd.fromiter(outer(vect1, i) for i in vect2.args)
-    if isinstance(vect1, VectorMul):
-        v1, m1 = next(iter(vect1.components.items()))
-        return m1 * outer(v1, vect2)
-    if isinstance(vect2, VectorMul):
-        v2, m2 = next(iter(vect2.components.items()))
-        return m2 * outer(vect1, v2)
+    if isinstance(v1, Add | VectorAdd):
+        return DyadicAdd.fromiter(outer(i, v2) for i in v1.args)
+    if isinstance(v2, Add | VectorAdd):
+        return DyadicAdd.fromiter(outer(v1, i) for i in v2.args)
+    if isinstance(v1, VectorMul):
+        v1_inner, m1 = next(iter(v1.components.items()))
+        return m1 * outer(v1_inner, v2)
+    if isinstance(v2, VectorMul):
+        v2_inner, m2 = next(iter(v2.components.items()))
+        return m2 * outer(v1, v2_inner)
 
-    if isinstance(vect1, VectorZero) or isinstance(vect2, VectorZero):
+    if isinstance(v1, VectorZero) or isinstance(v2, VectorZero):
         return Dyadic.zero
 
     args = [
-        (v1 * v2) * BaseDyadic(k1, k2)
-        for (k1, v1), (k2, v2) in product(
-            vect1.components.items(), vect2.components.items()
-        )
+        (c1 * c2) * BaseDyadic(k1, k2)
+        for (k1, c1), (k2, c2) in product(v1.components.items(), v2.components.items())
     ]
 
     return DyadicAdd(*args)
@@ -374,7 +372,7 @@ def divergence(v: Vector | Dyadic, doit: bool = True) -> Expr:
         # Note: In the formulas below we could also simply use the definition
         # bt = coord_sys.get_contravariant_basis(True)
         # res = sp.Add.fromiter(Dot(v.diff(x[i]), bt[i]).doit() for i in range(len(x)))
-        # However, it is much faster to use frecomputed metrics and Christoffel symbols
+        # However, it is much faster to use precomputed metrics and Christoffel symbols
         coord_sys = next(iter(coord_sys))
         x = coord_sys.base_scalars()
         comp = coord_sys.get_contravariant_component
@@ -817,7 +815,7 @@ class Identity(sp.Expr):
 
 
 def diff(self, *args, **kwargs):
-    """Differentiate a tensor (vector/dyadic) (component‑wise) wrt provided variables.
+    """Differentiate a tensor (vector/dyadic) (component-wise) wrt provided variables.
 
     Converts to Cartesian to avoid differentiating basis vectors, applies
     SymPy diff to scalar components, then maps back.

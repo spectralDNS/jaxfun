@@ -239,7 +239,7 @@ class Composite(OrthogonalSpace):
 
     @partial(jax.jit, static_argnums=0)
     def apply_stencils_petrovgalerkin(self, b: Array, P: BCOO) -> Array:
-        """Apply test (S) and trial (P) stencils (Petrov–Galerkin)."""
+        """Apply test (S) and trial (P) stencils (Petrov-Galerkin)."""
         return self.S @ b @ P.T
 
     @partial(jax.jit, static_argnums=0)

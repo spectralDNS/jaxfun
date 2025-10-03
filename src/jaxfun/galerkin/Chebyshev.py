@@ -13,6 +13,27 @@ from .Jacobi import Jacobi
 
 
 class Chebyshev(Jacobi):
+    """Chebyshev (first kind) polynomial basis space.
+
+    Implements a Chebyshev basis via the Jacobi formulation with
+    alpha = beta = -1/2. Provides several evaluation kernels:
+      * evaluate2: Clenshaw-like backward recurrence for series sum.
+      * evaluate3: Forward recurrence accumulating T_n on the fly.
+      * eval_basis_function: Single T_i evaluation (iterative).
+      * eval_basis_functions: Vectorized generation of all modes < N.
+
+    The series expansion (degree N-1):
+        p(X) = sum_{k=0}^{N-1} c_k T_k(X)
+
+    Args:
+        N: Number of basis functions (polynomial order = N-1).
+        domain: Physical interval (maps to reference [-1, 1]).
+        system: Coordinate system (optional).
+        name: Basis family name.
+        fun_str: Symbol stem for basis functions (default "T").
+        **kw: Extra keyword args passed to parent Jacobi constructor.
+    """
+
     def __init__(
         self,
         N: int,
@@ -35,17 +56,17 @@ class Chebyshev(Jacobi):
 
     @jit_vmap(in_axes=(0, None))
     def evaluate2(self, X: float | Array, c: Array) -> Array:
-        """
-        Alternative evaluate a Chebyshev series at point X
+        """Evaluate Chebyshev series using backward (Clenshaw-like) scheme.
 
-        .. math:: p(X) = c_0 * T_0(X) + c_1 * T_1(X) + ... + c_{N-1} * T_{N-1}(X)
+        Uses a modified two-term recurrence sweeping coefficients from
+        highest to lowest degree.
 
         Args:
-            X: Evaluation point in reference space
-            c: Expansion coefficients
+            X: Evaluation points in reference domain [-1, 1].
+            c: Coefficient array of length >= 1.
 
         Returns:
-            Chebyshev series evaluated at X.
+            Array of same shape as X with p(X) values.
         """
         if len(c) == 1:
             # Multiply by 0 * x for shape
@@ -70,14 +91,17 @@ class Chebyshev(Jacobi):
 
     @jit_vmap(in_axes=(0, None))
     def evaluate3(self, X: float | Array, c: Array) -> Array:
-        """Alternative implementation of evaluate
+        """Evaluate Chebyshev series via forward recurrence.
+
+        Builds successive T_n(X) terms with a scan, accumulating
+        contributions c_n T_n(X) except the final (handled separately).
 
         Args:
-            X: Evaluation point in reference space
-            c: Expansion coefficients
+            X: Evaluation points in [-1, 1].
+            c: Coefficient array length N (self.N expected).
 
         Returns:
-            Chebyshev series evaluated at X.
+            Series evaluation p(X) at each X.
         """
         x0 = jnp.ones_like(X)
 
@@ -94,6 +118,20 @@ class Chebyshev(Jacobi):
 
     @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
+        """Return Gauss–Chebyshev (first kind) nodes and weights.
+
+        Nodes:
+            x_k = cos(pi*(2k+1)/(2N)), k=0..N-1
+        Weights:
+            w_k = pi / N
+
+        Args:
+            N: Number of quadrature points (defaults self.num_quad_points
+               if 0).
+
+        Returns:
+            Array((2, N)) with first row nodes, second row weights.
+        """
         N = self.num_quad_points if N == 0 else N
         return jnp.array(
             (
@@ -104,7 +142,19 @@ class Chebyshev(Jacobi):
 
     @jit_vmap(in_axes=(0, None))
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
-        # return jnp.cos(i * jnp.acos(x))
+        """Evaluate single Chebyshev polynomial T_i at points X.
+
+        Iterative two-term recurrence:
+            T_0 = 1, T_1 = X,
+            T_{n+1} = 2 X T_n - T_{n-1}
+
+        Args:
+            X: Points in [-1, 1].
+            i: Basis index (0 <= i < N).
+
+        Returns:
+            Array of T_i(X).
+        """
         x0 = X * 0 + 1
         if i == 0:
             return x0
@@ -118,6 +168,16 @@ class Chebyshev(Jacobi):
 
     @jit_vmap(in_axes=0)
     def eval_basis_functions(self, X: float) -> Array:
+        """Evaluate all basis functions T_0..T_{N-1} at X.
+
+        Uses a scan to build the recurrence efficiently.
+
+        Args:
+            X: Points in [-1, 1].
+
+        Returns:
+            Array (N,) for each X containing T_k(X) stacked along axis 0.
+        """
         x0 = X * 0 + 1
 
         def inner_loop(
@@ -132,14 +192,49 @@ class Chebyshev(Jacobi):
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
     def norm_squared(self) -> Array:
+        """Return L2 norms squared over [-1, 1] with Chebyshev weight.
+
+        For T_0: integral = pi
+        For T_n (n>0): integral = pi/2
+
+        Returns:
+            Array of length N with norm^2 values.
+        """
         return jnp.hstack((jnp.array([jnp.pi]), jnp.full(self.N - 1, jnp.pi / 2)))
 
     # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
     def gn(self, n: Symbol) -> Expr:
+        """Return scaling g_n used in Jacobi-based normalization.
+
+        Args:
+            n: Polynomial index symbol.
+
+        Returns:
+            SymPy expression 1 / P_n^{(alpha,beta)}(1).
+        """
         return sp.S(1) / sp.jacobi(n, self.alpha, self.beta, 1)
 
 
 def matrices(test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]) -> Array:
+    """Sparse operator matrices between test/trial Chebyshev modes.
+
+    Constructs (possibly rectangular) sparse differentiation / mass-like
+    matrices for combinations of test index i and trial index j flags:
+
+        (i, j):
+          (0,0): Diagonal mass-like matrix (norm squares).
+          (0,1): First derivative coupling (odd offsets).
+          (1,0): Transpose of (0,1).
+          (0,2): Second derivative coupling (even offsets).
+          (2,0): Transpose of (0,2).
+
+    Args:
+        test: Tuple (v, i) with Chebyshev space v and number of derivatives i.
+        trial: Tuple (u, j) with Chebyshev space u and number of derivatives j.
+
+    Returns:
+        jax.experimental.sparse.BCOO or None if combination unsupported.
+    """
     import numpy as np
     from jax.experimental import sparse
     from scipy import sparse as scipy_sparse

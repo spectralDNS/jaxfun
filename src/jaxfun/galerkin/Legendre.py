@@ -13,6 +13,12 @@ from .Jacobi import Jacobi
 
 
 class Legendre(Jacobi):
+    """Legendre polynomial basis (Jacobi with alpha=beta=0).
+
+    Provides series and basis evaluation, quadrature nodes/weights, and
+    norm-squared values for P_n on [-1,1].
+    """
+
     def __init__(
         self,
         N: int,
@@ -35,50 +41,46 @@ class Legendre(Jacobi):
 
     @jit_vmap(in_axes=(0, None))
     def evaluate2(self, X: float | Array, c: Array) -> Array:
-        """Alternative evaluate a Legendre series at points X.
+        """Evaluate Legendre series using backward two-term scheme.
 
-        .. math:: p(X) = c_0 * L_0(X) + c_1 * L_1(X) + ... + c_{N-1} * L_{N-1}(X)
+        p(X) = sum_{k=0}^{N-1} c_k P_k(X)
 
         Args:
-            X: Evaluation point in reference space
-            c: Expansion coefficients
+            X: Evaluation points in reference domain [-1,1].
+            c: Coefficient array (length >= 1).
 
         Returns:
-            Legendre series evaluated at X.
+            Series values p(X) with shape like X.
         """
         nd: int = len(c)
         if nd == 1:
-            # Multiply by 0 * X for shape
-            return c[0] + 0 * X
+            return c[0] + 0 * X  # shape preservation
         if nd == 2:
             return c[0] + c[1] * X
 
         def body_fun(i: int, val: tuple[int, Array, Array]) -> tuple[int, Array, Array]:
             n, c0, c1 = val
-
             tmp = c0
             n -= 1
             c0 = c[-i] - (c1 * (n - 1)) / n
             c1 = tmp + (c1 * X * (2 * n - 1)) / n
-
             return n, c0, c1
 
         c0: Array = jnp.ones_like(X) * c[-2]
         c1: Array = jnp.ones_like(X) * c[-1]
-
         _, c0, c1 = jax.lax.fori_loop(3, nd + 1, body_fun, (nd, c0, c1))
         return c0 + c1 * X
 
     @jit_vmap(in_axes=(0, None))
     def evaluate3(self, X: float | Array, c: Array) -> Array:
-        """Alternative implementation of evaluate
+        """Evaluate Legendre series via forward recurrence accumulation.
 
         Args:
-            X: Evaluation point in reference space
-            c: Expansion coefficients
+            X: Evaluation points in reference domain [-1,1].
+            c: Coefficient array.
 
         Returns:
-            Legendre series evaluated at X.
+            Series values p(X) with shape like X.
         """
         x0 = jnp.ones_like(X)
 
@@ -90,16 +92,32 @@ class Legendre(Jacobi):
             return (x1, x2), x1 * c[i - 1]
 
         _, xs = jax.lax.scan(inner_loop, (x0, X), jnp.arange(2, self.N + 1))
-
         return jnp.sum(xs, axis=0) + c[0]
 
     @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
+        """Return Gauss–Legendre quadrature nodes and weights.
+
+        Args:
+            N: Number of points (0 => self.num_quad_points).
+
+        Returns:
+            (2, N) array: first row nodes, second row weights.
+        """
         N = self.num_quad_points if N == 0 else N
         return leggauss(N)
 
     @jit_vmap(in_axes=(0, None))
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
+        """Evaluate single Legendre polynomial P_i at X.
+
+        Args:
+            X: Points in [-1,1].
+            i: Polynomial index (0 <= i < N).
+
+        Returns:
+            P_i(X) values.
+        """
         x0 = X * 0 + 1
         if i == 0:
             return x0
@@ -113,6 +131,14 @@ class Legendre(Jacobi):
 
     @jit_vmap(in_axes=0)
     def eval_basis_functions(self, X: float | Array) -> Array:
+        """Evaluate all Legendre polynomials P_0..P_{N-1} at X.
+
+        Args:
+            X: Points in [-1,1].
+
+        Returns:
+            Array (N,) per X with stacked values.
+        """
         x0 = X * 0 + 1
 
         def inner_loop(
@@ -123,14 +149,30 @@ class Legendre(Jacobi):
             return (x1, x2), x1
 
         _, xs = jax.lax.scan(inner_loop, (x0, X), jnp.arange(2, self.N + 1))
-
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
     def norm_squared(self) -> Array:
+        """Return L2 norm squared of P_n over [-1,1]: 2/(2n+1)."""
         return sp.lambdify(n, 2 / (2 * n + 1), modules="jax")(jnp.arange(self.N))
 
 
 def matrices(test: tuple[Legendre, int], trial: tuple[Legendre, int]) -> Array:
+    """Return sparse operator matrices for Legendre derivative coupling.
+
+    Supported (i,j) derivative orders:
+        (0,0): Mass (diagonal)
+        (0,1): First derivative (odd shifts)
+        (1,0): Transpose of (0,1)
+        (0,2): Second derivative (even shifts)
+        (2,0): Transpose of (0,2)
+
+    Args:
+        test: (space, derivative order) test side.
+        trial: (space, derivative order) trial side.
+
+    Returns:
+        BCOO sparse matrix or None if unsupported.
+    """
     import numpy as np
     from jax.experimental import sparse
     from scipy import sparse as scipy_sparse
@@ -138,7 +180,6 @@ def matrices(test: tuple[Legendre, int], trial: tuple[Legendre, int]) -> Array:
     v, i = test
     u, j = trial
     if i == 0 and j == 0:
-        # BCOO chops the array if v.N > u.N, so no need to check sizes
         return sparse.BCOO(
             (v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
             shape=(v.N, u.N),
@@ -146,7 +187,6 @@ def matrices(test: tuple[Legendre, int], trial: tuple[Legendre, int]) -> Array:
     if i == 0 and j == 1:
         if u.N < 2:
             return None
-
         return sparse.BCOO.from_scipy_sparse(
             scipy_sparse.diags(
                 [2.0] * len(jnp.arange(1, u.N, 2)),
@@ -157,7 +197,6 @@ def matrices(test: tuple[Legendre, int], trial: tuple[Legendre, int]) -> Array:
         )
     if i == 1 and j == 0:
         return matrices(trial, test).transpose()
-
     if i == 0 and j == 2:
         k = jnp.arange(max(v.N, u.N))
 
@@ -171,7 +210,6 @@ def matrices(test: tuple[Legendre, int], trial: tuple[Legendre, int]) -> Array:
             )
 
         d = dict.fromkeys(np.arange(2, u.N, 2), _getkey)
-
         if len(d) == 0:
             return None
 
@@ -185,5 +223,4 @@ def matrices(test: tuple[Legendre, int], trial: tuple[Legendre, int]) -> Array:
         )
     if i == 2 and j == 0:
         return matrices(trial, test).transpose()
-
     return None

@@ -11,7 +11,6 @@ from flax.typing import (
     Dtype,
     Initializer,
     PrecisionLike,
-    # PromoteDtypeFn,
 )
 from jax import Array, lax
 from sympy import Function
@@ -33,30 +32,42 @@ default_rngs = nnx.Rngs(11)
 
 # Differs from jaxfun.utils.common.jacn in the last if else
 def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
+    """Return vectorized k-th order Jacobian (forward) of a function.
+
+    Repeatedly applies jax.jacfwd k times (producing nested Jacobians) and
+    then vmaps over the leading batch axis if k > 0.
+
+    Args:
+        fun: Function mapping a scalar/array to an Array.
+        k: Order of repeated jacfwd application (k >= 0).
+
+    Returns:
+        Callable producing the k-th order Jacobian for batched inputs.
+    """
     for _ in range(k):
-        fun = jax.jacfwd(fun)  # if i % 2 else jax.jacrev(fun)
+        fun = jax.jacfwd(fun)
     return jax.vmap(fun, in_axes=0, out_axes=0) if k > 0 else fun
 
 
 class RWFLinear(nnx.Module):
-    """A linear transformation applied over the last dimension of the input.
+    """Linear layer with RWF (Random Weight Factorization) style scaling.
+
+    Implements a linear transform y = x W + b with an additional learnable
+    exponential scaling vector g applied to columns of W (per output
+    feature) following RWF initialization ideas.
 
     Args:
-        in_features: the number of input features.
-        out_features: the number of output features.
-        use_bias: whether to add a bias to the output (default: True).
-        dtype: the dtype of the computation (default: infer from input and params).
-        param_dtype: the dtype passed to parameter initializers (default: float32).
-        precision: numerical precision of the computation see ``jax.lax.Precision``
-            for details.
-        kernel_init: initializer function for the weight matrix.
-        bias_init: initializer function for the bias.
-        dot_general: dot product function.
-        promote_dtype: function to promote the dtype of the arrays to the desired
-            dtype. The function should accept a tuple of ``(inputs, kernel, bias)``
-            and a ``dtype`` keyword argument, and return a tuple of arrays with the
-            promoted dtype.
-        rngs: rng key.
+        in_features: Number of input features.
+        out_features: Number of output features.
+        use_bias: Whether to add bias.
+        dtype: Computation dtype (promotes params+inputs if set).
+        param_dtype: Dtype for parameter initialization.
+        precision: JAX dot precision.
+        kernel_init: Weight initializer.
+        bias_init: Bias initializer.
+        dot_general: Dot routine (default lax.dot_general).
+        promote_dtype: Callable to promote dtypes of (inputs, kernel, bias, g).
+        rngs: RNG container.
     """
 
     __data__ = ("kernel", "scaling", "bias")
@@ -104,13 +115,13 @@ class RWFLinear(nnx.Module):
         self.promote_dtype = promote_dtype
 
     def __call__(self, inputs: Array) -> Array:
-        """Applies a linear transformation to the inputs along the last dimension.
+        """Apply linear transform (with column scaling) to inputs.
 
         Args:
-            inputs: The nd-array to be transformed.
+            inputs: Input tensor (..., in_features).
 
         Returns:
-            The transformed input.
+            Output tensor (..., out_features).
         """
         kernel = self.kernel.value
         bias = self.bias.value if self.bias is not None else None
@@ -133,28 +144,30 @@ class RWFLinear(nnx.Module):
 
 
 class KANLayer(nnx.Module):
-    """A Kolomogorov-Arnold transformation applied over the last dimension of the input.
+    """Single Kolmogorov–Arnold (KAN) spectral expansion layer.
+
+    Expands each input coordinate (or spectral feature in hidden layers)
+    into spectral basis coefficients and applies a linear combination to
+    produce output features.
+
+    For the input layer, one spectral basis per coordinate is used. Hidden
+    layers reuse a single basis (shared across channels).
 
     Args:
-        in_features: the number of input features.
-        out_features: the number of output features.
-        spectral_size: the number of spectral modes.
-        hidden: whether this is a hidden layer (default: False).
-        basespace: the spectral basis to use (default: Chebyshev).
-        domains: list of domains for each input dimension (default: (-1, 1) for all).
-        system: coordinate system (default: None).
-        dtype: the dtype of the computation (default: infer from input and params).
-        param_dtype: the dtype passed to parameter initializers (default: float32).
-        precision: numerical precision of the computation see ``jax.lax.Precision``
-            for details.
-        kernel_init: initializer function for the weight matrix.
-        bias_init: initializer function for the bias.
-        dot_general: dot product function.
-        promote_dtype: function to promote the dtype of the arrays to the desired
-            dtype. The function should accept a tuple of ``(inputs,)``
-            and a ``dtype`` keyword argument, and return a tuple of arrays with the
-            promoted dtype.
-        rngs: rng key.
+        in_features: Number of input channels/features.
+        out_features: Number of output channels.
+        spectral_size: Number of spectral modes per input.
+        hidden: True if this is a hidden (spectral→spectral) layer.
+        basespace: Spectral base class (e.g. Chebyshev.Chebyshev).
+        domains: List of (a, b) domains for each input (only for input layer).
+        system: Coordinate system (only needed for input layer mapping).
+        dtype: Computation dtype.
+        param_dtype: Parameter init dtype.
+        precision: JAX dot precision.
+        kernel_init: Weight initializer.
+        dot_general: Dot routine (defaults to lax.dot_general).
+        promote_dtype: Dtype promotion callable.
+        rngs: RNG container.
     """
 
     __data__ = ("kernel",)
@@ -194,22 +207,14 @@ class KANLayer(nnx.Module):
         self.dot_general = dot_general
         self.promote_dtype = promote_dtype
 
-        # The input layer needs special attention since the input is from the spatial
-        # domain while the hidden layers are from the spectral domain. The input layer
-        # will map each input dimension from its own physical domain to the reference
-        # domain of the spectral basis, while the hidden layers will use the standard
-        # reference domain of the spectral basis. The hidden layers will also use
-        # only one basespace since the input is already transformed to the spectral
-        # domain using activation function tanh. The input layer will use one basespace
-        # per input dimension. The domains are only used in the input layer. The
-        # coordinate system is only used in the input layer. The hidden layers will not
-        # use the coordinate system.
+        # Select subsystem(s) for per-dimension mapping (input layer only).
         subsystems = (
             [system.sub_system(i) if system else None for i in range(system.dims)]
-            if not hidden and system.dims > 1
+            if (not hidden and system and system.dims > 1)
             else [system]
         )
-        if in_features > system.dims and not hidden:  # Transient case
+        if system and in_features > system.dims and not hidden:
+            # Transient extra coordinate has no subsystem mapping.
             subsystems += [None]
 
         domains = (
@@ -225,20 +230,19 @@ class KANLayer(nnx.Module):
         )
 
     def __call__(self, inputs: Array) -> Array:
-        """Applies a linear transformation to the inputs along the last dimension.
+        """Apply spectral expansion + linear projection.
 
         Args:
-            inputs: The nd-array to be transformed.
+            inputs: Input tensor (..., in_features).
 
         Returns:
-            The transformed input.
+            Output tensor (..., out_features).
         """
         kernel = self.kernel.value
-
         inputs, kernel = self.promote_dtype((inputs, kernel), dtype=self.dtype)
-        weights = kernel
 
         if not self.hidden:
+            # Expand each input dimension independently.
             T = [
                 self.basespaces[j].eval_basis_functions(
                     self.basespaces[j].map_reference_domain(inputs[..., j])
@@ -246,6 +250,7 @@ class KANLayer(nnx.Module):
                 for j in range(self.in_features)
             ]
         else:
+            # Hidden layer: reuse one basis and treat each channel the same.
             T = [
                 self.basespaces[0].eval_basis_functions(inputs[..., j])
                 for j in range(self.in_features)
@@ -255,7 +260,7 @@ class KANLayer(nnx.Module):
             [
                 self.dot_general(
                     T[i],
-                    weights[i],
+                    kernel[i],
                     (((T[i].ndim - 1,), (0,)), ((), ())),
                     precision=self.precision,
                 )
@@ -265,6 +270,8 @@ class KANLayer(nnx.Module):
 
 
 class MLP(nnx.Module):
+    """Standard multilayer perceptron (RWFLinear layers + activation)."""
+
     def __init__(
         self,
         V: BaseSpace,
@@ -273,14 +280,13 @@ class MLP(nnx.Module):
         bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs,
     ) -> None:
-        """Multilayer perceptron
+        """Build an MLP from a function space description.
 
         Args:
-            V: Functionspace with detailed layer structure for the MLP
-            rngs: Seed
-            kernel_init (optional): Initializer for kernel. Defaults
-                to default_kernel_init.
-            bias_init (optional): Initializer for bias. Defaults to default_bias_init.
+            V: Function space (must supply in_size, out_size, hidden_size, act_fun).
+            kernel_init: Kernel initializer (defaults glorot normal).
+            bias_init: Bias initializer (defaults zeros).
+            rngs: RNG container.
         """
         hidden_size = (
             V.hidden_size
@@ -325,10 +331,19 @@ class MLP(nnx.Module):
 
     @property
     def dim(self) -> int:
+        """Return flattened parameter count."""
         st = nnx.split(self, nnx.Param)[1]
         return jax.flatten_util.ravel_pytree(st)[0].shape[0]
 
     def __call__(self, x: Array) -> Array:
+        """Forward pass.
+
+        Args:
+            x: Input batch (N, in_size).
+
+        Returns:
+            Output batch (N, out_size).
+        """
         x = self.act_fun(self.linear_in(x))
         for z in self.hidden:
             x = self.act_fun(z(x))
@@ -336,6 +351,28 @@ class MLP(nnx.Module):
 
 
 class PIModifiedBottleneck(nnx.Module):
+    """Physics-inspired modified bottleneck residual mixing block.
+
+    Applies three linear layers separated by nonlinear mixing with two
+    auxiliary feature tensors (u, v) and a learnable global scaling alpha.
+
+    Form (schematically):
+        h1 = act(W1 x)
+        h1 = h1 * u + (1 - h1) * v
+        h2 = act(W2 h1)
+        h2 = h2 * u + (1 - h2) * v
+        h3 = act(W3 h2)
+        out = alpha * h3 + (1 - alpha) * x
+
+    Args:
+        in_dim: Input dimension.
+        hidden_dim: Hidden layer width.
+        output_dim: Output dimension.
+        nonlinearity: Initial alpha (0 => identity, 1 => full residual).
+        act_fun: Activation function.
+        rngs: RNG container.
+    """
+
     def __init__(
         self,
         in_dim: int,
@@ -361,6 +398,16 @@ class PIModifiedBottleneck(nnx.Module):
         self.act_fun = act_fun
 
     def __call__(self, x: Array, u: Array, v: Array) -> Array:
+        """Forward pass with residual mixing.
+
+        Args:
+            x: Input tensor (N, in_dim).
+            u: Auxiliary tensor (broadcast compatible with hidden dims).
+            v: Auxiliary tensor (same shape as u).
+
+        Returns:
+            Mixed output tensor (N, output_dim).
+        """
         identity = x
 
         x = self.act_fun(self.layer1(x))
@@ -376,6 +423,20 @@ class PIModifiedBottleneck(nnx.Module):
 
 
 class PirateNet(nnx.Module):
+    """PirateNet: MLP with dual branch + bottleneck residual mixing.
+
+    Features:
+      * Fourier / periodic embeddings (optional) via Embedding
+      * Two initial branches (u_net, v_net) combined by PIModifiedBottleneck
+      * Optional learnable nonlinearity scaling
+
+    Args:
+        V: PirateSpace specification.
+        kernel_init: Kernel initializer.
+        bias_init: Bias initializer.
+        rngs: RNG container.
+    """
+
     def __init__(
         self,
         V: PirateSpace,
@@ -446,10 +507,19 @@ class PirateNet(nnx.Module):
 
     @property
     def dim(self) -> int:
+        """Return flattened parameter count."""
         st = nnx.split(self, nnx.Param)[1]
         return jax.flatten_util.ravel_pytree(st)[0].shape[0]
 
     def __call__(self, x: Array) -> Array:
+        """Forward pass.
+
+        Args:
+            x: Input batch (N, in_dim_pre_embedding).
+
+        Returns:
+            Output batch (N, out_size).
+        """
         x = self.embedder(x)
         u = self.act_fun(self.u_net(x))
         v = self.act_fun(self.v_net(x))
@@ -458,19 +528,28 @@ class PirateNet(nnx.Module):
             x = layer(x, u, v)
 
         y = self.output_layer(x)
-
         return y
 
 
 class SpectralModule(nnx.Module):
+    """Wrapper for a spectral function space (1D or tensor product)."""
+
     def __init__(
         self,
         basespace: BaseSpace,
         *,
         kernel_init: Initializer = default_kernel_init,
-        bias_init: Initializer = default_bias_init,
+        bias_init: Initializer = default_bias_init,  # kept for uniform API
         rngs: nnx.Rngs,
     ) -> None:
+        """Initialize spectral kernel parameters.
+
+        Args:
+            basespace: Spectral basis object with .evaluate method.
+            kernel_init: Kernel initializer.
+            bias_init: Ignored (present for consistency).
+            rngs: RNG container.
+        """
         if basespace.dims == 1:
             self.kernel = nnx.Param(kernel_init(rngs(), (1, basespace.dim)))
         else:
@@ -480,24 +559,31 @@ class SpectralModule(nnx.Module):
 
     @property
     def dim(self) -> int:
+        """Return number of spectral coefficients."""
         return self.space.dim
 
     @property
     def dims(self) -> int:
+        """Return spatial dimensionality of the basespace."""
         return self.space.dims
 
     def __call__(self, x: Array) -> Array:
+        """Evaluate spectral expansion at coordinates.
+
+        Args:
+            x: Coordinates (N, d).
+
+        Returns:
+            Values (N,) if d=1 else (N, 1).
+        """
         if self.dims == 1:
             X = self.space.map_reference_domain(x)
             return self.space.evaluate(X, self.kernel.value[0])
-
         return jnp.expand_dims(self.space.evaluate(x, self.kernel.value, True), -1)
 
 
 class KANMLPModule(nnx.Module):
-    """A Kolomogorov-Arnold Network in the input layer combined with MLP for the hidden
-    and output layers.
-    """
+    """Hybrid KAN input layer + MLP hidden/output layers."""
 
     def __init__(
         self,
@@ -558,10 +644,19 @@ class KANMLPModule(nnx.Module):
 
     @property
     def dim(self) -> int:
+        """Return flattened parameter count."""
         st = nnx.split(self, nnx.Param)[1]
         return jax.flatten_util.ravel_pytree(st)[0].shape[0]
 
     def __call__(self, x: Array) -> Array:
+        """Forward pass through KAN + MLP stack.
+
+        Args:
+            x: Input batch (N, in_size).
+
+        Returns:
+            Output batch (N, out_size).
+        """
         x = self.act_fun(self.layer_in(x))
         for z in self.hidden:
             x = self.act_fun(z(x))
@@ -569,7 +664,7 @@ class KANMLPModule(nnx.Module):
 
 
 class sPIKANModule(nnx.Module):
-    """Spectral PINN with KAN in all layers."""
+    """Pure spectral KAN in every layer (input, hidden, output)."""
 
     def __init__(
         self,
@@ -636,10 +731,19 @@ class sPIKANModule(nnx.Module):
 
     @property
     def dim(self) -> int:
+        """Return flattened parameter count."""
         st = nnx.split(self, nnx.Param)[1]
         return jax.flatten_util.ravel_pytree(st)[0].shape[0]
 
     def __call__(self, x: Array) -> Array:
+        """Forward pass through fully spectral KAN stack.
+
+        Args:
+            x: Input coordinates/features (N, in_size).
+
+        Returns:
+            Output batch (N, out_size).
+        """
         x = self.act_fun(self.layer_in(x))
         for z in self.hidden:
             x = self.act_fun(z(x))
@@ -647,6 +751,16 @@ class sPIKANModule(nnx.Module):
 
 
 class FlaxFunction(Function):
+    """Symbolic wrapper for a neural/spectral module bound to coordinates.
+
+    Creates a SymPy Function carrying:
+      * functionspace (metadata + dims/rank)
+      * module (the nnx.Module used for evaluation)
+      * symbolic arguments (coordinates, optional time, space name)
+
+    Supports vector fields (rank=1).
+    """
+
     def __new__(
         cls,
         V: BaseSpace,
@@ -680,16 +794,19 @@ class FlaxFunction(Function):
         return obj
 
     def __getitem__(self, i: int):
+        """Return component function for a vector-valued space."""
         return FlaxFunction(
             self.functionspace[i], name=self.name[i], module=self.module, rngs=self.rngs
         )
 
     @property
     def rank(self):
+        """Return tensor rank of the represented field."""
         return self.functionspace.rank
 
     @property
     def dim(self):
+        """Return flattened parameter count of underlying module."""
         return self.module.dim
 
     @staticmethod
@@ -700,6 +817,7 @@ class FlaxFunction(Function):
         bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs,
     ) -> MLP | PirateNet | SpectralModule:
+        """Instantiate appropriate nnx module given a function space."""
         if isinstance(V, MLPSpace):
             return MLP(V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)
         elif isinstance(V, PirateSpace):
@@ -715,6 +833,7 @@ class FlaxFunction(Function):
         )
 
     def get_args(self, Cartesian=True):
+        """Return symbolic arguments (Cartesian or base scalars + time)."""
         if Cartesian:
             return self.args[:-1]
         V = self.functionspace
@@ -722,6 +841,11 @@ class FlaxFunction(Function):
         return s + (self.t,) if V.is_transient else s
 
     def doit(self, **hints: dict) -> sp.Expr:
+        """Return an evaluated SymPy expression (vector or scalar).
+
+        For rank 0: returns a scalar Function placeholder.
+        For rank 1: returns a VectorAdd assembling components.
+        """
         V = self.functionspace
         args = self.get_args(Cartesian=False)
 
@@ -753,13 +877,13 @@ class FlaxFunction(Function):
         raise NotImplementedError
 
     def cartesian_mesh(self, xs: Array) -> Array:
-        """Return mesh in Cartesian (physical) domain
+        """Map computational coordinates to Cartesian physical domain.
 
         Args:
-            xs: Coordinates in computational domain
+            xs: Computational coordinates (N, dims).
 
         Returns:
-            Coordinates in real space
+            Physical coordinates (N, dims).
         """
         system = self.functionspace.system
         rv = system.position_vector(False)
@@ -802,6 +926,7 @@ class FlaxFunction(Function):
         return self.__str__()
 
     def __call__(self, x):
+        """Evaluate underlying module; flatten scalar output if rank 0."""
         y = self.module(x)
         if self.rank == 0:
             return y[:, 0]
@@ -809,17 +934,29 @@ class FlaxFunction(Function):
 
 
 class Comp(nnx.Module):
-    def __init__(self, *flaxfunctions: FlaxFunction) -> None:
-        """Collection of FlaxFunctions to be evaluated and stacked
+    """Module composing multiple FlaxFunctions in parallel (stack outputs)."""
 
-        Args: FlaxFunctions to be evaluated and stacked
+    def __init__(self, *flaxfunctions: FlaxFunction) -> None:
+        """Store list of FlaxFunctions and register modules as attributes.
+
+        Args:
+            *flaxfunctions: One or more FlaxFunction instances.
         """
         self.flaxfunctions = list(flaxfunctions)
         [setattr(self, str(id(p.module)), p.module) for p in flaxfunctions]
 
     @property
     def dim(self) -> int:
+        """Return total flattened parameter count across all functions."""
         return sum([f.module.dim for f in self.flaxfunctions])
 
     def __call__(self, x: Array) -> Array:
+        """Evaluate and horizontally stack all component module outputs.
+
+        Args:
+            x: Input batch.
+
+        Returns:
+            Concatenated outputs (N, sum(out_sizes)).
+        """
         return jnp.hstack([f.module(x) for f in self.flaxfunctions])

@@ -131,7 +131,8 @@ class LSQR:
 
             >>> import jax.numpy as jnp
             >>> from jaxfun.operators import Div, Grad
-            >>> from jaxfun.pinns.module import LSQR, MLPSpace, FlaxFunction
+            >>> from jaxfun.pinns.loss import LSQR
+            >>> from jaxfun.pinns.module import MLPSpace, FlaxFunction
             >>> V = MLPSpace([8, 8], dims=1, rank=0, name="V")
             >>> u = FlaxFunction(V, name="u")
             >>> eq = Div(Grad(u)) + 2

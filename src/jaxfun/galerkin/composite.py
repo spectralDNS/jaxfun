@@ -24,7 +24,28 @@ direct_sum_symbol = "\u2295"
 
 
 class BoundaryConditions(dict):
-    """Boundary conditions as a dictionary"""
+    """Container for 1D left/right boundary conditions.
+
+    Stores boundary data under the keys "left" and "right". Each side
+    maps condition code -> value. Supported codes (examples):
+
+      D  : Dirichlet
+      N  : Neumann (1st derivative)
+      N2 : 2nd derivative (etc.)
+      R  : Robin (tuple (alpha, value))
+      W  : Weighted (tuple (alpha, value))
+
+    Values can be:
+      * Number (homogeneous / inhomogeneous)
+      * Tuple (alpha, Number) for Robin / weighted forms
+
+    Args:
+        bc: User dictionary (partial). Missing sides are filled.
+        domain: Physical domain (unused here, kept for future features).
+
+    Attributes:
+        left/right: Dicts of condition_code -> value.
+    """
 
     def __init__(self, bc: dict, domain: Domain | None = None) -> None:
         if domain is None:
@@ -34,11 +55,13 @@ class BoundaryConditions(dict):
         dict.__init__(self, bcs)
 
     def orderednames(self) -> list[str]:
+        """Return ordered boundary condition codes (prefixed with L/R)."""
         return ["L" + bci for bci in sorted(self["left"].keys())] + [
             "R" + bci for bci in sorted(self["right"].keys())
         ]
 
     def orderedvals(self) -> list[Number]:
+        """Return boundary condition values in same order as orderednames()."""
         ls = []
         for lr in ("left", "right"):
             for key in sorted(self[lr].keys()):
@@ -47,9 +70,11 @@ class BoundaryConditions(dict):
         return ls
 
     def num_bcs(self) -> int:
+        """Return number of scalar boundary conditions."""
         return len(self.orderedvals())
 
     def num_derivatives(self) -> int:
+        """Return total derivative order count (used for basis offset)."""
         n = {"D": 0, "R": 0, "N": 1, "N2": 2, "N3": 3, "N4": 4}
         num_diff = 0
         for val in self.values():
@@ -58,6 +83,7 @@ class BoundaryConditions(dict):
         return num_diff
 
     def is_homogeneous(self) -> bool:
+        """Return True if all boundary values (incl. Robin) equal zero."""
         for val in self.values():
             for v in val.values():
                 if v != 0:
@@ -65,6 +91,7 @@ class BoundaryConditions(dict):
         return True
 
     def get_homogeneous(self) -> BoundaryConditions:
+        """Return a copy with all boundary values set to zero."""
         bc = {}
         for k, v in self.items():
             bc[k] = {}
@@ -74,13 +101,34 @@ class BoundaryConditions(dict):
 
 
 class Composite(OrthogonalSpace):
-    """Space created by combining orthogonal basis functions
+    """Composite basis enforcing boundary conditions via a stencil.
 
-    The stencil matrix is computed from the given boundary conditions, but
-    may also be given explicitly.
+    Builds a constrained basis φ_i = Σ_j S_{ij} P_{j} where P_j are
+    orthogonal polynomials (Chebyshev/Legendre/Jacobi). The stencil is
+    selected/derived from BoundaryConditions and converted into a sparse
+    matrix S (BCOO). Basis reduction removes degrees constrained by BCs.
+
+    Args:
+        N: Target (unconstrained) number of modes of underlying orthogonal.
+        orthogonal: Underlying orthogonal basis class (e.g. Chebyshev).
+        bcs: BoundaryConditions specification.
+        domain: Physical domain (defaults to [-1, 1]).
+        name: Space name.
+        fun_str: Symbol stem for basis functions.
+        system: Optional coordinate system.
+        stencil: Optional custom stencil dict {shift: sympy_expr}.
+        alpha: Jacobi alpha (for Jacobi-based bases).
+        beta: Jacobi beta.
+        scaling: SymPy expression scaling the stencil diagonals.
+
+    Attributes:
+        orthogonal: Instance of underlying orthogonal basis.
+        stencil: Ordered dict of diagonal shift -> expression / scaling.
+        S: Sparse (BCOO) stencil matrix.
+        scaling: Scaling expression applied to user stencil.
     """
 
-    def __init__(
+    def __init__(  # noqa: D401  (docstring above)
         self,
         N: int,
         orthogonal: OrthogonalSpace,
@@ -110,28 +158,34 @@ class Composite(OrthogonalSpace):
 
     @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
+        """Return quadrature nodes/weights (delegated to underlying basis)."""
         return self.orthogonal.quad_points_and_weights(N)
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
+        """Evaluate constrained expansion at X with composite coeffs c."""
         return self.orthogonal.evaluate(X, self.to_orthogonal(c))
 
     @partial(jax.jit, static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> float:
+        """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
 
     @partial(jax.jit, static_argnums=(0, 2))
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
+        """Return k-th derivative Vandermonde (constrained)."""
         P: Array = self.orthogonal.evaluate_basis_derivative(X, k)
         return self.apply_stencil_right(P)
 
     @partial(jax.jit, static_argnums=0)
     def vandermonde(self, X: Array) -> Array:
+        """Return (constrained) Vandermonde matrix at sample points X."""
         P: Array = self.orthogonal.evaluate_basis_derivative(X, 0)
         return self.apply_stencil_right(P)
 
     @partial(jax.jit, static_argnums=(0, 2))
     def eval_basis_function(self, X: float, i: int) -> float:
+        """Evaluate single constrained basis function φ_i at X."""
         row: Array = self.get_stencil_row(i)
         psi: Array = jnp.array(
             [self.orthogonal.eval_basis_function(X, i + j) for j in self.stencil]
@@ -140,16 +194,20 @@ class Composite(OrthogonalSpace):
 
     @partial(jax.jit, static_argnums=0)
     def eval_basis_functions(self, X: float) -> Array:
+        """Evaluate all constrained basis functions at X."""
         P: Array = self.orthogonal.eval_basis_functions(X)
         return self.apply_stencil_right(P)
 
     def get_stencil_row(self, i: int) -> Array:
+        """Return nonzero stencil row data for basis index i."""
         return self.S[i].data[: len(self.stencil)]
 
     def stencil_width(self) -> int:
+        """Return max diagonal shift minus min shift (stencil width)."""
         return max(self.stencil) - min(self.stencil)
 
     def stencil_to_scipy_sparse(self) -> scipy_sparse.spmatrix:
+        """Convert symbolic stencil to scipy sparse diagonal matrix."""
         k = jnp.arange(self.N - 1)
         return scipy_sparse.diags(
             [
@@ -166,30 +224,37 @@ class Composite(OrthogonalSpace):
 
     @property
     def reference_domain(self) -> Domain:
+        """Return reference domain of underlying orthogonal basis."""
         return self.orthogonal.reference_domain
 
     @partial(jax.jit, static_argnums=0)
     def to_orthogonal(self, a: Array) -> Array:
+        """Map composite coefficients -> underlying orthogonal coefficients."""
         return a @ self.S
 
     @partial(jax.jit, static_argnums=0)
     def apply_stencil_galerkin(self, b: Array) -> Array:
+        """Apply stencil on both sides (Galerkin mass-like transform)."""
         return self.S @ b @ self.S.T
 
     @partial(jax.jit, static_argnums=0)
     def apply_stencils_petrovgalerkin(self, b: Array, P: BCOO) -> Array:
+        """Apply test (S) and trial (P) stencils (Petrov–Galerkin)."""
         return self.S @ b @ P.T
 
     @partial(jax.jit, static_argnums=0)
     def apply_stencil_left(self, b: Array) -> Array:
+        """Left-multiply by stencil (test projection)."""
         return self.S @ b
 
     @partial(jax.jit, static_argnums=0)
     def apply_stencil_right(self, a: Array) -> Array:
+        """Right-multiply by stencil transpose (trial projection)."""
         return a @ self.S.T
 
     @partial(jax.jit, static_argnums=0)
     def mass_matrix(self) -> BCOO:
+        """Return constrained mass matrix in sparse BCOO format."""
         P: BCOO = self.orthogonal.mass_matrix()
         T = matmat((self.S * P.data[None, :]), self.S.T).data.reshape(
             (self.dim, -1)
@@ -198,20 +263,24 @@ class Composite(OrthogonalSpace):
 
     @partial(jax.jit, static_argnums=0)
     def forward(self, u: Array) -> Array:
+        """Project physical samples u -> constrained coefficients."""
         A = self.mass_matrix().todense()
         L = self.scalar_product(u)
         return jnp.linalg.solve(A, L)
 
     @partial(jax.jit, static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
+        """Return right-hand side inner product vector <u, φ_i>."""
         P: Array = self.orthogonal.scalar_product(u)
         return self.apply_stencil_right(P)
 
     @property
     def dim(self) -> int:
+        """Return dimension of composite space."""
         return self.orthogonal.dim - self.stencil_width()
 
     def get_homogeneous(self) -> Composite:
+        """Return new Composite with homogeneous boundary values."""
         bc = self.bcs.get_homogeneous()
         return Composite(
             N=self.orthogonal.dim,
@@ -227,6 +296,7 @@ class Composite(OrthogonalSpace):
         )
 
     def get_padded(self, N: int) -> Composite:
+        """Return Composite enlarged (padded) to size N (same stencil)."""
         return Composite(
             N=N,
             orthogonal=self.orthogonal.__class__,
@@ -242,9 +312,13 @@ class Composite(OrthogonalSpace):
 
 
 class BCGeneric(Composite):
-    """Space used to fix nonzero boundary conditions"""
+    """Basis spanning only boundary-constraint enforcing functions.
 
-    def __init__(
+    All degrees of freedom correspond to boundary modes; num_dofs == 0.
+    Used to construct direct sums (solution space ⊕ boundary lift space).
+    """
+
+    def __init__(  # noqa: D401
         self,
         N: int,
         orthogonal: OrthogonalSpace,
@@ -280,25 +354,40 @@ class BCGeneric(Composite):
 
     @property
     def dim(self) -> int:
+        """Return dimension of boundary space."""
         return self.S.shape[0]
 
     @property
     def num_dofs(self) -> int:
-        # Degrees of freedom after applying boundary constraints. For BCGeneric, all
-        # degrees of freedom are fixed by boundary conditions, so this is 0.
+        """Return number of free DOFs (always zero for pure BC basis)."""
         return 0
 
     def bnd_vals(self) -> Array:
+        """Return ordered boundary values vector."""
         return jnp.array(self.bcs.orderedvals())
 
     @partial(jax.jit, static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
+        """Quadrature nodes/weights (override to enforce num_quad_points)."""
         N = self.num_quad_points if N == 0 else N
         return self.orthogonal.quad_points_and_weights(N)
 
 
 class DirectSum:
-    """Direct sum of a Composite space and a boundary condition space"""
+    """Direct sum V = Composite ⊕ BCGeneric lifting boundary data.
+
+    Evaluation adds the homogeneous solution part and boundary lift
+    expansion. This preserves linear independence and imposes BCs.
+
+    Args:
+        a: Composite (homogeneous) space.
+        b: BCGeneric boundary lifting space.
+
+    Attributes:
+        basespaces: [a, b]
+        bcs: BoundaryConditions reference.
+        num_dofs: Free DOFs (from Composite part).
+    """
 
     def __init__(self, a: Composite, b: BCGeneric) -> None:
         assert isinstance(b, BCGeneric)
@@ -312,56 +401,63 @@ class DirectSum:
         self.map_true_domain = a.map_true_domain
 
     def __getitem__(self, i: int) -> Composite | BCGeneric:
+        """Return i-th summand."""
         return self.basespaces[i]
 
     def __len__(self) -> int:
+        """Return number of summands (always 2)."""
         return len(self.basespaces)
 
     def mesh(self, kind: str = "quadrature", N: int = 0) -> Array:
+        """Return mesh from homogeneous Composite summand."""
         return self.basespaces[0].mesh(kind=kind, N=N)
 
     def bnd_vals(self) -> Array:
+        """Return boundary lifting values (from BCGeneric)."""
         return self.basespaces[1].bnd_vals()
 
     @property
     def dim(self) -> int:
+        """Return total dimension (homogeneous + boundary)."""
         return self.basespaces[0].dim + self.basespaces[1].dim
 
     @property
     def num_dofs(self) -> int:
+        """Return free degrees of freedom (Composite part)."""
         return self.basespaces[0].num_dofs
 
     @partial(jax.jit, static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
+        """Evaluate direct-sum function at X with composite coeffs c."""
         return self.basespaces[0].evaluate(X, c) + self.basespaces[1].evaluate(
             X, self.bnd_vals()
         )
 
     @partial(jax.jit, static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+        """Backward transform (composite + boundary contribution)."""
         return self.basespaces[0].backward(c, kind, N) + self.basespaces[1].backward(
             self.bnd_vals(), kind, N
         )
 
 
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
-    r"""Return stencil matrix as dictionary of keys, values being diagonals
-    and sympy expressions.
+    """Derive symbolic stencil mapping orthogonal -> constrained basis.
 
-    For example, the Neumann basis functions for Chebyshev polynomials are
+    For BC set, solve linear relations among boundary traces of shifted
+    orthogonal functions to express ψ_i = Σ d_k P_{i+k}. Returns dict
+    {shift: sympy_expression}. Special-cases some frequent BC patterns.
 
-    .. math::
-        \psi_i = T_i - \frac{i^2}{i^2+4i+4}T_{i+2}
+    Args:
+        bcs: BoundaryConditions object.
+        orthogonal: Underlying orthogonal basis instance (Jacobi derived).
 
-    Hence, we get
+    Returns:
+        Dictionary shift -> SymPy expression (d_shift).
 
-    Example
-    -------
-    >>> from jaxfun import Chebyshev
-    >>> from jaxfun.composite import Composite
-    >>> C = Composite(10, Chebyshev.Chebyshev, {"left": {"N": 0}, "right": {"N": 0}})
-    >>> C.stencil
-    {0: 1, 2: -n**2/(n**2 + 4*n + 4)}
+    Example:
+        Neumann Chebyshev:
+            ψ_i = T_i - i^2/(i^2+4i+4) T_{i+2}
     """
     if "".join(bcs.orderednames()) == "LDRD" and isinstance(
         orthogonal, Chebyshev | Legendre
@@ -413,29 +509,18 @@ def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
 
 
 def get_bc_basis(bcs: BoundaryConditions, orthogonal: Jacobi) -> sp.Matrix:
-    """Return boundary basis satisfying `bcs`.
+    """Return lifting basis satisfying boundary conditions exactly.
 
-    Parameters
-    ----------
-    bcs : dict
-        The boundary conditions in dictionary form, see
-        :class:`.BoundaryConditions`.
+    Constructs a matrix S whose rows span functions meeting bcs. The
+    method searches for a starting index producing invertible boundary
+    evaluation matrix, then solves for canonical columns.
 
-    family : str
-        Choose one of
+    Args:
+        bcs: BoundaryConditions dictionary or raw dict.
+        orthogonal: Underlying orthogonal family instance.
 
-        - ``Chebyshev``
-        - ``Chebyshevu``
-        - ``Legendre``
-        - ``Ultraspherical``
-        - ``Jacobi``
-        - ``Laguerre``
-
-    alpha, beta : numbers, optional
-        The Jacobi parameters, used only for ``Jacobi`` or ``Ultraspherical``
-
-    gn : Scaling function for Jacobi polynomials
-
+    Returns:
+        SymPy Matrix of shape (num_bcs, K) giving expansion coefficients.
     """
     from sympy.matrices.common import NonInvertibleMatrixError
 

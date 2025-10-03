@@ -1,3 +1,23 @@
+"""Utilities for splitting Galerkin weak forms into linear / bilinear parts.
+
+The functions traverse SymPy expressions composed of:
+  * Test / trial basis Functions (argument attribute 0 / 1)
+  * JAX-backed symbolic wrappers (JAXFunction, Jaxf, JAXArray)
+  * Derivatives, sums, products, numeric coefficients
+
+They identify:
+  - Basis function structure (test / trial presence)
+  - Coefficient factors (scalars, arrays, JAXFunction references)
+  - Separable variable factors (multivariate vs separated)
+
+Main entry points:
+  get_basisfunctions(expr) -> locate test / trial functions
+  get_jaxarrays(expr)      -> locate JAXArray symbols
+  split_coeff(expr)        -> split bilinear/linear coefficient (for bilinear forms)
+  split_linear_coeff(expr) -> assemble scalar/array coefficient (for linear forms)
+  split(form_expr)         -> decompose full weak form into grouped terms
+"""
+
 import jax.numpy as jnp
 import sympy as sp
 
@@ -12,6 +32,24 @@ def get_basisfunctions(
     set[sp.Function] | sp.Function | None,
     set[sp.Function] | sp.Function | None,
 ]:
+    """Return test / trial basis Function objects present in expression.
+
+    A basis Function is recognized by a custom attribute 'argument':
+      argument == 0 : test function
+      argument == 1 : trial function
+
+    Depending on multiplicity the return values are either a single
+    Function, a set of Functions, or None if absent.
+
+    Args:
+        a: SymPy expression to inspect.
+
+    Returns:
+        (test, trial) where each element is:
+          - A single Function if exactly one found
+          - A set of Functions if multiple
+          - None if none found
+    """
     test_found, trial_found = set(), set()
     for p in sp.core.traversal.iterargs(sp.sympify(a)):
         if getattr(p, "argument", -1) == 1:
@@ -35,6 +73,16 @@ def get_basisfunctions(
 def get_jaxarrays(
     a: sp.Expr,
 ) -> tuple[set[JAXArray]]:
+    """Return set of JAXArray symbolic wrappers inside expression.
+
+    JAXArray nodes are identified through attribute 'argument' == 3.
+
+    Args:
+        a: SymPy expression.
+
+    Returns:
+        Set with zero or more JAXArray objects.
+    """
     array_found = set()
     for p in sp.core.traversal.iterargs(sp.sympify(a)):
         if getattr(p, "argument", -1) == 3:
@@ -43,14 +91,24 @@ def get_jaxarrays(
 
 
 def split_coeff(c0: sp.Expr) -> dict:
-    """Split coefficients of bilinear form into parts
+    """Split coefficient for bilinear form into linear / bilinear pieces.
+
+    Patterns handled:
+      * Pure number -> {'bilinear': scalar}
+      * Single Jaxf -> {'linear': {'scale': 1, 'jaxfunction': Jaxf}}
+      * Product including Jaxf -> scale isolated
+      * Sum of numbers / (scaled) Jaxf terms -> combined
 
     Args:
-        c0: Expression that may contain a Jaxf, a number, or a product/sum of
-        these.
+        c0: SymPy expression with optional Jaxf factor(s).
 
     Returns:
-        dict: input split into bilinear and linear parts.
+        Dictionary with possible keys:
+          'bilinear': numeric scalar (if present)
+          'linear': {'scale': number, 'jaxfunction': Jaxf | None}
+
+    Raises:
+        AssertionError: If basis functions are present in the coefficient.
     """
     coeffs = {}
     c0 = sp.sympify(c0)
@@ -91,14 +149,21 @@ def split_coeff(c0: sp.Expr) -> dict:
 
 
 def split_linear_coeff(c0: sp.Expr) -> dict:
-    """Split coefficients of linear form into parts
+    """Assemble (possibly array-valued) coefficient for a linear form term.
+
+    Accepts at most one JAXArray node (optionally raised to an integer
+    power). All numeric / complex factors are multiplied into a single
+    scalar and broadcast with the array.
 
     Args:
-        c0: Expression that may contain a JAXArray, a number, or a product of
-        these.
+        c0: SymPy expression (number, JAXArray, product, or power).
 
     Returns:
-        scale: input computed as number or array.
+        jnp.ndarray: Final numeric / array scale.
+
+    Raises:
+        AssertionError: If more than one JAXArray is present.
+        NotImplementedError: If unsupported power pattern encountered.
     """
     c0 = sp.sympify(c0)
     jaxarrays = get_jaxarrays(c0)
@@ -126,6 +191,29 @@ def split_linear_coeff(c0: sp.Expr) -> dict:
 
 
 def split(forms: sp.Expr) -> dict:
+    """Split a full weak form expression into linear and bilinear parts.
+
+    For each additive term:
+      * Identify presence of trial basis -> classify as bilinear
+      * Otherwise classify as linear
+      * Separate variable factors and coefficient (JAXFunction / Jaxf)
+      * Combine like terms via add_result
+
+    Args:
+        forms: SymPy expression representing the (expanded) weak form.
+
+    Returns:
+        {
+          'linear':  [dict, ...],
+          'bilinear':[dict, ...]
+        }
+        Each dict contains separated variables keyed by base scalars plus
+        optional 'coeff' and 'multivar' entries.
+
+    Raises:
+        AssertionError: If no test function is found.
+        RuntimeError: If term cannot be separated.
+    """
     v, _ = get_basisfunctions(forms)
     assert v is not None, "A test function is required"
     V = v.functionspace
@@ -168,17 +256,20 @@ def split(forms: sp.Expr) -> dict:
 
 
 def add_result(res: list[dict], d: dict, system: CoordSys) -> list[dict]:
-    """Add result dictionary `d` to list of results `res`.
+    """Accumulate result dictionary into list merging like basis factors.
 
-    Collect all results with identical basis functions in one dict.
+    Two dictionaries are considered identical if they match on every
+    coordinate scalar key. Coefficients are combined:
+      * Without 'multivar': add coefficient
+      * With 'multivar': distribute & factor
 
     Args:
-        res (list[dict]): list of results
-        d (dict): new result
-        system (CoordSys): Coordinate system
+        res: Existing list of grouped term dictionaries.
+        d: New term dictionary.
+        system: Coordinate system providing base scalar ordering.
 
     Returns:
-        list[dict]: appended list of results
+        Updated list with merged or appended dictionary.
     """
     found_d: bool = False
     for g in res:

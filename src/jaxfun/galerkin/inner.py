@@ -34,46 +34,37 @@ def inner(
     sparse_tol: int = 1000,
     return_all_items: bool = False,
 ) -> Array | list[Array]:
-    r"""Compute inner products
+    r"""Assemble Galerkin inner products (bilinear / linear forms).
 
-    Assemble bilinear and linear forms. The expr input needs to represent one of the following
-    three combinations::
+    Supports expressions of the forms:
+        a(u, v) - L(v)
+        a(u, v)
+        L(v)
 
-        a(u, v) - L(v)  # Bilinear and linear forms
-        a(u, v)  # Bilinear form only
-        L(v)  # Linear form only
+    Finds test / trial functions, splits expression into coefficients and
+    separated coordinate factors, constructs (tensor) matrices and load
+    vectors. Handles:
+      * Composite / BCGeneric spaces (boundary constraints / lifting)
+      * Direct sums of tensor product spaces
+      * Multivariable non-separable coefficients (symbolic factor kept)
+      * JAXFunction (produces linear contributions)
+      * JAXArray factors in linear forms
 
+    Args:
+        expr: SymPy expression containing TestFunction (mandatory) and
+            optionally TrialFunction, JAXFunction, JAXArray, scalar
+            coordinate-dependent factors.
+        sparse: If True, sparsify (1D) matrix/tensor factors (BCOO).
+        sparse_tol: Zero tolerance (integer multiple of ulp) for sparsify.
+        return_all_items: If True return raw list(s) of matrices / vectors
+            before summation (always for >1D tensor product).
 
-    where a(u, v) and L(v) are bilinear and linear forms, respectively. In addition to test v and
-    trial functions u, the forms may also contain regular spectral functions (:class:`.JAXFunction`),
-    JAXArrays (:class:`.JAXArray`), and Sympy functions of spatial coordinates
-    (e.g., :class:`.ScalarFunction`).
-
-    For a(u, v) - L(v) we return both matrices and a vector, where the vector represents the right
-    hand side of the linear system Ax = b. If only a(u, v), then we return only matrices unless there
-    are non-zero boundary conditions, in which case a right-hand side vector is returned as well. If
-    only L(v), then only a vector is returned.
-
-    If `return_all_items=True`, then we return all computed matrices and vectors, without adding them
-    together first.
-
-    Parameters
-    ----------
-    expr : Sympy Expr
-        An expression containing :class:`.TestFunction` and optionally :class:`.TrialFunction`
-        or :class:`.JAXFunction`. May also contain any Sympy function of spatial coordinates.
-    sparse : bool
-        if True, then sparsify the matrices before returning
-    sparse_tol : int
-        An integer multiple of one ulp. The tolereance for something being zero is
-        determined based on the absolute value of the number being less than
-        sparse_tol*ulp.
-    return_all_items : bool
-        Whether to return just one matrix/vector, or whether to return all computed matrices/vectors.
-        Note that one expr may maintain any number of terms leading to many matrices/vectors.
-        This parameter is only relevant for 1D problems. Multidimensional problems always
-        returns all tensor product matrices.
-
+    Returns:
+        Depending on content:
+          * Matrix (bilinear only, 1D)
+          * Vector (linear only)
+          * (Matrix, Vector) tuple
+          * Lists / TensorMatrix / TPMatrix objects for >1D
     """  # noqa: E501
     V, U = get_basisfunctions(expr)
     test_space = V.functionspace
@@ -253,6 +244,15 @@ def inner(
 
 
 def tosparse_and_attach(z: Array, sparse_tol: int) -> BCOO:
+    """Convert dense operator to BCOO and preserve metadata.
+
+    Args:
+        z: Dense matrix with attached attributes (test/trial data).
+        sparse_tol: Zero tolerance passed to tosparse.
+
+    Returns:
+        BCOO sparse matrix with copied metadata attributes.
+    """
     a0 = tosparse(z, tol=sparse_tol)
     a0.test_derivatives = z.test_derivatives
     a0.trial_derivatives = z.trial_derivatives
@@ -269,6 +269,19 @@ def process_results(
     sparse: bool,
     sparse_tol: int,
 ) -> Array | list[Array] | BCOO | list[BCOO] | tuple[BCOO | Array, Array]:
+    """Finalize assembly results (sum terms, optional sparsify).
+
+    Args:
+        aresults: List of bilinear matrices (dense or structured holders).
+        bresults: List of load vectors / tensors.
+        return_all_items: If True skip summation (raw lists returned).
+        dims: Spatial dimension (1 => sum; >1 keep tensor structure).
+        sparse: If True, sparsify (only when applicable).
+        sparse_tol: Zero tolerance for sparsification.
+
+    Returns:
+        Matrix, vector, (matrix, vector) or lists depending on inputs.
+    """
     if return_all_items:
         return aresults, bresults
 
@@ -307,6 +320,22 @@ def inner_bilinear(
     sc: float | complex,
     multivar: bool,
 ) -> Array:
+    """Assemble single bilinear form contribution term.
+
+    Detects derivative orders on test/trial factors, applies optional
+    symbolic coefficient (possibly sampled at quadrature points) and
+    returns dense matrix or tuple (multivar separated factors).
+
+    Args:
+        ai: SymPy sub-expression containing basis factors.
+        v: Test function space (Orthogonal or Composite).
+        u: Trial function space.
+        sc: Scalar bilinear coefficient (after linear split).
+        multivar: True if coefficient not separable (handled upstream).
+
+    Returns:
+        Dense matrix, or (Pi, Pj) tuple for multivar separation.
+    """
     vo = v.orthogonal
     uo = u.orthogonal
     xj, wj = vo.quad_points_and_weights()
@@ -382,6 +411,17 @@ def inner_linear(
     sc: float | complex,
     multivar: bool,
 ) -> Array:
+    """Assemble single linear form contribution.
+
+    Args:
+        bi: SymPy term with one test function (possibly derivative).
+        v: Test function space.
+        sc: Scalar coefficient (sign-adjusted if from a(u,v)-L(v)).
+        multivar: True if non-separable scaling (return tuple form).
+
+    Returns:
+        Vector (1D), tuple (Pi,) for multivar, or projected result.
+    """
     vo = v.orthogonal
     xj, wj = vo.quad_points_and_weights()
     df = float(vo.domain_factor)
@@ -425,6 +465,19 @@ def inner_linear(
 def assemble_multivar(
     mats: list[tuple[Array, Array]], scale: Array, test_space: TensorProductSpace
 ) -> Array:
+    """Contract separated multivariable factors into global matrix.
+
+    Handles expressions like sqrt(x+y)*u*v where coefficient cannot be
+    separated into pure x / y factors. Performs batched contraction.
+
+    Args:
+        mats: List [(P0,P1),(P2,P3)] of separated directional factors.
+        scale: SymPy expression or numeric scalar/array.
+        test_space: Tensor product space (for mesh / variable order).
+
+    Returns:
+        Dense matrix of shape (i*j, k*l) assembled from factors.
+    """
     P0, P1 = mats[0]
     P2, P3 = mats[1]
     i, k = P0.shape[1], P1.shape[1]
@@ -449,6 +502,15 @@ def assemble_multivar(
 
 
 def project1D(ue: sp.Expr, V: OrthogonalSpace) -> Array:
+    """Project scalar expression ue onto 1D space V (solve M uh = b).
+
+    Args:
+        ue: SymPy expression in physical coordinate.
+        V: Orthogonal (or Composite) space.
+
+    Returns:
+        Coefficient vector uh.
+    """
     u = TrialFunction(V)
     v = TestFunction(V)
     M, b = inner(v * (u - ue))
@@ -457,6 +519,15 @@ def project1D(ue: sp.Expr, V: OrthogonalSpace) -> Array:
 
 
 def project(ue: sp.Expr, V: OrthogonalSpace) -> Array:
+    """Project expression onto (possibly tensor) space V.
+
+    Args:
+        ue: SymPy expression.
+        V: Function space (may be tensor product/direct sum).
+
+    Returns:
+        Coefficient array shaped to V.num_dofs.
+    """
     u = TrialFunction(V)
     v = TestFunction(V)
     M, b = inner(v * (u - ue))
@@ -466,15 +537,29 @@ def project(ue: sp.Expr, V: OrthogonalSpace) -> Array:
 
 # Experimental measure
 class Measure:
+    """Light wrapper enabling custom integration measure multiplication.
+
+    When left-multiplied with an expression (expr * Measure(system)), the
+    system metric determinant (system.sg) is inserted and inner() invoked.
+
+    Attributes:
+        sparse: Whether to sparsify assembled matrices.
+        return_all_items: Return raw lists instead of summed results.
+        sparse_tol: Tolerance for sparsification.
+        system: Coordinate system providing sg (sqrt|g|).
+    """
+
     sparse = True
     return_all_items = False
     sparse_tol = 100
 
     def __init__(self, system: CoordSys, **kwargs: dict[Any]) -> None:
+        """Store coordinate system and optional override flags."""
         self.system = system
         self.__dict__.update(kwargs)
 
     def __rmul__(self, expr: sp.Expr) -> Array | list[Array]:
+        """Evaluate inner products for expr with inserted measure."""
         return inner(
             expr * self.system.sg,
             sparse=self.sparse,

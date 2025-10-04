@@ -411,7 +411,7 @@ class CoordSys(Basic):
             assumptions: SymPy logical assumption set (e.g. sp.Q.real & sp.Q.positive).
             replace: List/tuple of (pattern, replacement) pairs to aid simplification.
             measure: Custom operation counting function for complexity-guided
-            simplification.
+                simplification.
 
         Returns:
             The constructed coordinate system instance.
@@ -669,7 +669,7 @@ class CoordSys(Basic):
 
         For a vector expressed in this coordinate system using the covariant
         basis {b_i}, the stored components are already the contravariant
-        components v^i (since v = sum_i v^i b_i). For a dyadic (2nd‑order
+        components v^i (since v = sum_i v^i b_i). For a dyadic (2nd-order
         tensor) expressed with dyadic bases {b_i ⊗ b_j}, the stored components
         are v^{ij}.
 
@@ -683,7 +683,7 @@ class CoordSys(Basic):
 
         Returns:
             The scalar SymPy expression representing v^k (if v is a Vector) or
-            v^{k j} (if v is a Dyadic). Returns 0 if the component is not
+            v^{kj} (if v is a Dyadic). Returns 0 if the component is not
             present.
 
         Raises:
@@ -867,7 +867,7 @@ class CoordSys(Basic):
     def get_contravariant_basis(
         self, as_Vector: bool = False
     ) -> np.ndarray[Any, np.dtype[object]]:
-        """Returns contravariant basis vectors.
+        """Returns contravariant basis vectors as Cartesian vectors.
 
         Args:
             as_Vector: If True, returns SymPy Vectors; otherwise raw component array.

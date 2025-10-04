@@ -48,9 +48,9 @@ def _gradient_descent_based_optimizer(
     decay_steps: int | None,
     opt_constructor: Callable[..., optax.GradientTransformation],
 ) -> NamedOptimizer:
-    """Factory for simple (optionally decayed) gradient–descent style optimizers.
+    """Factory for simple (optionally decayed) gradient-descent style optimizers.
 
-    Builds a linear learning–rate schedule if decay_steps is provided; else
+    Builds a linear learning-rate schedule if decay_steps is provided; else
     uses a constant step size. Wraps the created transformation in NamedOptimizer.
 
     Args:

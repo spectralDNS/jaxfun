@@ -130,9 +130,6 @@ def lambdify(
     cse: bool = False,
     doctring_limit: int = 1000,
 ) -> Callable[[Iterable[Array]], Array]:
-    # system = get_system(expr)
-    # expr = system.expr_base_scalar_to_psi(expr)
-    # args = system.expr_base_scalar_to_psi(args)
     modules_default = ["jax", {"Ynm": Ynm}]
     modules = modules_default if modules is None else [modules] + modules_default
     return sp.lambdify(

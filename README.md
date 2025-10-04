@@ -1,6 +1,6 @@
 # jaxfun
 
-Spectral / Galerkin experimentation toolkit built on top of JAX for fast differentiable PDE prototyping, variational forms, and mixed spectral bases.
+Spectral / Galerkin / PINNs experimentation toolkit built on top of JAX for fast differentiable ODE/PDE prototyping, variational forms, and mixed spectral bases.
 
 ## Status & Badges
 

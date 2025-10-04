@@ -542,7 +542,7 @@ def curl(v: Vector, doit: bool = True) -> Vector:
     (square root of determinant of the Jacobian of the coordinate transformation).
 
     Args:
-        vect: Vector expression (must lie in a 3D system).
+        v: Vector expression (must lie in a 3D system).
         doit: If True, evaluate derivatives; else return unevaluated form.
 
     Returns:
@@ -833,9 +833,9 @@ def diff(self, *args, **kwargs):
     for x in args:
         if isinstance(x, sp.vector.basisdependent.BasisDependent):
             raise TypeError("Invalid arg for differentiation")
-    # Move to Cartesian because the basis vectors are then constant
-    # and non-differentiable
-    # Alternatively use Christoffel symbols, but this gets messy for more than one args.
+    # Move to Cartesian because the basis vectors are then constant and
+    # non-differentiable. Alternatively use Christoffel symbols, but this gets messy
+    # for more than one args.
     v0 = self._sys.to_cartesian(self)
     diff_components = [df(v, *args, **kwargs) * k for k, v in v0.components.items()]
     f = self._add_func(*diff_components)

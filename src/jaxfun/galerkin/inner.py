@@ -502,7 +502,7 @@ def assemble_multivar(
 
 
 def project1D(ue: sp.Expr, V: OrthogonalSpace) -> Array:
-    """Project scalar expression ue onto 1D space V (solve M uh = b).
+    """Project scalar expression ue onto 1D space V.
 
     Args:
         ue: SymPy expression in physical coordinate.

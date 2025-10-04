@@ -19,7 +19,7 @@ Boundary condition dictionary format (keys 'left' / 'right'):
       "left":  {"D": 0, "N": 1},
       "right": {"D": 0}
     }
-Keys like "D", "N", "N2", "R", "W" correspond to Dirichlet, first/second
+Keys like "D", "N", "N2", "R", "W" correspond to Dirichlet, Neuman with first/second
 derivatives, Robin, weighted, etc., as interpreted by BoundaryConditions.
 """
 
@@ -62,8 +62,7 @@ def FunctionSpace(
     Args:
         N: Number of modes (polynomials) or base functions (unconstrained).
         space: Base orthogonal / spectral space class (callable) or already
-            constructed BaseSpace subclass (factory expected signature:
-            space(N, domain=..., system=..., name=..., fun_str=..., **kw)).
+            constructed BaseSpace subclass.
         bcs: BoundaryConditions instance or raw dict specifying left/right
             boundary constraints. See module docstring for format.
         domain: Physical Domain (maps to reference domain internally).

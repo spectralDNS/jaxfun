@@ -25,9 +25,9 @@ from .nnspaces import (
 )
 from .optimizer import (
     GaussNewton as GaussNewton,
+    Trainer as Trainer,
     adam as adam,
     lbfgs as lbfgs,
-    run_optimizer as run_optimizer,
     soap as soap,
 )
 

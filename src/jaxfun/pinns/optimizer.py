@@ -2,8 +2,11 @@ import re
 from collections.abc import Callable
 
 import jax
+import jax.numpy as jnp
 import optax
 from flax import nnx
+from jax import Array
+from jax.experimental import multihost_utils as mh
 
 from jaxfun.utils.common import ulp
 
@@ -214,12 +217,17 @@ def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
     """
 
     @nnx.jit
-    def train_step(model: nnx.Module, optimizer: nnx.Optimizer) -> float:
+    def update(
+        model: nnx.Module,
+        optimizer: nnx.Optimizer,
+        loss: jax.Array,
+        gradients: nnx.State,
+    ) -> float:
         gd, state = nnx.split(model, nnx.Param)
         unravel = jax.flatten_util.ravel_pytree(state)[1]
-        loss, gradients = nnx.value_and_grad(loss_fn)(model)
         loss_fn_split = lambda state: loss_fn(nnx.merge(gd, state))
         H_loss_fn = lambda flat_weights: loss_fn(nnx.merge(gd, unravel(flat_weights)))
+
         optimizer.update(
             gradients,
             grad=gradients,
@@ -227,77 +235,118 @@ def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
             value=loss,
             H_loss_fn=H_loss_fn,
         )
+
+    @nnx.jit
+    def value_and_grad(model: nnx.Module, optimizer: nnx.Optimizer, gw: Array) -> float:
+        def value_fn_model(m: nnx.Module) -> Array:
+            return loss_fn.loss_with_gw(m, gw)
+
+        return nnx.value_and_grad(value_fn_model)(model)
+
+    def reduce(loss: jax.Array, gradients: nnx.State):
+        loss = mh.process_allgather(loss).mean(0)
+        gradients = jax.tree_util.tree_map(
+            lambda g: mh.process_allgather(g).mean(axis=0), gradients
+        )
+        return loss, gradients
+
+    def train_step(model: nnx.Module, optimizer: nnx.Optimizer, gw: Array) -> float:
+        loss, gradients = value_and_grad(model, optimizer, gw)
+        if jax.device_count() > 1:
+            loss, gradients = reduce(loss, gradients)
+        update(model, optimizer, loss, gradients)
         return loss
 
     return train_step
 
 
-def run_optimizer(
-    loss_fn: LSQR,
-    opt: nnx.Optimizer,
-    num: int,
-    epoch_print: int = 100,
-    module: nnx.Module = None,
-    name: str = None,
-    abs_limit_loss: float = ulp(1000),
-    abs_limit_change: float = ulp(100),
-    print_final_loss: bool = False,
-    update_global_weights: int = -1,
-    print_global_weights: bool = False,
-) -> None:
-    """Execute an optimization loop with early stopping & optional callbacks.
+class Trainer:
+    def __init__(self, loss_fn: LSQR) -> None:
+        """Trainer for optimization loops.
 
-    Early stopping criteria:
-      * abs(loss) < abs_limit_loss
-      * abs(loss - previous_loss) < abs_limit_change
+        Args:
+            loss_fn: Loss function / object (LSQR instance) to optimize.
+        """
+        self.loss_fn = loss_fn
+        self.reset_global_weights()
 
-    Optional periodic callback:
-      * update_global_weights: if > 0, every N epochs calls
-        loss_fn.update_global_weights(module).
+    def reset_global_weights(self):
+        self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)
 
-    Args:
-        loss_fn: Loss function / object supporting __call__(module) and optionally
-            update_global_weights(module).
-        opt: Optimizer instance (NamedOptimizer or custom nnx.Optimizer). If not a
-            NamedOptimizer and 'module' is None, a ValueError is raised.
-        num: Maximum number of epochs.
-        epoch_print: Print frequency (epochs). Set high to reduce logging.
-        module: Explicit module reference (required if opt is not a NamedOptimizer).
-        name: Override printed optimizer name (defaults to opt.name if present).
-        abs_limit_loss: Absolute loss threshold for early stop.
-        abs_limit_change: Absolute change threshold between epochs.
-        print_final_loss: If True, prints final loss on completion.
-        update_global_weights: Period (in epochs) for calling
-            loss_fn.update_global_weights; -1 disables.
-        print_global_weights: If True, prints global weights after each
-            update_global_weights trigger.
+    def train(
+        self,
+        opt: nnx.Optimizer,
+        num: int,
+        *,
+        epoch_print: int = 100,
+        name: str = None,
+        module: nnx.Module = None,
+        abs_limit_loss: float = ulp(1000),
+        abs_limit_change: float = ulp(100),
+        print_final_loss: bool = False,
+        update_global_weights: int = -1,
+        alpha: float = 0.8,
+        print_global_weights: bool = False,
+    ):
+        """Execute an optimization loop with early stopping & optional callbacks.
 
-    Raises:
-        ValueError: If module is None and opt is not a NamedOptimizer.
+        Early stopping criteria:
+          * abs(loss) < abs_limit_loss
+          * abs(loss - previous_loss) < abs_limit_change
 
-    Returns:
-        None. (Per-epoch loss printing side effects only.)
-    """
-    longname = name if name is not None else getattr(opt, "name", "Optimizer")
-    if module is None:
-        if not isinstance(opt, NamedOptimizer):
-            raise ValueError("Module must be provided if opt is not a NamedOptimizer")
-        module = opt.module
+        Optional periodic callback:
+          * update_global_weights: if > 0, every N epochs calls
+            loss_fn.update_global_weights(module).
 
-    print(f"Running optimizer {longname}")
-    name = re.sub(r"\([^)]*\)", "", longname)  # Remove parentheses content
-    train_step = train(loss_fn)
-    loss_old = 1.0
-    for epoch in range(1, num + 1):
-        loss = train_step(module, opt)
-        if epoch % epoch_print == 0:
-            print(f"Epoch {epoch} {name}, loss: {loss}")
-        if abs(loss) < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
-            break
-        loss_old = loss
-        if update_global_weights > 0 and epoch % update_global_weights == 0:
-            loss_fn.update_global_weights(module)
-            if print_global_weights:
-                print("Global weights", loss_fn.global_weights)
-    if print_final_loss:
-        print(f"Final loss for {longname}: {loss}")
+        Args:
+            opt: Optimizer instance (NamedOptimizer or custom nnx.Optimizer). If not a
+                NamedOptimizer and 'module' is None, a ValueError is raised.
+            num: Maximum number of epochs.
+
+            name: Optional name override for logging (defaults to opt.name or
+                'Optimizer').
+            module: Optional explicit module reference (required if opt is not a
+                NamedOptimizer).
+            abs_limit_loss: Absolute loss threshold for early stop.
+            abs_limit_change: Absolute change threshold between epochs.
+            print_final_loss: If True, prints final loss on completion.
+            update_global_weights: Period (in epochs) for calling
+                loss_fn.update_global_weights; -1 disables.
+            print_global_weights: If True, prints global weights after each
+                update_global_weights trigger.
+
+        Raises:
+            ValueError: If module is None and opt is not a NamedOptimizer.
+
+        """
+        rank = jax.process_index()
+        longname = name if name is not None else getattr(opt, "name", "Optimizer")
+        if module is None:
+            if not isinstance(opt, NamedOptimizer):
+                raise ValueError(
+                    "Module must be provided if opt is not a NamedOptimizer"
+                )
+            module = opt.module
+
+        if rank == 0:
+            print(f"Running optimizer {longname}")
+        name = re.sub(r"\([^)]*\)", "", longname)  # Remove parentheses content
+        train_step = train(self.loss_fn)
+        loss_old = 1.0
+        for epoch in range(1, num + 1):
+            loss = train_step(module, opt, self.global_weights)
+
+            if epoch % epoch_print == 0 and rank == 0:
+                print(f"Epoch {epoch} {name}, loss: {loss}")
+            if abs(loss) < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
+                break
+            loss_old = loss
+            if update_global_weights > 0 and epoch % update_global_weights == 0:
+                self.global_weights = self.loss_fn.update_global_weights(
+                    module, self.global_weights, alpha
+                )
+                if print_global_weights and rank == 0:
+                    print("Global weights", self.global_weights)
+
+        if print_final_loss and rank == 0:
+            print(f"Final loss for {longname}: {loss}")

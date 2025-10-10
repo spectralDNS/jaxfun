@@ -13,8 +13,8 @@ from jaxfun.pinns.mesh import Rectangle, points_along_axis
 from jaxfun.pinns.module import FlaxFunction
 from jaxfun.pinns.nnspaces import MLPSpace
 from jaxfun.pinns.optimizer import (
+    Trainer,
     lbfgs,
-    run_optimizer,
     soap,
 )
 
@@ -50,18 +50,16 @@ eq = u.diff(t) + u * u.diff(x) - nu * u.diff(x, 2)
 
 loss_fn = LSQR((eq, xi), (u, xb, ub))
 
-opt_soap = soap(u.module)
-run_optimizer(loss_fn, opt_soap, 1000, abs_limit_change=0)
+trainer = Trainer(loss_fn)
 
+opt_soap = soap(u.module)
 opt_lbfgs = lbfgs(u.module, memory_size=20)
-run_optimizer(
-    loss_fn,
-    opt_lbfgs,
-    1000,
-    100,
-    update_global_weights=10,
-    print_final_loss=True,
+
+trainer.train(opt_soap, 1000, abs_limit_change=0, update_global_weights=-1)
+trainer.global_weights = loss_fn.update_global_weights(
+    u.module, trainer.global_weights, 0.5
 )
+trainer.train(opt_lbfgs, 1000, update_global_weights=-1, print_final_loss=True)
 
 xj = jnp.linspace(left, right, 50)
 tj = jnp.linspace(t0, tmax, 50)

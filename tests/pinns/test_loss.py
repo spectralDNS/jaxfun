@@ -186,8 +186,8 @@ def test_lsqr_compute_Li():
 def test_lsqr_norm_grad_loss_i():
     V = FunctionSpace(2, Legendre.Legendre, name="V")
     u = FlaxFunction(V, "u", kernel_init=nnx.initializers.ones)
-    x = jnp.array([[0.0, 1.0]])
-    lsqr = LSQR((u, x, u(x)))
+    x = jnp.array([[0.0], [1.0]])
+    lsqr = LSQR((u, x, u.module(x)))
     norm = lsqr.norm_grad_loss_i(u.module, 0)
     assert norm == 0
 

@@ -744,7 +744,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "flax", specifier = ">=0.10.4" },
-    { name = "jax", specifier = ">=0.7" },
+    { name = "jax", specifier = ">=0.6" },
     { name = "matplotlib", specifier = ">=3.9.3" },
     { name = "optax", specifier = ">=0.2.5" },
     { name = "pre-commit", specifier = ">=4.3" },

@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
   "flax>=0.10.4",
-  "jax>=0.7",
+  "jax>=0.6",
   "matplotlib>=3.9.3",
   "optax>=0.2.5",
   "pre-commit>=4.3",

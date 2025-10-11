@@ -222,11 +222,15 @@ def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
         optimizer: nnx.Optimizer,
         loss: jax.Array,
         gradients: nnx.State,
+        gw: Array,
     ) -> float:
+        def value_fn(m: nnx.Module) -> Array:
+            return loss_fn.loss_with_gw(m, gw)
+
         gd, state = nnx.split(model, nnx.Param)
         unravel = jax.flatten_util.ravel_pytree(state)[1]
-        loss_fn_split = lambda state: loss_fn(nnx.merge(gd, state))
-        H_loss_fn = lambda flat_weights: loss_fn(nnx.merge(gd, unravel(flat_weights)))
+        loss_fn_split = lambda state: value_fn(nnx.merge(gd, state))
+        H_loss_fn = lambda flat_weights: value_fn(nnx.merge(gd, unravel(flat_weights)))
 
         optimizer.update(
             gradients,
@@ -245,16 +249,16 @@ def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
 
     def reduce(loss: jax.Array, gradients: nnx.State):
         loss = mh.process_allgather(loss).mean(0)
-        gradients = jax.tree_util.tree_map(
+        grads = jax.tree_util.tree_map(
             lambda g: mh.process_allgather(g).mean(axis=0), gradients
         )
-        return loss, gradients
+        return loss, grads
 
     def train_step(model: nnx.Module, optimizer: nnx.Optimizer, gw: Array) -> float:
         loss, gradients = value_and_grad(model, optimizer, gw)
-        if jax.device_count() > 1:
-            loss, gradients = reduce(loss, gradients)
-        update(model, optimizer, loss, gradients)
+        # if jax.device_count() > 1:
+        #    loss, gradients = reduce(loss, gradients)
+        update(model, optimizer, loss, gradients, gw)
         return loss
 
     return train_step
@@ -267,11 +271,21 @@ class Trainer:
         Args:
             loss_fn: Loss function / object (LSQR instance) to optimize.
         """
+        assert isinstance(loss_fn, LSQR), "Trainer requires an LSQR loss function"
         self.loss_fn = loss_fn
-        self.reset_global_weights()
-
-    def reset_global_weights(self):
         self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)
+
+    def reset_global_weights(self) -> None:
+        self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)
+
+    def allreduce(self, module: nnx.Module) -> None:
+        """Allreduce (average) all parameters across processes"""
+        state = nnx.state(module)
+        all_states = mh.process_allgather(state)
+        averaged_state = jax.tree_util.tree_map(
+            lambda x: jnp.mean(x, axis=0), all_states
+        )
+        nnx.update(module, averaged_state)
 
     def train(
         self,
@@ -285,9 +299,10 @@ class Trainer:
         abs_limit_change: float = ulp(100),
         print_final_loss: bool = False,
         update_global_weights: int = -1,
-        alpha: float = 0.8,
         print_global_weights: bool = False,
-    ):
+        allreduce_frequency: int = -1,
+        alpha: float = 0.9,
+    ) -> None:
         """Execute an optimization loop with early stopping & optional callbacks.
 
         Early stopping criteria:
@@ -296,7 +311,6 @@ class Trainer:
 
         Optional periodic callback:
           * update_global_weights: if > 0, every N epochs calls
-            loss_fn.update_global_weights(module).
 
         Args:
             opt: Optimizer instance (NamedOptimizer or custom nnx.Optimizer). If not a
@@ -314,9 +328,12 @@ class Trainer:
                 loss_fn.update_global_weights; -1 disables.
             print_global_weights: If True, prints global weights after each
                 update_global_weights trigger.
+            alpha: Smoothing factor for global weights update (0 < alpha < 1).
+                returns new * (1 - alpha) + old * alpha
 
         Raises:
             ValueError: If module is None and opt is not a NamedOptimizer.
+            ValueError: If alpha is not in the range [0, 1).
 
         """
         rank = jax.process_index()
@@ -327,6 +344,9 @@ class Trainer:
                     "Module must be provided if opt is not a NamedOptimizer"
                 )
             module = opt.module
+
+        if alpha < 0 or alpha >= 1:
+            raise ValueError("alpha must be in the range [0, 1)")
 
         if rank == 0:
             print(f"Running optimizer {longname}")
@@ -347,6 +367,8 @@ class Trainer:
                 )
                 if print_global_weights and rank == 0:
                     print("Global weights", self.global_weights)
+            if allreduce_frequency > 0 and epoch % allreduce_frequency == 0:
+                self.allreduce(module)
 
         if print_final_loss and rank == 0:
             print(f"Final loss for {longname}: {loss}")

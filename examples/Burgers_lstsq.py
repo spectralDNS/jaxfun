@@ -12,11 +12,7 @@ from jaxfun.pinns.loss import LSQR
 from jaxfun.pinns.mesh import Rectangle, points_along_axis
 from jaxfun.pinns.module import FlaxFunction
 from jaxfun.pinns.nnspaces import MLPSpace
-from jaxfun.pinns.optimizer import (
-    Trainer,
-    lbfgs,
-    soap,
-)
+from jaxfun.pinns.optimizer import Trainer, adam, lbfgs
 
 Nt = 40
 Nx = 40
@@ -52,13 +48,10 @@ loss_fn = LSQR((eq, xi), (u, xb, ub))
 
 trainer = Trainer(loss_fn)
 
-opt_soap = soap(u.module)
+opt_adam = adam(u.module)
 opt_lbfgs = lbfgs(u.module, memory_size=20)
 
-trainer.train(opt_soap, 1000, abs_limit_change=0, update_global_weights=-1)
-trainer.global_weights = loss_fn.update_global_weights(
-    u.module, trainer.global_weights, 0.5
-)
+trainer.train(opt_adam, 1000, abs_limit_change=0, update_global_weights=-1)
 trainer.train(opt_lbfgs, 1000, update_global_weights=-1, print_final_loss=True)
 
 xj = jnp.linspace(left, right, 50)

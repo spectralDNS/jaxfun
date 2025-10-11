@@ -235,16 +235,23 @@ class LSQR:
         return jnp.sum(norms) / jnp.where(norms < 1e-16, 1e-16, norms)
 
     def update_global_weights(self, model: nnx.Module, gw: Array, alpha: float) -> None:
+        from jax.experimental import multihost_utils as mh
+
         new = self.compute_global_weights(model)
-        return gw * (1 - alpha) + new * alpha
+        if jax.device_count() > 1:
+            new = mh.process_allgather(new).mean(0)
+        return new * (1 - alpha) + gw * alpha
 
     def loss_with_gw(self, model: nnx.Module, gw: Array) -> float:
         self.update_arrays(model, self.Js)
-        return sum(
-            [
-                gw[i] * (eq.weights * eq(self.Js) ** 2).mean()
-                for i, eq in enumerate(self.residuals)
-            ]
+        return (
+            jnp.array(
+                [
+                    (eq.weights * eq(self.Js) ** 2).mean()
+                    for i, eq in enumerate(self.residuals)
+                ]
+            )
+            @ gw
         )
 
     def __call__(self, model: nnx.Module) -> float:

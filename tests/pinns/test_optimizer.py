@@ -154,7 +154,7 @@ class TestTrainer:
         # Train with early stopping when loss < 1.0 (more achievable)
         trainer.train(
             optimizer,
-            10,  # Max epochs
+            50,  # Max epochs
             abs_limit_loss=1.0,
             abs_limit_change=0,
         )

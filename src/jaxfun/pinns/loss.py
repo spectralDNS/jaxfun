@@ -234,7 +234,9 @@ class LSQR:
         norms = self.norm_grad_loss(model)
         return jnp.sum(norms) / jnp.where(norms < 1e-16, 1e-16, norms)
 
-    def update_global_weights(self, model: nnx.Module, gw: Array, alpha: float) -> Array:
+    def update_global_weights(
+        self, model: nnx.Module, gw: Array, alpha: float
+    ) -> Array:
         from jax.experimental import multihost_utils as mh
 
         new = self.compute_global_weights(model)

@@ -321,8 +321,8 @@ class Trainer:
                 )
             module = opt.module
 
-        if alpha < 0 or alpha >= 1:
-            raise ValueError("alpha must be in the range [0, 1)")
+        if alpha <= 0 or alpha >= 1:
+            raise ValueError("alpha must be in the range (0, 1)")
 
         if rank == 0:
             print(f"Running optimizer {longname}")

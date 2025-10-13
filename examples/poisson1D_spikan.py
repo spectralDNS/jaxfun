@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import sympy as sp
 
 from jaxfun.operators import Div, Grad
-from jaxfun.pinns import LSQR, FlaxFunction, run_optimizer
+from jaxfun.pinns import LSQR, FlaxFunction, Trainer
 from jaxfun.pinns.mesh import Line
 from jaxfun.pinns.nnspaces import sPIKANSpace
 from jaxfun.pinns.optimizer import adam, lbfgs
@@ -32,19 +32,19 @@ xb = mesh.get_points_on_domain()
 eq = Div(Grad(w)) - Div(Grad(ue))
 
 loss_fn = LSQR((eq, xi), (w - ue, xb))
+trainer = Trainer(loss_fn)
 
 t0 = time.time()
 opt_adam = adam(w.module, learning_rate=1e-3, end_learning_rate=1e-4, decay_steps=10000)
-run_optimizer(loss_fn, opt_adam, 1000, 200, update_global_weights=10)
+trainer.train(opt_adam, 1000, epoch_print=200, update_global_weights=10)
 print(f"Adam time {time.time() - t0:.1f}s")
 
 t1 = time.time()
 opt_lbfgs = lbfgs(w.module, memory_size=20)
-run_optimizer(
-    loss_fn, opt_lbfgs, 1000, 100, update_global_weights=10, abs_limit_change=0
+trainer.train(
+    opt_lbfgs, 1000, epoch_print=100, update_global_weights=10, abs_limit_change=0
 )
 print(f"L-BFGS time {time.time() - t1:.1f}s")
-
 
 error = jnp.sqrt(loss_fn(w.module))
 if "PYTEST" in os.environ:

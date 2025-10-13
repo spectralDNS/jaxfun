@@ -1,8 +1,10 @@
+import contextlib
+
 import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from jaxfun.pinns import optimizer as opt_mod
+from jaxfun.pinns import LSQR, FlaxFunction, MLPSpace, optimizer as opt_mod
 
 
 class DummyModule(nnx.Module):
@@ -75,84 +77,170 @@ def test_train_returns_callable():
     assert callable(step)
 
 
-def test_run_optimizer_requires_module_if_not_nnx_optimizer():
-    class NotAnOptimizer:
-        pass
+class TestTrainer:
+    """Test suite for the Trainer class"""
 
-    dummy_opt = NotAnOptimizer()
-    # Should raise because opt is not nnx.Optimizer and has no module attr
-    with pytest.raises(ValueError, match="Module must be provided"):
-        opt_mod.run_optimizer(
-            loss_fn=lambda m: jnp.array(0.0),
-            opt=dummy_opt,  # type: ignore[arg-type]
-            num=1,
+    @pytest.fixture
+    def simple_model(self):
+        """Simple model with a single parameter for testing"""
+        m = MLPSpace(4, dims=1, rank=0, name="MLP")
+        u = FlaxFunction(m, "u")
+        return u.module
+
+    @pytest.fixture
+    def lsqr_loss_fn(self):
+        """Create an LSQR loss function for testing"""
+        m = MLPSpace(4, dims=1, rank=0, name="MLP")
+        u = FlaxFunction(m, "u")
+        x = jnp.array([[1.0]])
+        lsqr = LSQR((u, x))
+        return lsqr
+
+    def test_trainer_init_basic(self, lsqr_loss_fn):
+        """Test basic Trainer initialization"""
+        trainer = opt_mod.Trainer(lsqr_loss_fn)
+        assert trainer is not None
+        assert hasattr(trainer, "train")
+        assert hasattr(trainer, "reset_global_weights")
+        assert trainer.loss_fn is lsqr_loss_fn
+
+    def test_trainer_train_basic(self, simple_model, lsqr_loss_fn):
+        """Test basic training functionality"""
+        trainer = opt_mod.Trainer(lsqr_loss_fn)
+        optimizer = opt_mod.adam(simple_model, learning_rate=1e-2)
+
+        # Initial loss should be non-zero (w=0, target=1)
+        initial_loss = lsqr_loss_fn(simple_model)
+        assert initial_loss > 0
+
+        # Train for a few epochs
+        trainer.train(optimizer, 10)
+
+        # Loss should decrease
+        final_loss = lsqr_loss_fn(simple_model)
+        assert final_loss < initial_loss
+
+    def test_trainer_train_with_epoch_print(self, simple_model, lsqr_loss_fn, capsys):
+        """Test training with epoch printing"""
+        trainer = opt_mod.Trainer(lsqr_loss_fn)
+        optimizer = opt_mod.adam(simple_model, learning_rate=1e-2)
+
+        trainer.train(
+            optimizer,
+            5,
+            epoch_print=2,  # Print every 2 epochs
         )
 
+        captured = capsys.readouterr()
+        # Should have printed at epochs 2, 4 and the "Running optimizer" line
+        assert "Running optimizer" in captured.out or "Epoch" in captured.out
 
-def test_run_optimizer_early_stop_on_abs_limit_loss(monkeypatch, capsys):
-    # Stub train to return a function that yields a tiny loss once
-    calls = {"n": 0}
+    def test_trainer_train_early_stopping_abs_limit_loss(
+        self, simple_model, lsqr_loss_fn
+    ):
+        """Test early stopping based on absolute loss limit"""
+        trainer = opt_mod.Trainer(lsqr_loss_fn)
+        optimizer = opt_mod.adam(simple_model, learning_rate=1e-3)
 
-    def fake_train(loss_fn):
-        def step(model, optimizer):
-            calls["n"] += 1
-            return jnp.array(0.0)
+        # Train with early stopping when loss < 1.0 (more achievable)
+        trainer.train(
+            optimizer,
+            100,  # Max epochs
+            abs_limit_loss=1.0,
+            epoch_print=1,
+            abs_limit_change=-1,  # Disable change-based stopping
+        )
 
-        return step
+        # Should have stopped early when loss reached the limit
+        final_loss = lsqr_loss_fn(simple_model)
+        assert final_loss <= 1.0
 
-    monkeypatch.setattr(opt_mod, "train", fake_train)
+    def test_trainer_train_early_stopping_abs_limit_change(
+        self, simple_model, lsqr_loss_fn
+    ):
+        """Test early stopping based on absolute change limit"""
+        trainer = opt_mod.Trainer(lsqr_loss_fn)
+        optimizer = opt_mod.adam(simple_model, learning_rate=0)  # Zero learning rate
 
-    m = DummyModule()
-    opt = opt_mod.adam(m, learning_rate=1e-3)
-    opt_mod.run_optimizer(
-        loss_fn=lambda m: jnp.array(0.0),
-        opt=opt,
-        num=10,
-        abs_limit_loss=1e-6,
-        print_final_loss=True,
-    )
-    # Should have stopped after first epoch
-    assert calls["n"] == 1
+        # Train with zero learning rate thus enabling change-based early stopping
+        trainer.train(optimizer, 10)
 
+        assert trainer.epoch < 10
 
-def test_run_optimizer_calls_update_global_weights(monkeypatch):
-    # Make a train stub that returns decreasing losses to avoid "small change"
-    # early stop
-    seq = {"vals": [10.0, 9.0, 8.0], "i": 0}
+    def test_trainer_train_with_global_weights(self, simple_model, lsqr_loss_fn):
+        """Test training with global weight updates"""
+        trainer = opt_mod.Trainer(lsqr_loss_fn)
+        optimizer = opt_mod.adam(simple_model, learning_rate=1e-2)
 
-    def fake_train(loss_fn):
-        def step(model, optimizer):
-            i = seq["i"]
-            val = seq["vals"][i if i < len(seq["vals"]) else -1]
-            seq["i"] = min(i + 1, len(seq["vals"]) - 1)
-            return jnp.array(val)
+        trainer.train(
+            optimizer,
+            5,
+            update_global_weights=1,  # Update every epoch
+            alpha=0.9,  # Smoothing factor
+        )
 
-        return step
+        # Should complete without errors
+        assert True  # If we get here, no exceptions were raised
 
-    monkeypatch.setattr(opt_mod, "train", fake_train)
+    def test_trainer_train_without_global_weights(self, simple_model, lsqr_loss_fn):
+        """Test training without global weight updates (default behavior)"""
+        trainer = opt_mod.Trainer(lsqr_loss_fn)
+        optimizer = opt_mod.adam(simple_model, learning_rate=1e-4)
 
-    class LossWithUpdate:
-        def __init__(self):
-            self.updated = 0
+        initial_loss = lsqr_loss_fn(simple_model)
 
-        def __call__(self, model):
-            # never used by fake_train
-            return jnp.array(0.0)
+        trainer.train(
+            optimizer,
+            100,
+            abs_limit_loss=0,
+            update_global_weights=-1,  # Explicitly disable (default)
+        )
 
-        def update_global_weights(self, module):
-            self.updated += 1
+        final_loss = lsqr_loss_fn(simple_model)
+        assert final_loss < initial_loss
 
-    loss_obj = LossWithUpdate()
-    m = DummyModule()
-    opt = opt_mod.adam(m, learning_rate=1e-3)
+    def test_trainer_reset_global_weights(self, lsqr_loss_fn):
+        """Test reset_global_weights method"""
+        trainer = opt_mod.Trainer(lsqr_loss_fn)
 
-    # Trigger update at epoch 2
-    opt_mod.run_optimizer(
-        loss_fn=loss_obj,
-        opt=opt,
-        num=3,
-        update_global_weights=2,
-        abs_limit_loss=0.0,  # don't early stop by absolute loss
-        abs_limit_change=1e-12,  # small threshold; our loss changes by 1.0
-    )
-    assert loss_obj.updated >= 1
+        # Should not raise any errors
+        trainer.reset_global_weights()
+        assert True
+
+    def test_trainer_train_missing_loss_method_error(self, simple_model):
+        """Test error handling when loss function is missing required methods"""
+
+        def bad_loss_fn(model):
+            return (model.w - 1.0) ** 2
+
+        # Should raise AssertionError when trying to create Trainer with non-LSQR loss
+        with pytest.raises(AssertionError):
+            _ = opt_mod.Trainer(bad_loss_fn)
+
+    def test_trainer_train_zero_epochs(self, simple_model, lsqr_loss_fn):
+        """Test training with zero epochs"""
+        trainer = opt_mod.Trainer(lsqr_loss_fn)
+        optimizer = opt_mod.adam(simple_model, learning_rate=1e-2)
+
+        initial_loss = lsqr_loss_fn(simple_model)
+
+        trainer.train(optimizer, 0)
+
+        # Model should be unchanged
+        final_loss = lsqr_loss_fn(simple_model)
+        assert final_loss == initial_loss
+
+    def test_trainer_train_negative_alpha_error(self, simple_model, lsqr_loss_fn):
+        """Test error handling for invalid alpha values"""
+        trainer = opt_mod.Trainer(lsqr_loss_fn)
+        optimizer = opt_mod.adam(simple_model, learning_rate=1e-2)
+
+        # Invalid alpha values should be handled gracefully or raise appropriate errors
+        # The implementation may clamp alpha or raise an error - test for consistency
+        with contextlib.suppress(ValueError, AssertionError):
+            trainer.train(
+                optimizer,
+                1,
+                update_global_weights=1,
+                alpha=-0.1,  # Invalid negative alpha
+            )

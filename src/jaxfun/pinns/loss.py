@@ -93,7 +93,10 @@ class Residual:
         self.target = target
         if len(t.free_symbols) > 0:
             assert s is not None, "Could not find base scalars in expression"
-            self.target = target - lambdify(s, t)(*x.T)
+            tx = lambdify(s, t)(*self.x.T)
+            if tx.ndim == 1:
+                tx = tx[:, None]
+            self.target = target - tx
         else:
             assert isinstance(t, Number)
             t = float(t) if t.is_real else complex(t)
@@ -109,7 +112,7 @@ class Residual:
 class LSQR:
     """Least squares loss function"""
 
-    def __init__(self, *fs: LSQR_Tuple, alpha: float = 0.9):
+    def __init__(self, *fs: LSQR_Tuple):
         """The least squares method computes the loss over all input equations at
         all collocation points. The different equations are all defined with their
         own points.
@@ -123,9 +126,6 @@ class LSQR:
                 which is zero by default, whereas the last item is an optional
                 weight. The weight needs to be a number or an array of the same
                 shape as the collocation points.
-            alpha:
-                Update factor for adaptive weighting of loss functions for each
-                subproblem.
 
         Examples:
 
@@ -142,7 +142,6 @@ class LSQR:
         """
         from jaxfun.operators import Dot
 
-        self.alpha = alpha
         self.residuals = []
         self.Js = Js = {}  # All modules' evaluation and derivatives eval wrt variables
         self.xs = xs = {}  # All collocation points
@@ -150,11 +149,12 @@ class LSQR:
 
         for f in fs:
             f0 = f[0].doit()
+            f1 = f[1].addressable_data(0)
             if f0.is_Vector:  # Vector equation
                 sys = get_system(f0)
                 for i in range(sys.dims):
                     bt = sys.get_contravariant_basis_vector(i)
-                    g = (Dot(f0, bt),) + (f[1],)
+                    g = (Dot(f0, bt),) + (f1,)
                     if len(f) > 2:
                         if isinstance(f[2], Number):
                             g += (f[2],)
@@ -164,34 +164,34 @@ class LSQR:
                         g += (f[3],)
 
                     self.residuals.append(Residual(*g))
-                    res.append((g[0], g[1]))
+                    res.append((g[0], f[1]))
 
             else:
-                self.residuals.append(Residual(*f))
+                self.residuals.append(Residual(*((f[0], f1) + f[2:])))
                 res.append((f[0], f[1]))
 
-        self.global_weights = jnp.ones(len(self.residuals), dtype=int)
         self.Jres = [set() for _ in range(len(res))]  # Collection for each residual
         for i, f in enumerate(res):
             f0 = f[0].doit()
+            f1 = f[1].addressable_data(0)
             for s in sp.core.traversal.preorder_traversal(f0):
                 if isinstance(s, sp.Derivative):
                     func = s.args[0]
                     ki: int = int(s.derivative_count)
                     assert hasattr(func, "module")
-                    key = (id(f[1]), id(func.module), ki)
+                    key = (id(f1), id(func.module), ki)
                     if key not in Js:
-                        Js[key] = jacn(func.module, ki)(f[1])
+                        Js[key] = jacn(func.module, ki)(f1)
                     self.Jres[i].add(key)
 
                 if hasattr(s, "module"):
-                    key = (id(f[1]), id(s.module), 0)
+                    key = (id(f1), id(s.module), 0)
                     if key not in Js:
-                        Js[key] = s.module(f[1])
+                        Js[key] = s.module(f1)
                     self.Jres[i].add(key)
 
-            if id(f[1]) not in xs:
-                xs[id(f[1])] = f[1]
+            if id(f1) not in xs:
+                xs[id(f1)] = f1
 
     def update_arrays(
         self, model: nnx.Module, Js: dict[tuple[int, int, int], Array]
@@ -234,16 +234,33 @@ class LSQR:
         norms = self.norm_grad_loss(model)
         return jnp.sum(norms) / jnp.where(norms < 1e-16, 1e-16, norms)
 
-    def update_global_weights(self, model: nnx.Module) -> None:
+    def update_global_weights(
+        self, model: nnx.Module, gw: Array, alpha: float
+    ) -> Array:
+        from jax.experimental import multihost_utils as mh
+
         new = self.compute_global_weights(model)
-        old = self.global_weights
-        self.global_weights = old * (1 - self.alpha) + new * self.alpha
+        if jax.device_count() > 1:
+            new = mh.process_allgather(new).mean(0)
+        return new * (1 - alpha) + gw * alpha
+
+    def loss_with_gw(self, model: nnx.Module, gw: Array) -> float:
+        self.update_arrays(model, self.Js)
+        return (
+            jnp.array(
+                [
+                    (eq.weights * eq(self.Js) ** 2).mean()
+                    for i, eq in enumerate(self.residuals)
+                ]
+            )
+            @ gw
+        )
 
     def __call__(self, model: nnx.Module) -> float:
         self.update_arrays(model, self.Js)
         return sum(
             [
-                self.global_weights[i] * (eq.weights * eq(self.Js) ** 2).mean()
+                (eq.weights * eq(self.Js) ** 2).mean()
                 for i, eq in enumerate(self.residuals)
             ]
         )

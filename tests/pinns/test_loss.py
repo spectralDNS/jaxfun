@@ -218,11 +218,11 @@ def test_lsqr_update_global_weights():
     mlp = MLPSpace(4, dims=2, rank=0, name="MLP")
     u = FlaxFunction(mlp, "u")
     x = jnp.array([[1.0, 2.0]])
-    lsqr = LSQR((u, x), (u - 1, x, -1), alpha=0.5)
-    old_weights = lsqr.global_weights.copy()
-    lsqr.update_global_weights(u.module)
+    lsqr = LSQR((u, x), (u - 1, x, -1))
+    old_weights = jnp.ones(len(lsqr.residuals), dtype=float)
+    new_weights = lsqr.update_global_weights(u.module, old_weights, alpha=0.5)
     # Weights should have been updated
-    assert not jnp.array_equal(old_weights, lsqr.global_weights)
+    assert not jnp.array_equal(old_weights, new_weights)
 
 
 def test_lsqr_call_with_weights():
@@ -343,7 +343,6 @@ def test_lsqr_initialization_single_equation():
     f = sp.Integer(5)
     lsqr = LSQR((f, x))
     assert len(lsqr.residuals) == 1
-    assert len(lsqr.global_weights) == 1
 
 
 def test_lsqr_initialization_multiple_equations():
@@ -353,7 +352,6 @@ def test_lsqr_initialization_multiple_equations():
     f2 = sp.Integer(10)
     lsqr = LSQR((f1, x1), (f2, x2))
     assert len(lsqr.residuals) == 2
-    assert len(lsqr.global_weights) == 2
 
 
 def test_lsqr_compute_residuals_simple():
@@ -423,14 +421,6 @@ def test_get_fn_power_of_expression(base_scalars):
     result = fn(x, Js)
     expected = (2 * x[:, 0]) ** 3
     assert jnp.allclose(result, expected)
-
-
-def test_lsqr_alpha_parameter():
-    x = jnp.array([[1.0]])
-    f = sp.Integer(1)
-    alpha = 0.5
-    lsqr = LSQR((f, x), alpha=alpha)
-    assert lsqr.alpha == alpha
 
 
 def test_residual_with_zero_target():

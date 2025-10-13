@@ -24,7 +24,7 @@ from jaxfun.pinns.loss import LSQR
 from jaxfun.pinns.mesh import Rectangle
 from jaxfun.pinns.module import Comp, FlaxFunction
 from jaxfun.pinns.nnspaces import MLPSpace
-from jaxfun.pinns.optimizer import adam, lbfgs, run_optimizer
+from jaxfun.pinns.optimizer import Trainer, adam, lbfgs
 
 print("JAX running on", jax.devices()[0].platform.upper())
 
@@ -63,20 +63,21 @@ ub = DirichletBC(
 loss_fn = LSQR(
     (eq1, xyi, 0, wi),  # momentum vector equation
     (eq2, xyi, 0, wi),  # Divergence constraint
-    (u, xyb, ub, wb),  # Boundary conditions on u
-    (p, xyp, 0),  # Pressure pin-point
-    alpha=0.8,  # Global weights update parameter
+    (u, xyb, ub, 2),  # Boundary conditions on u
+    (p, xyp, 0, 10),  # Pressure pin-point
 )
 
 opt_adam = adam(module)
 opt_lbfgs = lbfgs(module, memory_size=100)
 
+trainer = Trainer(loss_fn)
+
 t0 = time.time()
-run_optimizer(loss_fn, opt_adam, 1000, 100, update_global_weights=10)
+trainer.train(opt_adam, 5000, epoch_print=1000)
 print("Time Adam", time.time() - t0)
 
 t1 = time.time()
-run_optimizer(loss_fn, opt_lbfgs, 10000, 1000, update_global_weights=10)
+trainer.train(opt_lbfgs, 10000, epoch_print=1000, abs_limit_change=0)
 print("Time LBFGS", time.time() - t1)
 
 yj = jnp.linspace(-1, 1, 50)

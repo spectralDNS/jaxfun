@@ -140,13 +140,14 @@ class TestTrainer:
     ):
         """Test early stopping based on absolute loss limit"""
         trainer = opt_mod.Trainer(lsqr_loss_fn)
-        optimizer = opt_mod.adam(simple_model, learning_rate=1e-4)
+        optimizer = opt_mod.adam(simple_model, learning_rate=1e-3)
 
         # Train with early stopping when loss < 1.0 (more achievable)
         trainer.train(
             optimizer,
             100,  # Max epochs
             abs_limit_loss=1.0,
+            epoch_print=1,
             abs_limit_change=-1,  # Disable change-based stopping
         )
 

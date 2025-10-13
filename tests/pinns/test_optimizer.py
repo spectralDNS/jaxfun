@@ -88,15 +88,6 @@ class TestTrainer:
         return u.module
 
     @pytest.fixture
-    def simple_loss_fn(self):
-        """Simple quadratic loss function: (w - target)^2"""
-
-        def loss_fn(model: nnx.Module):
-            return (model.w - 1.0) ** 2
-
-        return loss_fn
-
-    @pytest.fixture
     def lsqr_loss_fn(self):
         """Create an LSQR loss function for testing"""
         m = MLPSpace(4, dims=1, rank=0, name="MLP")
@@ -154,9 +145,9 @@ class TestTrainer:
         # Train with early stopping when loss < 1.0 (more achievable)
         trainer.train(
             optimizer,
-            50,  # Max epochs
+            100,  # Max epochs
             abs_limit_loss=1.0,
-            abs_limit_change=0,
+            abs_limit_change=-1,  # Disable change-based stopping
         )
 
         # Should have stopped early when loss reached the limit
@@ -168,20 +159,12 @@ class TestTrainer:
     ):
         """Test early stopping based on absolute change limit"""
         trainer = opt_mod.Trainer(lsqr_loss_fn)
-        optimizer = opt_mod.adam(simple_model, learning_rate=1e-2)
+        optimizer = opt_mod.adam(simple_model, learning_rate=0)  # Zero learning rate
 
-        # First train to get close to minimum
-        trainer.train(optimizer, 50)
+        # Train with zero learning rate thus enabling change-based early stopping
+        trainer.train(optimizer, 10)
 
-        # Reset and train with change-based early stopping
-        trainer.train(
-            optimizer,
-            100,
-            abs_limit_change=1e-6,  # Very small change threshold
-        )
-
-        # Should have stopped when loss change became small
-        # (Hard to test precisely, but should not run full 100 epochs)
+        assert trainer.epoch < 10
 
     def test_trainer_train_with_global_weights(self, simple_model, lsqr_loss_fn):
         """Test training with global weight updates"""

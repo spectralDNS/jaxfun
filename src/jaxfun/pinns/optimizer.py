@@ -274,6 +274,7 @@ class Trainer:
         assert isinstance(loss_fn, LSQR), "Trainer requires an LSQR loss function"
         self.loss_fn = loss_fn
         self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)
+        self.epoch = 0
 
     def reset_global_weights(self) -> None:
         self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)
@@ -369,6 +370,8 @@ class Trainer:
                     print("Global weights", self.global_weights)
             if allreduce_frequency > 0 and epoch % allreduce_frequency == 0:
                 self.allreduce(module)
+
+            self.epoch = epoch
 
         if print_final_loss and rank == 0:
             print(f"Final loss for {longname}: {loss}")

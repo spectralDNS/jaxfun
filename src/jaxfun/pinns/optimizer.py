@@ -217,48 +217,23 @@ def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
     """
 
     @nnx.jit
-    def update(
-        model: nnx.Module,
-        optimizer: nnx.Optimizer,
-        loss: jax.Array,
-        gradients: nnx.State,
-        gw: Array,
-    ) -> float:
+    def train_step(model: nnx.Module, optimizer: nnx.Optimizer, gw: Array) -> float:
         def value_fn(m: nnx.Module) -> Array:
             return loss_fn.loss_with_gw(m, gw)
 
+        loss, gradients = nnx.value_and_grad(value_fn)(model)
         gd, state = nnx.split(model, nnx.Param)
         unravel = jax.flatten_util.ravel_pytree(state)[1]
-        loss_fn_split = lambda state: value_fn(nnx.merge(gd, state))
+        value_fn_state = lambda state: value_fn(nnx.merge(gd, state))
         H_loss_fn = lambda flat_weights: value_fn(nnx.merge(gd, unravel(flat_weights)))
 
         optimizer.update(
             gradients,
             grad=gradients,
-            value_fn=loss_fn_split,
+            value_fn=value_fn_state,
             value=loss,
             H_loss_fn=H_loss_fn,
         )
-
-    @nnx.jit
-    def value_and_grad(model: nnx.Module, optimizer: nnx.Optimizer, gw: Array) -> float:
-        def value_fn_model(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, gw)
-
-        return nnx.value_and_grad(value_fn_model)(model)
-
-    def reduce(loss: jax.Array, gradients: nnx.State):
-        loss = mh.process_allgather(loss).mean(0)
-        grads = jax.tree_util.tree_map(
-            lambda g: mh.process_allgather(g).mean(axis=0), gradients
-        )
-        return loss, grads
-
-    def train_step(model: nnx.Module, optimizer: nnx.Optimizer, gw: Array) -> float:
-        loss, gradients = value_and_grad(model, optimizer, gw)
-        # if jax.device_count() > 1:
-        #    loss, gradients = reduce(loss, gradients)
-        update(model, optimizer, loss, gradients, gw)
         return loss
 
     return train_step

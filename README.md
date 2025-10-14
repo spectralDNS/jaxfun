@@ -41,6 +41,8 @@ uv sync
 
 ## Quickstart
 
+### Galerkin method
+
 ```python
 from jaxfun.galerkin import Chebyshev, TensorProduct, TestFunction, TrialFunction, Div, Grad
 from jaxfun.galerkin.inner import inner
@@ -52,7 +54,37 @@ u = TrialFunction(T)
 A = inner(Div(Grad(u)) * v)
 ```
 
-See the [`examples`](examples/) for more patterns.
+### Multilayer Perceptron
+
+Use a simple multilayer perceptron neural network and solve Poisson's equation on the unit square
+
+```python
+import jax
+from jaxfun import Div, Grad
+from jaxfun.pinns import LSQR, FlaxFunction, MLPSpace, Rectangle, Trainer, adam, lbfgs
+
+# Create an MLP neural network space with two hidden layers
+V = MLPSpace([12, 12], dims=2, rank=0, name="V") 
+u = FlaxFunction(V, name="u") # The trial function, which here is a neural network
+
+# Get some random mesh points on and inside the unit square
+N = 50
+mesh = Rectangle(N, N, 0, 1, 0, 1)
+xyi = mesh.get_points_inside_domain("uniform")
+xyb = mesh.get_points_on_domain("uniform")
+
+# Define Poisson's equation: residual = △u - 2
+residual = Div(Grad(u)) - 2
+
+# Define loss function based on Poisson's equation, including
+# homogeneous Dirichlet boundary conditions, and train model
+loss_fn = LSQR((residual, xyi), (u, xyb))
+trainer = Trainer(loss_fn)
+trainer.train(adam(u.module), 5000)
+trainer.train(lbfgs(u.module), 5000)
+```
+
+See the [`examples`](examples/) directory for more patterns.
 
 ## Development
 

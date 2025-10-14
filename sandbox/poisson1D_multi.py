@@ -64,11 +64,11 @@ import jax.flatten_util
 from jax.experimental import multihost_utils as mh
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
+from jaxfun.galerkin import Chebyshev
 from jaxfun.operators import Div, Grad
 from jaxfun.pinns import (
     LSQR,
     FlaxFunction,
-    MLPSpace,
     Trainer,
 )
 from jaxfun.pinns.mesh import Line
@@ -86,8 +86,8 @@ if rank == 0:
 mh.sync_global_devices("start")
 
 domain = Domain(-sp.pi, sp.pi)
-V = MLPSpace([16], dims=1, rank=0, name="V")
-# V = Chebyshev.Chebyshev(12, dims=1, rank=0, name="V", domain=domain)
+# V = MLPSpace([16], dims=1, rank=0, name="V")
+V = Chebyshev.Chebyshev(32, dims=1, rank=0, name="V", domain=domain)
 w = FlaxFunction(V, name="w")
 x = V.system.x
 ue = sp.sin(x) + x**2
@@ -97,7 +97,7 @@ ms = Mesh(jax.devices(), ("data",))
 sharding = NamedSharding(ms, P("data"))
 
 # Each process gets N points, total global shape is (world * N, 1)
-N = 600 // world  # 50 points per process for 2 processes
+N = 1000 // world  # 50 points per process for 2 processes
 global_shape = (world * N, 1)  # Global shape: (100, 1)
 
 # Create local mesh for this process
@@ -129,8 +129,6 @@ opt_adam = adam(w.module, learning_rate=1e-3)
 opt_lbfgs = lbfgs(w.module, memory_size=20)
 opt_hess = GaussNewton(w.module)
 
-print("loss", loss_fn(w.module))
-
 trainer = Trainer(loss_fn)
 
 # Train with periodic allreduce
@@ -142,6 +140,8 @@ trainer.train(
 )
 trainer.train(opt_hess, 10, epoch_print=1, abs_limit_change=0)
 trainer.allreduce(w.module)
+
+print("loss", loss_fn(w.module))
 
 # Final barrier for clean exit
 mh.sync_global_devices("end")

@@ -61,7 +61,7 @@ Use a simple multilayer perceptron neural network and solve Poisson's equation o
 ```python
 import jax
 from jaxfun import Div, Grad
-from jaxfun.pinns import LSQR, FlaxFunction, MLPSpace, Rectangle, Trainer, adam, lbfgs
+from jaxfun.pinns import LSQR, FlaxFunction, MLPSpace, Trainer, UnitSquare, adam, lbfgs
 
 # Create an MLP neural network space with two hidden layers
 V = MLPSpace([12, 12], dims=2, rank=0, name="V")
@@ -69,7 +69,7 @@ u = FlaxFunction(V, name="u") # The trial function, which here is a neural netwo
 
 # Get some random mesh points on and inside the unit square
 N = 50
-mesh = Rectangle(N, N, 0, 1, 0, 1)
+mesh = UnitSquare(N, N)
 xyi = mesh.get_points_inside_domain("uniform")
 xyb = mesh.get_points_on_domain("uniform")
 

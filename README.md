@@ -64,7 +64,7 @@ from jaxfun import Div, Grad
 from jaxfun.pinns import LSQR, FlaxFunction, MLPSpace, Rectangle, Trainer, adam, lbfgs
 
 # Create an MLP neural network space with two hidden layers
-V = MLPSpace([12, 12], dims=2, rank=0, name="V") 
+V = MLPSpace([12, 12], dims=2, rank=0, name="V")
 u = FlaxFunction(V, name="u") # The trial function, which here is a neural network
 
 # Get some random mesh points on and inside the unit square
@@ -80,8 +80,8 @@ residual = Div(Grad(u)) - 2
 # homogeneous Dirichlet boundary conditions, and train model
 loss_fn = LSQR((residual, xyi), (u, xyb))
 trainer = Trainer(loss_fn)
-trainer.train(adam(u.module), 5000)
-trainer.train(lbfgs(u.module), 5000)
+trainer.train(adam(u), 5000)
+trainer.train(lbfgs(u), 5000)
 ```
 
 See the [`examples`](examples/) directory for more patterns.

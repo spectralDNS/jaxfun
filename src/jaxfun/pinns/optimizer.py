@@ -8,6 +8,7 @@ from flax import nnx
 from jax import Array
 from jax.experimental import multihost_utils as mh
 
+from jaxfun.pinns import FlaxFunction
 from jaxfun.utils.common import ulp
 
 from .loss import LSQR
@@ -33,15 +34,15 @@ class NamedOptimizer[M: nnx.Module](nnx.Optimizer[M]):
 
     def __init__(
         self,
-        model: M,
+        module: M,
         tx: optax.GradientTransformation,
         wrt: nnx.filterlib.Filter = nnx.Param,
         *,
         name: str = "Optimizer",
     ) -> None:
-        super().__init__(model, tx, wrt)
+        super().__init__(module, tx, wrt)
         self.name = name
-        self.module = model
+        self.module = module
 
 
 def _gradient_descent_based_optimizer(
@@ -84,7 +85,7 @@ def _gradient_descent_based_optimizer(
 
 
 def adam(
-    module: nnx.Module,
+    u: FlaxFunction | nnx.Module,
     learning_rate: float = 1e-3,
     end_learning_rate: float = None,
     decay_steps: int = None,
@@ -92,7 +93,7 @@ def adam(
     """Create an Adam optimizer (optionally with linear LR decay).
 
     Args:
-        module: Module to optimize.
+        u: nnx.Module or FlaxFunction wrapping an nnx.Module.
         learning_rate: Initial learning rate.
         end_learning_rate: Final learning rate if decaying (defaults to lr / 10).
         decay_steps: Steps over which to linearly decay learning rate. If None, constant
@@ -102,7 +103,7 @@ def adam(
         NamedOptimizer wrapping an Adam transformation.
     """
     return _gradient_descent_based_optimizer(
-        module,
+        u.module if isinstance(u, FlaxFunction) else u,
         learning_rate,
         end_learning_rate,
         decay_steps,
@@ -111,7 +112,7 @@ def adam(
 
 
 def soap(
-    module: nnx.Module,
+    u: FlaxFunction | nnx.Module,
     learning_rate: float = 1e-3,
     end_learning_rate: float = None,
     decay_steps: int = None,
@@ -119,7 +120,7 @@ def soap(
     """Create a SOAP optimizer (from soap_jax) with optional LR decay.
 
     Args:
-        module: Module to optimize.
+        u: nnx.Module or FlaxFunction wrapping an nnx.Module.
         learning_rate: Initial learning rate.
         end_learning_rate: Final learning rate if decaying (defaults to lr / 10).
         decay_steps: Steps over which to linearly decay learning rate. If None, constant
@@ -134,7 +135,7 @@ def soap(
     from soap_jax import soap
 
     return _gradient_descent_based_optimizer(
-        module,
+        u.module if isinstance(u, FlaxFunction) else u,
         learning_rate,
         end_learning_rate,
         decay_steps,
@@ -143,12 +144,12 @@ def soap(
 
 
 def lbfgs(
-    module: nnx.Module, memory_size: int = 20, max_linesearch_steps: int = 25
+    u: FlaxFunction | nnx.Module, memory_size: int = 20, max_linesearch_steps: int = 25
 ) -> nnx.Optimizer:
     """Create an L-BFGS optimizer using optax's limited-memory implementation.
 
     Args:
-        module: Module to optimize.
+        u: nnx.Module or FlaxFunction wrapping an nnx.Module.
         memory_size: Number of past updates to retain (history length).
         max_linesearch_steps: Maximum zoom line search iterations.
 
@@ -161,12 +162,16 @@ def lbfgs(
             max_linesearch_steps, max_learning_rate=1.0
         ),
     )
-    opt = NamedOptimizer(module, opt, name=f"LBFGS(memory_size={memory_size})")
+    opt = NamedOptimizer(
+        u.module if isinstance(u, FlaxFunction) else u,
+        opt,
+        name=f"LBFGS(memory_size={memory_size})",
+    )
     return opt
 
 
 def GaussNewton(
-    module: nnx.Module,
+    u: FlaxFunction | nnx.Module,
     use_lstsq: bool = True,
     cg_max_iter: int = 1000,
     max_linesearch_steps: int = 25,
@@ -177,7 +182,7 @@ def GaussNewton(
     jaxfun.pinns.hessoptimizer.
 
     Args:
-        module: Module to optimize.
+        u: nnx.Module or FlaxFunction wrapping an nnx.Module.
         use_lstsq: If True solve normal equations via least squares; else conjugate
             gradient.
         cg_max_iter: Maximum CG iterations (ignored if use_lstsq is True).
@@ -195,7 +200,11 @@ def GaussNewton(
             max_linesearch_steps, max_learning_rate=1.0
         ),
     )
-    opt = NamedOptimizer(module, opt, name=f"Hessian(lstsq={use_lstsq})")
+    opt = NamedOptimizer(
+        u.module if isinstance(u, FlaxFunction) else u,
+        opt,
+        name=f"Hessian(lstsq={use_lstsq})",
+    )
     return opt
 
 

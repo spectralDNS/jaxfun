@@ -48,11 +48,8 @@ loss_fn = LSQR((eq, xi), (u, xb, ub))
 
 trainer = Trainer(loss_fn)
 
-opt_adam = adam(u.module)
-opt_lbfgs = lbfgs(u.module, memory_size=20)
-
-trainer.train(opt_adam, 1000, abs_limit_change=0, update_global_weights=-1)
-trainer.train(opt_lbfgs, 1000, update_global_weights=-1, print_final_loss=True)
+trainer.train(adam(u), 1000, abs_limit_change=0)
+trainer.train(lbfgs(u), 1000, print_final_loss=True)
 
 xj = jnp.linspace(left, right, 50)
 tj = jnp.linspace(t0, tmax, 50)

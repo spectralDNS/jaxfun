@@ -42,13 +42,13 @@ trainer = Trainer(loss_fn)
 
 t0 = time.time()
 
-opt_adam = adam(w.module, learning_rate=1e-3)
+opt_adam = adam(w, learning_rate=1e-3)
 trainer.train(opt_adam, 1000, epoch_print=100)
 
-opt_lbfgs = lbfgs(w.module, memory_size=20)
+opt_lbfgs = lbfgs(w, memory_size=20)
 trainer.train(opt_lbfgs, 1000, epoch_print=100, update_global_weights=100)
 
-opt_hess = GaussNewton(w.module, use_lstsq=True)
+opt_hess = GaussNewton(w, use_lstsq=True)
 trainer.train(opt_hess, 10, epoch_print=1, abs_limit_change=0)
 
 print("time", time.time() - t0)

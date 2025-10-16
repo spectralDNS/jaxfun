@@ -7,6 +7,7 @@ import optax
 from flax import nnx
 from jax import Array
 from jax.experimental import multihost_utils as mh
+from jaxtyping import PyTree
 
 from jaxfun.pinns import FlaxFunction
 from jaxfun.utils.common import ulp
@@ -22,14 +23,14 @@ class NamedOptimizer[M: nnx.Module](nnx.Optimizer[M]):
       * module: The optimized module (mirrors internal reference)
 
     Args:
-        model: The module whose parameters are being optimized.
+        module: The module whose parameters are being optimized.
         tx: The optax transformation (gradient transformation pipeline).
         wrt: Parameter filter (defaults to nnx.Param).
         name: Readable optimizer name.
 
     Attributes:
         name: Name string.
-        module: Reference to the optimized module (same as internal model).
+        module: Reference to the optimized module (same as internal module).
     """
 
     def __init__(
@@ -208,11 +209,13 @@ def GaussNewton(
     return opt
 
 
-def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
+def train(
+    loss_fn: LSQR, allreduce_gradients_and_loss: bool = False
+) -> Callable[[nnx.Module, nnx.Optimizer], float]:
     """Build a single JIT-compiled training step for a loss function.
 
     The produced function performs:
-      1. Split model into differentiable parameters and auxiliary state.
+      1. Split module into differentiable parameters and auxiliary state.
       2. Compute loss and gradients (value_and_grad).
       3. Provide closures for value_fn and Hessian approximation callbacks.
       4. Update optimizer state.
@@ -220,18 +223,20 @@ def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
 
     Args:
         loss_fn: Callable loss object/function (LSQR instance) accepting a module.
+        allreduce_gradients_and_loss: If True, allreduce gradients and loss across
+            processes each epoch.
 
     Returns:
-        A function (model, optimizer) -> loss suitable for epoch loops.
+        A function (module, optimizer) -> loss suitable for epoch loops.
     """
 
     @nnx.jit
-    def train_step(model: nnx.Module, optimizer: nnx.Optimizer, gw: Array) -> float:
+    def train_step(module: nnx.Module, optimizer: nnx.Optimizer, gw: Array) -> float:
         def value_fn(m: nnx.Module) -> Array:
             return loss_fn.loss_with_gw(m, gw)
 
-        loss, gradients = nnx.value_and_grad(value_fn)(model)
-        gd, state = nnx.split(model, nnx.Param)
+        loss, gradients = nnx.value_and_grad(value_fn)(module)
+        gd, state = nnx.split(module, nnx.Param)
         unravel = jax.flatten_util.ravel_pytree(state)[1]
         value_fn_state = lambda state: value_fn(nnx.merge(gd, state))
         H_loss_fn = lambda flat_weights: value_fn(nnx.merge(gd, unravel(flat_weights)))
@@ -245,6 +250,55 @@ def train(loss_fn: LSQR) -> Callable[[nnx.Module, nnx.Optimizer], float]:
         )
         return loss
 
+    @nnx.jit
+    def value_and_grad(module: nnx.Module, gw: Array) -> tuple[Array, PyTree]:
+        def value_fn(m: nnx.Module) -> Array:
+            return loss_fn.loss_with_gw(m, gw)
+
+        return nnx.value_and_grad(value_fn)(module)
+
+    @nnx.jit
+    def update(
+        loss: Array,
+        gradients: PyTree,
+        module: nnx.Module,
+        optimizer: nnx.Optimizer,
+        gw: Array,
+    ) -> None:
+        def value_fn(m: nnx.Module) -> Array:
+            return loss_fn.loss_with_gw(m, gw)
+
+        gd, state = nnx.split(module, nnx.Param)
+        unravel = jax.flatten_util.ravel_pytree(state)[1]
+        value_fn_state = lambda state: value_fn(nnx.merge(gd, state))
+        H_loss_fn = lambda flat_weights: value_fn(nnx.merge(gd, unravel(flat_weights)))
+
+        optimizer.update(
+            gradients,
+            grad=gradients,
+            value_fn=value_fn_state,
+            value=loss,
+            H_loss_fn=H_loss_fn,
+        )
+
+    def allreduce(loss: Array, gradients: PyTree) -> None:
+        all_gradients = mh.process_allgather(gradients)
+        reduced_gradients = jax.tree_util.tree_map(
+            lambda x: x.mean(axis=0), all_gradients
+        )
+        reduced_loss = mh.process_allgather(loss).mean(axis=0)
+        return reduced_loss, reduced_gradients
+
+    def train_step_distributed(
+        module: nnx.Module, optimizer: nnx.Optimizer, gw: Array
+    ) -> float:
+        loss, gradients = value_and_grad(module, gw)
+        loss, gradients = allreduce(loss, gradients)
+        update(loss, gradients, module, optimizer, gw)
+        return loss
+
+    if allreduce_gradients_and_loss:
+        return train_step_distributed
     return train_step
 
 
@@ -285,7 +339,8 @@ class Trainer:
         print_final_loss: bool = False,
         update_global_weights: int = -1,
         print_global_weights: bool = False,
-        allreduce_frequency: int = -1,
+        allreduce_grads_and_loss: bool = False,
+        allreduce_module_freq: int = 1,
         alpha: float = 0.9,
     ) -> None:
         """Execute an optimization loop with early stopping & optional callbacks.
@@ -313,6 +368,10 @@ class Trainer:
                 loss_fn.update_global_weights; -1 disables.
             print_global_weights: If True, prints global weights after each
                 update_global_weights trigger.
+            allreduce_grads_and_loss: If True, allreduce gradients and loss
+                across processes each epoch.
+            allreduce_module_freq: Period (in epochs) for allreducing module
+                parameters; < 1 disables.
             alpha: Smoothing factor for global weights update (0 < alpha < 1).
                 returns new * (1 - alpha) + old * alpha
 
@@ -336,7 +395,10 @@ class Trainer:
         if rank == 0:
             print(f"Running optimizer {longname}")
         name = re.sub(r"\([^)]*\)", "", longname)  # Remove parentheses content
-        train_step = train(self.loss_fn)
+        train_step = train(
+            self.loss_fn, allreduce_grads_and_loss and jax.process_count() > 1
+        )
+
         loss_old = 1.0
         for epoch in range(1, num + 1):
             loss = train_step(module, opt, self.global_weights)
@@ -352,7 +414,7 @@ class Trainer:
                 )
                 if print_global_weights and rank == 0:
                     print("Global weights", self.global_weights)
-            if allreduce_frequency > 0 and epoch % allreduce_frequency == 0:
+            if allreduce_module_freq > 0 and epoch % allreduce_module_freq == 0:
                 self.allreduce(module)
 
             self.epoch = epoch

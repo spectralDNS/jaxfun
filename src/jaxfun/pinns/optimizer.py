@@ -10,6 +10,7 @@ from jax.experimental import multihost_utils as mh
 from jaxtyping import PyTree
 
 from jaxfun.pinns import FlaxFunction
+from jaxfun.pinns.distributed import process_allmean
 from jaxfun.utils.common import ulp
 
 from .loss import LSQR
@@ -282,10 +283,7 @@ def train(
         )
 
     def allreduce(loss: Array, gradients: PyTree) -> None:
-        all_gradients = mh.process_allgather(gradients)
-        reduced_gradients = jax.tree_util.tree_map(
-            lambda x: x.mean(axis=0), all_gradients
-        )
+        reduced_gradients = process_allmean(gradients)
         reduced_loss = mh.process_allgather(loss).mean(axis=0)
         return reduced_loss, reduced_gradients
 
@@ -320,10 +318,7 @@ class Trainer:
     def allreduce(self, module: nnx.Module) -> None:
         """Allreduce (average) all parameters across processes"""
         state = nnx.state(module)
-        all_states = mh.process_allgather(state)
-        averaged_state = jax.tree_util.tree_map(
-            lambda x: jnp.mean(x, axis=0), all_states
-        )
+        averaged_state = process_allmean(state)
         nnx.update(module, averaged_state)
 
     def train(

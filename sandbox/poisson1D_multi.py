@@ -60,11 +60,11 @@ initialize_distributed()
 
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
-from jaxfun.galerkin import Chebyshev
 from jaxfun.operators import Div, Grad
 from jaxfun.pinns import (
     LSQR,
     FlaxFunction,
+    MLPSpace,
     Trainer,
 )
 from jaxfun.pinns.mesh import Line
@@ -79,8 +79,8 @@ if rank == 0:
     print(f"JAX distributed: {world} processes")
 
 domain = Domain(-sp.pi, sp.pi)
-# V = MLPSpace([16], dims=1, rank=0, name="V")
-V = Chebyshev.Chebyshev(32, dims=1, rank=0, name="V", domain=domain)
+V = MLPSpace([16], dims=1, rank=0, name="V")
+# V = Chebyshev.Chebyshev(32, dims=1, rank=0, name="V", domain=domain)
 w = FlaxFunction(V, name="w")
 x = V.system.x
 ue = sp.sin(x) + x**2
@@ -101,12 +101,12 @@ x_local = mesh.get_points_inside_domain("random")
 
 # Create globally sharded array from local data across all processes
 # Not really necessary to shard the input points, but just for demonstration
-xj = jax.make_array_from_process_local_data(
-    sharding,
-    x_local,
-    global_shape,
-)
-# xj = x_local
+# xj = jax.make_array_from_process_local_data(
+#    sharding,
+#    x_local,
+#    global_shape,
+# )
+xj = x_local
 
 xb = mesh.get_points_on_domain()
 

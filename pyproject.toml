@@ -17,12 +17,9 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-  "cython>=3.1.4",
   "flax>=0.10.4",
   "jax>=0.6",
   "matplotlib>=3.9.3",
-  "mpi4jax>=0.8.1.post1",
-  "mpi4py>=4.1",
   "optax>=0.2.5",
   "pre-commit>=4.3",
   "sympy>=1.13.3",

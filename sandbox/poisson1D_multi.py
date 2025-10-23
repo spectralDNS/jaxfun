@@ -80,8 +80,8 @@ ue = sp.sin(x) + x**2
 global_mesh = np.array(jax.devices()).reshape(
     (jax.process_count(), jax.local_device_count())
 )
-ms = Mesh(global_mesh, ("prosesses", "local_devices"))
-shard_batch = NamedSharding(ms, P("prosesses", None))
+ms = Mesh(global_mesh, ("processes", "local_devices"))
+shard_batch = NamedSharding(ms, P("processes", None))
 
 # Each process gets N // world points, total global shape is (N, 1)
 N = 10000

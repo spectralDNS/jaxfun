@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
-from jax._src import array
-from jax.experimental.multihost_utils import core, pxla
+import numpy as np
 from jax.sharding import PartitionSpec as P
 from jaxtyping import PyTree
 
@@ -24,15 +23,16 @@ def process_allmean(inp: PyTree) -> PyTree:
     if jax.process_count() == 1:
         return inp
     flat_arr, unravel = jax.flatten_util.ravel_pytree(inp)
-    mesh = jax.sharding.Mesh(jax.devices(), ("processes",))
+    global_shape = (jax.process_count(), flat_arr.shape[0])
     flat_arr = jnp.expand_dims(flat_arr, axis=0)
-    s = jax.sharding.NamedSharding(mesh, P("processes"))
-    aval = core.ShapedArray(flat_arr.shape, flat_arr.dtype)
-    global_aval = pxla.mesh_local_to_global(
-        mesh, pxla.get_array_mapping(P("processes")), aval
+    global_mesh = np.array(jax.devices()).reshape(
+        (jax.process_count(), jax.local_device_count())
     )
-    bufs = [jax.device_put(flat_arr, d) for d in jax.local_devices()]
-    global_arr = array.make_array_from_single_device_arrays(global_aval.shape, s, bufs)
+    mesh = jax.sharding.Mesh(global_mesh, ("processes", "local_devices"))
+    shard_batch = jax.sharding.NamedSharding(mesh, P("processes"))
+    global_arr = jax.make_array_from_process_local_data(
+        shard_batch, flat_arr, global_shape
+    )
     out = jax.jit(_identity_fn, out_shardings=jax.NamedSharding(mesh, P()))(
         global_arr.sum(axis=0) / jax.process_count()
     )

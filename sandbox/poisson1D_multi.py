@@ -1,6 +1,5 @@
 # Solve Poisson's equation
 # ruff: noqa: E402
-import os
 import time
 
 import jax
@@ -9,6 +8,7 @@ jax.config.update("jax_enable_x64", True)
 
 import socket
 
+import numpy as np
 import sympy as sp
 from flax import nnx
 
@@ -19,7 +19,6 @@ def initialize_distributed():
     try:
         from mpi4py import MPI
     except Exception:
-        # No MPI -> single process
         return
 
     comm = MPI.COMM_WORLD
@@ -28,14 +27,6 @@ def initialize_distributed():
 
     if world == 1:
         return
-
-    # One GPU per local rank (if GPUs present)
-    try:
-        shm = comm.Split_type(MPI.COMM_TYPE_SHARED, 0)
-        local_rank = shm.Get_rank()
-    except Exception:
-        local_rank = rank
-    os.environ.setdefault("CUDA_VISIBLE_DEVICES", str(local_rank))
 
     # Rank 0 chooses a free TCP port on localhost
     if rank == 0:
@@ -86,26 +77,43 @@ x = V.system.x
 ue = sp.sin(x) + x**2
 
 # Create mesh for sharding across devices/processes
-ms = Mesh(jax.devices(), ("batch",))
-sharding = NamedSharding(ms, P("batch"))
+global_mesh = np.array(jax.devices()).reshape(
+    (jax.process_count(), jax.local_device_count())
+)
+ms = Mesh(global_mesh, ("prosesses", "local_devices"))
+shard_batch = NamedSharding(ms, P("prosesses", None))
 
-# Each process gets N points, total global shape is (world * N, 1)
-N = 10000 // world
-global_shape = (world * N, 1)
+# Each process gets N // world points, total global shape is (N, 1)
+N = 10000
+N_PER_PROCESS = N // jax.process_count()
+global_shape = (N, 1)
 
-# Create local mesh for this process
-mesh = Line(N, float(domain.lower), float(domain.upper), key=nnx.Rngs(1000 + rank)())
+# Each local device get N // jax.device_count() points
+N_PER_DEVICE = N // jax.device_count()
 
-# Get local data points - shape will be (N, 1) on each process
-x_local = mesh.get_points_inside_domain("random")
+# Create local mesh on this process
+mesh = Line(
+    N_PER_PROCESS, float(domain.lower), float(domain.upper), key=nnx.Rngs(1000 + rank)()
+)
 
-# Create globally sharded array from local data across all processes
-# Not really necessary to shard the input points, but just for demonstration
-# xj = jax.make_array_from_process_local_data(
-#    sharding,
-#    x_local,
-#    global_shape,
+# Get local data points of shape (N_PER_PROCESS, 1), that reside on single local device
+x_process = mesh.get_points_inside_domain("random")
+
+# Create sharded array from data local to each process. Note, the array will be
+# replicated across local devices
+x_local = jax.make_array_from_process_local_data(
+    shard_batch,
+    x_process,
+    global_shape,
+)
+
+# Alternatively (same result)
+# x_local = jax.make_array_from_single_device_arrays(
+#   global_shape,
+#   shard_batch,
+#   [jax.device_put(x_process, d) for d in jax.local_devices()],
 # )
+
 xj = x_local
 
 xb = mesh.get_points_on_domain()

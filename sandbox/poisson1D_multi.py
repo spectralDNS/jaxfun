@@ -57,7 +57,7 @@ from jaxfun.operators import Div, Grad
 from jaxfun.pinns import (
     LSQR,
     FlaxFunction,
-    PirateSpace,
+    MLPSpace,
     Trainer,
 )
 from jaxfun.pinns.mesh import Line
@@ -71,22 +71,25 @@ num_devices = jax.device_count()
 if rank == 0:
     print(f"JAX distributed: {world} processes and {jax.local_device_count()} devices")
 
-domain = Domain(-sp.pi, sp.pi)
-# V = MLPSpace([16], dims=1, rank=0, name="V")
-# V = Chebyshev.Chebyshev(32, dims=1, rank=0, name="V", domain=domain)
-# V = sPIKANSpace(4, [8], dims=1, rank=0, name="V", domains=[domain])
-# V = KANMLPSpace(4, [16], dims=1, rank=0, name="V", domains=[domain])
-V = PirateSpace([16], dims=1, rank=0, name="V")
-w = FlaxFunction(V, name="w")
-x = V.system.x
-ue = sp.sin(x) + x**2
-
 # Create mesh for sharding across devices/processes
 global_mesh = np.array(jax.devices()).reshape(
     (jax.process_count(), jax.local_device_count())
 )
 ms = Mesh(global_mesh, ("processes", "local_devices"))
 shard_batch = NamedSharding(ms, P("processes", None))
+
+domain = Domain(-sp.pi, sp.pi)
+
+with jax.set_mesh(ms):
+    V = MLPSpace([16], dims=1, rank=0, name="V")
+    # V = Chebyshev.Chebyshev(32, dims=1, rank=0, name="V", domain=domain)
+    # V = sPIKANSpace(4, [8], dims=1, rank=0, name="V", domains=[domain])
+    # V = KANMLPSpace(4, [16], dims=1, rank=0, name="V", domains=[domain])
+    # V = PirateSpace([16], dims=1, rank=0, name="V")
+    w = FlaxFunction(V, name="w")
+
+x = V.system.x
+ue = sp.sin(x) + x**2
 
 # Each process gets N // world points, total global shape is (N, 1)
 N = 1000
@@ -121,8 +124,8 @@ x_local = jax.make_array_from_process_local_data(
 #   [jax.device_put(x_process, d) for d in jax.local_devices()],
 # )
 
-xj = x_local
-# xj = x_process
+# xj = x_local
+xj = x_process
 
 xb = mesh.get_points_on_domain()
 
@@ -131,44 +134,51 @@ if rank == 0:
     print(f"Global shape: {xj.shape}, Local shape: {x_local.shape}")
     print("Global sharding:")
     jax.debug.visualize_array_sharding(xj)
+    print("Local sharding:")
+    jax.debug.visualize_array_sharding(w.module.linear_in.kernel.value)
+    print("Hidden sharding:")
+    jax.debug.visualize_array_sharding(w.module.hidden[0].kernel.value)
 
-# Equations to solve
-f = Div(Grad(w)) - w - (Div(Grad(ue)) - ue)
-loss_fn = LSQR((f, xj), (w, xb, lambdify(x, ue)(xb)))
+with jax.set_mesh(ms):
+    # Equations to solve
+    f = Div(Grad(w)) - w - (Div(Grad(ue)) - ue)
+    loss_fn = LSQR((f, xj), (w, xb, lambdify(x, ue)(xb)))
 
-opt_adam = adam(w, learning_rate=1e-3)
-opt_lbfgs = lbfgs(w, memory_size=20)
-opt_hess = GaussNewton(w)
+    opt_adam = adam(w, learning_rate=1e-3)
+    opt_lbfgs = lbfgs(w, memory_size=20)
+    opt_hess = GaussNewton(w)
 
-trainer = Trainer(loss_fn)
+    trainer = Trainer(loss_fn)
 
-t0 = time.time()
-# Train with periodic allreduce
-trainer.train(
-    opt_adam,
-    1000,
-    print_final_loss=True,
-    epoch_print=100,
-    allreduce_grads_and_loss=False,
-    allreduce_module_freq=1,
-    update_global_weights=-1,
-)
-trainer.train(
-    opt_lbfgs,
-    100,
-    epoch_print=10,
-    abs_limit_change=0,
-    allreduce_grads_and_loss=False,
-    allreduce_module_freq=1,
-)
-trainer.train(
-    opt_hess,
-    10,
-    epoch_print=1,
-    abs_limit_change=0,
-    allreduce_grads_and_loss=False,
-    allreduce_module_freq=1,
-)
+    t0 = time.time()
+
+    # Train with periodic allreduce
+    trainer.train(
+        opt_adam,
+        1000,
+        print_final_loss=True,
+        epoch_print=100,
+        allreduce_grads_and_loss=False,
+        allreduce_module_freq=1,
+        update_global_weights=-1,
+    )
+    trainer.train(
+        opt_lbfgs,
+        100,
+        epoch_print=10,
+        abs_limit_change=0,
+        allreduce_grads_and_loss=False,
+        allreduce_module_freq=1,
+    )
+    trainer.train(
+        opt_hess,
+        10,
+        epoch_print=1,
+        abs_limit_change=0,
+        allreduce_grads_and_loss=False,
+        allreduce_module_freq=1,
+    )
+
 print(f"Total time {time.time() - t0:.1f}s")
 
 

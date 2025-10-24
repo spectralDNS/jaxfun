@@ -36,4 +36,4 @@ def process_allmean(inp: PyTree) -> PyTree:
     out = jax.jit(_identity_fn, out_shardings=jax.NamedSharding(mesh, P()))(
         global_arr.mean(axis=0)
     )
-    return unravel(out.addressable_data(0))
+    return unravel(out)

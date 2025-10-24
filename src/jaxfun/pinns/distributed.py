@@ -29,11 +29,11 @@ def process_allmean(inp: PyTree) -> PyTree:
         (jax.process_count(), jax.local_device_count())
     )
     mesh = jax.sharding.Mesh(global_mesh, ("processes", "local_devices"))
-    shard_batch = jax.sharding.NamedSharding(mesh, P("processes"))
+    shard_batch = jax.sharding.NamedSharding(mesh, P("processes", None))
     global_arr = jax.make_array_from_process_local_data(
-        shard_batch, flat_arr, global_shape
+        shard_batch, flat_arr.addressable_data(0), global_shape
     )
     out = jax.jit(_identity_fn, out_shardings=jax.NamedSharding(mesh, P()))(
-        global_arr.sum(axis=0) / jax.process_count()
+        global_arr.mean(axis=0)
     )
     return unravel(out.addressable_data(0))

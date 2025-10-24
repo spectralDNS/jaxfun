@@ -5,9 +5,11 @@ import time
 import jax
 
 jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_num_cpu_devices", 2)
 
 import socket
 
+import jax.numpy as jnp
 import numpy as np
 import sympy as sp
 from flax import nnx
@@ -55,7 +57,7 @@ from jaxfun.operators import Div, Grad
 from jaxfun.pinns import (
     LSQR,
     FlaxFunction,
-    MLPSpace,
+    PirateSpace,
     Trainer,
 )
 from jaxfun.pinns.mesh import Line
@@ -64,14 +66,17 @@ from jaxfun.utils.common import Domain, lambdify
 
 rank = jax.process_index()
 world = jax.process_count()
-num_devices = len(jax.devices())
+num_devices = jax.device_count()
 
 if rank == 0:
-    print(f"JAX distributed: {world} processes")
+    print(f"JAX distributed: {world} processes and {jax.local_device_count()} devices")
 
 domain = Domain(-sp.pi, sp.pi)
-V = MLPSpace([16], dims=1, rank=0, name="V")
+# V = MLPSpace([16], dims=1, rank=0, name="V")
 # V = Chebyshev.Chebyshev(32, dims=1, rank=0, name="V", domain=domain)
+# V = sPIKANSpace(4, [8], dims=1, rank=0, name="V", domains=[domain])
+# V = KANMLPSpace(4, [16], dims=1, rank=0, name="V", domains=[domain])
+V = PirateSpace([16], dims=1, rank=0, name="V")
 w = FlaxFunction(V, name="w")
 x = V.system.x
 ue = sp.sin(x) + x**2
@@ -84,7 +89,7 @@ ms = Mesh(global_mesh, ("processes", "local_devices"))
 shard_batch = NamedSharding(ms, P("processes", None))
 
 # Each process gets N // world points, total global shape is (N, 1)
-N = 10000
+N = 1000
 N_PER_PROCESS = N // jax.process_count()
 global_shape = (N, 1)
 
@@ -98,6 +103,8 @@ mesh = Line(
 
 # Get local data points of shape (N_PER_PROCESS, 1), that reside on single local device
 x_process = mesh.get_points_inside_domain("random")
+
+jax.debug.visualize_array_sharding(x_process)
 
 # Create sharded array from data local to each process. Note, the array will be
 # replicated across local devices
@@ -115,6 +122,7 @@ x_local = jax.make_array_from_process_local_data(
 # )
 
 xj = x_local
+# xj = x_process
 
 xb = mesh.get_points_on_domain()
 
@@ -141,21 +149,42 @@ trainer.train(
     1000,
     print_final_loss=True,
     epoch_print=100,
-    allreduce_grads_and_loss=True,
+    allreduce_grads_and_loss=False,
     allreduce_module_freq=1,
+    update_global_weights=-1,
 )
 trainer.train(
     opt_lbfgs,
     100,
     epoch_print=10,
     abs_limit_change=0,
-    allreduce_grads_and_loss=True,
+    allreduce_grads_and_loss=False,
     allreduce_module_freq=1,
 )
-# trainer.train(
-#    opt_hess, 10, epoch_print=1, abs_limit_change=0, allreduce_gradients_and_loss=True
-# )
-# trainer.allreduce(w.module)
+trainer.train(
+    opt_hess,
+    10,
+    epoch_print=1,
+    abs_limit_change=0,
+    allreduce_grads_and_loss=False,
+    allreduce_module_freq=1,
+)
 print(f"Total time {time.time() - t0:.1f}s")
 
+
+def l2_norm(tree):
+    return jnp.sqrt(sum(jnp.vdot(x, x) for x in jax.tree.flatten(tree)[0]))
+
+
 print("loss", loss_fn(w.module))
+state = nnx.state(w.module)
+print("norm", l2_norm(state))
+
+if rank == 0:
+    import matplotlib.pyplot as plt
+
+    xj = jnp.linspace(float(domain.lower), float(domain.upper), 1000)
+    plt.plot(xj, lambdify(x, ue)(xj), label="Exact", lw=3)
+    plt.plot(xj, w(xj[:, None]), "--", label="Approx", lw=3)
+    plt.legend()
+    plt.show()

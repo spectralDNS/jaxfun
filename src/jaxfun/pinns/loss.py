@@ -93,7 +93,10 @@ class Residual:
         self.target = target
         if len(t.free_symbols) > 0:
             assert s is not None, "Could not find base scalars in expression"
-            tx = lambdify(s, t)(*self.x.T)
+            if self.x.is_fully_addressable:
+                tx = lambdify(s, t)(*self.x.T)
+            else:
+                tx = jax.vmap(lambda x: lambdify(s, t)(*x.T))(self.x)
             if tx.ndim == 1:
                 tx = tx[:, None]
             self.target = target - tx
@@ -254,7 +257,7 @@ class LSQR:
                 ]
             )
             @ gw
-        )
+        ).mean()
 
     def __call__(self, model: nnx.Module) -> float:
         self.update_arrays(model, self.Js)

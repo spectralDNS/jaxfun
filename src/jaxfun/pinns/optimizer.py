@@ -241,7 +241,6 @@ def train(
         unravel = jax.flatten_util.ravel_pytree(state)[1]
         value_fn_state = lambda state: value_fn(nnx.merge(gd, state))
         H_loss_fn = lambda flat_weights: value_fn(nnx.merge(gd, unravel(flat_weights)))
-
         optimizer.update(
             gradients,
             grad=gradients,

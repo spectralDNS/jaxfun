@@ -28,6 +28,9 @@ from .nnspaces import KANMLPSpace, MLPSpace, PirateSpace, sPIKANSpace
 default_kernel_init = nnx.initializers.glorot_normal()
 default_bias_init = nnx.initializers.zeros_init()
 default_rngs = nnx.Rngs(11)
+parallell_kernel_init = nnx.with_partitioning(
+    default_kernel_init, (None, "local_devices")
+)
 
 
 # Differs from jaxfun.utils.common.jacn in the last if else
@@ -94,7 +97,7 @@ class RWFLinear(nnx.Module):
         scaling_init = nnx.initializers.normal(0.1)
         g = 1.0 + scaling_init(scaling_key, (out_features,), param_dtype)
         self.g = nnx.Param(jnp.exp(g))
-        self.kernel = nnx.Param(w / g)
+        self.kernel = nnx.Param(w)
 
         self.bias: nnx.Param[jax.Array] | None
         if use_bias:
@@ -144,7 +147,7 @@ class RWFLinear(nnx.Module):
 
 
 class KANLayer(nnx.Module):
-    """Single Kolmogorov–Arnold (KAN) spectral expansion layer.
+    """Single Kolmogorov-Arnold (KAN) spectral expansion layer.
 
     Expands each input coordinate (or spectral feature in hidden layers)
     into spectral basis coefficients and applies a linear combination to
@@ -297,8 +300,8 @@ class MLP(nnx.Module):
             V.in_size,
             hidden_size[0],
             rngs=rngs,
-            bias_init=bias_init,
-            kernel_init=kernel_init,
+            bias_init=nnx.with_partitioning(bias_init, ("local_devices")),
+            kernel_init=nnx.with_partitioning(kernel_init, (None, "local_devices")),
             param_dtype=float,
             dtype=float,
         )
@@ -308,8 +311,10 @@ class MLP(nnx.Module):
                     hidden_size[i],
                     hidden_size[min(i + 1, len(hidden_size) - 1)],
                     rngs=rngs,
-                    bias_init=bias_init,
-                    kernel_init=kernel_init,
+                    bias_init=nnx.with_partitioning(bias_init, ("local_devices")),
+                    kernel_init=nnx.with_partitioning(
+                        kernel_init, ("local_devices", "local_devices")
+                    ),
                     param_dtype=float,
                     dtype=float,
                 )
@@ -323,7 +328,7 @@ class MLP(nnx.Module):
             V.out_size,
             rngs=rngs,
             bias_init=bias_init,
-            kernel_init=kernel_init,
+            kernel_init=nnx.with_partitioning(kernel_init, ("local_devices", None)),
             param_dtype=float,
             dtype=float,
         )
@@ -466,8 +471,8 @@ class PirateNet(nnx.Module):
             in_dim,
             hidden_size[0],
             rngs=rngs,
-            bias_init=bias_init,
-            kernel_init=kernel_init,
+            bias_init=nnx.with_partitioning(bias_init, ("local_devices")),
+            kernel_init=nnx.with_partitioning(kernel_init, (None, "local_devices")),
             param_dtype=float,
             dtype=float,
         )
@@ -475,8 +480,8 @@ class PirateNet(nnx.Module):
             in_dim,
             hidden_size[0],
             rngs=rngs,
-            bias_init=bias_init,
-            kernel_init=kernel_init,
+            bias_init=nnx.with_partitioning(bias_init, ("local_devices")),
+            kernel_init=nnx.with_partitioning(kernel_init, (None, "local_devices")),
             param_dtype=float,
             dtype=float,
         )
@@ -500,7 +505,7 @@ class PirateNet(nnx.Module):
                 V.out_size,
                 rngs=rngs,
                 bias_init=bias_init,
-                kernel_init=kernel_init,
+                kernel_init=nnx.with_partitioning(kernel_init, ("local_devices", None)),
                 param_dtype=float,
                 dtype=float,
             )
@@ -551,9 +556,17 @@ class SpectralModule(nnx.Module):
             rngs: RNG container.
         """
         if basespace.dims == 1:
-            self.kernel = nnx.Param(kernel_init(rngs(), (1, basespace.dim)))
+            self.kernel = nnx.Param(
+                nnx.with_partitioning(kernel_init, (None, "local_devices"))(
+                    rngs(), (1, basespace.dim)
+                )
+            )
         else:
-            self.kernel = nnx.Param(kernel_init(rngs(), basespace.dim))
+            self.kernel = nnx.Param(
+                nnx.with_partitioning(kernel_init, (None, "local_devices"))(
+                    rngs(), basespace.dim
+                )
+            )
         self.space = basespace
         self.domain_factor = getattr(basespace, "domain_factor", 1)
 
@@ -609,7 +622,9 @@ class KANMLPModule(nnx.Module):
             domains=V.domains,
             system=V.system,
             rngs=rngs,
-            kernel_init=kernel_init,
+            kernel_init=nnx.with_partitioning(
+                kernel_init, (None, None, "local_devices")
+            ),
             param_dtype=float,
             dtype=float,
         )
@@ -619,8 +634,10 @@ class KANMLPModule(nnx.Module):
                     hidden_size[i],
                     hidden_size[min(i + 1, len(hidden_size) - 1)],
                     rngs=rngs,
-                    bias_init=bias_init,
-                    kernel_init=kernel_init,
+                    bias_init=nnx.with_partitioning(bias_init, ("local_devices")),
+                    kernel_init=nnx.with_partitioning(
+                        kernel_init, ("local_devices", "local_devices")
+                    ),
                     param_dtype=float,
                     dtype=float,
                 )
@@ -635,7 +652,7 @@ class KANMLPModule(nnx.Module):
                 V.out_size,
                 rngs=rngs,
                 bias_init=bias_init,
-                kernel_init=kernel_init,
+                kernel_init=nnx.with_partitioning(kernel_init, ("local_devices", None)),
                 param_dtype=float,
                 dtype=float,
             )
@@ -689,7 +706,9 @@ class sPIKANModule(nnx.Module):
             domains=V.domains,
             system=V.system,
             rngs=rngs,
-            kernel_init=kernel_init,
+            kernel_init=nnx.with_partitioning(
+                kernel_init, (None, None, "local_devices")
+            ),
             param_dtype=float,
             dtype=float,
         )
@@ -703,7 +722,14 @@ class sPIKANModule(nnx.Module):
                     basespace=V.basespace,
                     system=V.system,
                     rngs=rngs,
-                    kernel_init=kernel_init,
+                    kernel_init=nnx.with_partitioning(
+                        kernel_init,
+                        (
+                            "local_devices",
+                            None,
+                            "local_devices",
+                        ),
+                    ),
                     param_dtype=float,
                     dtype=float,
                 )
@@ -722,7 +748,9 @@ class sPIKANModule(nnx.Module):
                 basespace=V.basespace,
                 system=V.system,
                 rngs=rngs,
-                kernel_init=kernel_init,
+                kernel_init=nnx.with_partitioning(
+                    kernel_init, ("local_devices", None, None)
+                ),
                 param_dtype=float,
                 dtype=float,
             )
@@ -816,7 +844,7 @@ class FlaxFunction(Function):
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs,
-    ) -> MLP | PirateNet | SpectralModule:
+    ) -> MLP | PirateNet | SpectralModule | KANMLPModule | sPIKANModule:
         """Instantiate appropriate nnx module given a function space."""
         if isinstance(V, MLPSpace):
             return MLP(V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)

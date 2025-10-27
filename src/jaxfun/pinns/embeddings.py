@@ -39,7 +39,7 @@ class PeriodEmbs(nnx.Module):
         for p, idx, is_trainable in zip(period, axis, trainable, strict=True):
             val = jnp.asarray(p)
             store[f"period_{idx}"] = nnx.Param(val) if is_trainable else val
-        self._periods = store
+        self._periods = nnx.Dict(store)
 
     def __call__(self, x: Array) -> Array:
         """Apply per-axis periodic embeddings.

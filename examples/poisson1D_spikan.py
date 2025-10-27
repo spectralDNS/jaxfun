@@ -36,7 +36,9 @@ trainer = Trainer(loss_fn)
 
 t0 = time.time()
 opt_adam = adam(w, learning_rate=1e-3, end_learning_rate=1e-4, decay_steps=10000)
-trainer.train(opt_adam, 1000, epoch_print=200, update_global_weights=10)
+trainer.train(
+    opt_adam, 1000, epoch_print=200, update_global_weights=10, abs_limit_change=0
+)
 print(f"Adam time {time.time() - t0:.1f}s")
 
 t1 = time.time()

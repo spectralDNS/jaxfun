@@ -303,7 +303,7 @@ class MLP(nnx.Module):
             dtype=float,
         )
         self.hidden = (
-            [
+            nnx.List(
                 RWFLinear(
                     hidden_size[i],
                     hidden_size[min(i + 1, len(hidden_size) - 1)],
@@ -314,7 +314,7 @@ class MLP(nnx.Module):
                     dtype=float,
                 )
                 for i in range(len(hidden_size))
-            ]
+            )
             if isinstance(V.hidden_size, list | tuple)
             else []
         )
@@ -480,7 +480,7 @@ class PirateNet(nnx.Module):
             param_dtype=float,
             dtype=float,
         )
-        self.hidden = [
+        self.hidden = nnx.List(
             PIModifiedBottleneck(
                 in_dim=in_dim,
                 hidden_dim=hidden_size[i],
@@ -490,7 +490,7 @@ class PirateNet(nnx.Module):
                 act_fun=V.act_fun_hidden,
             )
             for i in range(len(hidden_size))
-        ]
+        )
 
         if V.pi_init is not None:
             raise NotImplementedError("Least squares initialization not implemented")
@@ -614,7 +614,7 @@ class KANMLPModule(nnx.Module):
             dtype=float,
         )
         self.hidden = (
-            [
+            nnx.List(
                 RWFLinear(
                     hidden_size[i],
                     hidden_size[min(i + 1, len(hidden_size) - 1)],
@@ -625,7 +625,7 @@ class KANMLPModule(nnx.Module):
                     dtype=float,
                 )
                 for i in range(len(hidden_size))
-            ]
+            )
             if isinstance(V.hidden_size, list | tuple)
             else []
         )
@@ -694,7 +694,7 @@ class sPIKANModule(nnx.Module):
             dtype=float,
         )
         self.hidden = (
-            [
+            nnx.List(
                 KANLayer(
                     hidden_size[i],
                     hidden_size[min(i + 1, len(hidden_size) - 1)],
@@ -708,7 +708,7 @@ class sPIKANModule(nnx.Module):
                     dtype=float,
                 )
                 for i in range(len(hidden_size))
-            ]
+            )
             if isinstance(V.hidden_size, list | tuple)
             else []
         )

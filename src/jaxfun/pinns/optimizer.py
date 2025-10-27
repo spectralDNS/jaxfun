@@ -42,7 +42,7 @@ class NamedOptimizer[M: nnx.Module](nnx.Optimizer[M]):
         *,
         name: str = "Optimizer",
     ) -> None:
-        super().__init__(module, tx, wrt)
+        super().__init__(module, tx, wrt=wrt)
         self.name = name
         self.module = module
 
@@ -82,7 +82,7 @@ def _gradient_descent_based_optimizer(
 
     base_name = opt_constructor.__name__.capitalize()
     name = f"{base_name}({lr_str})"
-    opt = NamedOptimizer(module, opt, name=name)
+    opt = NamedOptimizer(module, opt, nnx.Param, name=name)
     return opt
 
 
@@ -243,6 +243,7 @@ def train(
         H_loss_fn = lambda flat_weights: value_fn(nnx.merge(gd, unravel(flat_weights)))
 
         optimizer.update(
+            module,
             gradients,
             grad=gradients,
             value_fn=value_fn_state,

@@ -276,6 +276,7 @@ def train(
         H_loss_fn = lambda flat_weights: value_fn(nnx.merge(gd, unravel(flat_weights)))
 
         optimizer.update(
+            module,
             gradients,
             grad=gradients,
             value_fn=value_fn_state,

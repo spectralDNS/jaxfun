@@ -149,7 +149,7 @@ class LSQR:
 
         for f in fs:
             f0 = f[0].doit()
-            f1 = f[1].addressable_data(0)
+            f1 = f[1]  # .addressable_data(0)
             if f0.is_Vector:  # Vector equation
                 sys = get_system(f0)
                 for i in range(sys.dims):
@@ -173,7 +173,7 @@ class LSQR:
         self.Jres = [set() for _ in range(len(res))]  # Collection for each residual
         for i, f in enumerate(res):
             f0 = f[0].doit()
-            f1 = f[1].addressable_data(0)
+            f1 = f[1]  # .addressable_data(0)
             for s in sp.core.traversal.preorder_traversal(f0):
                 if isinstance(s, sp.Derivative):
                     func = s.args[0]
@@ -240,7 +240,7 @@ class LSQR:
         from jax.experimental import multihost_utils as mh
 
         new = self.compute_global_weights(model)
-        if jax.device_count() > 1:
+        if jax.process_count() > 1:
             new = mh.process_allgather(new).mean(0)
         return new * (1 - alpha) + gw * alpha
 

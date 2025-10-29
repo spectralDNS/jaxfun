@@ -127,6 +127,11 @@ class LSQR:
                 weight. The weight needs to be a number or an array of the same
                 shape as the collocation points.
 
+        Note:
+            The collocation points need to be arrays of shape (N, D), where N
+            is the number of points and D is the number of dimensions. The
+            collocation points need to be fully addressable.
+
         Examples:
 
             >>> import jax.numpy as jnp
@@ -149,7 +154,7 @@ class LSQR:
 
         for f in fs:
             f0 = f[0].doit()
-            f1 = f[1]  # .addressable_data(0)
+            f1 = f[1]
             if f0.is_Vector:  # Vector equation
                 sys = get_system(f0)
                 for i in range(sys.dims):
@@ -173,7 +178,7 @@ class LSQR:
         self.Jres = [set() for _ in range(len(res))]  # Collection for each residual
         for i, f in enumerate(res):
             f0 = f[0].doit()
-            f1 = f[1]  # .addressable_data(0)
+            f1 = f[1]
             for s in sp.core.traversal.preorder_traversal(f0):
                 if isinstance(s, sp.Derivative):
                     func = s.args[0]

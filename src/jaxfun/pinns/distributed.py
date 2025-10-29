@@ -27,7 +27,9 @@ def process_allmean(inp: PyTree) -> PyTree:
     devices = np.array(jax.devices()).reshape(
         jax.process_count(), jax.local_device_count()
     )
-    global_mesh = jax.sharding.Mesh(devices, ("processes", "local_devices"))
+    # global_mesh = jax.sharding.Mesh(devices, ("processes", "local_devices"))
+    global_mesh = jax.sharding.Mesh(devices[:, 0], ("processes",))
+
     pspec = P("processes")
     s = jax.sharding.NamedSharding(global_mesh, pspec)
 

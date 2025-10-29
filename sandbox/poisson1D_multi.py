@@ -5,10 +5,10 @@ import time
 import jax
 
 jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_num_cpu_devices", 6)
 
 import socket
 
-import numpy as np
 import sympy as sp
 from flax import nnx
 
@@ -66,8 +66,15 @@ rank = jax.process_index()
 world = jax.process_count()
 num_devices = len(jax.devices())
 
-if rank == 0:
-    print(f"JAX distributed: {world} processes")
+# Note that spaces and modules (FlaxFunctions) are created on local device 0
+# on each rank. Since they have the same random seed, they will be initialized
+# identically across ranks. All weights will be put on only one local device,
+# which is the default device set for the process. The weights will need to be
+# syncronized periodically during training.
+#
+# The mesh is created on each process, and then distributed further to local
+# devices. Each local device get a different portion of the date created on the
+# process they belong to.
 
 domain = Domain(-sp.pi, sp.pi)
 V = MLPSpace([16], dims=1, rank=0, name="V")
@@ -76,15 +83,12 @@ w = FlaxFunction(V, name="w")
 x = V.system.x
 ue = sp.sin(x) + x**2
 
-# Create mesh for sharding across devices/processes
-global_mesh = np.array(jax.devices()).reshape(
-    (jax.process_count(), jax.local_device_count())
-)
-ms = Mesh(global_mesh, ("processes", "local_devices"))
-shard_batch = NamedSharding(ms, P("processes", None))
+# Create mesh for sharding the mesh across local devices
+local_mesh = Mesh(jax.local_devices(), ("local_batch",))
+local_batch = NamedSharding(local_mesh, P("local_batch"))
 
 # Each process gets N // world points, total global shape is (N, 1)
-N = 10000
+N = 1200
 N_PER_PROCESS = N // jax.process_count()
 global_shape = (N, 1)
 
@@ -99,34 +103,36 @@ mesh = Line(
 # Get local data points of shape (N_PER_PROCESS, 1), that reside on single local device
 x_process = mesh.get_points_inside_domain("random")
 
-# Create sharded array from data local to each process. Note, the array will be
-# replicated across local devices
-x_local = jax.make_array_from_process_local_data(
-    shard_batch,
+# Shard this local data across local devices
+x_device = jax.device_put(x_process, local_batch)
+
+# Create global array just for visualization (not used in computation)
+x_global = jax.make_array_from_process_local_data(
+    NamedSharding(Mesh(jax.devices(), ("batch",)), P("batch")),
     x_process,
     global_shape,
 )
 
-# Alternatively (same result)
-# x_local = jax.make_array_from_single_device_arrays(
-#   global_shape,
-#   shard_batch,
-#   [jax.device_put(x_process, d) for d in jax.local_devices()],
-# )
-
-xj = x_local
-
 xb = mesh.get_points_on_domain()
 
 if rank == 0:
-    print(world, "processes with", num_devices, "devices")
-    print(f"Global shape: {xj.shape}, Local shape: {x_local.shape}")
-    print("Global sharding:")
-    jax.debug.visualize_array_sharding(xj)
+    print(
+        f"JAX distributed with {world} processes and {jax.local_device_count()} local devices per process"  # noqa: E501
+    )
+    print(f"In total using {jax.device_count()} devices")
+    print(f"Global shape (x_global): {x_global.shape}")
+    print(f"Local shape (x_device): {x_device.shape}")
+    print(f"Addressable shape on device 0: {x_device.addressable_data(0).shape}")
+    print(f"x_device is fully addressable: {x_device.is_fully_addressable}")
+    print(f"x_global is fully addressable: {x_global.is_fully_addressable}")
+    print("Sharding of x_device living on rank 0:")
+    jax.debug.visualize_array_sharding(x_device)
+    print("Sharding of x_global (unused):")
+    jax.debug.visualize_array_sharding(x_global)
 
-# Equations to solve
+# Equations to solve. Note that we use the fully addressable x_device
 f = Div(Grad(w)) - w - (Div(Grad(ue)) - ue)
-loss_fn = LSQR((f, xj), (w, xb, lambdify(x, ue)(xb)))
+loss_fn = LSQR((f, x_device), (w, xb, lambdify(x, ue)(xb)))
 
 opt_adam = adam(w, learning_rate=1e-3)
 opt_lbfgs = lbfgs(w, memory_size=20)
@@ -153,9 +159,14 @@ trainer.train(
     allreduce_module_freq=1,
 )
 # trainer.train(
-#    opt_hess, 10, epoch_print=1, abs_limit_change=0, allreduce_gradients_and_loss=True
+#    opt_hess,
+#    10,
+#    epoch_print=1,
+#    abs_limit_change=0,
+#    allreduce_grads_and_loss=True,
+#    allreduce_module_freq=1,
 # )
-# trainer.allreduce(w.module)
+
 print(f"Total time {time.time() - t0:.1f}s")
 
 print("loss", loss_fn(w.module))

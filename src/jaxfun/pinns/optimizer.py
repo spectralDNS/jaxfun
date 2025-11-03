@@ -232,9 +232,14 @@ def train(
     """
 
     @nnx.jit
-    def train_step(module: nnx.Module, optimizer: nnx.Optimizer, gw: Array) -> float:
+    def train_step(
+        module: nnx.Module,
+        optimizer: nnx.Optimizer,
+        gw: Array,
+        args: list[tuple[Array, Array]],
+    ) -> float:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, gw)
+            return loss_fn.loss_with_gw(m, gw, args)
 
         loss, gradients = nnx.value_and_grad(value_fn)(module)
         gd, state = nnx.split(module, nnx.Param)
@@ -396,9 +401,10 @@ class Trainer:
             self.loss_fn, allreduce_grads_and_loss and jax.process_count() > 1
         )
 
+        args = self.loss_fn.args
         loss_old = 1.0
         for epoch in range(1, num + 1):
-            loss = train_step(module, opt, self.global_weights)
+            loss = train_step(module, opt, self.global_weights, args)
 
             if epoch % epoch_print == 0 and rank == 0:
                 print(f"Epoch {epoch} {name}, loss: {loss}")
@@ -407,7 +413,7 @@ class Trainer:
             loss_old = loss
             if update_global_weights > 0 and epoch % update_global_weights == 0:
                 self.global_weights = self.loss_fn.update_global_weights(
-                    module, self.global_weights, alpha
+                    module, self.global_weights, args, alpha
                 )
                 if print_global_weights and rank == 0:
                     print("Global weights", self.global_weights)

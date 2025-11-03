@@ -14,6 +14,24 @@ from jaxfun.utils import jacn, lambdify
 from .module import Comp, Function
 
 
+def vjacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
+    """Return vectorized k-th order Jacobian (forward) of a function.
+
+    Repeatedly applies jax.jacfwd k times (producing nested Jacobians) and
+    then vmaps over the leading batch axis if k > 0.
+
+    Args:
+        fun: Function mapping a scalar/array to an Array.
+        k: Order of repeated jacfwd application (k >= 0).
+
+    Returns:
+        Callable producing the k-th order Jacobian for batched inputs.
+    """
+    for _ in range(k):
+        fun = jax.jacfwd(fun)
+    return jax.vmap(fun, in_axes=0, out_axes=0) if k > 0 else fun
+
+
 def get_flaxfunction_args(a: sp.Expr) -> tuple[sp.Symbol | BaseScalar, ...]:
     for p in sp.core.traversal.iterargs(a):
         if getattr(p, "argument", -1) == 2:
@@ -86,27 +104,29 @@ class Residual:
         t, expr = expand(f)
         s = get_flaxfunction_args(f.doit())
         self.eqs = [get_fn(h, s) for h in expr]
-        self.x = x
         # Place all terms without flaxfunctions in the target,
         # because these will not need to be computed more than once
         assert isinstance(target, Number | Array)
-        self.target = target
+        t0 = target
         if len(t.free_symbols) > 0:
             assert s is not None, "Could not find base scalars in expression"
-            tx = lambdify(s, t)(*self.x.T)
+            tx = lambdify(s, t)(*x.T)
             if tx.ndim == 1:
                 tx = tx[:, None]
-            self.target = target - tx
+            t0 = target - tx
         else:
             assert isinstance(t, Number)
             t = float(t) if t.is_real else complex(t)
-            self.target = target - t
-        self.target = jnp.squeeze(self.target)
+            t0 = target - t
+        t0 = jnp.squeeze(t0)
         assert isinstance(weights, Number | Array)
         self.weights = weights
+        self.x, self.target = x, t0
 
-    def __call__(self, Js: dict[tuple[int, int, int], Array]) -> Array:
-        return sum([eq(self.x, Js) for eq in self.eqs]) - self.target
+    def __call__(
+        self, Js: dict[tuple[int, int, int], Array], x: Array, target: Array
+    ) -> Array:
+        return sum([eq(x, Js) for eq in self.eqs]) - target
 
 
 class LSQR:
@@ -148,8 +168,6 @@ class LSQR:
         from jaxfun.operators import Dot
 
         self.residuals = []
-        self.Js = Js = {}  # All modules' evaluation and derivatives eval wrt variables
-        self.xs = xs = {}  # All collocation points
         res = []
 
         for f in fs:
@@ -169,104 +187,145 @@ class LSQR:
                         g += (f[3],)
 
                     self.residuals.append(Residual(*g))
-                    res.append((g[0], f[1]))
+                    res.append(g[0])
 
             else:
                 self.residuals.append(Residual(*((f[0], f1) + f[2:])))
-                res.append((f[0], f[1]))
+                res.append(f[0])
 
-        self.Jres = [set() for _ in range(len(res))]  # Collection for each residual
+        # Collection of modules and derivative counts for each residual:
+        Jres = [set() for _ in range(len(res))]
         for i, f in enumerate(res):
-            f0 = f[0].doit()
-            f1 = f[1]
+            f0 = f.doit()
             for s in sp.core.traversal.preorder_traversal(f0):
                 if isinstance(s, sp.Derivative):
                     func = s.args[0]
                     ki: int = int(s.derivative_count)
                     assert hasattr(func, "module")
-                    key = (id(f1), id(func.module), ki)
-                    if key not in Js:
-                        Js[key] = jacn(func.module, ki)(f1)
-                    self.Jres[i].add(key)
+                    key = (id(func.module), ki)
+                    Jres[i].add(key)
 
                 if hasattr(s, "module"):
-                    key = (id(f1), id(s.module), 0)
-                    if key not in Js:
-                        Js[key] = s.module(f1)
-                    self.Jres[i].add(key)
+                    key = (id(s.module), 0)
+                    Jres[i].add(key)
+        self.Jres = Jres
 
-            if id(f1) not in xs:
-                xs[id(f1)] = f1
+    @property
+    def args(self) -> tuple[tuple[Array, Array], ...]:
+        return tuple((eq.x, eq.target) for eq in self.residuals)
 
+    @partial(nnx.jit, static_argnums=0)
     def update_arrays(
-        self, model: nnx.Module, Js: dict[tuple[int, int, int], Array]
+        self, model: nnx.Module, Jsi: dict[tuple[int, int, int], Array]
     ) -> None:
-        for k in Js:
+        Js = {}
+        for k, xs in Jsi.items():
             mod = (
                 model.__getattribute__(str(k[1])) if isinstance(model, Comp) else model
             )
-            Js[k] = jacn(mod, k[2])(self.xs[k[0]])
+            Js[k] = jacn(mod, k[2])(xs)
 
-    def compute_residual_i(self, model: nnx.Module, i: int) -> Array:
-        Jsi = {k: None for k in self.Jres[i]}
-        self.update_arrays(model, Jsi)
-        return self.residuals[i](Jsi)
+        return Js
 
-    def compute_residuals(self, model: nnx.Module):
-        self.update_arrays(model, self.Js)
+    def compute_residual_i(
+        self, model: nnx.Module, args: tuple[tuple[Array, Array], ...], i: int
+    ) -> Array:
+        Jsi = {(id(args[i][0]),) + k: args[i][0] for k in self.Jres[i]}
+        Js = self.update_arrays(model, Jsi)
+        return self.residuals[i](Js, args[i][0], args[i][1])
+
+    def compute_residuals(
+        self, model: nnx.Module, args: tuple[tuple[Array, Array], ...]
+    ) -> Array:
+        Jsi = {
+            (id(arg[0]),) + z: arg[0]
+            for k, arg in zip(self.Jres, args, strict=True)
+            for z in k
+        }
+        Js = self.update_arrays(model, Jsi)
         L2 = []
-        for res in self.residuals:
-            L2.append((res.weights * res(self.Js) ** 2).mean())
+        for res, arg in zip(self.residuals, args, strict=True):
+            L2.append((res.weights * res(Js, arg[0], arg[1]) ** 2).mean())
         return jnp.array(L2)
 
-    def compute_Li(self, model: nnx.Module, i: int):
-        x = self.compute_residual_i(model, i)
+    def compute_Li(
+        self, model: nnx.Module, args: tuple[tuple[Array, Array], ...], i: int
+    ):
+        x = self.compute_residual_i(model, args, i)
         return (self.residuals[i].weights * x**2).mean()
 
-    def norm_grad_loss_i(self, model: nnx.Module, i: int) -> Array:
+    def norm_grad_loss_i(
+        self, model: nnx.Module, args: tuple[tuple[Array, Array], ...], i: int
+    ) -> Array:
         return jnp.linalg.norm(
-            jax.flatten_util.ravel_pytree(nnx.grad(self.compute_Li)(model, i))[0]
+            jax.flatten_util.ravel_pytree(nnx.grad(self.compute_Li)(model, args, i))[0]
         )
 
-    def norm_grad_loss(self, model: nnx.Module) -> Array:
+    def norm_grad_loss(
+        self, model: nnx.Module, args: tuple[tuple[Array, Array], ...]
+    ) -> Array:
         norms = []
         for i in range(len(self.residuals)):
-            norms.append(self.norm_grad_loss_i(model, i))
+            norms.append(self.norm_grad_loss_i(model, args, i))
         return jnp.array(norms)
 
     @partial(nnx.jit, static_argnums=0)
-    def compute_global_weights(self, model: nnx.Module) -> Array:
-        norms = self.norm_grad_loss(model)
+    def compute_global_weights(
+        self, model: nnx.Module, args: tuple[tuple[Array, Array], ...]
+    ) -> Array:
+        norms = self.norm_grad_loss(model, args)
         return jnp.sum(norms) / jnp.where(norms < 1e-16, 1e-16, norms)
 
     def update_global_weights(
-        self, model: nnx.Module, gw: Array, alpha: float
+        self,
+        model: nnx.Module,
+        gw: Array,
+        args: tuple[tuple[Array, Array], ...],
+        alpha: float,
     ) -> Array:
         from jax.experimental import multihost_utils as mh
 
-        new = self.compute_global_weights(model)
+        new = self.compute_global_weights(model, args)
         if jax.process_count() > 1:
             new = mh.process_allgather(new).mean(0)
         return new * (1 - alpha) + gw * alpha
 
-    def loss_with_gw(self, model: nnx.Module, gw: Array) -> float:
-        self.update_arrays(model, self.Js)
+    @partial(nnx.jit, static_argnums=0)
+    def loss_with_gw(
+        self, model: nnx.Module, gw: Array, args: tuple[tuple[Array, Array], ...]
+    ) -> Array:
+        Jsi = {
+            (id(arg[0]),) + z: arg[0]
+            for k, arg in zip(self.Jres, args, strict=True)
+            for z in k
+        }
+        Js = self.update_arrays(model, Jsi)
+
         return (
             jnp.array(
                 [
-                    (eq.weights * eq(self.Js) ** 2).mean()
-                    for i, eq in enumerate(self.residuals)
+                    (eq.weights * eq(Js, arg[0], arg[1]) ** 2).mean()
+                    for i, (eq, arg) in enumerate(
+                        zip(self.residuals, args, strict=True)
+                    )
                 ]
             )
             @ gw
         )
 
-    def __call__(self, model: nnx.Module) -> float:
-        self.update_arrays(model, self.Js)
+    @partial(nnx.jit, static_argnums=0)
+    def __call__(self, model: nnx.Module) -> Array:
+        args = self.args
+        Jsi = {
+            (id(arg[0]),) + z: arg[0]
+            for k, arg in zip(self.Jres, args, strict=True)
+            for z in k
+        }
+        Js = self.update_arrays(model, Jsi)
         return sum(
             [
-                (eq.weights * eq(self.Js) ** 2).mean()
-                for i, eq in enumerate(self.residuals)
+                (eq.weights * eq(Js, arg[0], arg[1]) ** 2).mean()
+                for i, (eq, arg) in enumerate(zip(self.residuals, args, strict=True))
             ]
         )
 
@@ -287,10 +346,11 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar, ...]) -> Callable[[Array, dict], Arr
     if len(v) == 0:
         # Coefficient independent of basis function
         if len(f.free_symbols) > 0:
-            return lambda x, Js, s=s, f=f: lambdify(s, f)(*x.T)
+            z = lambdify(s, f)
+            return lambda x, Js, z=z: z(*x.T)
         else:
-            f0 = float(f) if f.is_real else complex(f)
-            return lambda x, Js, f=f0: jnp.array(f)
+            f0 = jnp.array(float(f) if f.is_real else complex(f))
+            return lambda x, Js, f=f0: f
 
     if isinstance(f, sp.Mul):
         # Multiplication of terms that either contain the basis function or not
@@ -323,6 +383,24 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar, ...]) -> Callable[[Array, dict], Arr
         k=int(getattr(f, "derivative_count", "0")),
         variables=getattr(f, "variables", ()),
     )
+    # return partial(
+    #    compute_gradient,
+    #    # mod=v.module,
+    #    i=v.global_index,
+    #    k=int(getattr(f, "derivative_count", "0")),
+    #    variables=getattr(f, "variables", ()),
+    # )
+
+
+def compute_gradient(
+    x: Array,
+    mod: nnx.Module,
+    i: int = 0,
+    k: int = 1,
+    variables: tuple[int] = [0],
+):
+    var: tuple[int] = tuple((slice(None), i)) + tuple(int(s._id[0]) for s in variables)
+    return vjacn(mod, k)(x)[var]
 
 
 def lookup_array(

@@ -199,39 +199,44 @@ class UnitSquare:
         Returns:
             Array (#boundary_pts, 2).
         """
+        Nx = self.Nx
+        Ny = self.Ny
+
         if kind == "uniform":
-            x = np.linspace(0, 1, self.Nx + 2)[1:-1]
-            y = np.linspace(0, 1, self.Ny + 2)[1:-1]
+            x = np.linspace(0, 1, Nx + 2)[1:-1]
+            y = np.linspace(0, 1, Ny + 2)[1:-1]
             xy = np.vstack((np.hstack((x, x, y, y)),) * 2).T
 
         elif kind == "legendre":
-            x = (1 + leggauss(self.Nx)[0]) / 2
-            y = (1 + leggauss(self.Ny)[0]) / 2
+            x = (1 + leggauss(Nx)[0]) / 2
+            y = (1 + leggauss(Ny)[0]) / 2
             xy = np.vstack((np.hstack((x, x, y, y)),) * 2).T
 
         elif kind == "chebyshev":
-            x = (
-                1 + np.cos(np.pi + (2 * np.arange(self.Nx) + 1) * np.pi / (2 * self.Nx))
-            ) / 2
-            y = (
-                1 + np.cos(np.pi + (2 * np.arange(self.Ny) + 1) * np.pi / (2 * self.Ny))
-            ) / 2
+            x = (1 + np.cos(np.pi + (2 * np.arange(Nx) + 1) * np.pi / (2 * Nx))) / 2
+            y = (1 + np.cos(np.pi + (2 * np.arange(Ny) + 1) * np.pi / (2 * Ny))) / 2
             xy = np.vstack((np.hstack((x, x, y, y)),) * 2).T
 
         else:
             assert kind == "random", (
                 "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
             )
-            xy = np.array(jax.random.uniform(self.key, (2 * (self.Nx + self.Ny), 2)))
+            if Nx == 1 or Ny == 1:
+                M = jnp.sqrt(max(Nx, Ny)).astype(int)
+                xy = np.array(jax.random.uniform(self.key, (4 * M, 2)))
+                Nx = M
+                Ny = M
+            else:
+                xy = np.array(jax.random.uniform(self.key, (2 * (Nx + Ny), 2)))
 
         if corners:
             c = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=float)
             xy = np.vstack((xy, c))
 
-        xy[: self.Nx, 1] = 0
-        xy[self.Nx : 2 * self.Nx, 1] = 1
-        xy[2 * self.Nx : (2 * self.Nx + self.Ny), 0] = 0
-        xy[(2 * self.Nx + self.Ny) : (2 * self.Nx + 2 * self.Ny), 0] = 1
+        xy[:Nx, 1] = 0
+        xy[Nx : 2 * Nx, 1] = 1
+        xy[2 * Nx : (2 * Nx + Ny), 0] = 0
+        xy[(2 * Nx + Ny) : (2 * Nx + 2 * Ny), 0] = 1
         return jnp.array(xy)
 
     def get_weights_inside_domain(

@@ -293,7 +293,8 @@ class MLP(nnx.Module):
             if isinstance(V.hidden_size, list | tuple)
             else [V.hidden_size]
         )
-        self.linear_in = RWFLinear(
+        linlayer = RWFLinear if V.weight_factorization else nnx.Linear
+        self.linear_in = linlayer(
             V.in_size,
             hidden_size[0],
             rngs=rngs,
@@ -304,7 +305,7 @@ class MLP(nnx.Module):
         )
         self.hidden = (
             nnx.List(
-                RWFLinear(
+                linlayer(
                     hidden_size[i],
                     hidden_size[min(i + 1, len(hidden_size) - 1)],
                     rngs=rngs,
@@ -318,7 +319,7 @@ class MLP(nnx.Module):
             if isinstance(V.hidden_size, list | tuple)
             else []
         )
-        self.linear_out = RWFLinear(
+        self.linear_out = linlayer(
             hidden_size[-1],
             V.out_size,
             rngs=rngs,
@@ -332,7 +333,7 @@ class MLP(nnx.Module):
     @property
     def dim(self) -> int:
         """Return flattened parameter count."""
-        st = nnx.split(self, nnx.Param)[1]
+        st = nnx.state(self)
         return jax.flatten_util.ravel_pytree(st)[0].shape[0]
 
     def __call__(self, x: Array) -> Array:

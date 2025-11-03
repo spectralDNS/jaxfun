@@ -165,12 +165,13 @@ def test_lsqr_update_arrays():
     u = FlaxFunction(mlp, "u")
     x = jnp.array([[1.0, 2.0]])
     lsqr = LSQR((u, x))
+    u0 = u.module(x)
     # Test update_arrays method
-    key = list(lsqr.Js.keys())[0]
-    old_value = lsqr.Js[key]
-    lsqr.update_arrays(u.module, lsqr.Js)
+    key = (id(x), id(u.module), 0)
+    Jsi = {key: x}
+    Js = lsqr.update_arrays(u.module, Jsi)
     # Should update with fresh computation
-    assert jnp.array_equal(lsqr.Js[key], old_value)
+    assert jnp.array_equal(Js[key], u0)
 
 
 def test_lsqr_compute_Li():
@@ -178,7 +179,7 @@ def test_lsqr_compute_Li():
     u = FlaxFunction(mlp, "u")
     x = jnp.array([[1.0, 2.0]])
     lsqr = LSQR((u - 1, x))  # residual should be u - 1
-    loss_i = lsqr.compute_Li(u.module, 0)
+    loss_i = lsqr.compute_Li(u.module, lsqr.args, 0)
     assert isinstance(loss_i, jnp.ndarray)
     assert loss_i.shape == ()  # scalar loss
 
@@ -188,7 +189,7 @@ def test_lsqr_norm_grad_loss_i():
     u = FlaxFunction(V, "u", kernel_init=nnx.initializers.ones)
     x = jnp.array([[0.0], [1.0]])
     lsqr = LSQR((u, x, u.module(x)))
-    norm = lsqr.norm_grad_loss_i(u.module, 0)
+    norm = lsqr.norm_grad_loss_i(u.module, lsqr.args, 0)
     assert norm == 0
 
 
@@ -198,7 +199,7 @@ def test_lsqr_norm_grad_loss():
     x1 = jnp.array([[0.2, 0.5]])
     x2 = jnp.array([[0.3, 0.4]])
     lsqr = LSQR((u, x1, u(x1)), (u - 1, x2, u(x2) - 1))
-    norms = lsqr.norm_grad_loss(u.module)
+    norms = lsqr.norm_grad_loss(u.module, lsqr.args)
     assert norms.shape == (2,)  # Two residuals
     assert jnp.all(norms == 0)
 
@@ -209,7 +210,7 @@ def test_lsqr_compute_global_weights():
     x1 = jnp.array([[1.0, 2.0]])
     x2 = jnp.array([[3.0, 4.0]])
     lsqr = LSQR((u, x1), (u - 1, x2))
-    weights = lsqr.compute_global_weights(u.module)
+    weights = lsqr.compute_global_weights(u.module, lsqr.args)
     assert weights.shape == (2,)
     assert jnp.all(weights > 0)
 
@@ -220,7 +221,9 @@ def test_lsqr_update_global_weights():
     x = jnp.array([[1.0, 2.0]])
     lsqr = LSQR((u, x), (u - 1, x, -1))
     old_weights = jnp.ones(len(lsqr.residuals), dtype=float)
-    new_weights = lsqr.update_global_weights(u.module, old_weights, alpha=0.5)
+    new_weights = lsqr.update_global_weights(
+        u.module, old_weights, lsqr.args, alpha=0.5
+    )
     # Weights should have been updated
     assert not jnp.array_equal(old_weights, new_weights)
 
@@ -286,12 +289,17 @@ def test_lsqr_with_derivative_terms():
     # Test LSQR with derivative expressions
     mlp = MLPSpace(4, dims=2, rank=0, name="MLP")
     u = FlaxFunction(mlp, "u")
-    du = Grad(u, 0)  # First derivative
-    x = jnp.array([[1.0, 2.0]])
-    lsqr = LSQR((du, x))
+    x = mlp.system.x
+    y = mlp.system.y
+    dudx = u.diff(x, 1)  # First derivative
+    dudy = u.diff(y, 1)  # Second derivative
+    xj = jnp.array([[1.0, 2.0]])
+    lsqr = LSQR((dudx, xj), (dudy, xj))
     # Should have derivative terms in Js
-    derivative_keys = [k for k in lsqr.Js if k[2] > 0]
-    assert len(derivative_keys) > 0
+    key = (id(xj), id(u.module), 1)
+    Js = lsqr.update_arrays(u.module, {key: xj})
+    assert jnp.array_equal(Js[key][:, :, 0], eval_flaxfunction(dudx, xj))
+    assert jnp.array_equal(Js[key][:, :, 1], eval_flaxfunction(dudy, xj))
 
 
 def test_get_flaxfunction_args_none():
@@ -324,8 +332,9 @@ def test_residual_call_no_flaxfunctions():
     f = sp.Integer(5)
     residual = Residual(f, x)
     Js = {}
-    result = residual(Js)
-    assert jnp.allclose(result, 5.0)  # sum([]) - (-5) = 5
+    result = residual(Js, x, 0)
+    assert residual.target == -5.0
+    assert jnp.allclose(result, 0.0)
 
 
 def test_residual_with_symbolic_expression(flax_func):
@@ -363,9 +372,9 @@ def test_lsqr_compute_residuals_simple():
     _mlp = MLPSpace(4, dims=1, rank=0, name="dummy")
     model = nnx.Module()
 
-    residuals = lsqr.compute_residuals(model)
+    residuals = lsqr.compute_residuals(model, lsqr.args)
     assert residuals.shape == (1,)
-    assert residuals[0] > 0  # Should be positive since it's a squared residual
+    assert residuals[0] == 25.0
 
 
 def test_lookup_array():
@@ -428,7 +437,7 @@ def test_residual_with_zero_target():
     f = sp.Integer(5)
     residual = Residual(f, x, target=0)
     Js = {}
-    result = residual(Js)
+    result = residual(Js, residual.x, residual.target)
     assert jnp.allclose(result, 5.0)
 
 

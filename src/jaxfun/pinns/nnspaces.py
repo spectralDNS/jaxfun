@@ -89,6 +89,7 @@ class MLPSpace(NNSpace):
         system: Optional coordinate system (defaults to Cartesian).
         transient: If True, time is appended as input coordinate.
         act_fun: Activation function used for all hidden layers.
+        weight_factorization: Optional weight factorization method.
         name: Space name.
     """
 
@@ -100,12 +101,14 @@ class MLPSpace(NNSpace):
         system: CoordSys = None,
         transient: bool = False,
         act_fun: Callable[[Array], Array] = nnx.tanh,
+        weight_factorization: bool = False,
         *,
         name: str,
     ) -> None:
         """Initialize MLPSpace metadata."""
         NNSpace.__init__(self, dims, rank, transient, system, name)
         self.hidden_size = hidden_size
+        self.weight_factorization = weight_factorization
         self.act_fun = act_fun
 
 

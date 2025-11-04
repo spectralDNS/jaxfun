@@ -40,4 +40,7 @@ def process_allmean(inp: PyTree) -> PyTree:
         global_arr.mean(axis=0)
     )
 
-    return unravel(np.asarray(out.addressable_data(0)))
+    out_0 = unravel(out.addressable_data(0))
+    out_d = jax.device_put(out_0, flat_arr.sharding)
+
+    return out_d

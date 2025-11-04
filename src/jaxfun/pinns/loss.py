@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
+from jax.sharding import NamedSharding, PartitionSpec as P
 
 from jaxfun.coordinates import BaseScalar, get_system
 from jaxfun.typing import Array, LSQR_Tuple
@@ -120,8 +121,18 @@ class Residual:
             t0 = target - t
         t0 = jnp.squeeze(t0)
         assert isinstance(weights, Number | Array)
-        self.weights = weights
-        self.x, self.target = x, t0
+        weights = jnp.array(weights)
+        if weights.sharding != x.sharding and jax.local_device_count() > 1:
+            if len(weights.shape) > 0 and weights.shape[0] == x.shape[0]:
+                weights = jax.device_put(weights, x.sharding)
+            else:
+                weights = jax.device_put(weights, NamedSharding(x.sharding.mesh, P()))
+        if t0.sharding != x.sharding and jax.local_device_count() > 1:
+            if len(t0.shape) > 0 and t0.shape[0] == x.shape[0]:
+                t0 = jax.device_put(t0, x.sharding)
+            else:
+                t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))
+        self.x, self.target, self.weights = x, t0, weights
 
     def __call__(
         self, Js: dict[tuple[int, int, int], Array], x: Array, target: Array
@@ -194,112 +205,209 @@ class LSQR:
                 res.append(f[0])
 
         # Collection of modules and derivative counts for each residual:
-        Jres = [set() for _ in range(len(res))]
+        self.Jres = Jres = [set() for _ in range(len(res))]
         for i, f in enumerate(res):
             f0 = f.doit()
             for s in sp.core.traversal.preorder_traversal(f0):
-                if isinstance(s, sp.Derivative):
-                    func = s.args[0]
-                    ki: int = int(s.derivative_count)
-                    assert hasattr(func, "module")
-                    key = (id(func.module), ki)
+                # look for either derivatives of flax functions or flax functions
+                mod = s.args[0] if isinstance(s, sp.Derivative) else s
+                if hasattr(mod, "module"):
+                    mod = mod.module
+                    ki = int(getattr(s, "derivative_count", "0"))
+                    key = (id(mod), ki)
                     Jres[i].add(key)
-
-                if hasattr(s, "module"):
-                    key = (id(s.module), 0)
-                    Jres[i].add(key)
-        self.Jres = Jres
 
     @property
     def args(self) -> tuple[tuple[Array, Array], ...]:
         return tuple((eq.x, eq.target) for eq in self.residuals)
 
+    @property
+    def local_mesh(self):
+        if jax.local_device_count() == 1:
+            return None
+        assert self.residuals[0].x.sharding.num_devices == jax.local_device_count()
+        return self.residuals[0].x.sharding.mesh
+
     @partial(nnx.jit, static_argnums=0)
     def update_arrays(
-        self, model: nnx.Module, Jsi: dict[tuple[int, int, int], Array]
-    ) -> None:
+        self, module: nnx.Module, Jsi: dict[tuple[int, int, int], Array]
+    ) -> dict[tuple[int, int, int], Array]:
+        """Return all required derivatives of the module evaluated at the
+        collocation points.
+
+        Args:
+            module: The module (nnx.Module)
+            Jsi: dictionary mapping (coll points id, module id, derivative order) to
+            collocation points
+
+        Returns:
+            dict[tuple[int, int, int], Array]: dictionary mapping
+                (coll points id, module id, derivative order) to evaluated derivatives
+        """
         Js = {}
         for k, xs in Jsi.items():
             mod = (
-                model.__getattribute__(str(k[1])) if isinstance(model, Comp) else model
+                module.__getattribute__(str(k[1]))
+                if isinstance(module, Comp)
+                else module
             )
             Js[k] = jacn(mod, k[2])(xs)
 
         return Js
 
     def compute_residual_i(
-        self, model: nnx.Module, args: tuple[tuple[Array, Array], ...], i: int
+        self, module: nnx.Module, args: tuple[tuple[Array, Array], ...], i: int
     ) -> Array:
+        """Return the residuals for equation i
+
+        Args:
+            module: The module (nnx.Module)
+            args: The collocation points and targets for all equations
+            i: The equation number
+
+        Returns:
+            Array: The residuals for equation i
+        """
         Jsi = {(id(args[i][0]),) + k: args[i][0] for k in self.Jres[i]}
-        Js = self.update_arrays(model, Jsi)
+        Js = self.update_arrays(module, Jsi)
         return self.residuals[i](Js, args[i][0], args[i][1])
 
     def compute_residuals(
-        self, model: nnx.Module, args: tuple[tuple[Array, Array], ...]
+        self, module: nnx.Module, args: tuple[tuple[Array, Array], ...]
     ) -> Array:
+        """Return the residuals for all equations
+
+        Args:
+            module: The module (nnx.Module)
+            args: The collocation points and targets for all equations
+
+        Returns:
+            Array: The residuals for all equations
+        """
         Jsi = {
             (id(arg[0]),) + z: arg[0]
             for k, arg in zip(self.Jres, args, strict=True)
             for z in k
         }
-        Js = self.update_arrays(model, Jsi)
+        Js = self.update_arrays(module, Jsi)
         L2 = []
         for res, arg in zip(self.residuals, args, strict=True):
             L2.append((res.weights * res(Js, arg[0], arg[1]) ** 2).mean())
         return jnp.array(L2)
 
     def compute_Li(
-        self, model: nnx.Module, args: tuple[tuple[Array, Array], ...], i: int
-    ):
-        x = self.compute_residual_i(model, args, i)
+        self, module: nnx.Module, args: tuple[tuple[Array, Array], ...], i: int
+    ) -> Array:
+        """Return the loss for equation i
+
+        Args:
+            module: The module (nnx.Module)
+            args: The collocation points and targets for all equations
+            i: The equation number
+
+        Returns:
+            Array: The loss for equation i
+        """
+        x = self.compute_residual_i(module, args, i)
         return (self.residuals[i].weights * x**2).mean()
 
     def norm_grad_loss_i(
-        self, model: nnx.Module, args: tuple[tuple[Array, Array], ...], i: int
+        self, module: nnx.Module, args: tuple[tuple[Array, Array], ...], i: int
     ) -> Array:
+        """Return the norm of the gradient of the loss for equation i
+
+        Args:
+            module: The module (nnx.Module)
+            args: The collocation points and targets for all equations
+            i: The equation number
+
+        Returns:
+            Array: The norm of the gradient of the loss for equation i
+        """
         return jnp.linalg.norm(
-            jax.flatten_util.ravel_pytree(nnx.grad(self.compute_Li)(model, args, i))[0]
+            jax.flatten_util.ravel_pytree(nnx.grad(self.compute_Li)(module, args, i))[0]
         )
 
     def norm_grad_loss(
-        self, model: nnx.Module, args: tuple[tuple[Array, Array], ...]
+        self, module: nnx.Module, args: tuple[tuple[Array, Array], ...]
     ) -> Array:
+        """Return the norms of the gradients of the losses for all equations
+
+        Args:
+            module: The module (nnx.Module)
+            args: The collocation points and targets for all equations
+
+        Returns:
+            Array: The norms of the gradients of the losses for all equations
+        """
         norms = []
         for i in range(len(self.residuals)):
-            norms.append(self.norm_grad_loss_i(model, args, i))
+            norms.append(self.norm_grad_loss_i(module, args, i))
         return jnp.array(norms)
 
     @partial(nnx.jit, static_argnums=0)
     def compute_global_weights(
-        self, model: nnx.Module, args: tuple[tuple[Array, Array], ...]
+        self, module: nnx.Module, args: tuple[tuple[Array, Array], ...]
     ) -> Array:
-        norms = self.norm_grad_loss(model, args)
+        """Return global weights based on the norms of the gradients
+
+        Args:
+            module: The module (nnx.Module)
+            args: The collocation points and targets for all equations
+
+        Returns:
+            Array: The global weights
+        """
+        norms = self.norm_grad_loss(module, args)
         return jnp.sum(norms) / jnp.where(norms < 1e-16, 1e-16, norms)
 
+    @partial(nnx.jit, static_argnums=0)
     def update_global_weights(
         self,
-        model: nnx.Module,
+        module: nnx.Module,
         gw: Array,
         args: tuple[tuple[Array, Array], ...],
         alpha: float,
     ) -> Array:
+        """Return updated global weights
+
+        Args:
+            module: The module (nnx.Module)
+            gw: Current global weights
+            args: The collocation points and targets for all equations
+            alpha: Smoothing parameter (0 < alpha < 1)
+
+        Returns:
+            Array: The updated global weights
+        """
         from jax.experimental import multihost_utils as mh
 
-        new = self.compute_global_weights(model, args)
+        new = self.compute_global_weights(module, args)
         if jax.process_count() > 1:
             new = mh.process_allgather(new).mean(0)
         return new * (1 - alpha) + gw * alpha
 
     @partial(nnx.jit, static_argnums=0)
     def loss_with_gw(
-        self, model: nnx.Module, gw: Array, args: tuple[tuple[Array, Array], ...]
+        self, module: nnx.Module, gw: Array, args: tuple[tuple[Array, Array], ...]
     ) -> Array:
+        """Return the weighted loss with given global weights
+
+        Args:
+            module: The module (nnx.Module)
+            gw: Global weights
+            args: The collocation points and targets for all equations
+
+        Returns:
+            Array: The weighted loss
+        """
         Jsi = {
             (id(arg[0]),) + z: arg[0]
             for k, arg in zip(self.Jres, args, strict=True)
             for z in k
         }
-        Js = self.update_arrays(model, Jsi)
+        Js = self.update_arrays(module, Jsi)
+        self.Js = Js
 
         return (
             jnp.array(
@@ -314,14 +422,22 @@ class LSQR:
         )
 
     @partial(nnx.jit, static_argnums=0)
-    def __call__(self, model: nnx.Module) -> Array:
+    def __call__(self, module: nnx.Module) -> Array:
+        """Return the total least squares loss
+
+        Args:
+            module: The module (nnx.Module)
+
+        Returns:
+            Array: The total least squares loss
+        """
         args = self.args
         Jsi = {
             (id(arg[0]),) + z: arg[0]
             for k, arg in zip(self.Jres, args, strict=True)
             for z in k
         }
-        Js = self.update_arrays(model, Jsi)
+        Js = self.update_arrays(module, Jsi)
         return sum(
             [
                 (eq.weights * eq(Js, arg[0], arg[1]) ** 2).mean()
@@ -377,22 +493,21 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar, ...]) -> Callable[[Array, dict], Arr
     assert len(v) == 1
     v = v.pop()
     return partial(
-        lookup_array,
+        _lookup_array,
         mod=id(v.module),
         i=v.global_index,
         k=int(getattr(f, "derivative_count", "0")),
         variables=getattr(f, "variables", ()),
     )
     # return partial(
-    #    compute_gradient,
-    #    # mod=v.module,
+    #    _compute_gradient,
     #    i=v.global_index,
     #    k=int(getattr(f, "derivative_count", "0")),
     #    variables=getattr(f, "variables", ()),
     # )
 
 
-def compute_gradient(
+def _compute_gradient(
     x: Array,
     mod: nnx.Module,
     i: int = 0,
@@ -403,7 +518,7 @@ def compute_gradient(
     return vjacn(mod, k)(x)[var]
 
 
-def lookup_array(
+def _lookup_array(
     x: Array,
     Js: dict[tuple[int, int, int], Array],
     mod: int = 0,
@@ -411,5 +526,6 @@ def lookup_array(
     k: int = 1,
     variables: tuple[int] = [0],
 ) -> Array:
+    """Lookup precomputed derivative from Js dictionary"""
     var: tuple[int] = tuple((slice(None), i)) + tuple(int(s._id[0]) for s in variables)
     return Js[(id(x), mod, k)][var]

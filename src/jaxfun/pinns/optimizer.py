@@ -7,6 +7,7 @@ import optax
 from flax import nnx
 from jax import Array
 from jax.experimental import multihost_utils as mh
+from jax.sharding import NamedSharding, PartitionSpec as P
 from jaxtyping import PyTree
 
 from jaxfun.pinns import FlaxFunction
@@ -236,7 +237,7 @@ def train(
         module: nnx.Module,
         optimizer: nnx.Optimizer,
         gw: Array,
-        args: list[tuple[Array, Array]],
+        args: tuple[tuple[Array, Array], ...],
     ) -> float:
         def value_fn(m: nnx.Module) -> Array:
             return loss_fn.loss_with_gw(m, gw, args)
@@ -258,9 +259,11 @@ def train(
         return loss
 
     @nnx.jit
-    def value_and_grad(module: nnx.Module, gw: Array) -> tuple[Array, PyTree]:
+    def value_and_grad(
+        module: nnx.Module, gw: Array, args: tuple[tuple[Array, Array], ...]
+    ) -> tuple[Array, PyTree]:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, gw)
+            return loss_fn.loss_with_gw(m, gw, args)
 
         return nnx.value_and_grad(value_fn)(module)
 
@@ -271,9 +274,10 @@ def train(
         module: nnx.Module,
         optimizer: nnx.Optimizer,
         gw: Array,
+        args: tuple[tuple[Array, Array], ...],
     ) -> None:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, gw)
+            return loss_fn.loss_with_gw(m, gw, args)
 
         gd, state = nnx.split(module, nnx.Param)
         unravel = jax.flatten_util.ravel_pytree(state)[1]
@@ -295,11 +299,14 @@ def train(
         return reduced_loss, reduced_gradients
 
     def train_step_distributed(
-        module: nnx.Module, optimizer: nnx.Optimizer, gw: Array
+        module: nnx.Module,
+        optimizer: nnx.Optimizer,
+        gw: Array,
+        args: tuple[tuple[Array, Array], ...],
     ) -> float:
-        loss, gradients = value_and_grad(module, gw)
+        loss, gradients = value_and_grad(module, gw, args)
         loss, gradients = allreduce(loss, gradients)
-        update(loss, gradients, module, optimizer, gw)
+        update(loss, gradients, module, optimizer, gw, args)
         return loss
 
     if allreduce_gradients_and_loss:
@@ -317,10 +324,20 @@ class Trainer:
         assert isinstance(loss_fn, LSQR), "Trainer requires an LSQR loss function"
         self.loss_fn = loss_fn
         self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)
+        if jax.local_device_count() > 1:
+            self.global_weights = jax.device_put(
+                self.global_weights,
+                NamedSharding(loss_fn.local_mesh, P()),
+            )
         self.epoch = 0
 
     def reset_global_weights(self) -> None:
         self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)
+        if jax.local_device_count() > 1:
+            self.global_weights = jax.device_put(
+                self.global_weights,
+                NamedSharding(self.loss_fn.local_mesh, P()),
+            )
 
     def allreduce(self, module: nnx.Module) -> None:
         """Allreduce (average) all parameters across processes"""

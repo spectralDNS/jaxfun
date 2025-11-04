@@ -10,12 +10,12 @@ from jaxfun.operators import Grad
 from jaxfun.pinns.loss import (
     LSQR,
     Residual,
+    _lookup_array,
     eval_flaxfunction,
     expand,
     get_flaxfunction_args,
     get_flaxfunctions,
     get_fn,
-    lookup_array,
 )
 from jaxfun.pinns.module import FlaxFunction, MLPSpace
 
@@ -261,7 +261,7 @@ def test_get_fn_complex_number():
     assert result == 1 + 2j
 
 
-def test_lookup_array_with_multiple_variables():
+def test__lookup_array_with_multiple_variables():
     x = jnp.array([[1.0, 2.0, 3.0]])
     key = (id(x), 789, 1)
     mock_array = jnp.array([[[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]])
@@ -272,7 +272,7 @@ def test_lookup_array_with_multiple_variables():
             self._id = (id_val,)
 
     variables = (MockVar(0), MockVar(1))
-    result = lookup_array(x, Js, mod=789, i=1, k=1, variables=variables)
+    result = _lookup_array(x, Js, mod=789, i=1, k=1, variables=variables)
     expected = mock_array[slice(None), 1, 0, 1]
     assert jnp.allclose(result, expected)
 
@@ -377,19 +377,19 @@ def test_lsqr_compute_residuals_simple():
     assert residuals[0] == 25.0
 
 
-def test_lookup_array():
+def test__lookup_array():
     x = jnp.array([[1.0, 2.0]])
     # Create mock Js dict
     key = (id(x), 123, 0)
     mock_array = jnp.array([[[1.0, 2.0], [3.0, 4.0]]])
     Js = {key: mock_array}
 
-    result = lookup_array(x, Js, mod=123, i=0, k=0, variables=())
+    result = _lookup_array(x, Js, mod=123, i=0, k=0, variables=())
     expected = mock_array[slice(None), 0]
     assert jnp.allclose(result, expected)
 
 
-def test_lookup_array_with_variables():
+def test__lookup_array_with_variables():
     x = jnp.array([[1.0, 2.0]])
     key = (id(x), 456, 1)
     mock_array = jnp.array([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]])
@@ -401,7 +401,7 @@ def test_lookup_array_with_variables():
             self._id = (id_val,)
 
     variables = (MockVar(1),)
-    result = lookup_array(x, Js, mod=456, i=1, k=1, variables=variables)
+    result = _lookup_array(x, Js, mod=456, i=1, k=1, variables=variables)
     expected = mock_array[slice(None), 1, 1]
     assert jnp.allclose(result, expected)
 

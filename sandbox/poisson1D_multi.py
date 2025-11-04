@@ -8,6 +8,8 @@ jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_num_cpu_devices", 2)
 
 
+import socket
+
 import sympy as sp
 from flax import nnx
 
@@ -27,8 +29,20 @@ def initialize_distributed():
     if world == 1:
         return
 
+    # Rank 0 chooses a free TCP port on localhost
+    if rank == 0:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        host, port = s.getsockname()
+        s.close()
+        coord = f"{host}:{port}"
+    else:
+        coord = None
+    coord = comm.bcast(coord, root=0)
+
     # Initialize jax.distributed
     jdist.initialize(
+        coordinator_address=coord,
         num_processes=world,
         process_id=rank,
     )
@@ -74,17 +88,10 @@ w = FlaxFunction(V, name="w")
 x = V.system.x
 ue = sp.sin(x) + x**2
 
-w.module = jax.tree.map(
-    lambda f: jax.device_put(f, NamedSharding(local_mesh, P())), w.module
-)
-
 # Each process gets N // world points, total global shape is (N, 1)
 N = 1000
 N_PER_PROCESS = N // jax.process_count()
 global_shape = (N, 1)
-
-# Each local device get N // jax.device_count() points
-N_PER_DEVICE = N // jax.device_count()
 
 # Create local mesh on this process
 mesh = Line(
@@ -94,7 +101,7 @@ mesh = Line(
 # Get local data points of shape (N_PER_PROCESS, 1), that reside on single local device
 x_process = mesh.get_points_inside_domain("random")
 
-# Shard this local data across local devices
+# Shard the local data across local devices
 x_device = jax.device_put(x_process, local_batch)
 
 # Create global array just for visualization (not used in computation)
@@ -131,15 +138,10 @@ opt_lbfgs = lbfgs(w, memory_size=20)
 opt_hess = GaussNewton(w)
 trainer = Trainer(loss_fn)
 
-trainer.global_weights = jax.device_put(
-    trainer.global_weights, NamedSharding(local_mesh, P())
-)
-for res in loss_fn.residuals:
-    res.target = jax.device_put(res.target, NamedSharding(local_mesh, P()))
-    res.weights = jax.device_put(res.weights, NamedSharding(local_mesh, P()))
-
 t0 = time.time()
-# Train with periodic allreduce
+loss = loss_fn(w.module)
+print("Initial loss:", loss, loss.sharding)
+print("kernel", w.module.linear_in.kernel.sharding)
 
 trainer.train(
     opt_adam,
@@ -148,9 +150,14 @@ trainer.train(
     epoch_print=100,
     allreduce_grads_and_loss=True,
     allreduce_module_freq=1,
+    update_global_weights=10,
     abs_limit_change=0,
 )
 print(f"Time Adam {time.time() - t0:.1f}s")
+loss = loss_fn(w.module)
+print("loss", loss, loss.sharding)
+print("kernel", w.module.linear_in.kernel.sharding)
+
 trainer.train(
     opt_lbfgs,
     1,
@@ -170,7 +177,6 @@ trainer.train(
 )
 loss = loss_fn(w.module)
 print("loss", loss, loss.sharding)
-print("gw", trainer.global_weights.sharding)
 print(f"LBFS time {time.time() - t0:.1f}s")
 # trainer.train(
 #    opt_hess,

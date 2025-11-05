@@ -237,10 +237,11 @@ def train(
         module: nnx.Module,
         optimizer: nnx.Optimizer,
         gw: Array,
-        args: tuple[tuple[Array, Array], ...],
+        xs: tuple[Array],
+        targets: tuple[Array],
     ) -> float:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, args, gw)
+            return loss_fn.loss_with_gw(m, gw, xs, targets)
 
         loss, gradients = nnx.value_and_grad(value_fn)(module)
         gd, state = nnx.split(module, nnx.Param)
@@ -260,10 +261,10 @@ def train(
 
     @nnx.jit
     def value_and_grad(
-        module: nnx.Module, gw: Array, args: tuple[tuple[Array, Array], ...]
+        module: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
     ) -> tuple[Array, PyTree]:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, args, gw)
+            return loss_fn.loss_with_gw(m, gw, xs, targets)
 
         return nnx.value_and_grad(value_fn)(module)
 
@@ -274,10 +275,11 @@ def train(
         module: nnx.Module,
         optimizer: nnx.Optimizer,
         gw: Array,
-        args: tuple[tuple[Array, Array], ...],
+        xs: tuple[Array],
+        targets: tuple[Array],
     ) -> None:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, args, gw)
+            return loss_fn.loss_with_gw(m, gw, xs, targets)
 
         gd, state = nnx.split(module, nnx.Param)
         unravel = jax.flatten_util.ravel_pytree(state)[1]
@@ -302,11 +304,12 @@ def train(
         module: nnx.Module,
         optimizer: nnx.Optimizer,
         gw: Array,
-        args: tuple[tuple[Array, Array], ...],
+        xs: tuple[Array],
+        targets: tuple[Array],
     ) -> float:
-        loss, gradients = value_and_grad(module, gw, args)
+        loss, gradients = value_and_grad(module, gw, xs, targets)
         loss, gradients = allreduce(loss, gradients)
-        update(loss, gradients, module, optimizer, gw, args)
+        update(loss, gradients, module, optimizer, gw, xs, targets)
         return loss
 
     if allreduce_gradients_and_loss:
@@ -418,10 +421,10 @@ class Trainer:
             self.loss_fn, allreduce_grads_and_loss and jax.process_count() > 1
         )
 
-        args = self.loss_fn.args
+        xs, targets = self.loss_fn.args  # Extract points and targets for tracing
         loss_old = 1.0
         for epoch in range(1, num + 1):
-            loss = train_step(module, opt, self.global_weights, args)
+            loss = train_step(module, opt, self.global_weights, xs, targets)
 
             if epoch % epoch_print == 0 and rank == 0:
                 print(f"Epoch {epoch} {name}, loss: {loss}")

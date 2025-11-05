@@ -209,6 +209,7 @@ class LSQR:
         self.xs = {id(eq.x): eq.x for eq in self.residuals}
         x_keys = list(self.xs.keys())
         self.x_ids = tuple(x_keys.index(id(eq.x)) for eq in self.residuals)
+        self.Js = {}
 
     @property
     def args(self) -> tuple[tuple[Array], tuple[Array]]:
@@ -222,7 +223,8 @@ class LSQR:
         assert self.residuals[0].x.sharding.num_devices == jax.local_device_count()
         return self.residuals[0].x.sharding.mesh
 
-    def compute_residual_i(
+    @partial(nnx.jit, static_argnums=(0, 4))
+    def _compute_residual_i(
         self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array], i: int
     ) -> Array:
         """Return the residuals for equation i
@@ -237,30 +239,37 @@ class LSQR:
         Returns:
             Array: The residuals for equation i
         """
+        return self.residuals[i](xs[self.x_ids[i]], targets[i], module, Js=self.Js)
+
+    def compute_residual_i(self, module: nnx.Module, i: int) -> Array:
+        """Return the residuals for equation i
+
+        Args:
+            module: The module (nnx.Module)
+            i: The equation number
+
+        Returns:
+            Array: The residuals for equation i
+        """
+        xs, targets = self.args
         return self.residuals[i](xs[self.x_ids[i]], targets[i], module, Js={})
 
-    def compute_residuals(
-        self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array]
-    ) -> Array:
+    def compute_residuals(self, module: nnx.Module) -> Array:
         """Return the residuals for all equations
 
         Args:
             module: The module (nnx.Module)
-            xs: All the collocation arrays used for all equations (not necessarily same
-                length as self.residuals)
-            targets: Targets for all residuals (same length as self.residuals)
 
         Returns:
             Array: The residuals for all equations
         """
-        self.Js = {}
+        xs, targets = self.args
         L2 = []
         for res, target, x_id in zip(self.residuals, targets, self.x_ids, strict=True):
-            L2.append(
-                (res.weights * res(xs[x_id], target, module, Js=self.Js) ** 2).mean()
-            )
+            L2.append((res.weights * res(xs[x_id], target, module, Js={}) ** 2).mean())
         return jnp.array(L2)
 
+    @partial(nnx.jit, static_argnums=(0, 4))
     def compute_Li(
         self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array], i: int
     ) -> Array:
@@ -276,9 +285,10 @@ class LSQR:
         Returns:
             Array: The loss for equation i
         """
-        x = self.compute_residual_i(module, xs, targets, i)
+        x = self._compute_residual_i(module, xs, targets, i)
         return (self.residuals[i].weights * x**2).mean()
 
+    @partial(nnx.jit, static_argnums=(0, 4))
     def norm_grad_loss_i(
         self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array], i: int
     ) -> Array:
@@ -300,6 +310,7 @@ class LSQR:
             )[0]
         )
 
+    @partial(nnx.jit, static_argnums=0)
     def norm_grad_loss(
         self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array]
     ) -> Array:
@@ -337,11 +348,14 @@ class LSQR:
         norms = self.norm_grad_loss(module, xs, targets)
         return jnp.sum(norms) / jnp.where(norms < 1e-16, 1e-16, norms)
 
+    @partial(nnx.jit, static_argnums=0)
     def update_global_weights(
         self,
         module: nnx.Module,
         gw: Array,
         alpha: float,
+        xs: tuple[Array],
+        targets: tuple[Array],
     ) -> Array:
         """Return updated global weights
 
@@ -355,7 +369,7 @@ class LSQR:
         """
         from jax.experimental import multihost_utils as mh
 
-        new = self.compute_global_weights(module, *self.args)
+        new = self.compute_global_weights(module, xs, targets)
         if jax.process_count() > 1:
             new = mh.process_allgather(new).mean(0)
         return new * (1 - alpha) + gw * alpha

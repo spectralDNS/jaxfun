@@ -433,7 +433,7 @@ class Trainer:
             loss_old = loss
             if update_global_weights > 0 and epoch % update_global_weights == 0:
                 self.global_weights = self.loss_fn.update_global_weights(
-                    module, self.global_weights, alpha
+                    module, self.global_weights, alpha, xs, targets
                 )
                 if print_global_weights and rank == 0:
                     print("Global weights", self.global_weights)

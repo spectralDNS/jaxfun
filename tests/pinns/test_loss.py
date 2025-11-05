@@ -207,8 +207,11 @@ def test_lsqr_update_global_weights():
     u = FlaxFunction(mlp, "u")
     x = jnp.array([[1.0, 2.0]])
     lsqr = LSQR((u, x), (u - 1, x, -1))
+    xs, targets = lsqr.args
+    gw = jnp.ones(len(lsqr.residuals), dtype=float)
+    _ = lsqr.loss_with_gw(u.module, gw, xs, targets)  # Initialize Js
     old_weights = jnp.ones(len(lsqr.residuals), dtype=float)
-    new_weights = lsqr.update_global_weights(u.module, old_weights, alpha=0.5)
+    new_weights = lsqr.update_global_weights(u.module, old_weights, 0.5, xs, targets)
     # Weights should have been updated
     assert not jnp.array_equal(old_weights, new_weights)
 
@@ -327,7 +330,7 @@ def test_lsqr_compute_residuals_simple():
     _mlp = MLPSpace(4, dims=1, rank=0, name="dummy")
     model = nnx.Module()
 
-    residuals = lsqr.compute_residuals(model, *lsqr.args)
+    residuals = lsqr.compute_residuals(model)
     assert residuals.shape == (1,)
     assert residuals[0] == 25.0
 

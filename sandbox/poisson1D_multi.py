@@ -140,12 +140,10 @@ trainer = Trainer(loss_fn)
 
 t0 = time.time()
 loss = loss_fn(w.module)
-print("Initial loss:", loss, loss.sharding)
-print("kernel", w.module.linear_in.kernel.sharding)
 
 trainer.train(
     opt_adam,
-    1000,
+    100,
     print_final_loss=True,
     epoch_print=100,
     allreduce_grads_and_loss=True,
@@ -154,9 +152,6 @@ trainer.train(
     abs_limit_change=0,
 )
 print(f"Time Adam {time.time() - t0:.1f}s")
-loss = loss_fn(w.module)
-print("loss", loss, loss.sharding)
-print("kernel", w.module.linear_in.kernel.sharding)
 
 trainer.train(
     opt_lbfgs,
@@ -176,8 +171,6 @@ trainer.train(
     allreduce_module_freq=10,
 )
 loss = loss_fn(w.module)
-print("loss", loss, loss.sharding)
-print(f"LBFS time {time.time() - t0:.1f}s")
 # trainer.train(
 #    opt_hess,
 #    10,

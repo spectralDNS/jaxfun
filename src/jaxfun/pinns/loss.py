@@ -361,12 +361,10 @@ class LSQR:
         norms = self.norm_grad_loss(module, args)
         return jnp.sum(norms) / jnp.where(norms < 1e-16, 1e-16, norms)
 
-    @partial(nnx.jit, static_argnums=0)
     def update_global_weights(
         self,
         module: nnx.Module,
         gw: Array,
-        args: tuple[tuple[Array, Array], ...],
         alpha: float,
     ) -> Array:
         """Return updated global weights
@@ -374,7 +372,6 @@ class LSQR:
         Args:
             module: The module (nnx.Module)
             gw: Current global weights
-            args: The collocation points and targets for all equations
             alpha: Smoothing parameter (0 < alpha < 1)
 
         Returns:
@@ -382,7 +379,7 @@ class LSQR:
         """
         from jax.experimental import multihost_utils as mh
 
-        new = self.compute_global_weights(module, args)
+        new = self.compute_global_weights(module, self.args)
         if jax.process_count() > 1:
             new = mh.process_allgather(new).mean(0)
         return new * (1 - alpha) + gw * alpha

@@ -386,14 +386,14 @@ class LSQR:
 
     @partial(nnx.jit, static_argnums=0)
     def loss_with_gw(
-        self, module: nnx.Module, gw: Array, args: tuple[tuple[Array, Array], ...]
+        self, module: nnx.Module, args: tuple[tuple[Array, Array], ...], gw: Array,
     ) -> Array:
         """Return the weighted loss with given global weights
 
         Args:
             module: The module (nnx.Module)
-            gw: Global weights
             args: The collocation points and targets for all equations
+            gw: Global weights
 
         Returns:
             Array: The weighted loss

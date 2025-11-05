@@ -240,7 +240,7 @@ def train(
         args: tuple[tuple[Array, Array], ...],
     ) -> float:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, gw, args)
+            return loss_fn.loss_with_gw(m, args, gw)
 
         loss, gradients = nnx.value_and_grad(value_fn)(module)
         gd, state = nnx.split(module, nnx.Param)
@@ -263,7 +263,7 @@ def train(
         module: nnx.Module, gw: Array, args: tuple[tuple[Array, Array], ...]
     ) -> tuple[Array, PyTree]:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, gw, args)
+            return loss_fn.loss_with_gw(m, args, gw)
 
         return nnx.value_and_grad(value_fn)(module)
 
@@ -277,7 +277,7 @@ def train(
         args: tuple[tuple[Array, Array], ...],
     ) -> None:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, gw, args)
+            return loss_fn.loss_with_gw(m, args, gw)
 
         gd, state = nnx.split(module, nnx.Param)
         unravel = jax.flatten_util.ravel_pytree(state)[1]

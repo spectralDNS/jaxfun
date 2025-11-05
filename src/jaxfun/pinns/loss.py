@@ -404,8 +404,6 @@ class LSQR:
             for z in k
         }
         Js = self.update_arrays(module, Jsi)
-        self.Js = Js
-
         return (
             jnp.array(
                 [

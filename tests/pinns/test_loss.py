@@ -221,9 +221,7 @@ def test_lsqr_update_global_weights():
     x = jnp.array([[1.0, 2.0]])
     lsqr = LSQR((u, x), (u - 1, x, -1))
     old_weights = jnp.ones(len(lsqr.residuals), dtype=float)
-    new_weights = lsqr.update_global_weights(
-        u.module, old_weights, lsqr.args, alpha=0.5
-    )
+    new_weights = lsqr.update_global_weights(u.module, old_weights, alpha=0.5)
     # Weights should have been updated
     assert not jnp.array_equal(old_weights, new_weights)
 

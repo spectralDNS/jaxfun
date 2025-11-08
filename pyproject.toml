@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
   "flax>=0.12",
-  "jax[cuda12]>=0.6",
+  "jax>=0.6",
   "matplotlib>=3.9.3",
   "optax>=0.2.6",
   "pre-commit>=4.3",
@@ -68,4 +68,4 @@ dev = [
 ]
 
 [tool.uv.sources]
-soap-jax = { git = "https://github.com/haydn-jones/SOAP_JAX" }
+soap-jax = { git = "https://github.com/mikaem/SOAP_JAX" }

@@ -226,7 +226,7 @@ class KANMLPSpace(NNSpace):
 
 
 class sPIKANSpace(NNSpace):
-    """Fully spectral Kolmogorov–Arnold style function space.
+    """Fully spectral Kolmogorov-Arnold style function space.
 
     All layers (input + hidden + output) employ spectral bases (e.g.
     Chebyshev). Supports a pure spectral 1D case if hidden_size == 1.

@@ -154,6 +154,7 @@ class TestTrainer:
         # Should have stopped early when loss reached the limit
         final_loss = lsqr_loss_fn(simple_model)
         assert final_loss <= 1.0
+        assert trainer.epoch < 100
 
     def test_trainer_train_early_stopping_abs_limit_change(
         self, simple_model, lsqr_loss_fn
@@ -163,7 +164,7 @@ class TestTrainer:
         optimizer = opt_mod.adam(simple_model, learning_rate=0)  # Zero learning rate
 
         # Train with zero learning rate thus enabling change-based early stopping
-        trainer.train(optimizer, 10)
+        trainer.train(optimizer, 10, abs_limit_change=1e-6)
 
         assert trainer.epoch < 10
 

@@ -10,26 +10,27 @@ from jax.sharding import NamedSharding, PartitionSpec as P
 
 from jaxfun.coordinates import BaseScalar, get_system
 from jaxfun.typing import Array, LSQR_Tuple
-from jaxfun.utils import jacn, lambdify
+from jaxfun.utils import lambdify
 
 from .module import Comp, Function
 
 
-def vjacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
-    """Return vectorized k-th order Jacobian (forward) of a function.
+# Differs from jaxfun.utils.common.jacn in the last if else
+def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
+    """Return vectorized k-th order Jacobian of a function.
 
-    Repeatedly applies jax.jacfwd k times (producing nested Jacobians) and
+    Repeatedly applies jacfwd/jacrev k times (producing nested Jacobians) and
     then vmaps over the leading batch axis if k > 0.
 
     Args:
         fun: Function mapping a scalar/array to an Array.
-        k: Order of repeated jacfwd application (k >= 0).
+        k: Number of derivatives (k >= 0).
 
     Returns:
         Callable producing the k-th order Jacobian for batched inputs.
     """
-    for _ in range(k):
-        fun = jax.jacfwd(fun)
+    for i in range(k):
+        fun = jax.jacfwd(fun) if (i % 2 == 0) else jax.jacrev(fun)
     return jax.vmap(fun, in_axes=0, out_axes=0) if k > 0 else fun
 
 
@@ -37,6 +38,7 @@ def get_flaxfunction_args(a: sp.Expr) -> tuple[sp.Symbol | BaseScalar, ...]:
     for p in sp.core.traversal.iterargs(a):
         if getattr(p, "argument", -1) == 2:
             return p.args
+    return None
 
 
 def get_flaxfunctions(
@@ -49,15 +51,22 @@ def get_flaxfunctions(
     return flax_found
 
 
-def eval_flaxfunction(expr, x: Array) -> Array:
-    f = get_flaxfunctions(expr)
-    assert len(f) == 1
-    f = f.pop()
-    du = jacn(f.module, expr.derivative_count)(x)
-    var: tuple[int] = tuple((slice(None), slice(None))) + tuple(
-        int(s._id[0]) for s in expr.variables
-    )
-    return du[var]
+def evaluate(expr: sp.Expr, x: Array) -> Array:
+    """Evaluate a sympy expression containing FlaxFunctions
+
+    Args:
+        expr: Sympy expression containing FlaxFunctions
+        x: Points where to evaluate the expression (N, D)
+
+    Returns:
+        Array: The evaluated expression at points x
+    """
+    if len(get_flaxfunctions(expr)) == 0:
+        raise ValueError("Expression does not contain any FlaxFunctions")
+    if len(x.shape) == 1:
+        x = x[:, None]
+    r = Residual(expr, x)
+    return r.evaluate(get_flaxfunctions(expr).pop().module)
 
 
 def expand(forms: sp.Expr) -> list[sp.Expr]:
@@ -143,6 +152,17 @@ class Residual:
     ) -> Array:
         return sum([eq(x, module, Js=Js) for eq in self.eqs]) - target
 
+    def evaluate(self, module: nnx.Module) -> Array:
+        """Evaluate the residual at points x using module
+
+        Args:
+            module: The module (nnx.Module)
+
+        Returns:
+            Array: The residuals at points x
+        """
+        return self(self.x, self.target, module)
+
 
 class LSQR:
     """Least squares loss function"""
@@ -223,24 +243,6 @@ class LSQR:
         assert self.residuals[0].x.sharding.num_devices == jax.local_device_count()
         return self.residuals[0].x.sharding.mesh
 
-    @partial(nnx.jit, static_argnums=(0, 4))
-    def _compute_residual_i(
-        self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array], i: int
-    ) -> Array:
-        """Return the residuals for equation i
-
-        Args:
-            module: The module (nnx.Module)
-            xs: All the collocation arrays used for all equations (not necessarily same
-                length as self.residuals)
-            targets: Targets for all residuals (same length as self.residuals)
-            i: The equation number
-
-        Returns:
-            Array: The residuals for equation i
-        """
-        return self.residuals[i](xs[self.x_ids[i]], targets[i], module, Js=self.Js)
-
     def compute_residual_i(self, module: nnx.Module, i: int) -> Array:
         """Return the residuals for equation i
 
@@ -261,7 +263,7 @@ class LSQR:
             module: The module (nnx.Module)
 
         Returns:
-            Array: The residuals for all equations
+            Array: The residuals for all equations (not including global weights)
         """
         xs, targets = self.args
         L2 = []
@@ -275,6 +277,8 @@ class LSQR:
     ) -> Array:
         """Return the loss for equation i
 
+        Does not include the global weight.
+
         Args:
             module: The module (nnx.Module)
             xs: All the collocation arrays used for all equations (not necessarily same
@@ -285,7 +289,7 @@ class LSQR:
         Returns:
             Array: The loss for equation i
         """
-        x = self._compute_residual_i(module, xs, targets, i)
+        x = self.residuals[i](xs[self.x_ids[i]], targets[i], module, Js=self.Js)
         return (self.residuals[i].weights * x**2).mean()
 
     @partial(nnx.jit, static_argnums=(0, 4))
@@ -424,7 +428,9 @@ class LSQR:
         )
 
 
-def get_fn(f: sp.Expr, s: tuple[BaseScalar, ...]) -> Callable[[Array, dict], Array]:
+def get_fn(
+    f: sp.Expr, s: tuple[BaseScalar, ...]
+) -> Callable[[Array, nnx.Module, dict], Array]:
     """Return Sympy Expr as function evaluated by points and gradients
 
     Args:
@@ -432,7 +438,7 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar, ...]) -> Callable[[Array, dict], Arr
         s: Tuple of base scalars used as variables in f
 
     Returns:
-        Callable[[Array, dict], Array]
+        Callable[[Array, nnx.Module, dict], Array]
     """
 
     v = get_flaxfunctions(f)
@@ -489,13 +495,13 @@ def _gradient(
     variables: tuple[int] = [0],
 ) -> Array:
     """Compute or look up k-th order Jacobian of module at points x"""
+    if Js is None:
+        Js = {}
     var: tuple[int] = tuple((slice(None), i)) + tuple(int(s._id[0]) for s in variables)
     key: tuple[int, int, int] = (id(x), mod_id, k)
     if key not in Js:
-        # jax.debug.print(f"Computing array for key {key}")
         module = mod.__getattribute__(str(mod_id)) if isinstance(mod, Comp) else mod
-        z = vjacn(module, k)(x)
+        z = jacn(module, k)(x)
         Js[key] = z
         return z[var]
-    # jax.debug.print(f"Using cached array for key {key}")
     return Js[key][var]

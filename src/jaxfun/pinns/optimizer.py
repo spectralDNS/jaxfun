@@ -12,7 +12,6 @@ from jaxtyping import PyTree
 
 from jaxfun.pinns import FlaxFunction
 from jaxfun.pinns.distributed import process_allmean
-from jaxfun.utils.common import ulp
 
 from .loss import LSQR
 
@@ -147,7 +146,7 @@ def soap(
 
 
 def lbfgs(
-    u: FlaxFunction | nnx.Module, memory_size: int = 20, max_linesearch_steps: int = 25
+    u: FlaxFunction | nnx.Module, memory_size: int = 10, max_linesearch_steps: int = 20
 ) -> nnx.Optimizer:
     """Create an L-BFGS optimizer using optax's limited-memory implementation.
 
@@ -162,7 +161,7 @@ def lbfgs(
     opt = optax.lbfgs(
         memory_size=memory_size,
         linesearch=optax.scale_by_zoom_linesearch(
-            max_linesearch_steps, max_learning_rate=1.0
+            max_linesearch_steps=max_linesearch_steps, initial_guess_strategy="one"
         ),
     )
     opt = NamedOptimizer(
@@ -214,14 +213,7 @@ def GaussNewton(
 def train(
     loss_fn: LSQR, allreduce_gradients_and_loss: bool = False
 ) -> Callable[[nnx.Module, nnx.Optimizer], float]:
-    """Build a single JIT-compiled training step for a loss function.
-
-    The produced function performs:
-      1. Split module into differentiable parameters and auxiliary state.
-      2. Compute loss and gradients (value_and_grad).
-      3. Provide closures for value_fn and Hessian approximation callbacks.
-      4. Update optimizer state.
-      5. Return the scalar loss.
+    """Build a JIT-compiled training step for a loss function.
 
     Args:
         loss_fn: Callable loss object/function (LSQR instance) accepting a module.
@@ -257,6 +249,7 @@ def train(
             value=loss,
             H_loss_fn=H_loss_fn,
         )
+
         return loss
 
     @nnx.jit
@@ -356,8 +349,8 @@ class Trainer:
         epoch_print: int = 100,
         name: str = None,
         module: nnx.Module = None,
-        abs_limit_loss: float = ulp(1000),
-        abs_limit_change: float = ulp(100),
+        abs_limit_loss: float = 0,
+        abs_limit_change: float = 0,
         print_final_loss: bool = False,
         update_global_weights: int = -1,
         print_global_weights: bool = False,
@@ -420,7 +413,7 @@ class Trainer:
         train_step = train(
             self.loss_fn, allreduce_grads_and_loss and jax.process_count() > 1
         )
-
+        allow_early_break = abs_limit_loss > 0 or abs_limit_change > 0
         xs, targets = self.loss_fn.args  # Extract points and targets for tracing
         loss_old = 1.0
         for epoch in range(1, num + 1):
@@ -428,8 +421,9 @@ class Trainer:
 
             if epoch % epoch_print == 0 and rank == 0:
                 print(f"Epoch {epoch} {name}, loss: {loss}")
-            if abs(loss) < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
-                break
+            if allow_early_break:  # noqa: SIM102
+                if loss < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
+                    break
             loss_old = loss
             if update_global_weights > 0 and epoch % update_global_weights == 0:
                 self.global_weights = self.loss_fn.update_global_weights(

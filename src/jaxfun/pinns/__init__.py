@@ -4,7 +4,7 @@ from .embeddings import (
     PeriodEmbs as PeriodEmbs,
 )
 from .freeze import freeze_layer as freeze_layer, unfreeze_layer as unfreeze_layer
-from .loss import LSQR as LSQR
+from .loss import LSQR as LSQR, evaluate as evaluate
 from .mesh import (
     Annulus as Annulus,
     AnnulusPolar as AnnulusPolar,

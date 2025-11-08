@@ -30,25 +30,6 @@ default_bias_init = nnx.initializers.zeros_init()
 default_rngs = nnx.Rngs(11)
 
 
-# Differs from jaxfun.utils.common.jacn in the last if else
-def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
-    """Return vectorized k-th order Jacobian (forward) of a function.
-
-    Repeatedly applies jax.jacfwd k times (producing nested Jacobians) and
-    then vmaps over the leading batch axis if k > 0.
-
-    Args:
-        fun: Function mapping a scalar/array to an Array.
-        k: Order of repeated jacfwd application (k >= 0).
-
-    Returns:
-        Callable producing the k-th order Jacobian for batched inputs.
-    """
-    for _ in range(k):
-        fun = jax.jacfwd(fun)
-    return jax.vmap(fun, in_axes=0, out_axes=0) if k > 0 else fun
-
-
 class RWFLinear(nnx.Module):
     """Linear layer with RWF (Random Weight Factorization) style scaling.
 

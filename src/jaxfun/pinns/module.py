@@ -125,7 +125,7 @@ class RWFLinear(nnx.Module):
 
 
 class KANLayer(nnx.Module):
-    """Single Kolmogorov–Arnold (KAN) spectral expansion layer.
+    """Single Kolmogorov-Arnold (KAN) spectral expansion layer.
 
     Expands each input coordinate (or spectral feature in hidden layers)
     into spectral basis coefficients and applies a linear combination to
@@ -171,12 +171,6 @@ class KANLayer(nnx.Module):
         promote_dtype=dtypes.promote_dtype,
         rngs: nnx.Rngs,
     ):
-        kernel_key = rngs.params()
-        w = kernel_init(
-            kernel_key, (in_features, spectral_size, out_features), param_dtype
-        )
-        self.kernel = nnx.Param(w)
-
         self.in_features = in_features
         self.out_features = out_features
         self.spectral_size = spectral_size
@@ -187,6 +181,15 @@ class KANLayer(nnx.Module):
         self.kernel_init = kernel_init
         self.dot_general = dot_general
         self.promote_dtype = promote_dtype
+
+        kernel_key = rngs.params()
+        w = kernel_init(
+            kernel_key, (in_features, spectral_size, out_features), param_dtype
+        )
+        y = jnp.logspace(0, -min(6, spectral_size), spectral_size, dtype=param_dtype)[
+            None, :, None
+        ]
+        self.kernel = nnx.Param(w * y)
 
         # Select subsystem(s) for per-dimension mapping (input layer only).
         subsystems = (
@@ -201,13 +204,16 @@ class KANLayer(nnx.Module):
         domains = (
             domains if domains is not None else [(-1, 1) for _ in range(in_features)]
         )
+
         self.basespaces = (
             [
                 basespace(spectral_size, domain=domains[i], system=subsystems[i])
                 for i in range(in_features)
             ]
             if not hidden
-            else [basespace(spectral_size, domain=Domain(-1, 1))]
+            else [
+                basespace(spectral_size, domain=Domain(-1, 1))
+            ]  # Hidden domain according to tanh  # noqa: E501
         )
 
     def __call__(self, inputs: Array) -> Array:
@@ -251,7 +257,7 @@ class KANLayer(nnx.Module):
 
 
 class MLP(nnx.Module):
-    """Standard multilayer perceptron (RWFLinear layers + activation)."""
+    """Standard multilayer perceptron ((weighted) Linear layers + activation)."""
 
     def __init__(
         self,
@@ -661,11 +667,16 @@ class sPIKANModule(nnx.Module):
             if isinstance(V.hidden_size, list | tuple)
             else [V.hidden_size]
         )
+        spectral_size = (
+            V.spectral_size
+            if isinstance(V.spectral_size, list | tuple)
+            else [V.spectral_size for _ in range(len(hidden_size) + 1)]
+        )
         self.act_fun = V.act_fun
         self.layer_in = KANLayer(
             V.in_size,
             hidden_size[0],
-            V.spectral_size,
+            spectral_size[0],
             hidden=False,
             basespace=V.basespace,
             domains=V.domains,
@@ -680,7 +691,7 @@ class sPIKANModule(nnx.Module):
                 KANLayer(
                     hidden_size[i],
                     hidden_size[min(i + 1, len(hidden_size) - 1)],
-                    V.spectral_size,
+                    spectral_size[i + 1],
                     hidden=True,
                     basespace=V.basespace,
                     system=V.system,
@@ -699,7 +710,7 @@ class sPIKANModule(nnx.Module):
             self.layer_out = KANLayer(
                 hidden_size[-1],
                 V.out_size,
-                V.spectral_size,
+                spectral_size[-1],
                 hidden=True,
                 basespace=V.basespace,
                 system=V.system,

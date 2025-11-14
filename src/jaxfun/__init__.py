@@ -15,4 +15,9 @@ from .operators import (
     gradient as gradient,
     outer as outer,
 )
-from .utils import Domain as Domain, common as common, fastgl as fastgl
+from .utils import (
+    Domain as Domain,
+    common as common,
+    fastgl as fastgl,
+    lambdify as lambdify,
+)

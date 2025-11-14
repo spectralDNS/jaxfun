@@ -6,7 +6,7 @@ import time
 import jax
 
 # jax.config.update("jax_enable_x64", True)
-jax.config.update("jax_num_cpu_devices", 2)
+jax.config.update("jax_num_cpu_devices", 1)
 
 import sympy as sp
 from flax import nnx
@@ -88,7 +88,7 @@ x = V.system.x
 ue = sp.sin(x * sp.pi)
 
 # Each process gets N // world points, total global shape is (N, 1)
-N = 10000
+N = 256
 N_PER_PROCESS = N // jax.process_count()
 global_shape = (N, 1)
 

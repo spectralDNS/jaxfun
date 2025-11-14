@@ -65,6 +65,7 @@ def evaluate(expr: sp.Expr, x: Array) -> Array:
         raise ValueError("Expression does not contain any FlaxFunctions")
     if len(x.shape) == 1:
         x = x[:, None]
+
     r = Residual(expr, x)
     return r.evaluate(get_flaxfunctions(expr).pop().module)
 
@@ -89,6 +90,7 @@ def expand(forms: sp.Expr) -> list[sp.Expr]:
             consts.append(fi)
         else:
             flaxs.append(fi)
+
     return sp.Add(*consts), flaxs
 
 
@@ -106,14 +108,15 @@ class Residual:
 
         Args:
             f: Sympy expression representing the equation residual. The
-                expression may contain one or several FlaxFunctions
-            x: Collocation points where the residual is evaluated
-            target: Target value of the residual. Defaults to 0.
-            weights: Weights for the residual. Defaults to 1.
+                expression may contain one or several FlaxFunctions.
+            x: Collocation points where the residual is evaluated.
+            target: Target value of the residual.
+            weights: Weights for the residual.
         """
         t, expr = expand(f)
         s = get_flaxfunction_args(f.doit())
         self.eqs = [get_fn(h, s) for h in expr]
+
         # Place all terms without flaxfunctions in the target,
         # because these will not need to be computed more than once
         assert isinstance(target, Number | Array)
@@ -240,6 +243,7 @@ class LSQR:
     def local_mesh(self):
         if jax.local_device_count() == 1:
             return None
+
         assert self.residuals[0].x.sharding.num_devices == jax.local_device_count()
         return self.residuals[0].x.sharding.mesh
 
@@ -410,11 +414,13 @@ class LSQR:
     def __call__(self, module: nnx.Module) -> Array:
         """Return the total least squares loss
 
+        Does not include global weights.
+
         Args:
             module: The module (nnx.Module)
 
         Returns:
-            Array: The total least squares loss
+            Array: The total (unweighted) least squares loss
         """
         xs, targets = self.args
         self.Js = {}
@@ -446,28 +452,29 @@ def get_fn(
     if len(v) == 0:
         # Coefficient independent of basis function
         if len(f.free_symbols) > 0:
-            z = lambdify(s, f)
-            return lambda x, mod, Js=None, z=z: z(*x.T)
+            fun = lambdify(s, f)
+            return lambda x, mod, Js=None, fun=fun: fun(*x.T)
         else:
-            f0 = jnp.array(float(f) if f.is_real else complex(f))
-            return lambda x, mod, Js=None, f=f0: f
+            arr = jnp.array(float(f) if f.is_real else complex(f))
+            return lambda x, mod, Js=None, arr=arr: arr
 
     if isinstance(f, sp.Mul):
         # Multiplication of terms that either contain the basis function or not
-        gi = []
-        gc = []
-        for bii in f.args:
-            v0 = get_flaxfunctions(bii)
+        f_flax = []
+        f_const = []
+        for fx in f.args:
+            v0 = get_flaxfunctions(fx)
             # Collect terms that do not contain the basis function
             if len(v0) == 0:
-                gc.append(bii)
+                f_const.append(fx)
                 continue
-            gi.append(bii)
-        gc = sp.Mul(*gc)
+            f_flax.append(fx)
 
-        return lambda x, mod, Js=None, s=s, f=gc, f0=gi: get_fn(f, s)(
-            x, mod, Js=Js
-        ) * jnp.prod(jnp.array([get_fn(fi, s)(x, mod, Js=Js) for fi in f0]), axis=0)
+        f_const = sp.Mul(*f_const)
+        fun = get_fn(f_const, s)
+        return lambda x, mod, Js=None, s=s, f=f_flax: fun(x, mod, Js=Js) * jnp.prod(
+            jnp.array([get_fn(fi, s)(x, mod, Js=Js) for fi in f]), axis=0
+        )
 
     elif isinstance(f, sp.Pow):
         fi = f.args[0]
@@ -479,9 +486,9 @@ def get_fn(
     return partial(
         _gradient,
         mod_id=id(v.module),
-        i=v.global_index,
+        index=v.global_index,
         k=int(getattr(f, "derivative_count", "0")),
-        variables=getattr(f, "variables", ()),
+        vars=getattr(f, "variables", ()),
     )
 
 
@@ -490,14 +497,14 @@ def _gradient(
     mod: nnx.Module,
     Js: dict[tuple[int, int, int], Array] = None,
     mod_id: int = 0,
-    i: int = 0,
+    index: int = 0,
     k: int = 1,
-    variables: tuple[int] = [0],
+    vars: tuple[int] = [0],
 ) -> Array:
     """Compute or look up k-th order Jacobian of module at points x"""
     if Js is None:
         Js = {}
-    var: tuple[int] = tuple((slice(None), i)) + tuple(int(s._id[0]) for s in variables)
+    var: tuple[int] = tuple((slice(None), index)) + tuple(int(s._id[0]) for s in vars)
     key: tuple[int, int, int] = (id(x), mod_id, k)
     if key not in Js:
         module = mod.__getattribute__(str(mod_id)) if isinstance(mod, Comp) else mod

@@ -252,7 +252,7 @@ class sPIKANSpace(NNSpace):
 
     def __init__(
         self,
-        spectral_size: int,
+        spectral_size: list[int] | int,
         hidden_size: list[int] | int,
         dims: int = 1,
         rank: int = 0,

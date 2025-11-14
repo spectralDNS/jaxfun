@@ -34,12 +34,12 @@ nu = 2.0 / Re
 
 N = 50
 
-mesh = Rectangle(N, N, -1, 1, -1, 1)
-xyi = mesh.get_points_inside_domain("legendre")
-xyb = mesh.get_points_on_domain("legendre")
+mesh = Rectangle(-1, 1, -1, 1)
+xyi = mesh.get_points_inside_domain(N, N, "legendre")
+xyb = mesh.get_points_on_domain(N, N, "legendre")
 xyp = jnp.array([[0.0, 0.0]])
-wi = mesh.get_weights_inside_domain("legendre")
-wb = mesh.get_weights_on_domain("legendre")
+wi = mesh.get_weights_inside_domain(N, N, "legendre")
+wb = mesh.get_weights_on_domain(N, N, "legendre")
 
 V = MLPSpace([30], dims=2, rank=1, name="V")  # Vector space for velocity
 Q = MLPSpace([20], dims=2, rank=0, name="Q")  # Scalar space for pressure

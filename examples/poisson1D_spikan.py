@@ -25,8 +25,8 @@ x = V.system.x
 ue = 5 + sp.summation(sp.sin(i * x), (i, 1, 3))
 
 N = w.dim
-mesh = Line(N, domain.lower, domain.upper)
-xi = mesh.get_points_inside_domain("random")
+mesh = Line(domain.lower, domain.upper)
+xi = mesh.get_points_inside_domain(N, "random")
 xb = mesh.get_points_on_domain()
 
 eq = Div(Grad(w)) - Div(Grad(ue))

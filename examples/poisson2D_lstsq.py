@@ -26,11 +26,12 @@ V = TensorProduct(C, C, name="V")
 w = FlaxFunction(V, name="w")
 
 N = 32
-mesh = Rectangle(N, N, -1, 1, -1, 1)
-xyi = mesh.get_points_inside_domain(C.__class__.__name__.lower())
-xyb = mesh.get_points_on_domain(C.__class__.__name__.lower())
-wi = mesh.get_weights_inside_domain(C.__class__.__name__.lower())
-wb = mesh.get_weights_on_domain(C.__class__.__name__.lower())
+mesh = Rectangle(-1, 1, -1, 1)
+points = C.__class__.__name__.lower()
+xyi = mesh.get_points_inside_domain(N, N, points)
+xyb = mesh.get_points_on_domain(N, N, points, corners=True)
+wi = mesh.get_weights_inside_domain(N, N, points)
+wb = mesh.get_weights_on_domain(N, N, points, corners=True)
 
 x, y = V.system.base_scalars()
 ue = (1 - x**2) * (1 - y**2)  # manufactured solution

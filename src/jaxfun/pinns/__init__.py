@@ -10,6 +10,7 @@ from .mesh import (
     AnnulusPolar as AnnulusPolar,
     Line as Line,
     Rectangle as Rectangle,
+    Square_with_hole as Square_with_hole,
     UnitLine as UnitLine,
     UnitSquare as UnitSquare,
 )

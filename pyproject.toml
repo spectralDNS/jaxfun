@@ -65,6 +65,7 @@ dev = [
   "plotly>=6.3.0",
   "marimo[recommended]>=0.15.2",
   "pre-commit>=4.3.0",
+  "shapely>=2.1.0",
 ]
 
 [tool.uv.sources]

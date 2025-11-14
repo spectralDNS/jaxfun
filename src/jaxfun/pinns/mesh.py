@@ -435,3 +435,138 @@ class Annulus(AnnulusPolar):
         """Return boundary Cartesian points."""
         xc = AnnulusPolar.get_points_on_domain(self, kind, False)
         return self.convert_to_cartesian(xc)
+
+
+@dataclass
+class Square_with_hole:
+    """Square domain with a circular hole.
+
+    The outer boundary is a square defined by corners (left, bottom) and (right, top).
+    The hole is a circle with center (cx, cy) and radius r. Sampling uses:
+      - Interior: rejection sampling from the bounding box using a prepared polygon
+      - Boundary: length-proportional sampling along all boundary segments
+          (outer + hole)
+
+    Attributes:
+        n_interior: Number of interior points to sample.
+        n_boundary: Number of boundary points to sample (distributed by arclength).
+        left, right, bottom, top: Square bounds (default: [-1, 1] x [-1, 1]).
+        cx, cy, r: Circle center and radius (default: (0.3, 0.0), r=0.4).
+        hole_resolution: Polygonization resolution for the circle boundary.
+        seed: Seed passed to NumPy's default_rng for reproducibility.
+    """
+
+    n_interior: int
+    n_boundary: int
+    left: float = -1.0
+    right: float = 1.0
+    bottom: float = -1.0
+    top: float = 1.0
+    cx: float = 0.3
+    cy: float = 0.0
+    r: float = 0.4
+    hole_resolution: int = 128
+    seed: int = 101
+
+    def make_polygon(self):
+        from shapely.geometry import Point, Polygon
+
+        outer = [
+            (self.left, self.bottom),
+            (self.right, self.bottom),
+            (self.right, self.top),
+            (self.left, self.top),
+        ]
+        hole = Point(self.cx, self.cy).buffer(self.r, resolution=self.hole_resolution)
+        poly = Polygon(outer, holes=[list(hole.exterior.coords)[:-1]])
+        if not poly.is_valid or poly.area <= 0.0:
+            raise ValueError(
+                "Invalid polygon configuration (check square bounds and hole)."
+            )
+        return poly
+
+    def get_points_inside_domain(self, kind: SampleMethod = "random") -> Array:
+        """Return interior points (n_interior, 2) inside the square-with-hole."""
+        assert kind in ("random",), (
+            "Only 'random' interior sampling is supported for polygons."
+        )
+        from shapely.geometry import Point
+        from shapely.prepared import prep
+
+        poly = self.make_polygon()
+        prepared = prep(poly)
+        lo_x, lo_y, hi_x, hi_y = poly.bounds
+        rng = np.random.default_rng(self.seed)
+
+        pts = []
+        # Chunk size for batched rejection; scale with target for efficiency
+        chunk = max(8192, self.n_interior // 2)
+        len_pts = lambda p: sum(len(pi) for pi in p)
+        while len_pts(pts) < self.n_interior:
+            k = max(chunk, self.n_interior - len_pts(pts))
+            cand = np.empty((k, 2), dtype=float)
+            cand[:, 0] = rng.uniform(lo_x, hi_x, size=k)
+            cand[:, 1] = rng.uniform(lo_y, hi_y, size=k)
+            mask = np.fromiter(
+                (prepared.contains(Point(x, y)) for x, y in cand),
+                count=k,
+                dtype=bool,
+            )
+            sel = cand[mask]
+            if sel.size:
+                need = self.n_interior - len_pts(pts)
+                pts.append(sel[:need])
+
+        return jnp.asarray(np.vstack(pts))
+
+    def get_points_on_domain(
+        self, kind: SampleMethod = "random", corners: bool = False
+    ) -> Array:
+        """Return boundary points (n_boundary, 2) along outer square and circular
+        hole.
+        """
+        assert kind in ("random",), (
+            "Only 'random' boundary sampling is supported for polygons."
+        )
+
+        poly = self.make_polygon()
+        rings = [poly.exterior] + list(poly.interiors)
+
+        # Build edge list for all rings
+        edges = []
+        lengths = []
+        for ring in rings:
+            coords = np.asarray(ring.coords)  # closed ring; last point == first
+            A = coords[:-1]
+            B = coords[1:]
+            segs = np.stack([A, B], axis=1)  # (m, 2, 2)
+            L = np.linalg.norm(B - A, axis=1)
+            edges.append(segs)
+            lengths.append(L)
+
+        edges = np.concatenate(edges, axis=0)
+        lengths = np.concatenate(lengths, axis=0)
+        probs = lengths / lengths.sum()
+
+        rng = np.random.default_rng(self.seed + 1)  # different stream than interior
+        counts = rng.multinomial(self.n_boundary, probs)
+
+        pts = []
+        for (a, b), m in zip(edges, counts, strict=True):
+            if m == 0:
+                continue
+            t = rng.random(m)
+            pts.append(a + t[:, None] * (b - a))
+
+        if corners:
+            c = np.array(
+                [
+                    [self.left, self.bottom],
+                    [self.right, self.bottom],
+                    [self.right, self.top],
+                    [self.left, self.top],
+                ],
+                dtype=float,
+            )
+            pts.append(c)
+        return jnp.asarray(np.vstack(pts))

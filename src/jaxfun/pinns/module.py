@@ -186,9 +186,7 @@ class KANLayer(nnx.Module):
         w = kernel_init(
             kernel_key, (in_features, spectral_size, out_features), param_dtype
         )
-        y = jnp.logspace(0, -min(6, spectral_size), spectral_size, dtype=param_dtype)[
-            None, :, None
-        ]
+        y = jnp.logspace(0, -min(6, spectral_size), spectral_size)[None, :, None]
         self.kernel = nnx.Param(w * y)
 
         # Select subsystem(s) for per-dimension mapping (input layer only).

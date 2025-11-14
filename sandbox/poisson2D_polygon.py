@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
 import numpy as np
-from shapely.geometry import Point as ShpPoint
+from shapely.geometry import Point
 from shapely.prepared import prep
 
 from jaxfun import Div, Grad
@@ -60,7 +60,7 @@ def plot_solution_all(mesh, X, values, xb=None, levels=30):
     # Mask triangles whose centroid lies outside the polygon (handles holes)
     prepared = prep(poly)
     centroids = pts[tri.triangles].mean(axis=1)
-    mask = np.array([not prepared.contains(ShpPoint(c[0], c[1])) for c in centroids])
+    mask = np.array([not prepared.contains(Point(c[0], c[1])) for c in centroids])
     tri.set_mask(mask)
 
     fig, ax = plt.subplots(figsize=(6, 6))

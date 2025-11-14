@@ -54,16 +54,17 @@ trainer.train(opt_hess, 10, epoch_print=1, abs_limit_change=ulp(1000))
 print("time", time.time() - t0)
 
 uj = lambdify((x, y), ue)(*xyi.T)
-fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(10, 5))
-ax0.contourf(
-    xyi[:, 0].reshape((N, N)), xyi[:, 1].reshape((N, N)), w(xyi).reshape((N, N))
-)
-ax1.contourf(xyi[:, 0].reshape((N, N)), xyi[:, 1].reshape((N, N)), uj.reshape((N, N)))
-# plt.colorbar()
-
 error = jnp.linalg.norm(w.module(xyi)[:, 0] - uj) / jnp.sqrt(len(xyi))
 print("Error", error)
 
 if "PYTEST" in os.environ:
     assert error < ulp(1000), error
     sys.exit(1)
+
+
+fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(10, 5))
+ax0.contourf(
+    xyi[:, 0].reshape((N, N)), xyi[:, 1].reshape((N, N)), w(xyi).reshape((N, N))
+)
+ax1.contourf(xyi[:, 0].reshape((N, N)), xyi[:, 1].reshape((N, N)), uj.reshape((N, N)))
+# plt.colorbar()

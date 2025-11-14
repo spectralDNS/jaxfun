@@ -16,9 +16,9 @@ from jaxfun.pinns.optimizer import adam, lbfgs
 V = MLPSpace([12, 12, 12], dims=2, rank=0, name="V")
 w = FlaxFunction(V, name="w")
 
-mesh = Square_with_hole(6000, 400)
-xi = mesh.get_points_inside_domain()
-xb = mesh.get_points_on_domain(corners=True)
+mesh = Square_with_hole()
+xi = mesh.get_points_inside_domain(6000)
+xb = mesh.get_points_on_domain(400, corners=True)
 
 x, y = V.system.base_scalars()
 
@@ -47,7 +47,7 @@ w_all = w(X_all)
 def plot_solution_all(mesh, X, values, xb=None, levels=30):
     """
     mesh   : mesh object (for polygon)
-    X      : all sample points (N,2) = vstack((xi, xb))
+    X      : all sample points (N, 2) = vstack((xi, xb))
     values : solution values at X (N,)
     xb     : optional boundary points to overlay as red dots
     """

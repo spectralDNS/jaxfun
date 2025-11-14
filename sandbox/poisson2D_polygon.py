@@ -44,7 +44,7 @@ X_all = jnp.vstack((xi, xb))
 w_all = w(X_all)
 
 
-def plot_solution_all(mesh, X, values, xb=None, levels=30):
+def plot_solution(mesh, X, values, xb=None, levels=30):
     """
     mesh   : mesh object (for polygon)
     X      : all sample points (N, 2) = vstack((xi, xb))
@@ -52,23 +52,20 @@ def plot_solution_all(mesh, X, values, xb=None, levels=30):
     xb     : optional boundary points to overlay as red dots
     """
     poly = mesh.make_polygon()
-    pts = np.asarray(X)
-    vals = np.asarray(values).reshape(-1)
 
-    tri = mtri.Triangulation(pts[:, 0], pts[:, 1])
+    tri = mtri.Triangulation(X[:, 0], X[:, 1])
 
     # Mask triangles whose centroid lies outside the polygon (handles holes)
     prepared = prep(poly)
-    centroids = pts[tri.triangles].mean(axis=1)
+    centroids = X[tri.triangles].mean(axis=1)
     mask = np.array([not prepared.contains(Point(c[0], c[1])) for c in centroids])
     tri.set_mask(mask)
 
     fig, ax = plt.subplots(figsize=(6, 6))
-    tpc = ax.tripcolor(tri, vals, shading="gouraud", cmap="viridis")
-    ax.tricontour(tri, vals, levels=levels, colors="k", linewidths=0.5)
+    tpc = ax.tripcolor(tri, values, shading="gouraud", cmap="viridis")
+    ax.tricontour(tri, values, levels=levels, colors="k", linewidths=0.5)
     if xb is not None:
-        xb_np = np.asarray(xb)
-        ax.plot(xb_np[:, 0], xb_np[:, 1], "r.", ms=2, label="boundary")
+        ax.plot(xb[:, 0], xb[:, 1], "r.", ms=2, label="boundary")
         ax.legend(loc="lower left")
     ax.set_aspect("equal")
     ax.set_title("Solution w(x,y)")
@@ -76,4 +73,4 @@ def plot_solution_all(mesh, X, values, xb=None, levels=30):
     plt.show()
 
 
-plot_solution_all(mesh, X_all, w_all, xb=xb, levels=30)
+plot_solution(mesh, X_all, w_all, xb=xb, levels=30)

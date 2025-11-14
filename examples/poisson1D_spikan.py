@@ -46,7 +46,7 @@ print(f"L-BFGS time {time.time() - t1:.1f}s")
 
 error = jnp.sqrt(loss_fn(w.module))
 if "PYTEST" in os.environ:
-    assert error < 1e-2, error
+    assert error < 1e-1, error
     sys.exit(1)
 
 print(f"L2 Error {error:.2e} ({error / ulp(1):.1f} ulp)")

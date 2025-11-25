@@ -180,18 +180,18 @@ class OrthogonalSpace(BaseSpace):
         return a
 
     @property
-    def dim(self):
+    def dim(self) -> int:
         """Return total number of raw modes N."""
         return self.N
 
     @property
-    def dims(self):
+    def dims(self) -> int:
         """Return spatial dimensionality (always 1)."""
         return 1
 
     @property
     def num_dofs(self) -> int:
-        """Return number of active degrees of freedom (== dim)."""
+        """Return number of active degrees of freedom."""
         return self.dim
 
     @property

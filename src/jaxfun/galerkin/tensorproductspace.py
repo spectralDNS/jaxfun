@@ -96,9 +96,9 @@ class TensorProductSpace:
         return tuple([space.N for space in self.basespaces])
 
     @property
-    def dim(self) -> tuple[int, ...]:
-        """Return tuple of total modes per axis (may differ from N)."""
-        return tuple(space.dim for space in self.basespaces)
+    def dim(self) -> int:
+        """Return total number of modes."""
+        return int(jnp.prod(jnp.array([space.dim for space in self.basespaces])))
 
     @property
     def num_dofs(self) -> tuple[int, ...]:
@@ -252,7 +252,7 @@ class TensorProductSpace:
         """Evaluate expansion at scattered points (per-axis samples).
 
         Args:
-            x: Tuple-like array of per-axis coordinates stacked.
+            x: Array of per-axis coordinates stacked (N, d).
             c: Coefficient tensor.
             use_einsum: Whether to use einsum contraction.
 
@@ -404,6 +404,8 @@ class VectorTensorProductSpace:
         tensorname: Joined printable representation.
     """
 
+    is_transient = False
+
     def __init__(
         self,
         tensorspace: TensorProductSpace | tuple[TensorProductSpace],
@@ -438,6 +440,35 @@ class VectorTensorProductSpace:
     def dims(self) -> int:
         """Return spatial dimension of each component space."""
         return len(self.tensorspaces[0])
+
+    @property
+    def dim(self) -> int:
+        """Return total number of modes."""
+        return sum([space.dim for space in self.tensorspaces])
+
+    @property
+    def num_dofs(self) -> tuple[int, ...]:
+        """Return tuple of active degrees of freedom per axis."""
+        return (self.dims,) + self.tensorspaces[0].num_dofs
+
+    @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
+    def evaluate(self, x: Array, c: Array, use_einsum: bool) -> Array:
+        """Evaluate vector expansion at scattered points.
+
+        Args:
+            x: Array of per-axis coordinates stacked (N, d).
+            c: Coefficient array shaped (dims, N0, N1, ...).
+            use_einsum: Whether to use einsum contraction.
+
+        Returns:
+            Evaluated values with shape determined by leading dims of x.
+        """
+        vals = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = c[i]
+            vi = space.evaluate(x, ci, use_einsum)
+            vals.append(vi)
+        return jnp.array(vals)
 
 
 def TensorProduct(

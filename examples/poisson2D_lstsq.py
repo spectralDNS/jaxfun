@@ -26,11 +26,12 @@ V = TensorProduct(C, C, name="V")
 w = FlaxFunction(V, name="w")
 
 N = 32
-mesh = Rectangle(N, N, -1, 1, -1, 1)
-xyi = mesh.get_points_inside_domain(C.__class__.__name__.lower())
-xyb = mesh.get_points_on_domain(C.__class__.__name__.lower())
-wi = mesh.get_weights_inside_domain(C.__class__.__name__.lower())
-wb = mesh.get_weights_on_domain(C.__class__.__name__.lower())
+mesh = Rectangle(-1, 1, -1, 1)
+points = C.__class__.__name__.lower()
+xyi = mesh.get_points_inside_domain(N, N, points)
+xyb = mesh.get_points_on_domain(N, N, points, corners=True)
+wi = mesh.get_weights_inside_domain(N, N, points)
+wb = mesh.get_weights_on_domain(N, N, points, corners=True)
 
 x, y = V.system.base_scalars()
 ue = (1 - x**2) * (1 - y**2)  # manufactured solution
@@ -48,7 +49,7 @@ trainer.train(opt_adam, 1000, epoch_print=100)
 opt_lbfgs = lbfgs(w, memory_size=20)
 trainer.train(opt_lbfgs, 1000, epoch_print=100, update_global_weights=100)
 
-opt_hess = GaussNewton(w, use_lstsq=True)
+opt_hess = GaussNewton(w, use_lstsq=True, use_GN=True)
 trainer.train(opt_hess, 10, epoch_print=1, abs_limit_change=ulp(1000))
 
 print("time", time.time() - t0)

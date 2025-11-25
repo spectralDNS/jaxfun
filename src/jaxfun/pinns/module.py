@@ -20,6 +20,10 @@ from sympy.vector import VectorAdd
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseTime, CoordSys
 from jaxfun.galerkin import Chebyshev
+from jaxfun.galerkin.tensorproductspace import (
+    TensorProductSpace,
+    VectorTensorProductSpace,
+)
 from jaxfun.utils.common import Domain, lambdify
 
 from .embeddings import Embedding
@@ -28,6 +32,22 @@ from .nnspaces import KANMLPSpace, MLPSpace, PirateSpace, sPIKANSpace
 default_kernel_init = nnx.initializers.glorot_normal()
 default_bias_init = nnx.initializers.zeros_init()
 default_rngs = nnx.Rngs(11)
+
+
+class BaseModule(nnx.Module):
+    """Base class for PINN modules."""
+
+    def __hash__(self) -> int:
+        # Use static hash for module (does not reflect a change of state)
+        if not hasattr(self, "_hash"):
+            self._hash = hash(nnx.graphdef(self))
+        return self._hash
+
+    def __eq__(self, other: object) -> bool:
+        # Equality based on graphdef (structure), consistent with __hash__
+        if not isinstance(other, BaseModule):
+            return NotImplemented
+        return nnx.graphdef(self) == nnx.graphdef(other)
 
 
 class RWFLinear(nnx.Module):
@@ -211,7 +231,7 @@ class KANLayer(nnx.Module):
             if not hidden
             else [
                 basespace(spectral_size, domain=Domain(-1, 1))
-            ]  # Hidden domain according to tanh  # noqa: E501
+            ]  # Hidden layer domain [-1, 1] matches tanh activation range
         )
 
     def __call__(self, inputs: Array) -> Array:
@@ -235,7 +255,7 @@ class KANLayer(nnx.Module):
                 for j in range(self.in_features)
             ]
         else:
-            # Hidden layer: reuse one basis and treat each channel the same.
+            # Hidden layer, all with the same domain [-1, 1]: reuse one basis.
             T = [
                 self.basespaces[0].eval_basis_functions(inputs[..., j])
                 for j in range(self.in_features)
@@ -254,7 +274,7 @@ class KANLayer(nnx.Module):
         )
 
 
-class MLP(nnx.Module):
+class MLP(BaseModule):
     """Standard multilayer perceptron ((weighted) Linear layers + activation)."""
 
     def __init__(
@@ -408,7 +428,7 @@ class PIModifiedBottleneck(nnx.Module):
         return x
 
 
-class PirateNet(nnx.Module):
+class PirateNet(BaseModule):
     """PirateNet: MLP with dual branch + bottleneck residual mixing.
 
     Features:
@@ -517,7 +537,7 @@ class PirateNet(nnx.Module):
         return y
 
 
-class SpectralModule(nnx.Module):
+class SpectralModule(BaseModule):
     """Wrapper for a spectral function space (1D or tensor product)."""
 
     def __init__(
@@ -537,11 +557,23 @@ class SpectralModule(nnx.Module):
             rngs: RNG container.
         """
         if basespace.dims == 1:
-            self.kernel = nnx.Param(kernel_init(rngs(), (1, basespace.dim)))
-        else:
-            self.kernel = nnx.Param(kernel_init(rngs(), basespace.dim))
+            w = kernel_init(rngs(), (1, basespace.num_dofs))
+            # Spectral modes should decay - apply logscaled weighting
+            x = jnp.logspace(0, -6, basespace.num_dofs)
+            self.kernel = nnx.Param(w * x[None, :])
+
+        elif basespace.dims == 2:
+            w = kernel_init(rngs(), basespace.num_dofs)
+            if isinstance(basespace, TensorProductSpace):
+                x = jnp.logspace(0, -6, basespace.num_dofs[0])
+                y = jnp.logspace(0, -6, basespace.num_dofs[1])
+                self.kernel = nnx.Param(x[:, None] * y[None, :] * w)
+            elif isinstance(basespace, VectorTensorProductSpace):
+                x = jnp.logspace(0, -6, basespace.num_dofs[1])
+                y = jnp.logspace(0, -6, basespace.num_dofs[2])
+                self.kernel = nnx.Param((x[None, :, None] * y[None, None, :]) * w)
+
         self.space = basespace
-        self.domain_factor = getattr(basespace, "domain_factor", 1)
 
     @property
     def dim(self) -> int:
@@ -560,15 +592,19 @@ class SpectralModule(nnx.Module):
             x: Coordinates (N, d).
 
         Returns:
-            Values (N,) if d=1 else (N, 1).
+            Values (N,) if d=1 else (N, rank+1).
         """
         if self.dims == 1:
             X = self.space.map_reference_domain(x)
             return self.space.evaluate(X, self.kernel.value[0])
-        return jnp.expand_dims(self.space.evaluate(x, self.kernel.value, True), -1)
+
+        z = self.space.evaluate(x, self.kernel.value, True)
+        if self.space.rank == 0:
+            return jnp.expand_dims(z, -1)
+        return z
 
 
-class KANMLPModule(nnx.Module):
+class KANMLPModule(BaseModule):
     """Hybrid KAN input layer + MLP hidden/output layers."""
 
     def __init__(
@@ -649,7 +685,7 @@ class KANMLPModule(nnx.Module):
         return self.layer_out(x)
 
 
-class sPIKANModule(nnx.Module):
+class sPIKANModule(BaseModule):
     """Pure spectral KAN in every layer (input, hidden, output)."""
 
     def __init__(
@@ -723,7 +759,7 @@ class sPIKANModule(nnx.Module):
     @property
     def dim(self) -> int:
         """Return flattened parameter count."""
-        st = nnx.split(self, nnx.Param)[1]
+        st = nnx.state(self)
         return jax.flatten_util.ravel_pytree(st)[0].shape[0]
 
     def __call__(self, x: Array) -> Array:
@@ -934,7 +970,10 @@ class Comp(nnx.Module):
             *flaxfunctions: One or more FlaxFunction instances.
         """
         self.flaxfunctions = list(flaxfunctions)
-        [setattr(self, str(id(p.module)), p.module) for p in flaxfunctions]
+        self.mod_index = {
+            str(hash(p.module)): i for i, p in enumerate(self.flaxfunctions)
+        }
+        self.data = nnx.List([p.module for p in self.flaxfunctions])
 
     @property
     def dim(self) -> int:

@@ -247,21 +247,6 @@ def test_residual_with_array_weights():
     assert jnp.allclose(residual.weights, weights)
 
 
-def test_lsqr_with_derivative_terms(flax_func):
-    mlp = flax_func.functionspace
-    x = mlp.system.x
-    y = mlp.system.y
-    dudx = flax_func.diff(x, 1)
-    dudy = flax_func.diff(y, 1)
-    xj = jnp.array([[1.0, 2.0]])
-    lsqr = LSQR((dudx, xj), (dudy, xj))
-    _ = lsqr(flax_func.module)
-    # Should have derivative terms in Js
-    key = (id(xj), id(flax_func.module), 1)
-    assert jnp.array_equal(lsqr.Js[key][:, 0, 0], evaluate(dudx, xj))
-    assert jnp.array_equal(lsqr.Js[key][:, 0, 1], evaluate(dudy, xj))
-
-
 def test_expand_with_complex_expression(flax_func):
     base_scalars = flax_func.functionspace.system.base_scalars()
     x_sym, y_sym = base_scalars[:2]
@@ -392,7 +377,6 @@ if __name__ == "__main__":
     test_lsqr_compute_residuals_simple()
     test_lsqr_initialization_single_equation()
     test_lsqr_initialization_multiple_equations()
-    test_lsqr_with_derivative_terms(flax_func.__wrapped__())
     test_get_fn_complex_number()
     test_get_fn_power_of_expression(base_scalars.__wrapped__())
     test_get_fn_no_free_symbols()

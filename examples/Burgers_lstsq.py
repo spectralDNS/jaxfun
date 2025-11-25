@@ -20,8 +20,8 @@ t0 = 0
 tmax = 5
 left = -8
 right = 8
-mesh = Rectangle(Nx, Nt, left, right, t0, tmax)
-xi = mesh.get_points_inside_domain()
+mesh = Rectangle(left, right, t0, tmax)
+xi = mesh.get_points_inside_domain(Nx, Nt)
 
 # Boundary points on three sides of the rectangle:
 xb = jnp.vstack(

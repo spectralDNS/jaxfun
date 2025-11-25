@@ -558,11 +558,13 @@ class SpectralModule(BaseModule):
 
         elif basespace.dims == 2:
             w = kernel_init(rngs(), basespace.num_dofs)
-            x = jnp.logspace(0, -6, basespace.num_dofs[-2])
-            y = jnp.logspace(0, -6, basespace.num_dofs[-1])
             if isinstance(basespace, TensorProductSpace):
+                x = jnp.logspace(0, -6, basespace.num_dofs[0])
+                y = jnp.logspace(0, -6, basespace.num_dofs[1])
                 self.kernel = nnx.Param(x[:, None] * y[None, :] * w)
             elif isinstance(basespace, VectorTensorProductSpace):
+                x = jnp.logspace(0, -6, basespace.num_dofs[1])
+                y = jnp.logspace(0, -6, basespace.num_dofs[2])
                 self.kernel = nnx.Param((x[None, :, None] * y[None, None, :]) * w)
 
         self.space = basespace

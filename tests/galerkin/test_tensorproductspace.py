@@ -25,7 +25,7 @@ def test_tensorproduct_forward_backward_padding_fourier():
     v = TestFunction(T)
     M, b = inner(v * (u - sp.sin(x) * sp.sin(y)))
     # Solve
-    uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(T.dim)
+    uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(T.num_dofs)
     # Backward on padded grid
     up = T.backward(uh, N=(12, 8))
     # Make sure shape matches requested padding (only first axis padded)
@@ -64,7 +64,7 @@ def test_tp_matrix_and_preconditioner():
     u = TrialFunction(T)
     A = inner(v * u)
     tp = A[0]
-    X = jax.random.normal(jax.random.PRNGKey(0), shape=T.dim)
+    X = jax.random.normal(jax.random.PRNGKey(0), shape=T.num_dofs)
     Y = tp(X)
     # Check manual matmul versus kron
     Y2 = tp.mats[0] @ X @ tp.mats[1].T

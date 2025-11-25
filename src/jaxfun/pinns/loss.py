@@ -115,7 +115,27 @@ class Residual:
         """
         t, expr = expand(f)
         s = get_flaxfunction_args(f.doit())
-        self.eqs = [get_fn(h, s) for h in expr]
+
+        # Build list of equations and all required evaluations of flaxfunctions
+        eqs = []
+        keys = set()
+        for h in expr:
+            eqs.append(get_fn(h, s))
+            v = get_flaxfunctions(h)
+            if len(v) == 0:
+                continue
+            mod_id = hash(v.pop().module)
+            for p in sp.core.traversal.iterargs(h):
+                if (
+                    isinstance(p, sp.Derivative)
+                    and getattr(p.args[0], "argument", -1) == 2
+                ):
+                    keys.add((id(x), mod_id, p.derivative_count))
+                if getattr(p, "argument", -1) == 2:
+                    keys.add((id(x), mod_id, 0))
+
+        self.eqs = tuple(eqs)
+        self.keys = keys
 
         # Place all terms without flaxfunctions in the target,
         # because these will not need to be computed more than once
@@ -152,17 +172,40 @@ class Residual:
         target: Array,
         module: nnx.Module,
         Js: dict[tuple[int, int, int], Array] = None,
+        x_id: int = None,
     ) -> Array:
-        return sum([eq(x, module, Js=Js) for eq in self.eqs]) - target
+        return sum([eq(x, module, Js=Js, x_id=x_id) for eq in self.eqs]) - target
+
+    def _compute_gradients(
+        self, module: nnx.Module, x: Array
+    ) -> dict[tuple[int, int, int], Array]:
+        """Return (as a dictionary) all the required evaluations of module
+        for all the residuals' equations"""
+        Js = {}
+        for key in self.keys:
+            x_id, mod_id, k = key
+            mod = (
+                module.data[module.mod_index[str(mod_id)]]
+                if isinstance(module, Comp)
+                else module
+            )
+            Js[key] = jacn(mod, key[2])(x)
+        return Js
+
+    def eval_compute_grad(
+        self, x: Array, target: Array, module: nnx.Module, x_id: int
+    ) -> Array:
+        Js = self._compute_gradients(module, x)
+        return self(x, target, module, Js=Js, x_id=x_id)
 
     def evaluate(self, module: nnx.Module) -> Array:
-        """Evaluate the residual at points x using module
+        """Evaluate the residual at internal points
 
         Args:
             module: The module (nnx.Module)
 
         Returns:
-            Array: The residuals at points x
+            Array: The residuals at points self.x, self.target
         """
         return self(self.x, self.target, module)
 
@@ -232,7 +275,12 @@ class LSQR:
         self.xs = {id(eq.x): eq.x for eq in self.residuals}
         x_keys = list(self.xs.keys())
         self.x_ids = tuple(x_keys.index(id(eq.x)) for eq in self.residuals)
-        self.Js = {}
+        # use indices into xs (0, 1, ...) as keys instead of id(x)
+        for i, eq in enumerate(self.residuals):
+            eq.keys = set([(self.x_ids[i], mod_id, k) for (_, mod_id, k) in eq.keys])
+            eq.x_id = self.x_ids[i]
+        # Store all keys needed for gradient computations
+        self.keys = set(key for i, eq in enumerate(self.residuals) for key in eq.keys)
 
     @property
     def args(self) -> tuple[tuple[Array], tuple[Array]]:
@@ -240,12 +288,113 @@ class LSQR:
         return tuple(self.xs.values()), targets
 
     @property
-    def local_mesh(self):
+    def local_mesh(self) -> jax.sharding.Mesh | None:
         if jax.local_device_count() == 1:
             return None
 
         assert self.residuals[0].x.sharding.num_devices == jax.local_device_count()
         return self.residuals[0].x.sharding.mesh
+
+    def compute_residual_arrays(
+        self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array]
+    ) -> list[Array]:
+        """Return the weighted residuals with given global weights
+
+        Args:
+            module: The module (nnx.Module)
+            gw: Global weights
+            xs: All the collocation arrays used for all equations (not necessarily same
+                length as self.residuals)
+            targets: Targets for all residuals (same length as self.residuals)
+
+        Returns:
+            Array: The weighted residuals
+        """
+        Js = self._compute_gradients(module, xs)
+        return [
+            eq(xs[x_id], target, module, Js=Js, x_id=x_id)
+            for i, (eq, target, x_id) in enumerate(
+                zip(self.residuals, targets, self.x_ids, strict=True)
+            )
+        ]
+
+    def JTJ(
+        self, module: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+    ) -> Array:
+        """Return the Gauss-Newton approximation to the Hessian
+
+        For the loss L = sum_i gw[i] * mean( res_i^2 ), the Gauss-Newton
+        approximation to the Hessian is given by
+
+            H = 2 * sum_i gw[i] * J_i^T @ J_i / N_i
+
+        where J_i is the Jacobian (J_i)_kj = ∂res_i(x^i_k) / ∂w_j (for weights w_j) of
+        the residuals for equation i evaluated at all collocation points
+        (x^i = (x^i_k)_{k=0}^{N_i-1}) for equation i, and N_i = |x^i| is the number
+        of collocation points for equation i.
+
+        Args:
+            module: The module (nnx.Module)
+            gw: Global weights
+            xs: All the collocation arrays used for all equations
+            targets: Targets for all residuals"""
+        res = jax.jacfwd(self.compute_residual_arrays, argnums=0)(module, xs, targets)
+        JTJ = []
+        for i, r in enumerate(res):
+            jf = jax.flatten_util.ravel_pytree(r)[0]
+            N = xs[self.x_ids[i]].shape[0]
+            J = jf.reshape((N, -1))
+            w = gw[i] * self.residuals[i].weights
+            if len(w.shape) == 0:
+                w = jnp.array([w])
+            JTJ.append(((J * w[:, None]).T @ J) / N)
+        return 2 * sum(JTJ)
+
+    @partial(nnx.jit, static_argnums=0)
+    def value_and_grad_and_JTJ(
+        self, module: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+    ) -> tuple[Array, Array, Array]:
+        """Return the loss value, gradient and Jacobian
+
+        Args:
+            module: The module (nnx.Module)
+            gw: Global weights
+            xs: All the collocation arrays used for all equations
+            targets: Targets for all residuals
+
+        Returns:
+            A tuple where the first item is the loss value and the second item
+            is the gradient and the third is the Gauss-Newton approximation to the
+            Hessian
+        """
+        res = self.compute_residual_arrays(module, xs, targets)
+        dres = jax.jacfwd(self.compute_residual_arrays, argnums=0)(module, xs, targets)
+        unravel = jax.flatten_util.ravel_pytree(nnx.state(module))[1]
+        JTJ = []
+        grads = []
+        loss = 0
+        for i, (r, dr) in enumerate(zip(res, dres, strict=True)):
+            jf = jax.flatten_util.ravel_pytree(dr)[0]
+            N = xs[self.x_ids[i]].shape[0]
+            J = jf.reshape((N, -1))
+            w = gw[i] * self.residuals[i].weights
+            if len(w.shape) == 0:
+                w = jnp.array([w])
+            JTJ.append(((J * w[:, None]).T @ J) / N)
+            grads.append(
+                jax.flatten_util.ravel_pytree(
+                    jax.tree.map(
+                        lambda g, r=r, w=w: jax.lax.dot_general(
+                            r * w, g, (((0,), (0,)), ((), ()))
+                        ),
+                        dr,
+                    )
+                )[0]
+                / N
+            )
+            loss = loss + (r * w) @ r / N
+
+        return loss, unravel(2 * sum(grads)), 2 * sum(JTJ)
 
     def compute_residual_i(self, module: nnx.Module, i: int) -> Array:
         """Return the residuals for equation i
@@ -258,7 +407,9 @@ class LSQR:
             Array: The residuals for equation i
         """
         xs, targets = self.args
-        return self.residuals[i](xs[self.x_ids[i]], targets[i], module, Js={})
+        return self.residuals[i].eval_compute_grad(
+            xs[self.x_ids[i]], targets[i], module, x_id=self.x_ids[i]
+        )
 
     def compute_residuals(self, module: nnx.Module) -> Array:
         """Return the residuals for all equations
@@ -271,8 +422,13 @@ class LSQR:
         """
         xs, targets = self.args
         L2 = []
+        Js = self._compute_gradients(module, xs)
         for res, target, x_id in zip(self.residuals, targets, self.x_ids, strict=True):
-            L2.append((res.weights * res(xs[x_id], target, module, Js={}) ** 2).mean())
+            L2.append(
+                (
+                    res.weights * res(xs[x_id], target, module, Js=Js, x_id=x_id) ** 2
+                ).mean()
+            )
         return jnp.array(L2)
 
     @partial(nnx.jit, static_argnums=(0, 4))
@@ -293,7 +449,9 @@ class LSQR:
         Returns:
             Array: The loss for equation i
         """
-        x = self.residuals[i](xs[self.x_ids[i]], targets[i], module, Js=self.Js)
+        x = self.residuals[i].eval_compute_grad(
+            xs[self.x_ids[i]], targets[i], module, x_id=self.x_ids[i]
+        )
         return (self.residuals[i].weights * x**2).mean()
 
     @partial(nnx.jit, static_argnums=(0, 4))
@@ -382,7 +540,22 @@ class LSQR:
             new = mh.process_allgather(new).mean(0)
         return new * (1 - alpha) + gw * alpha
 
-    @partial(nnx.jit, static_argnums=0)
+    def _compute_gradients(
+        self, module: nnx.Module, xs: tuple[Array]
+    ) -> dict[tuple[int, int, int], Array]:
+        """Return (as a dictionary) all the required evaluations of module
+        for the loss function"""
+        Js = {}
+        for key in self.keys:
+            x_id, mod_id, k = key
+            mod = (
+                module.data[module.mod_index[str(mod_id)]]
+                if isinstance(module, Comp)
+                else module
+            )
+            Js[key] = jacn(mod, key[2])(xs[key[0]])
+        return Js
+
     def loss_with_gw(
         self, module: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
     ) -> Array:
@@ -398,11 +571,13 @@ class LSQR:
         Returns:
             Array: The weighted loss
         """
-        self.Js = {}
+        Js = self._compute_gradients(module, xs)
         return (
             jnp.array(
                 [
-                    (eq.weights * eq(xs[x_id], target, module, Js=self.Js) ** 2).mean()
+                    (
+                        eq.weights * eq(xs[x_id], target, module, Js=Js, x_id=x_id) ** 2
+                    ).mean()
                     for i, (eq, target, x_id) in enumerate(
                         zip(self.residuals, targets, self.x_ids, strict=True)
                     )
@@ -423,10 +598,12 @@ class LSQR:
             Array: The total (unweighted) least squares loss
         """
         xs, targets = self.args
-        self.Js = {}
+        Js = self._compute_gradients(module, xs)
         return sum(
             [
-                (eq.weights * eq(xs[x_id], target, module, Js=self.Js) ** 2).mean()
+                (
+                    eq.weights * eq(xs[x_id], target, module, Js=Js, x_id=x_id) ** 2
+                ).mean()
                 for i, (eq, target, x_id) in enumerate(
                     zip(self.residuals, targets, self.x_ids, strict=True)
                 )
@@ -436,7 +613,7 @@ class LSQR:
 
 def get_fn(
     f: sp.Expr, s: tuple[BaseScalar, ...]
-) -> Callable[[Array, nnx.Module, dict], Array]:
+) -> Callable[[Array, nnx.Module, dict[tuple[int, int, int], Array], int], Array]:
     """Return Sympy Expr as function evaluated by points and gradients
 
     Args:
@@ -444,7 +621,7 @@ def get_fn(
         s: Tuple of base scalars used as variables in f
 
     Returns:
-        Callable[[Array, nnx.Module, dict], Array]
+        Callable[[Array, nnx.Module, dict[tuple[int, int, int], Array], int], Array]
     """
 
     v = get_flaxfunctions(f)
@@ -453,10 +630,10 @@ def get_fn(
         # Coefficient independent of basis function
         if len(f.free_symbols) > 0:
             fun = lambdify(s, f)
-            return lambda x, mod, Js=None, fun=fun: fun(*x.T)
+            return lambda x, mod, Js=None, x_id=None, fun=fun: fun(*x.T)
         else:
             arr = jnp.array(float(f) if f.is_real else complex(f))
-            return lambda x, mod, Js=None, arr=arr: arr
+            return lambda x, mod, Js=None, x_id=None, arr=arr: arr
 
     if isinstance(f, sp.Mul):
         # Multiplication of terms that either contain the basis function or not
@@ -464,7 +641,7 @@ def get_fn(
         f_const = []
         for fx in f.args:
             v0 = get_flaxfunctions(fx)
-            # Collect terms that do not contain the basis function
+            # Collect terms that do not (f_const) and contain (f_flax) the flaxfunction
             if len(v0) == 0:
                 f_const.append(fx)
                 continue
@@ -472,43 +649,56 @@ def get_fn(
 
         f_const = sp.Mul(*f_const)
         fun = get_fn(f_const, s)
-        return lambda x, mod, Js=None, s=s, f=f_flax: fun(x, mod, Js=Js) * jnp.prod(
-            jnp.array([get_fn(fi, s)(x, mod, Js=Js) for fi in f]), axis=0
+        return lambda x, mod, Js=None, x_id=None, s=s, f=f_flax: fun(
+            x, mod, Js=Js, x_id=x_id
+        ) * jnp.prod(
+            jnp.array([get_fn(fi, s)(x, mod, Js=Js, x_id=x_id) for fi in f]), axis=0
         )
 
     elif isinstance(f, sp.Pow):
-        fi = f.args[0]
-        p = int(f.args[1])
-        return lambda x, mod, Js=None, s=s, f=fi, p=p: get_fn(f, s)(x, mod, Js=Js) ** p
+        return (
+            lambda x,
+            mod,
+            Js=None,
+            x_id=None,
+            s=s,
+            f=f.args[0],
+            p=int(f.args[1]): get_fn(f, s)(x, mod, Js=Js, x_id=x_id) ** p
+        )
 
     assert len(v) == 1
     v = v.pop()
     return partial(
-        _gradient,
-        mod_id=id(v.module),
-        index=v.global_index,
+        _lookup_or_eval,
+        mod_id=hash(v.module),
+        global_index=v.global_index,
         k=int(getattr(f, "derivative_count", "0")),
-        vars=getattr(f, "variables", ()),
+        variables=getattr(f, "variables", ()),
     )
 
 
-def _gradient(
+def _lookup_or_eval(
     x: Array,
     mod: nnx.Module,
     Js: dict[tuple[int, int, int], Array] = None,
+    x_id: int = 0,
     mod_id: int = 0,
-    index: int = 0,
+    global_index: int = 0,
     k: int = 1,
-    vars: tuple[int] = [0],
+    variables: tuple[BaseScalar, ...] = (),
 ) -> Array:
     """Compute or look up k-th order Jacobian of module at points x"""
     if Js is None:
         Js = {}
-    var: tuple[int] = tuple((slice(None), index)) + tuple(int(s._id[0]) for s in vars)
-    key: tuple[int, int, int] = (id(x), mod_id, k)
+    module = mod.data[mod.mod_index[str(mod_id)]] if isinstance(mod, Comp) else mod
+    assert mod_id == hash(module)
+    var: tuple[int] = tuple((slice(None), global_index)) + tuple(
+        int(s._id[0]) for s in variables
+    )
+    key: tuple[int, int, int] = (x_id, mod_id, k)
     if key not in Js:
-        module = mod.__getattribute__(str(mod_id)) if isinstance(mod, Comp) else mod
+        # Compute gradient
         z = jacn(module, k)(x)
-        Js[key] = z
         return z[var]
+    # look up gradient
     return Js[key][var]

@@ -14,6 +14,8 @@ from jaxfun.pinns.mesh import Square_with_hole
 from jaxfun.pinns.optimizer import adam, lbfgs
 
 V = MLPSpace([12, 12, 12], dims=2, rank=0, name="V")
+# V = sPIKANSpace(5, [8, 8], dims=2, rank=0, name="V")
+# V = KANMLPSpace(4, [12, 12], dims=2, rank=0, name="V")
 w = FlaxFunction(V, name="w")
 
 mesh = Square_with_hole()
@@ -35,7 +37,7 @@ print("Time for Adam:", time.time() - t0)
 
 t1 = time.time()
 opt_lbfgs = lbfgs(w, memory_size=20)
-trainer.train(opt_lbfgs, 1000, epoch_print=100)
+trainer.train(opt_lbfgs, 10000, epoch_print=100)
 print("Time for LBFGS:", time.time() - t1)
 
 print("time", time.time() - t0)

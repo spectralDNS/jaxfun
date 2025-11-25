@@ -493,9 +493,9 @@ class Square_with_hole:
         rng = np.random.default_rng(self.seed)
 
         pts = []
-        # Chunk size for batched rejection; scale with target for efficiency
+        # Draw points until enough are collected
         chunk = max(8192, N // 2)
-        len_pts = lambda p: sum(len(pi) for pi in p)
+        len_pts = lambda p: sum(len(pj) for pj in p)
         while len_pts(pts) < N:
             k = max(chunk, N - len_pts(pts))
             cand = np.empty((k, 2), dtype=float)

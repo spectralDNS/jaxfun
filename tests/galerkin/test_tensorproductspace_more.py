@@ -20,7 +20,7 @@ def test_tensorproductspace_broadcast_and_evaluate_2d():
     L = Legendre.Legendre(5)
     T = TensorProduct(C, L)
     mesh = T.mesh()
-    coeffs = jax.random.normal(jax.random.PRNGKey(0), shape=T.dim)
+    coeffs = jax.random.normal(jax.random.PRNGKey(0), shape=T.num_dofs)
     T.backward(coeffs)
     # broadcast_to_ndims path
     bx = T.broadcast_to_ndims(mesh[0], 0)
@@ -59,7 +59,7 @@ def test_tpmatrices_call_and_kron_3d():
     kron = tpmats_to_scipy_kron(A)
     # Build TPMatrices and apply to random u
     mats = TPMatrices(A)
-    X = jax.random.normal(jax.random.PRNGKey(4), shape=T3.dim)
+    X = jax.random.normal(jax.random.PRNGKey(4), shape=T3.num_dofs)
     Y = mats(X)
     assert Y.shape == X.shape and kron.shape[0] == kron.shape[1]
 
@@ -71,7 +71,7 @@ def test_inner_linear_form_3d_outer_products():
     v = TestFunction(T3)
     x, y, z = T3.system.base_scalars()
     b = inner((x + y + z) * v)
-    assert b.shape == T3.dim
+    assert b.shape == T3.num_dofs
 
 
 def test_inner_sparse_multivar_path():

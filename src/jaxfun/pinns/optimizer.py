@@ -292,6 +292,7 @@ def lbfgs(
 def GaussNewton(
     u: FlaxFunction | nnx.Module,
     use_lstsq: bool = True,
+    use_GN: bool = False,
     cg_max_iter: int = 1000,
     linesearch: optax_base.GradientTransformationExtraArgs
     | optax_base.GradientTransformation
@@ -308,6 +309,7 @@ def GaussNewton(
         u: nnx.Module or FlaxFunction wrapping an nnx.Module.
         use_lstsq: If True solve normal equations via least squares; else conjugate
             gradient.
+        use_GN: If True, use Gauss-Newton approximation (J^T J) instead of full Hessian.
         cg_max_iter: Maximum CG iterations (ignored if use_lstsq is True).
         linesearch: Optional line search transformation to use. If None, a zoom
             linesearch is used.
@@ -327,6 +329,7 @@ def GaussNewton(
 
     opt = hess(
         use_lstsq=use_lstsq,
+        use_GN=use_GN,
         cg_max_iter=cg_max_iter,
         linesearch=linesearch,
     )
@@ -361,14 +364,17 @@ def train(
         xs: tuple[Array],
         targets: tuple[Array],
     ) -> float:
+        gd, state = nnx.split(module, nnx.Param)
+
         def value_fn(m: nnx.Module) -> Array:
             return loss_fn.loss_with_gw(m, gw, xs, targets)
 
+        def JTJ(m: nnx.Module) -> Array:
+            return loss_fn.JTJ(m, gw, xs, targets)
+
         loss, gradients = nnx.value_and_grad(value_fn)(module)
-        gd, state = nnx.split(module, nnx.Param)
-        unravel = jax.flatten_util.ravel_pytree(state)[1]
         value_fn_state = lambda state: value_fn(nnx.merge(gd, state))
-        H_loss_fn = lambda flat_weights: value_fn(nnx.merge(gd, unravel(flat_weights)))
+        GN_loss_fn = lambda state: JTJ(nnx.merge(gd, state))
 
         optimizer.update(
             module,
@@ -376,9 +382,8 @@ def train(
             grad=gradients,
             value_fn=value_fn_state,
             value=loss,
-            H_loss_fn=H_loss_fn,
+            GN_loss_fn=GN_loss_fn,
         )
-
         return loss
 
     @nnx.jit
@@ -407,7 +412,7 @@ def train(
         unravel = jax.flatten_util.ravel_pytree(state)[1]
         value_fn_state = lambda state: value_fn(nnx.merge(gd, state))
         H_loss_fn = lambda flat_weights: value_fn(nnx.merge(gd, unravel(flat_weights)))
-
+        GN_loss_fn = lambda state: loss_fn.JTJ(nnx.merge(gd, state), gw, xs, targets)
         optimizer.update(
             module,
             gradients,
@@ -415,6 +420,7 @@ def train(
             value_fn=value_fn_state,
             value=loss,
             H_loss_fn=H_loss_fn,
+            GN_loss_fn=GN_loss_fn,
         )
 
     def allreduce(loss: Array, gradients: PyTree) -> None:

@@ -49,7 +49,7 @@ trainer.train(opt_adam, 1000, epoch_print=100)
 opt_lbfgs = lbfgs(w, memory_size=20)
 trainer.train(opt_lbfgs, 1000, epoch_print=100, update_global_weights=100)
 
-opt_hess = GaussNewton(w, use_lstsq=True)
+opt_hess = GaussNewton(w, use_lstsq=True, use_GN=True)
 trainer.train(opt_hess, 10, epoch_print=1, abs_limit_change=ulp(1000))
 
 print("time", time.time() - t0)

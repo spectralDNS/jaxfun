@@ -176,7 +176,7 @@ def test_project_function():
     ue = sp.chebyshevt(1, x) * sp.legendre(2, y)
     uh = project(ue, T)
     assert abs(uh[1, 2] - 1.0) < ulp(100)
-    assert uh.shape == T.dim
+    assert uh.shape == T.num_dofs
 
 
 def test_scalar_vector_function_pretty_and_sympy():

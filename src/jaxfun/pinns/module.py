@@ -37,7 +37,7 @@ default_rngs = nnx.Rngs(11)
 class BaseModule(nnx.Module):
     """Base class for PINN modules."""
 
-    def __hash__(self) -> bool:
+    def __hash__(self) -> int:
         # Use static hash for module (does not reflect a change of state)
         if not hasattr(self, "_hash"):
             self._hash = hash(nnx.graphdef(self))

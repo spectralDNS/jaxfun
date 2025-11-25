@@ -225,7 +225,7 @@ class KANLayer(nnx.Module):
             if not hidden
             else [
                 basespace(spectral_size, domain=Domain(-1, 1))
-            ]  # tanh co-domain is [-1, 1]
+            ]  # Hidden layer domain [-1, 1] matches tanh activation range
         )
 
     def __call__(self, inputs: Array) -> Array:

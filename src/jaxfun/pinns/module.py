@@ -43,6 +43,12 @@ class BaseModule(nnx.Module):
             self._hash = hash(nnx.graphdef(self))
         return self._hash
 
+    def __eq__(self, other: object) -> bool:
+        # Equality based on graphdef (structure), consistent with __hash__
+        if not isinstance(other, BaseModule):
+            return NotImplemented
+        return nnx.graphdef(self) == nnx.graphdef(other)
+
 
 class RWFLinear(nnx.Module):
     """Linear layer with RWF (Random Weight Factorization) style scaling.

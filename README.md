@@ -67,11 +67,11 @@ from jaxfun.pinns import LSQR, FlaxFunction, MLPSpace, Trainer, UnitSquare, adam
 V = MLPSpace([12, 12], dims=2, rank=0, name="V")
 u = FlaxFunction(V, name="u") # The trial function, which here is a neural network
 
-# Get some random mesh points on and inside the unit square
+# Get mesh points on and inside the unit square
 N = 50
-mesh = UnitSquare(N, N)
-xyi = mesh.get_points_inside_domain("uniform")
-xyb = mesh.get_points_on_domain("uniform")
+mesh = UnitSquare()
+xyi = mesh.get_points_inside_domain(N, N, "uniform")
+xyb = mesh.get_points_on_domain(N, N, "uniform")
 
 # Define Poisson's equation: residual = △u - 2
 residual = Div(Grad(u)) - 2

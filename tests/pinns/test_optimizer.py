@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from jaxfun.pinns import LSQR, FlaxFunction, MLPSpace, optimizer as opt_mod
+from jaxfun.pinns import FlaxFunction, Loss, MLPSpace, optimizer as opt_mod
 
 
 class DummyModule(nnx.Module):
@@ -89,11 +89,11 @@ class TestTrainer:
 
     @pytest.fixture
     def lsqr_loss_fn(self):
-        """Create an LSQR loss function for testing"""
+        """Create an Loss loss function for testing"""
         m = MLPSpace(4, dims=1, rank=0, name="MLP")
         u = FlaxFunction(m, "u")
         x = jnp.array([[1.0]])
-        lsqr = LSQR((u, x))
+        lsqr = Loss((u, x))
         return lsqr
 
     def test_trainer_init_basic(self, lsqr_loss_fn):
@@ -214,7 +214,7 @@ class TestTrainer:
         def bad_loss_fn(model):
             return (model.w - 1.0) ** 2
 
-        # Should raise AssertionError when trying to create Trainer with non-LSQR loss
+        # Should raise AssertionError when trying to create Trainer with non-Loss loss
         with pytest.raises(AssertionError):
             _ = opt_mod.Trainer(bad_loss_fn)
 

@@ -140,7 +140,7 @@ class Chebyshev(Jacobi):
             )
         )
 
-    @jit_vmap(in_axes=(0, None))
+    @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single Chebyshev polynomial T_i at points X.
 
@@ -213,6 +213,18 @@ class Chebyshev(Jacobi):
             SymPy expression 1 / P_n^{(alpha,beta)}(1).
         """
         return sp.S(1) / sp.jacobi(n, self.alpha, self.beta, 1)
+
+    def sympy_basis_function(self, i: int, X: Symbol) -> Expr:
+        """Return symbolic Chebyshev polynomial T_i(X).
+
+        Args:
+            i: Basis function index (0 <= i < N).
+            X: SymPy symbol (Reference coordinate in [-1, 1]).
+
+        Returns:
+            SymPy expression for T_i(X).
+        """
+        return sp.cos(i * sp.acos(X))
 
 
 def matrices(test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]) -> Array:

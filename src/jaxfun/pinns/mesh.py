@@ -436,51 +436,21 @@ class Annulus(AnnulusPolar):
 
 
 @dataclass
-class Square_with_hole:
-    """Square domain with a circular hole.
+class ShapelyMesh:
+    """Polygonal domain using Shapely for sampling.
 
-    The outer boundary is a square defined by corners (left, bottom) and (right, top).
-    The hole is a circle with center (cx, cy) and radius r. Sampling uses:
-      - Interior: rejection sampling from the bounding box using a prepared polygon
-      - Boundary: length-proportional sampling along all boundary segments
-          (outer + hole)
+    - Interior: rejection sampling from the bounding box using a prepared polygon
+    - Boundary: length-proportional sampling along all boundary segments
 
-    Attributes:
-        left, right, bottom, top: Square bounds (default: [-1, 1] x [-1, 1]).
-        cx, cy, r: Circle center and radius (default: (0.3, 0.0), r=0.4).
-        hole_resolution: Polygonization resolution for the circle boundary.
-        seed: Seed passed to NumPy's default_rng for reproducibility.
     """
 
-    left: float = -1.0
-    right: float = 1.0
-    bottom: float = -1.0
-    top: float = 1.0
-    cx: float = 0.3
-    cy: float = 0.0
-    r: float = 0.4
-    hole_resolution: int = 128
     seed: int = 101
 
     def make_polygon(self):
-        from shapely.geometry import Point, Polygon
-
-        outer = [
-            (self.left, self.bottom),
-            (self.right, self.bottom),
-            (self.right, self.top),
-            (self.left, self.top),
-        ]
-        hole = Point(self.cx, self.cy).buffer(self.r, resolution=self.hole_resolution)
-        poly = Polygon(outer, holes=[list(hole.exterior.coords)[:-1]])
-        if not poly.is_valid or poly.area <= 0.0:
-            raise ValueError(
-                "Invalid polygon configuration (check square bounds and hole)."
-            )
-        return poly
+        raise NotImplementedError
 
     def get_points_inside_domain(self, N: int, kind: SampleMethod = "random") -> Array:
-        """Return interior points (N, 2) inside the square-with-hole."""
+        """Return interior points (N, 2) inside the domain."""
         assert kind in ("random",), (
             "Only 'random' interior sampling is supported for polygons."
         )
@@ -513,12 +483,8 @@ class Square_with_hole:
 
         return jnp.asarray(np.vstack(pts))
 
-    def get_points_on_domain(
-        self, N: int, kind: SampleMethod = "random", corners: bool = False
-    ) -> Array:
-        """Return boundary points (N, 2) along outer square and circular
-        hole.
-        """
+    def get_points_on_domain(self, N: int, kind: SampleMethod = "random") -> Array:
+        """Return boundary points (N, 2) along the polygon edges."""
         assert kind in ("random",), (
             "Only 'random' boundary sampling is supported for polygons."
         )
@@ -552,6 +518,93 @@ class Square_with_hole:
             t = rng.random(m)
             pts.append(a + t[:, None] * (b - a))
 
+        return jnp.asarray(np.vstack(pts))
+
+    def plot_solution(self, X, values, xb=None, levels=30):
+        """Plot solution over polygonal mesh using triangulation.
+        Args:
+            X      : all sample points (N, 2) = vstack((xi, xb))
+            values : solution values at X (N,)
+            xb     : optional boundary points to overlay as red dots
+        """
+        import matplotlib.pyplot as plt
+        import matplotlib.tri as mtri
+        from shapely.geometry import Point
+        from shapely.prepared import prep
+
+        poly = self.make_polygon()
+
+        tri = mtri.Triangulation(X[:, 0], X[:, 1])
+
+        # Mask triangles whose centroid lies outside the polygon (handles holes)
+        prepared = prep(poly)
+        centroids = X[tri.triangles].mean(axis=1)
+        mask = np.array([not prepared.contains(Point(c[0], c[1])) for c in centroids])
+        tri.set_mask(mask)
+
+        fig, ax = plt.subplots(figsize=(6, 6))
+        tpc = ax.tripcolor(tri, values, shading="gouraud", cmap="viridis")
+        ax.tricontour(tri, values, levels=levels, colors="k", linewidths=0.5)
+        if xb is not None:
+            ax.plot(xb[:, 0], xb[:, 1], "r.", ms=2, label="boundary")
+            ax.legend(loc="lower left")
+        ax.set_aspect("equal")
+        ax.set_title("Solution w(x,y)")
+        fig.colorbar(tpc, ax=ax, shrink=0.8, label="w")
+        plt.show()
+
+
+@dataclass
+class Square_with_hole(ShapelyMesh):
+    """Square domain with a circular hole.
+
+    The outer boundary is a square defined by corners (left, bottom) and (right, top).
+    The hole is a circle with center (cx, cy) and radius r. Sampling uses:
+      - Interior: rejection sampling from the bounding box using a prepared polygon
+      - Boundary: length-proportional sampling along all boundary segments
+          (outer + hole)
+
+    Attributes:
+        left, right, bottom, top: Square bounds (default: [-1, 1] x [-1, 1]).
+        cx, cy, r: Circle center and radius (default: (0.3, 0.0), r=0.4).
+        hole_resolution: Polygonization resolution for the circle boundary.
+        seed: Seed passed to NumPy's default_rng for reproducibility.
+    """
+
+    left: float = -1.0
+    right: float = 1.0
+    bottom: float = -1.0
+    top: float = 1.0
+    cx: float = 0.3
+    cy: float = 0.0
+    r: float = 0.4
+    hole_resolution: int = 128
+
+    def make_polygon(self):
+        from shapely.geometry import Point, Polygon
+
+        outer = [
+            (self.left, self.bottom),
+            (self.right, self.bottom),
+            (self.right, self.top),
+            (self.left, self.top),
+        ]
+        hole = Point(self.cx, self.cy).buffer(self.r, resolution=self.hole_resolution)
+        poly = Polygon(outer, holes=[list(hole.exterior.coords)[:-1]])
+        if not poly.is_valid or poly.area <= 0.0:
+            raise ValueError(
+                "Invalid polygon configuration (check square bounds and hole)."
+            )
+        return poly
+
+    def get_points_on_domain(
+        self, N: int, kind: SampleMethod = "random", corners: bool = False
+    ) -> Array:
+        """Return boundary points (N, 2) along outer square and circular
+        hole.
+        """
+        pts = super().get_points_on_domain(N, kind)
+
         if corners:
             c = np.array(
                 [
@@ -562,5 +615,107 @@ class Square_with_hole:
                 ],
                 dtype=float,
             )
-            pts.append(c)
-        return jnp.asarray(np.vstack(pts))
+            return jnp.asarray(np.vstack([pts, c]))
+        return pts
+
+
+@dataclass
+class Circle_with_hole(ShapelyMesh):
+    """Circular domain with a circular hole.
+
+    The outer boundary is a circle defined by center (Cx, Cy) and radius R.
+    The hole is a circle with center (cx, cy) and radius r. Sampling uses:
+      - Interior: rejection sampling from the bounding box using a prepared polygon
+      - Boundary: length-proportional sampling along all boundary segments
+
+    Attributes:
+        Cx, Cy, R: Outer circle center and radius (default: (0.0, 0.0), R=1).
+        cx, cy, r: Inner circle center and radius (default: (0.3, 0.0), r=0.4).
+        inner_hole_resolution: Polygonization resolution for inner circle.
+        outer_hole_resolution: Polygonization resolution for outer circle.
+        seed: Seed passed to NumPy's default_rng for reproducibility.
+    """
+
+    Cx: float = 0.0
+    Cy: float = 0.0
+    R: float = 1.0
+    cx: float = 0.3
+    cy: float = 0.0
+    r: float = 0.4
+    inner_hole_resolution: int = 64
+    outer_hole_resolution: int = 256
+
+    def make_polygon(self):
+        from shapely.geometry import Point
+
+        outer = Point(self.Cx, self.Cy).buffer(
+            self.R, resolution=self.outer_hole_resolution
+        )
+        hole = Point(self.cx, self.cy).buffer(
+            self.r, resolution=self.inner_hole_resolution
+        )
+        poly = outer.difference(hole)
+        if not poly.is_valid or poly.area <= 0.0:
+            raise ValueError(
+                "Invalid polygon configuration (check circle bounds and hole)."
+            )
+        return poly
+
+
+@dataclass
+class Lshape(ShapelyMesh):
+    """L-shaped polygonal domain.
+
+    Sampling uses:
+      - Interior: rejection sampling from the bounding box using a prepared polygon
+      - Boundary: length-proportional sampling along all boundary segments
+
+    Attributes:
+        seed: Seed passed to NumPy's default_rng for reproducibility.
+    """
+
+    left: float = -1.0
+    right: float = 1.0
+    bottom: float = -1.0
+    top: float = 1.0
+    Lx: float = 1.0
+    Ly: float = 1.0
+
+    def make_polygon(self):
+        from shapely.geometry import Polygon
+
+        outer = [
+            (self.left, self.top),
+            (self.left, self.bottom),
+            (self.right, self.bottom),
+            (self.right, self.bottom + self.Ly),
+            (self.left + self.Lx, self.bottom + self.Ly),
+            (self.left + self.Lx, self.top),
+        ]
+        poly = Polygon(outer)
+        if not poly.is_valid or poly.area <= 0.0:
+            raise ValueError("Invalid polygon configuration for L-shape.")
+        return poly
+
+    def get_points_on_domain(
+        self, N: int, kind: SampleMethod = "random", corners: bool = False
+    ) -> Array:
+        """Return boundary points (N, 2) along outer square and circular
+        hole.
+        """
+        pts = super().get_points_on_domain(N, kind)
+
+        if corners:
+            c = np.array(
+                [
+                    [self.left, self.bottom],
+                    [self.right, self.bottom],
+                    [self.left, self.top],
+                    [self.left + self.Lx, self.bottom + self.Ly],
+                    [self.left + self.Lx, self.top],
+                    [self.right, self.bottom + self.Ly],
+                ],
+                dtype=float,
+            )
+            return jnp.asarray(np.vstack([pts, c]))
+        return pts

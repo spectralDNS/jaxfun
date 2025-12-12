@@ -20,7 +20,7 @@ from flax import nnx
 
 from jaxfun.operators import Div, Grad, Outer
 from jaxfun.pinns.bcs import DirichletBC
-from jaxfun.pinns.loss import LSQR
+from jaxfun.pinns.loss import Loss
 from jaxfun.pinns.mesh import Rectangle
 from jaxfun.pinns.module import Comp, FlaxFunction
 from jaxfun.pinns.nnspaces import MLPSpace
@@ -60,7 +60,7 @@ ub = DirichletBC(
 )  # No-slip on walls, u=(1-x)**2*(1+x)**2 on lid
 
 # Each item is (equation, points, target, optional weights)
-loss_fn = LSQR(
+loss_fn = Loss(
     (eq1, xyi, 0, wi),  # momentum vector equation
     (eq2, xyi, 0, wi),  # Divergence constraint
     (u, xyb, ub, 2),  # Boundary conditions on u

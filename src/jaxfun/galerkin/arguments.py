@@ -52,7 +52,7 @@ def get_BasisFunction(
 ):
     """Create a symbolic basis function with enriched printing.
 
-    Adds (monkey‑patches) __str__, _pretty and _latex methods so tensor
+    Adds (monkey-patches) __str__, _pretty and _latex methods so tensor
     product / vector indices appear compactly (e.g. phi_i^{(k)}(x)).
 
     Args:

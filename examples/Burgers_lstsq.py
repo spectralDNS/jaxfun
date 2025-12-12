@@ -8,7 +8,7 @@ import sympy as sp
 
 from jaxfun.operators import Constant
 from jaxfun.pinns.bcs import DirichletBC
-from jaxfun.pinns.loss import LSQR
+from jaxfun.pinns.loss import Loss
 from jaxfun.pinns.mesh import Rectangle, points_along_axis
 from jaxfun.pinns.module import FlaxFunction
 from jaxfun.pinns.nnspaces import MLPSpace
@@ -44,7 +44,7 @@ ub = DirichletBC(
 nu = Constant("nu", sp.Rational(1, 10))
 eq = u.diff(t) + u * u.diff(x) - nu * u.diff(x, 2)
 
-loss_fn = LSQR((eq, xi), (u, xb, ub))
+loss_fn = Loss((eq, xi), (u, xb, ub))
 
 trainer = Trainer(loss_fn)
 

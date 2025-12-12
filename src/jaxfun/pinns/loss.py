@@ -149,8 +149,8 @@ class Residual:
 
         # Place all terms without flaxfunctions in the target,
         # because these will not need to be computed more than once
-        assert isinstance(target, Number | Array)
-        t0 = target
+        if not isinstance(target, Number | Array):
+            raise ValueError("Target need to be a Number or an Array")
         if len(t.free_symbols) > 0:
             assert s is not None, "Could not find base scalars in expression"
             tx = lambdify(s, t)(*x.T)

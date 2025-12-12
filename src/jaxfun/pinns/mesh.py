@@ -483,7 +483,9 @@ class ShapelyMesh:
 
         return jnp.asarray(np.vstack(pts))
 
-    def get_points_on_domain(self, N: int, kind: SampleMethod = "random") -> Array:
+    def get_points_on_domain(
+        self, N: int, kind: SampleMethod = "random", corners: bool = False
+    ) -> Array:
         """Return boundary points (N, 2) along the polygon edges."""
         assert kind in ("random",), (
             "Only 'random' boundary sampling is supported for polygons."

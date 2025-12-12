@@ -140,7 +140,7 @@ def test_residual_with_flaxfunction(flax_func):
     assert len(residual.eqs) == 1
     assert jnp.allclose(residual.target, -3.0)
     x = flax_func.functionspace.system.base_scalars()[0]
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         residual = Residual(f, xj, target=x)
 
 

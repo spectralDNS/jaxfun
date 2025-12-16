@@ -106,7 +106,7 @@ def expand(forms: sp.Expr) -> list[sp.Expr]:
 
 
 class Residual:
-    """Residual of a single equation
+    r"""Residual of a single equation
 
     Regular least squares residual defined at collocation points. The residual
     is computed as

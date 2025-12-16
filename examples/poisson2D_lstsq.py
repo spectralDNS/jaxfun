@@ -39,7 +39,7 @@ ue = (1 - x**2) * (1 - y**2)  # manufactured solution
 
 f = Div(Grad(w)) + x * w * w.diff(x) - (Div(Grad(ue)) + x * ue * ue.diff(x))
 
-loss_fn = Loss((f, xyi, 0, wi), (w, xyb, 0, 100 / Nb))
+loss_fn = Loss((f, xyi, 0, wi), (w, xyb, 0, 10))
 trainer = Trainer(loss_fn)
 
 t0 = time.time()

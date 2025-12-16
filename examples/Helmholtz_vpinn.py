@@ -39,7 +39,7 @@ xb = mesh.get_points_on_domain()
 
 # fv = (Div(Grad(w)) + w - (Div(Grad(ue)) + ue)) * v
 fv = -Dot(Grad(w), Grad(v)) + w * v - (-Dot(Grad(ue), Grad(v)) + ue * v)
-loss_fn = Loss((fv, xj, 0, wj), (w, xb, 0, 100))
+loss_fn = Loss((fv, xj, 0, wj), (w, xb, 0, 1))
 trainer = Trainer(loss_fn)
 
 opt_adam = adam(w, learning_rate=1e-3)

@@ -105,6 +105,26 @@ def expand(forms: sp.Expr) -> list[sp.Expr]:
     return sp.Add(*consts), flaxs
 
 
+def _check_input_arrays(arrays: tuple[Array, ...], x: Array) -> tuple[Array, ...]:
+    _newarrays = []
+    for array in arrays:
+        if isinstance(array, Array):
+            if array.shape[0] != x.shape[0]:
+                raise ValueError(
+                    "Input array length does not match number of collocation points"
+                )
+            if len(array.shape) == 2 and array.shape[1] == 1:
+                array = jnp.squeeze(array)
+            if len(array.shape) > 1:
+                raise ValueError("Input array must be one-dimensional")
+        elif array is None:
+            array = jnp.array(1 / x.shape[0], dtype=float)
+        elif isinstance(array, Number):
+            array = jnp.array(array, dtype=float)
+        _newarrays.append(array)
+    return _newarrays
+
+
 class Residual:
     r"""Residual of a single equation
 
@@ -155,12 +175,7 @@ class Residual:
         t, expr = expand(f)
         s = get_flaxfunction_args(f.doit())
 
-        if isinstance(target, Array):
-            assert target.shape[0] == x.shape[0]
-            assert len(target.shape) == 1
-        if isinstance(weights, Array):
-            assert weights.shape[0] == x.shape[0]
-            assert len(weights.shape) == 1
+        target, weights = _check_input_arrays((target, weights), x)
 
         # Place all terms without flaxfunctions in the target,
         # because these will not need to be computed more than once
@@ -198,12 +213,6 @@ class Residual:
         self.eqs = tuple(eqs)
         self.keys = keys
 
-        if weights is None:
-            weights = 1 / x.shape[0]
-        if not isinstance(weights, Number | Array):
-            raise ValueError("Weights need to be a Number or an Array")
-        weights = jnp.array(weights)
-
         if weights.sharding != x.sharding and jax.local_device_count() > 1:
             if len(weights.shape) > 0 and weights.shape[0] == x.shape[0]:
                 weights = jax.device_put(weights, x.sharding)
@@ -214,6 +223,7 @@ class Residual:
                 t0 = jax.device_put(t0, x.sharding)
             else:
                 t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))
+
         self.x, self.target, self.weights = x, t0, weights
 
     def __call__(
@@ -355,6 +365,8 @@ class ResidualVPINN(Residual):
         test = get_testfunction(f)
         V = test.functionspace
 
+        target, weights = _check_input_arrays((target, weights), x)
+
         # Place all terms without flaxfunctions in the target, since these will only be
         # computed once
 
@@ -388,8 +400,6 @@ class ResidualVPINN(Residual):
             for k in set(z[1] for z in t_split)
         }
 
-        if not isinstance(target, Number | Array):
-            raise ValueError("Target needs to be a Number or an Array")
         t0 = jnp.expand_dims(jnp.atleast_1d(target), axis=-1)
         tns = []
         for tn, tv in t_split:
@@ -425,12 +435,6 @@ class ResidualVPINN(Residual):
         self.eqs = tuple(eqs)
         self.keys = keys
 
-        if weights is None:
-            weights = 1 / x.shape[0]
-        if not isinstance(weights, Number | Array):
-            raise ValueError("Weights need to be a Number or an Array")
-        weights = jnp.array(weights)
-
         if weights.sharding != x.sharding and jax.local_device_count() > 1:
             if len(weights.shape) > 0 and weights.shape[0] == x.shape[0]:
                 weights = jax.device_put(weights, x.sharding)
@@ -441,6 +445,7 @@ class ResidualVPINN(Residual):
                 t0 = jax.device_put(t0, x.sharding)
             else:
                 t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))
+
         self.x, self.target, self.weights = x, t0 * weights[:, None], weights
 
     def loss(
@@ -587,7 +592,7 @@ class Loss:
             >>> eq = Div(Grad(u)) + 2
             >>> xj = jnp.linspace(-1, 1, 10)[:, None]
             >>> xb = jnp.array([[-1.0], [1.0]])
-            >>> loss_fn = Loss((eq, xj, 0, 1), (u, xb, 0, 10))
+            >>> loss_fn = Loss((eq, xj), (u, xb, 0, 10))
         """
         from jaxfun.operators import Dot
 
@@ -643,7 +648,7 @@ class Loss:
             )
         return self.residuals[0].x.sharding.mesh
 
-    def compute_residual_arrays(
+    def _compute_residual_arrays(
         self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array]
     ) -> list[Array]:
         """Return the residuals for all collocation points
@@ -686,7 +691,7 @@ class Loss:
             gw: Global weights
             xs: All the collocation arrays used for all equations
             targets: Targets for all residuals"""
-        res = jax.jacfwd(self.compute_residual_arrays, argnums=0)(module, xs, targets)
+        res = jax.jacfwd(self._compute_residual_arrays, argnums=0)(module, xs, targets)
         JTJ = []
         for i, r in enumerate(res):
             jf = jax.flatten_util.ravel_pytree(r)[0]
@@ -715,8 +720,8 @@ class Loss:
             is the gradient and the third is the Gauss-Newton approximation to the
             Hessian
         """
-        res = self.compute_residual_arrays(module, xs, targets)
-        dres = jax.jacfwd(self.compute_residual_arrays, argnums=0)(module, xs, targets)
+        res = self._compute_residual_arrays(module, xs, targets)
+        dres = jax.jacfwd(self._compute_residual_arrays, argnums=0)(module, xs, targets)
         unravel = jax.flatten_util.ravel_pytree(nnx.state(module))[1]
         JTJ = []
         grads = []

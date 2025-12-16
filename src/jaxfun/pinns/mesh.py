@@ -12,7 +12,7 @@ Sampling kinds (interior / boundary):
 - 'random'    : Pseudorandom uniform samples
 
 Weights:
-Return 1 when uniform (each point equal) or arrays for quadrature-based kinds.
+Return 1 when uniform/random (each point equal) or arrays for quadrature-based kinds.
 """
 
 from dataclasses import dataclass, field
@@ -93,7 +93,7 @@ class UnitLine:
         if kind in ("uniform", "random"):
             return 1
         elif kind == "legendre":
-            return leggauss(N)[1] * N
+            return leggauss(N)[1]
         elif kind == "chebyshev":
             return jnp.pi / N * jnp.ones(N)
         raise NotImplementedError
@@ -247,8 +247,8 @@ class UnitSquare:
         if kind in ("uniform", "random"):
             return 1
         elif kind == "legendre":
-            wx = leggauss(Nx)[1] * Nx
-            wy = leggauss(Ny)[1] * Ny
+            wx = leggauss(Nx)[1]
+            wy = leggauss(Ny)[1]
             return jnp.outer(wx, wy).flatten()
         else:
             assert kind == "chebyshev", (
@@ -275,8 +275,8 @@ class UnitSquare:
         if kind in ("uniform", "random"):
             return 1
         elif kind == "legendre":
-            wx = leggauss(Nx)[1] * (2 * Nx + 2 * Ny)
-            wy = leggauss(Ny)[1] * (2 * Nx + 2 * Ny)
+            wx = leggauss(Nx)[1]
+            wy = leggauss(Ny)[1]
             w = jnp.hstack((wx, wx, wy, wy))
             if corners:
                 w = jnp.hstack((w, jnp.ones(4)))
@@ -285,8 +285,8 @@ class UnitSquare:
             assert kind == "chebyshev", (
                 "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
             )
-            wx = jnp.pi / Nx * (2 * Nx + 2 * Ny) * jnp.ones(Nx)
-            wy = jnp.pi / Ny * (2 * Nx + 2 * Ny) * jnp.ones(Ny)
+            wx = jnp.pi / Nx * jnp.ones(Nx)
+            wy = jnp.pi / Ny * jnp.ones(Ny)
             w = jnp.hstack((wx, wx, wy, wy))
             if corners:
                 w = jnp.hstack((w, jnp.ones(4)))
@@ -721,3 +721,32 @@ class Lshape(ShapelyMesh):
             )
             return jnp.asarray(np.vstack([pts, c]))
         return pts
+
+
+class CartesianMesh:
+    """Cartesian product mesh from 1D arrays along each axis.
+
+    Attributes:
+        x: 1D array of x-coordinates.
+        y: 1D array of y-coordinates.
+    """
+
+    def __init__(self, x: ArrayLike, y: ArrayLike) -> None:
+        self.x = jnp.atleast_1d(x)
+        self.y = jnp.atleast_1d(y)
+
+    def get_points_inside_domain(self) -> Array:
+        """Return all Cartesian product points (x_i, y_j)."""
+        return jnp.array(jnp.meshgrid(self.x, self.y, indexing="ij")).reshape((2, -1)).T
+
+    def get_points_on_domain(self) -> Array:
+        """Return boundary points in counterclockwise order."""
+        xb = jnp.vstack(
+            [
+                points_along_axis(self.x, self.y[0]),  # bottom
+                points_along_axis(self.x[-1], self.y[1:-1]),  # right
+                points_along_axis(self.x[::-1], self.y[-1]),  # top
+                points_along_axis(self.x[0], self.y[-2:0:-1]),  # left
+            ]
+        )
+        return xb

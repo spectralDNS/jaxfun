@@ -44,8 +44,9 @@ uv sync
 ### Galerkin method
 
 ```python
-from jaxfun.galerkin import Chebyshev, TensorProduct, TestFunction, TrialFunction, Div, Grad
+from jaxfun.galerkin import Chebyshev, TensorProduct, TestFunction, TrialFunction
 from jaxfun.galerkin.inner import inner
+from jaxfun.operators import Div, Grad
 
 C = Chebyshev.Chebyshev(16)
 T = TensorProduct((C, C))
@@ -60,8 +61,8 @@ Use a simple multilayer perceptron neural network and solve Poisson's equation o
 
 ```python
 import jax
-from jaxfun import Div, Grad
 from jaxfun.pinns import FlaxFunction, Loss, MLPSpace, Trainer, UnitSquare, adam, lbfgs
+from jaxfun.operators import Div, Grad
 
 # Create an MLP neural network space with two hidden layers
 V = MLPSpace([12, 12], dims=2, rank=0, name="V")

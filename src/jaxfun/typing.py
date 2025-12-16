@@ -1,13 +1,14 @@
+from numbers import Number
 from typing import Literal
 
 import sympy as sp
 from jax import Array as Array
 from jax.typing import ArrayLike as ArrayLike
 
-type LSQR_Tuple = (
+type Loss_Tuple = (
     tuple[sp.Expr, Array]
-    | tuple[sp.Expr, Array, Array]
-    | tuple[sp.Expr, Array, Array, Array]
+    | tuple[sp.Expr, Array, Number | Array]
+    | tuple[sp.Expr, Array, Number | Array, Number | Array]
 )
 
 type SampleMethod = Literal["uniform", "legendre", "chebyshev", "random"]

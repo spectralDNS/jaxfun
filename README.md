@@ -61,7 +61,7 @@ Use a simple multilayer perceptron neural network and solve Poisson's equation o
 ```python
 import jax
 from jaxfun import Div, Grad
-from jaxfun.pinns import LSQR, FlaxFunction, MLPSpace, Trainer, UnitSquare, adam, lbfgs
+from jaxfun.pinns import FlaxFunction, Loss, MLPSpace, Trainer, UnitSquare, adam, lbfgs
 
 # Create an MLP neural network space with two hidden layers
 V = MLPSpace([12, 12], dims=2, rank=0, name="V")
@@ -78,7 +78,7 @@ residual = Div(Grad(u)) - 2
 
 # Define loss function based on Poisson's equation, including
 # homogeneous Dirichlet boundary conditions, and train model
-loss_fn = LSQR((residual, xyi), (u, xyb))
+loss_fn = Loss((residual, xyi), (u, xyb))
 trainer = Trainer(loss_fn)
 trainer.train(adam(u), 5000)
 trainer.train(lbfgs(u), 5000)

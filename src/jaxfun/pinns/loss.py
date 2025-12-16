@@ -9,7 +9,7 @@ from flax import nnx
 from jax.sharding import NamedSharding, PartitionSpec as P
 
 from jaxfun.coordinates import BaseScalar, get_system
-from jaxfun.typing import Array, LSQR_Tuple
+from jaxfun.typing import Array, Loss_Tuple
 from jaxfun.utils import lambdify
 
 from .module import Comp, Function
@@ -51,6 +51,15 @@ def get_flaxfunctions(
     return flax_found
 
 
+def get_testfunction(
+    a: sp.Expr,
+) -> Function | None:
+    for p in sp.core.traversal.iterargs(a):
+        if getattr(p, "argument", -1) == 0:
+            return p
+    return None
+
+
 def evaluate(expr: sp.Expr, x: Array) -> Array:
     """Evaluate a sympy expression containing FlaxFunctions
 
@@ -65,6 +74,8 @@ def evaluate(expr: sp.Expr, x: Array) -> Array:
         raise ValueError("Expression does not contain any FlaxFunctions")
     if len(x.shape) == 1:
         x = x[:, None]
+
+    assert get_testfunction(expr) is None, "Expression contains TestFunction"
 
     r = Residual(expr, x)
     return r.evaluate(get_flaxfunctions(expr).pop().module)
@@ -104,17 +115,51 @@ class Residual:
         target: Number | Array = 0,
         weights: Number | Array = 1,
     ) -> None:
-        """Residual of a single equation evaluated at collocation points
+        r"""Residual of a single equation evaluated at collocation points
+
+        .. math::
+            residual(x_i) = \mathcal{L}(u(x_i)) - f(x_i)
+
+        where :math:`\mathcal{L}` is the differential operator, :math:`u` is the
+        unknown solution, and :math:`f` is the target. The target is the part of
+        the equation that does not contain the unknown solution. Hence, the target
+        needs to be computed only once per collocation point, and is reused for all
+        iterations.
 
         Args:
             f: Sympy expression representing the equation residual. The
                 expression may contain one or several FlaxFunctions.
             x: Collocation points where the residual is evaluated.
-            target: Target value of the residual.
-            weights: Weights for the residual.
+            target: Provided target value of the residual. If the expression f
+                contains terms without FlaxFunctions, these are automatically
+                placed in the target. The target needs to be a number or an array
+                of the same length as the collocation points.
+            weights: Weights for the residual. The weights need to be a number
+                or an array of the same length as the collocation points.
         """
         t, expr = expand(f)
         s = get_flaxfunction_args(f.doit())
+
+        if isinstance(target, Array):
+            assert target.shape[0] == x.shape[0]
+            assert len(target.shape) == 1
+        if isinstance(weights, Array):
+            assert weights.shape[0] == x.shape[0]
+            assert len(weights.shape) == 1
+
+        # Place all terms without flaxfunctions in the target,
+        # because these will not need to be computed more than once
+        if not isinstance(target, Number | Array):
+            raise ValueError("Target need to be a Number or an Array")
+        if len(t.free_symbols) > 0:
+            assert s is not None, "Could not find base scalars in expression"
+            tx = lambdify(s, t)(*x.T)
+            t0 = target - tx
+        else:
+            assert isinstance(t, Number)
+            t = float(t) if t.is_real else complex(t)
+            t0 = target - t
+        t0 = jnp.atleast_1d(t0)
 
         # Build list of equations and all required evaluations of flaxfunctions
         eqs = []
@@ -131,29 +176,19 @@ class Residual:
                     and getattr(p.args[0], "argument", -1) == 2
                 ):
                     keys.add((id(x), mod_id, p.derivative_count))
+                    continue
                 if getattr(p, "argument", -1) == 2:
                     keys.add((id(x), mod_id, 0))
 
         self.eqs = tuple(eqs)
         self.keys = keys
 
-        # Place all terms without flaxfunctions in the target,
-        # because these will not need to be computed more than once
-        assert isinstance(target, Number | Array)
-        t0 = target
-        if len(t.free_symbols) > 0:
-            assert s is not None, "Could not find base scalars in expression"
-            tx = lambdify(s, t)(*x.T)
-            if tx.ndim == 1:
-                tx = tx[:, None]
-            t0 = target - tx
-        else:
-            assert isinstance(t, Number)
-            t = float(t) if t.is_real else complex(t)
-            t0 = target - t
-        t0 = jnp.squeeze(t0)
-        assert isinstance(weights, Number | Array)
+        if not isinstance(weights, Number | Array):
+            raise ValueError("Weights need to be a Number or an Array")
+        if isinstance(weights, Number) and weights == 1:
+            weights = weights / x.shape[0]
         weights = jnp.array(weights)
+
         if weights.sharding != x.sharding and jax.local_device_count() > 1:
             if len(weights.shape) > 0 and weights.shape[0] == x.shape[0]:
                 weights = jax.device_put(weights, x.sharding)
@@ -175,6 +210,17 @@ class Residual:
         x_id: int = None,
     ) -> Array:
         return sum([eq(x, module, Js=Js, x_id=x_id) for eq in self.eqs]) - target
+
+    def loss(
+        self,
+        x: Array,
+        target: Array,
+        module: nnx.Module,
+        Js: dict[tuple[int, int, int], Array] = None,
+        x_id: int = None,
+    ) -> Array:
+        r = self(x, target, module, Js=Js, x_id=x_id)
+        return (self.weights * r**2).sum()
 
     def _compute_gradients(
         self, module: nnx.Module, x: Array
@@ -198,6 +244,12 @@ class Residual:
         Js = self._compute_gradients(module, x)
         return self(x, target, module, Js=Js, x_id=x_id)
 
+    def loss_compute_grad(
+        self, x: Array, target: Array, module: nnx.Module, x_id: int
+    ) -> Array:
+        Js = self._compute_gradients(module, x)
+        return self.loss(x, target, module, Js=Js, x_id=x_id)
+
     def evaluate(self, module: nnx.Module) -> Array:
         """Evaluate the residual at internal points
 
@@ -210,41 +262,307 @@ class Residual:
         return self(self.x, self.target, module)
 
 
-class LSQR:
-    """Least squares loss function"""
+class ResidualVPINN(Residual):
+    """Residual of a single equation for VPINNs"""
 
-    def __init__(self, *fs: LSQR_Tuple):
-        """The least squares method computes the loss over all input equations at
-        all collocation points. The different equations are all defined with their
-        own points.
+    def __init__(
+        self,
+        f: sp.Expr,
+        x: Array,
+        target: Number | Array = 0,
+        weights: Number | Array = 1,
+    ) -> None:
+        r"""Residual of a single equation.
+
+        .. math::
+            res(x_i) = \mathcal{L}(u(x_i)) - b(x_i)
+
+        where :math:`\mathcal{L}` is the differential operator, :math:`u` is the
+        unknown solution (`FlaxFunction`), and :math:`b` is the target. The target
+        is the part of the equation that does not contain the unknown solution. Hence,
+        the target needs to be computed only once per collocation point, and is reused
+        for all iterations.
+
+        The expression f contains a test functions v_k (`TestFunction`) and represents
+        the integrand of the inner product between the residual and the test functions:
+
+        .. math::
+
+            \int res(x) v_k(x) dx
+
+        Hence :math:`f = res(x) v_k(x)`. Note that the integral may be manipulated using
+        integration by parts. For example
+
+        .. math::
+            \int u''(x) v_k(x) dx = -\int u'(x) v'_k(x) dx
+
+        if :math:`v_k` vanishes on the boundary. In this case, f would contain the term
+        :math:`-u'(x) v'_k(x)`.
+
+        The residual is used to compute losses in a variational sense, and the test
+        functions are identified automatically from the sympy expression f.
+
+        The loss is computed as the sum of squared inner products between the
+        residual and the test functions.
+
+        .. math::
+            L = \sum_{k=0}^{K-1} \left( \int res(x) v_k(x) dx \right)^2 / K
+
+        The integral is computed using
+
+        .. math::
+            \int residual(x) v_k(x) dx \approx \sum_{i=0}^{N-1} w_i residual(x_i) v_k(x_i)
+
+        where x_i are the collocation points and w_i are weights (e.g., quadrature
+        weights).
+
+        Args:
+            f: Sympy expression representing the equation residual. The
+                expression may contain one or several FlaxFunctions and a TestFunction.
+            x: Collocation points where the residual is evaluated.
+            target: Provided target value of the residual. If the expression f
+                contains terms without FlaxFunctions, these are automatically
+                placed in the target. The target needs to be a number or an array
+                of the same length as the collocation points.
+            weights: Weights for the residual. The weights need to be a number
+                or an array of the same length as the collocation points.
+        """  # noqa: E501
+        t, expr = expand(f)
+        s = get_flaxfunction_args(f.doit())
+        test = get_testfunction(f)
+        V = test.functionspace
+
+        # Place all terms without flaxfunctions in the target,
+        # because these will not need to be computed more than once
+
+        # t is now a sum of targets, but contains test functions
+        t_args = sp.Add.make_args(t)
+
+        def _pop_test_and_get_derivative_count(iterable):
+            test = None
+            remains = []
+            for z in iterable:
+                t_ = get_testfunction(z)
+                if t_ is not None:
+                    test = z
+                else:
+                    remains.append(z)
+            return sp.Mul(*remains), getattr(test, "derivative_count", 0)
+
+        t_split = []
+        for ta in t_args:
+            if isinstance(ta, sp.Mul):
+                t_split.append(_pop_test_and_get_derivative_count(ta.args))
+            elif get_testfunction(ta) is not None:
+                t_split.append((1, getattr(ta, "derivative_count", 0)))
+            else:
+                raise ValueError("Could not parse target expression")
+
+        # The test functions should be evaluated once per derivative count
+        # FIXME: only implemented for 1D currently
+        self.TD = {
+            k: V.evaluate_basis_derivative(x[:, 0], k)
+            for k in set(z[1] for z in t_split)
+        }
+
+        if not isinstance(target, Number | Array):
+            raise ValueError("Target need to be a Number or an Array")
+        t0 = jnp.expand_dims(jnp.atleast_1d(target), axis=-1)
+        tns = []
+        for tn, tv in t_split:
+            if len(tn.free_symbols) > 0:
+                assert s is not None, "Could not find base scalars in expression"
+                tx = lambdify(s, tn)(*x.T)
+                tns.append(self.TD[tv] * tx[:, None])
+            else:
+                assert isinstance(tn, Number)
+                tn = float(tn) if tn.is_real else complex(tn)
+                tns.append(self.TD[tv] * tn)
+        t0 = t0 - jnp.array(tns, dtype=float).sum(axis=0)
+
+        # Build list of equations and all required evaluations of flaxfunctions
+        eqs = []
+        keys = set()
+        for h in expr:
+            assert isinstance(h, sp.Mul)
+            hn, hi = _pop_test_and_get_derivative_count(h.args)
+            eqs.append((get_fn(hn, s), hi))
+            v = get_flaxfunctions(hn)
+            assert len(v) > 0, "No FlaxFunctions found in equation term"
+            mod_id = hash(v.pop().module)
+            for p in sp.core.traversal.iterargs(hn):
+                if (
+                    isinstance(p, sp.Derivative)
+                    and getattr(p.args[0], "argument", -1) == 2
+                ):
+                    keys.add((id(x), mod_id, p.derivative_count))
+                    continue
+                if getattr(p, "argument", -1) == 2:
+                    keys.add((id(x), mod_id, 0))
+        self.eqs = tuple(eqs)
+        self.keys = keys
+
+        if not isinstance(weights, Number | Array):
+            raise ValueError("Weights need to be a Number or an Array")
+        if isinstance(weights, Number) and weights == 1:
+            weights = weights / x.shape[0]
+        weights = jnp.array(weights)
+
+        if weights.sharding != x.sharding and jax.local_device_count() > 1:
+            if len(weights.shape) > 0 and weights.shape[0] == x.shape[0]:
+                weights = jax.device_put(weights, x.sharding)
+            else:
+                weights = jax.device_put(weights, NamedSharding(x.sharding.mesh, P()))
+        if t0.sharding != x.sharding and jax.local_device_count() > 1:
+            if len(t0.shape) > 0 and t0.shape[0] == x.shape[0]:
+                t0 = jax.device_put(t0, x.sharding)
+            else:
+                t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))
+        self.x, self.target, self.weights = x, t0 * weights[:, None], weights
+
+    def loss(
+        self,
+        x: Array,
+        target: tuple[Array],
+        module: nnx.Module,
+        Js: dict[tuple[int, int, int], Array] = None,
+        x_id: int = None,
+    ) -> Array:
+        # rk = self(x, target, module, Js=Js, x_id=x_id)
+        # return (rk.sum(axis=0)**2).mean() # slower
+        return (
+            jnp.array(
+                sum(
+                    [
+                        (
+                            self.TD[k].T
+                            @ (self.weights * eq(x, module, Js=Js, x_id=x_id))
+                        )
+                        for eq, k in self.eqs
+                    ]
+                )
+                - target.sum(axis=0)
+            )
+            ** 2
+        ).mean()
+
+    def __call__(
+        self,
+        x: Array,
+        target: tuple[Array],
+        module: nnx.Module,
+        Js: dict[tuple[int, int, int], Array] = None,
+        x_id: int = None,
+    ) -> Array:
+        # Return N x K array of residuals for all points N and test functions K
+        return jnp.array(
+            sum(
+                [
+                    (
+                        self.TD[k]
+                        * (self.weights * eq(x, module, Js=Js, x_id=x_id))[:, None]
+                    )
+                    for eq, k in self.eqs
+                ]
+            )
+            - target
+        )
+
+
+class Loss:
+    r"""Loss function
+
+    Computes the total loss over several equations, all defined at their
+    own collocation points. The collocation points need to be arrays of
+    shape (N, D), where N is the number of points and D is the number of
+    dimensions. The collocation points need to be fully addressable.
+
+    The loss is defined as the sum of the losses for all provided subproblems.
+    The subproblems are defined by tuples containing
+
+    1. The equation residual (sympy expression)
+    2. The collocation points (Array of shape (N, D))
+    3. (optional) The target (Number or Array of shape (N,))
+    4. (optional) The weights (Number or Array of shape (N,))
+
+    The residual of each subproblem is understood as:
+
+    .. math::
+        res(x_i) = \mathcal{L}(u(x_i)) - b(x_i),
+
+    where \mathcal{L} is the differential operator, u is the unknown solution,
+    and b is the target. The target is the part of the subproblem that does not
+    contain the unknown solution. This target may be part of the provided equation,
+    or provided as an explicit array under 3.
+
+    The weights are used to weight the contribution at each collocation point.
+    The losses are computed for each subproblem j as:
+
+    .. math::
+        L_j = sum_{i=0}^{N-1} (w_i * res(x_i)^2)
+
+    where :math:`w_i` are the weights for each collocation point :math:`x_i`.
+
+    If the subproblem contains a test function v_k, then the loss is
+    interpreted as an inner product, computed as
+
+    .. math::
+        \phi_k = sum_{i=0}^{N-1} (w_i * res(x_i, v_k(x_i)))
+
+    and subsequently the loss for each subproblem j is
+
+    .. math::
+        L_j = sum_{k=0}^{K-1} \phi_k^2 / K
+
+    All subproblems are then finally combined into a total loss as
+
+    .. math::
+        L = sum_j gw_j * L_j,
+
+    where :math:`gw_j` are global weights that can be set in the Trainer, or
+    computed automatically to achieve a balanced contribution from each
+    subproblem.
+
+    For either loss, sums (not means) are used in the inner computations. Hence
+    an appropriate weight for a least squares loss is weights = 1 / N, where N
+    is the number of collocation points. If weights == (int) 1, which is default,
+    then the weights are automatically scaled to 1 / N.
+
+    For VPINN, the weights represent quadrature weights for inner products, and
+    the weights should be chosen accordingly.
+
+    """
+
+    def __init__(self, *fs: Loss_Tuple):
+        r"""Computes the total loss over all input equations at all collocation
+        points.
 
         Args:
             fs:
                 One or several tuples. The tuples contain the subproblems that
-                are to be solved. The subproblems are defined by the equation
-                residuals (first item) and the collocation points (second item)
-                used to evaluate the residuals. The third item is the target,
-                which is zero by default, whereas the last item is an optional
-                weight. The weight needs to be a number or an array of the same
-                shape as the collocation points.
+                are to be solved. The subproblem tuples are defined by items:
 
-        Note:
-            The collocation points need to be arrays of shape (N, D), where N
-            is the number of points and D is the number of dimensions. The
-            collocation points need to be fully addressable.
+                    1. The equation residual (sympy expression)
+                    2. The collocation points (Array of shape (N, D))
+                    3. (optional) The target (Number or Array of shape (N,))
+                    4. (optional) The weights (Number or Array of shape (N,))
+
+                For VPINN the equation residual needs to contain a `TestFunction`,
+                and the equation residual is the integrand of the inner product,
+                except the weight.
 
         Examples:
 
             >>> import jax.numpy as jnp
             >>> from jaxfun.operators import Div, Grad
-            >>> from jaxfun.pinns.loss import LSQR
+            >>> from jaxfun.pinns.loss import Loss
             >>> from jaxfun.pinns.module import MLPSpace, FlaxFunction
             >>> V = MLPSpace([8, 8], dims=1, rank=0, name="V")
             >>> u = FlaxFunction(V, name="u")
             >>> eq = Div(Grad(u)) + 2
             >>> xj = jnp.linspace(-1, 1, 10)[:, None]
             >>> xb = jnp.array([[-1.0], [1.0]])
-            >>> loss_fn = LSQR((eq, xj, 0, 1), (u, xb, 0, 10))
+            >>> loss_fn = Loss((eq, xj, 0, 1), (u, xb, 0, 10))
         """
         from jaxfun.operators import Dot
 
@@ -253,6 +571,7 @@ class LSQR:
         for f in fs:
             f0 = f[0].doit()
             f1 = f[1]
+            res = ResidualVPINN if get_testfunction(f0) is not None else Residual
             if f0.is_Vector:  # Vector equation
                 sys = get_system(f0)
                 for i in range(sys.dims):
@@ -266,10 +585,10 @@ class LSQR:
                     if len(f) > 3:
                         g += (f[3],)
 
-                    self.residuals.append(Residual(*g))
+                    self.residuals.append(res(*g))
 
             else:
-                self.residuals.append(Residual(*((f[0], f1) + f[2:])))
+                self.residuals.append(res(*((f[0], f1) + f[2:])))
 
         # Store the unique collocation points and their order for later use
         self.xs = {id(eq.x): eq.x for eq in self.residuals}
@@ -292,23 +611,26 @@ class LSQR:
         if jax.local_device_count() == 1:
             return None
 
-        assert self.residuals[0].x.sharding.num_devices == jax.local_device_count()
+        if self.residuals[0].x.sharding.num_devices != jax.local_device_count():
+            raise ValueError(
+                "Cannot determine local mesh, collocation points are not sharded "
+                "over all local devices"
+            )
         return self.residuals[0].x.sharding.mesh
 
     def compute_residual_arrays(
         self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array]
     ) -> list[Array]:
-        """Return the weighted residuals with given global weights
+        """Return the residuals for all collocation points
 
         Args:
             module: The module (nnx.Module)
-            gw: Global weights
             xs: All the collocation arrays used for all equations (not necessarily same
                 length as self.residuals)
             targets: Targets for all residuals (same length as self.residuals)
 
         Returns:
-            Array: The weighted residuals
+            Array: The residuals for all collocation points
         """
         Js = self._compute_gradients(module, xs)
         return [
@@ -326,12 +648,13 @@ class LSQR:
         For the loss L = sum_i gw[i] * mean( res_i^2 ), the Gauss-Newton
         approximation to the Hessian is given by
 
-            H = 2 * sum_i gw[i] * J_i^T @ J_i / N_i
+            H = 2 * sum_i gw[i] * (J_i*w)^T @ J_i / N_i
 
-        where J_i is the Jacobian (J_i)_kj = ∂res_i(x^i_k) / ∂w_j (for weights w_j) of
+        where J_i is the Jacobian (J_i)_kj = ∂res_i(x^i_k) / ∂p_j (weights p_j) of
         the residuals for equation i evaluated at all collocation points
         (x^i = (x^i_k)_{k=0}^{N_i-1}) for equation i, and N_i = |x^i| is the number
-        of collocation points for equation i.
+        of collocation points for equation i. The weights w are optional weights for
+        the residuals.
 
         Args:
             module: The module (nnx.Module)
@@ -354,7 +677,7 @@ class LSQR:
     def value_and_grad_and_JTJ(
         self, module: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
     ) -> tuple[Array, Array, Array]:
-        """Return the loss value, gradient and Jacobian
+        """Return the loss value, gradient and JTJ
 
         Args:
             module: The module (nnx.Module)
@@ -381,18 +704,19 @@ class LSQR:
             if len(w.shape) == 0:
                 w = jnp.array([w])
             JTJ.append(((J * w[:, None]).T @ J) / N)
+            rw = r * w
             grads.append(
                 jax.flatten_util.ravel_pytree(
                     jax.tree.map(
-                        lambda g, r=r, w=w: jax.lax.dot_general(
-                            r * w, g, (((0,), (0,)), ((), ()))
+                        lambda g, rw=rw: jax.lax.dot_general(
+                            rw, g, (((0,), (0,)), ((), ()))
                         ),
                         dr,
                     )
                 )[0]
                 / N
             )
-            loss = loss + (r * w) @ r / N
+            loss = loss + rw @ r / N
 
         return loss, unravel(2 * sum(grads)), 2 * sum(JTJ)
 
@@ -423,16 +747,11 @@ class LSQR:
         xs, targets = self.args
         L2 = []
         Js = self._compute_gradients(module, xs)
-        for res, target, x_id in zip(self.residuals, targets, self.x_ids, strict=True):
-            L2.append(
-                (
-                    res.weights * res(xs[x_id], target, module, Js=Js, x_id=x_id) ** 2
-                ).mean()
-            )
+        for eq, target, x_id in zip(self.residuals, targets, self.x_ids, strict=True):
+            L2.append(eq.loss(xs[x_id], target, module, Js=Js, x_id=x_id))
         return jnp.array(L2)
 
-    @partial(nnx.jit, static_argnums=(0, 4))
-    def compute_Li(
+    def loss_i(
         self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array], i: int
     ) -> Array:
         """Return the loss for equation i
@@ -449,12 +768,10 @@ class LSQR:
         Returns:
             Array: The loss for equation i
         """
-        x = self.residuals[i].eval_compute_grad(
+        return self.residuals[i].loss_compute_grad(
             xs[self.x_ids[i]], targets[i], module, x_id=self.x_ids[i]
         )
-        return (self.residuals[i].weights * x**2).mean()
 
-    @partial(nnx.jit, static_argnums=(0, 4))
     def norm_grad_loss_i(
         self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array], i: int
     ) -> Array:
@@ -472,11 +789,10 @@ class LSQR:
         """
         return jnp.linalg.norm(
             jax.flatten_util.ravel_pytree(
-                nnx.grad(self.compute_Li)(module, xs, targets, i)
+                nnx.grad(self.loss_i)(module, xs, targets, i)
             )[0]
         )
 
-    @partial(nnx.jit, static_argnums=0)
     def norm_grad_loss(
         self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array]
     ) -> Array:
@@ -496,7 +812,6 @@ class LSQR:
             norms.append(self.norm_grad_loss_i(module, xs, targets, i))
         return jnp.array(norms)
 
-    @partial(nnx.jit, static_argnums=0)
     def compute_global_weights(
         self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array]
     ) -> Array:
@@ -529,6 +844,9 @@ class LSQR:
             module: The module (nnx.Module)
             gw: Current global weights
             alpha: Smoothing parameter (0 < alpha < 1)
+            xs: All the collocation arrays used for all equations (not necessarily same
+                length as self.residuals)
+            targets: Targets for all residuals (same length as self.residuals)
 
         Returns:
             Array: The updated global weights
@@ -553,7 +871,7 @@ class LSQR:
                 if isinstance(module, Comp)
                 else module
             )
-            Js[key] = jacn(mod, key[2])(xs[key[0]])
+            Js[key] = jacn(mod, k)(xs[x_id])
         return Js
 
     def loss_with_gw(
@@ -575,9 +893,7 @@ class LSQR:
         return (
             jnp.array(
                 [
-                    (
-                        eq.weights * eq(xs[x_id], target, module, Js=Js, x_id=x_id) ** 2
-                    ).mean()
+                    eq.loss(xs[x_id], target, module, Js=Js, x_id=x_id)
                     for i, (eq, target, x_id) in enumerate(
                         zip(self.residuals, targets, self.x_ids, strict=True)
                     )
@@ -601,9 +917,7 @@ class LSQR:
         Js = self._compute_gradients(module, xs)
         return sum(
             [
-                (
-                    eq.weights * eq(xs[x_id], target, module, Js=Js, x_id=x_id) ** 2
-                ).mean()
+                eq.loss(xs[x_id], target, module, Js=Js, x_id=x_id)
                 for i, (eq, target, x_id) in enumerate(
                     zip(self.residuals, targets, self.x_ids, strict=True)
                 )

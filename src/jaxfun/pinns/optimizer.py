@@ -15,7 +15,7 @@ from optax._src import base as optax_base
 from jaxfun.pinns import FlaxFunction
 from jaxfun.pinns.distributed import process_allmean
 
-from .loss import LSQR
+from .loss import Loss
 
 
 class NamedOptimizer[M: nnx.Module](nnx.Optimizer[M]):
@@ -343,12 +343,12 @@ def GaussNewton(
 
 
 def train(
-    loss_fn: LSQR, allreduce_gradients_and_loss: bool = False
+    loss_fn: Loss, allreduce_gradients_and_loss: bool = False
 ) -> Callable[[nnx.Module, nnx.Optimizer], float]:
     """Build a JIT-compiled training step for a loss function.
 
     Args:
-        loss_fn: Callable loss object/function (LSQR instance) accepting a module.
+        loss_fn: Callable loss object/function (Loss instance) accepting a module.
         allreduce_gradients_and_loss: If True, allreduce gradients and loss across
             processes each epoch.
 
@@ -447,13 +447,13 @@ def train(
 
 
 class Trainer:
-    def __init__(self, loss_fn: LSQR) -> None:
+    def __init__(self, loss_fn: Loss) -> None:
         """Trainer for optimization loops.
 
         Args:
-            loss_fn: Loss function / object (LSQR instance) to optimize.
+            loss_fn: Loss function / object (Loss instance) to optimize.
         """
-        assert isinstance(loss_fn, LSQR), "Trainer requires an LSQR loss function"
+        assert isinstance(loss_fn, Loss), "Trainer requires an Loss loss function"
         self.loss_fn = loss_fn
         self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)
         if jax.local_device_count() > 1:

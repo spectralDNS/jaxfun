@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import sympy as sp
 
 from jaxfun.operators import Div, Grad
-from jaxfun.pinns import LSQR, FlaxFunction, Trainer
+from jaxfun.pinns import FlaxFunction, Loss, Trainer
 from jaxfun.pinns.mesh import Line
 from jaxfun.pinns.nnspaces import sPIKANSpace
 from jaxfun.pinns.optimizer import adam, lbfgs
@@ -31,7 +31,7 @@ xb = mesh.get_points_on_domain()
 
 eq = Div(Grad(w)) - Div(Grad(ue))
 
-loss_fn = LSQR((eq, xi), (w - ue, xb))
+loss_fn = Loss((eq, xi), (w - ue, xb))
 trainer = Trainer(loss_fn)
 
 t0 = time.time()

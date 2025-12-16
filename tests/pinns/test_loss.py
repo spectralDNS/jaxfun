@@ -8,7 +8,7 @@ from jaxfun.coordinates import BaseScalar, CartCoordSys, x, y
 from jaxfun.galerkin import FunctionSpace, Legendre
 from jaxfun.operators import Grad
 from jaxfun.pinns.loss import (
-    LSQR,
+    Loss,
     Residual,
     evaluate,
     expand,
@@ -140,36 +140,36 @@ def test_residual_with_flaxfunction(flax_func):
     assert len(residual.eqs) == 1
     assert jnp.allclose(residual.target, -3.0)
     x = flax_func.functionspace.system.base_scalars()[0]
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         residual = Residual(f, xj, target=x)
 
 
 def test_lsqr_vector_equation(flax_func):
     grad_u = Grad(flax_func)
     pts = jnp.array([[1.0, 2.0], [3.0, 4.0]])
-    lsqr = LSQR((grad_u, pts))
+    lsqr = Loss((grad_u, pts))
     # Should create residuals for each component
     assert len(lsqr.residuals) == 2  # 2D vector = 2 components
 
 
 def test_lsqr_vector_equation_with_target():
-    # Test LSQR with vector equations
+    # Test Loss with vector equations
     mlp = MLPSpace([4, 4], dims=2, rank=1, name="MLP")
     u = FlaxFunction(mlp, "u")
     pts = jnp.array([[1.0, 2.0], [3.0, 4.0]])
-    lsqr = LSQR((u, pts, u(pts), jnp.array([1.0, 1.0])))
+    lsqr = Loss((u, pts, u(pts), jnp.array([1.0, 1.0])))
     assert jnp.allclose(lsqr.residuals[0].target, u(pts)[:, 0])
     assert jnp.allclose(lsqr.residuals[1].target, u(pts)[:, 1])
     assert len(lsqr.residuals) == 2
-    lsqr = LSQR((u, pts, 0, jnp.array([1.0, 1.0])))
+    lsqr = Loss((u, pts, 0, jnp.array([1.0, 1.0])))
     assert len(lsqr.residuals) == 2
 
 
-def test_lsqr_compute_Li(flax_func):
+def test_lsqr_loss_i(flax_func):
     x = jnp.array([[1.0, 2.0]])
-    lsqr = LSQR((flax_func - 1, x))
+    lsqr = Loss((flax_func - 1, x))
     xs, targets = lsqr.args
-    loss_i = lsqr.compute_Li(flax_func.module, xs, targets, 0)
+    loss_i = lsqr.loss_i(flax_func.module, xs, targets, 0)
     assert jnp.allclose(xs[0], x)
     assert targets[0] == 1.0
     assert isinstance(loss_i, jnp.ndarray)
@@ -181,7 +181,7 @@ def test_lsqr_norm_grad_loss_i():
     V = FunctionSpace(2, Legendre.Legendre, name="V")
     u = FlaxFunction(V, "u", kernel_init=nnx.initializers.ones)
     x = jnp.array([[0.0], [1.0]])
-    lsqr = LSQR((u, x, u(x)))
+    lsqr = Loss((u, x, u(x)))
     xs, targets = lsqr.args
     norm = lsqr.norm_grad_loss_i(u.module, xs, targets, 0)
     assert norm == 0
@@ -192,7 +192,7 @@ def test_lsqr_norm_grad_loss():
     u = FlaxFunction(V, "u", kernel_init=nnx.initializers.ones)
     x1 = jnp.array([[0.2, 0.5]])
     x2 = jnp.array([[0.3, 0.4]])
-    lsqr = LSQR((u, x1, u(x1)), (u - 1, x2, u(x2) - 1))
+    lsqr = Loss((u, x1, u(x1)), (u - 1, x2, u(x2) - 1))
     norms = lsqr.norm_grad_loss(u.module, *lsqr.args)
     assert norms.shape == (2,)  # Two residuals
     assert jnp.all(norms == 0)
@@ -201,7 +201,7 @@ def test_lsqr_norm_grad_loss():
 def test_lsqr_compute_global_weights(flax_func):
     x1 = jnp.array([[1.0, 2.0]])
     x2 = jnp.array([[3.0, 4.0]])
-    lsqr = LSQR((flax_func, x1), (flax_func - 1, x2))
+    lsqr = Loss((flax_func, x1), (flax_func - 1, x2))
     weights = lsqr.compute_global_weights(flax_func.module, *lsqr.args)
     assert weights.shape == (2,)
     assert jnp.all(weights > 0)
@@ -209,7 +209,7 @@ def test_lsqr_compute_global_weights(flax_func):
 
 def test_lsqr_update_global_weights(flax_func):
     x = jnp.array([[1.0, 2.0]])
-    lsqr = LSQR((flax_func, x), (flax_func - 1, x, -1))
+    lsqr = Loss((flax_func, x), (flax_func - 1, x, -1))
     xs, targets = lsqr.args
     gw = jnp.ones(len(lsqr.residuals), dtype=float)
     _ = lsqr.loss_with_gw(flax_func.module, gw, xs, targets)  # Initialize Js
@@ -223,7 +223,7 @@ def test_lsqr_update_global_weights(flax_func):
 def test_lsqr_call_with_weights(flax_func):
     x = jnp.array([[1.0, 2.0]])
     weights = jnp.array([2.0])
-    lsqr = LSQR((flax_func, x, 0, weights))
+    lsqr = Loss((flax_func, x, 0, weights))
     loss = lsqr(flax_func.module)
     assert lsqr.residuals[0].weights[0] == 2.0
     assert isinstance(loss, jnp.ndarray)
@@ -286,7 +286,7 @@ def test_residual_with_symbolic_expression(flax_func):
 def test_lsqr_initialization_single_equation():
     x = jnp.array([[1.0], [2.0]])
     f = sp.Integer(5)
-    lsqr = LSQR((f, x))
+    lsqr = Loss((f, x))
     assert len(lsqr.residuals) == 1
     assert lsqr.residuals[0].target == -5.0
 
@@ -296,7 +296,7 @@ def test_lsqr_initialization_multiple_equations():
     x2 = jnp.array([[3.0], [4.0]])
     f1 = sp.Integer(5)
     f2 = sp.Integer(10)
-    lsqr = LSQR((f1, x1), (f2, x2))
+    lsqr = Loss((f1, x1), (f2, x2))
     assert len(lsqr.residuals) == 2
     assert lsqr.residuals[0].target == -5.0
     assert lsqr.residuals[1].target == -10.0
@@ -307,11 +307,11 @@ def test_lsqr_initialization_multiple_equations():
 def test_lsqr_compute_residuals_simple():
     x = jnp.array([[1.0], [2.0]])
     f = sp.Integer(5)
-    lsqr = LSQR((f, x))
+    lsqr = Loss((f, x))
     model = nnx.Module()
     residuals = lsqr.compute_residuals(model)
     assert residuals.shape == (1,)
-    assert residuals[0] == 25.0
+    assert residuals[0] == 12.5
 
 
 def test_get_fn_power_of_expression(base_scalars):
@@ -368,7 +368,7 @@ if __name__ == "__main__":
     test_residual_with_symbolic_expression(flax_func.__wrapped__())
     test_lsqr_vector_equation(flax_func.__wrapped__())
     test_lsqr_vector_equation_with_target()
-    test_lsqr_compute_Li(flax_func.__wrapped__())
+    test_lsqr_loss_i(flax_func.__wrapped__())
     test_lsqr_norm_grad_loss_i()
     test_lsqr_norm_grad_loss()
     test_lsqr_compute_global_weights(flax_func.__wrapped__())

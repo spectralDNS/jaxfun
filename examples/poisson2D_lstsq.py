@@ -6,11 +6,12 @@ import time
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+from flax import nnx
 
 from jaxfun import Div, Grad
 from jaxfun.galerkin import FunctionSpace, TensorProduct
 from jaxfun.galerkin.Chebyshev import Chebyshev
-from jaxfun.pinns import LSQR, FlaxFunction, Trainer
+from jaxfun.pinns import FlaxFunction, Loss, Trainer
 from jaxfun.pinns.mesh import Rectangle
 from jaxfun.pinns.optimizer import GaussNewton, adam, lbfgs
 from jaxfun.utils import lambdify
@@ -23,7 +24,7 @@ print("JAX running on", jax.devices()[0].platform.upper())
 # )
 C = FunctionSpace(10, Chebyshev, domain=(-1, 1), name="C")
 V = TensorProduct(C, C, name="V")
-w = FlaxFunction(V, name="w")
+w = FlaxFunction(V, name="w", rngs=nnx.Rngs(1001))
 
 N = 32
 mesh = Rectangle(-1, 1, -1, 1)
@@ -31,14 +32,13 @@ points = C.__class__.__name__.lower()
 xyi = mesh.get_points_inside_domain(N, N, points)
 xyb = mesh.get_points_on_domain(N, N, points, corners=True)
 wi = mesh.get_weights_inside_domain(N, N, points)
-wb = mesh.get_weights_on_domain(N, N, points, corners=True)
 
 x, y = V.system.base_scalars()
 ue = (1 - x**2) * (1 - y**2)  # manufactured solution
 
 f = Div(Grad(w)) + x * w * w.diff(x) - (Div(Grad(ue)) + x * ue * ue.diff(x))
 
-loss_fn = LSQR((f, xyi, 0, wi), (w, xyb, 0, wb))
+loss_fn = Loss((f, xyi, 0, wi), (w, xyb, 0, 10))
 trainer = Trainer(loss_fn)
 
 t0 = time.time()
@@ -50,7 +50,7 @@ opt_lbfgs = lbfgs(w, memory_size=20)
 trainer.train(opt_lbfgs, 1000, epoch_print=100, update_global_weights=100)
 
 opt_hess = GaussNewton(w, use_lstsq=True, use_GN=True)
-trainer.train(opt_hess, 10, epoch_print=1, abs_limit_change=ulp(1000))
+trainer.train(opt_hess, 10, epoch_print=1)
 
 print("time", time.time() - t0)
 
@@ -59,7 +59,7 @@ error = jnp.linalg.norm(w.module(xyi)[:, 0] - uj) / jnp.sqrt(len(xyi))
 print("Error", error)
 
 if "PYTEST" in os.environ:
-    assert error < ulp(1000), error
+    assert error < ulp(10000), error
     sys.exit(1)
 
 

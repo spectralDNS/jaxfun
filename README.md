@@ -60,7 +60,6 @@ A = inner(Div(Grad(u)) * v)
 Use a simple multilayer perceptron neural network and solve Poisson's equation on the unit square
 
 ```python
-import jax
 from jaxfun.pinns import FlaxFunction, Loss, MLPSpace, Trainer, UnitSquare, adam, lbfgs
 from jaxfun.operators import Div, Grad
 

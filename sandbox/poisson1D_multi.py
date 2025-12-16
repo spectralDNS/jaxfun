@@ -52,8 +52,8 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
 from jaxfun.operators import Div, Grad
 from jaxfun.pinns import (
-    LSQR,
     FlaxFunction,
+    Loss,
     MLPSpace,
     Trainer,
 )
@@ -93,12 +93,10 @@ N_PER_PROCESS = N // jax.process_count()
 global_shape = (N, 1)
 
 # Create local mesh on this process
-mesh = Line(
-    N_PER_PROCESS, float(domain.lower), float(domain.upper), key=nnx.Rngs(1000 + rank)()
-)
+mesh = Line(float(domain.lower), float(domain.upper), key=nnx.Rngs(1000 + rank)())
 
 # Get local data points of shape (N_PER_PROCESS, 1), that reside on single local device
-x_process = mesh.get_points_inside_domain("random")
+x_process = mesh.get_points_inside_domain(N_PER_PROCESS, "random")
 
 # Shard the local data across local devices
 x_device = jax.device_put(x_process, local_batch)
@@ -112,7 +110,7 @@ x_global = jax.make_array_from_process_local_data(
 
 xb = mesh.get_points_on_domain()  # Just two points so just replicate
 xb = jax.device_put(xb, NamedSharding(local_mesh, P()))
-ub = lambdify(x, ue)(xb)
+ub = lambdify(x, ue)(xb[:, 0])
 
 if rank == 0:
     print(
@@ -131,14 +129,14 @@ if rank == 0:
 
 # Equations to solve. Note that we use the fully addressable x_device
 f = Div(Grad(w)) - (Div(Grad(ue)))
-loss_fn = LSQR((f, x_device), (w, xb, ub))
+loss_fn = Loss((f, x_device), (w, xb, ub))
 opt_adam = adam(w, learning_rate=1e-3)
 opt_soap = soap(w, learning_rate=1e-3)
 opt_lbfgs = lbfgs(w, memory_size=10)
 opt_hess = GaussNewton(w)
 trainer = Trainer(loss_fn)
 
-loss = loss_fn(w.module)
+# loss = loss_fn(w.module)
 t0 = time.time()
 
 trainer.train(

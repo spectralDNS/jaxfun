@@ -8,7 +8,7 @@ import jax.numpy as jnp
 
 from jaxfun import Div, Grad
 from jaxfun.galerkin import Chebyshev, TensorProduct
-from jaxfun.pinns import LSQR, FlaxFunction, Trainer
+from jaxfun.pinns import FlaxFunction, Loss, Trainer
 from jaxfun.pinns.mesh import Lshape
 from jaxfun.pinns.optimizer import GaussNewton, adam, lbfgs
 
@@ -30,7 +30,7 @@ x, y = V.system.base_scalars()
 
 f = Div(Grad(w)) - 1
 
-loss_fn = LSQR((f, xi, 0), (w, xb, 0))
+loss_fn = Loss((f, xi, 0), (w, xb, 0))
 trainer = Trainer(loss_fn)
 
 t0 = time.time()

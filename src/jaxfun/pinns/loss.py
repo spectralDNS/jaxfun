@@ -106,25 +106,40 @@ def expand(forms: sp.Expr) -> list[sp.Expr]:
 
 
 class Residual:
-    """Residual of a single equation"""
+    """Residual of a single equation
+
+    Regular least squares residual defined at collocation points. The residual
+    is computed as
+
+    .. math::
+        residual(x_i) = \mathcal{L}(u(x_i)) - b(x_i)
+
+    where :math:`\mathcal{L}` is the differential operator, :math:`u` is the
+    unknown solution, and :math:`b` is the target. The target is the part of
+    the equation that does not contain the unknown solution. Hence, the target
+    needs to be computed only once per collocation point, and is reused for all
+    iterations.
+
+    The loss is computed as
+    .. math::
+        L = \sum_{i=0}^{N-1} (w_i * residual(x_i)^2)
+
+    Attributes:
+        x: Collocation points where the residual is evaluated.
+        target: Target values for the residual at the collocation points.
+        weights: Weights for the residual at the collocation points.
+        eqs: Tuple of subequations required to evaluate the residual.
+        keys: Set of keys identifying required evaluations of FlaxFunctions.
+    """
 
     def __init__(
         self,
         f: sp.Expr,
         x: Array,
         target: Number | Array = 0,
-        weights: Number | Array = 1,
+        weights: Number | Array | None = None,
     ) -> None:
         r"""Residual of a single equation evaluated at collocation points
-
-        .. math::
-            residual(x_i) = \mathcal{L}(u(x_i)) - f(x_i)
-
-        where :math:`\mathcal{L}` is the differential operator, :math:`u` is the
-        unknown solution, and :math:`f` is the target. The target is the part of
-        the equation that does not contain the unknown solution. Hence, the target
-        needs to be computed only once per collocation point, and is reused for all
-        iterations.
 
         Args:
             f: Sympy expression representing the equation residual. The
@@ -183,10 +198,10 @@ class Residual:
         self.eqs = tuple(eqs)
         self.keys = keys
 
+        if weights is None:
+            weights = 1 / x.shape[0]
         if not isinstance(weights, Number | Array):
             raise ValueError("Weights need to be a Number or an Array")
-        if isinstance(weights, Number) and weights == 1:
-            weights = weights / x.shape[0]
         weights = jnp.array(weights)
 
         if weights.sharding != x.sharding and jax.local_device_count() > 1:
@@ -263,58 +278,66 @@ class Residual:
 
 
 class ResidualVPINN(Residual):
-    """Residual of a single equation for VPINNs"""
+    r"""Residual of a single equation for VPINNs.
+
+    The residual is computed as an inner product between the equation
+    and test functions v_k (`TestFunction`). The equation residual is
+    identified as
+
+    .. ::math
+        R(x; u) = \mathcal{L}(u(x)) - b(x),
+
+    for operator :mathcal:`L`, target :math:`b(x)`, and solution :math:`u(x)`.
+    The loss is then computed as
+
+    .. math::
+        L = \sum_{k=0}^{K-1} \left( \int R(x; u) v_k(x) dx \right)^2 / K
+
+    The initialization of this class requires the integrand, here
+    :math:`f = R(x; u) v_k(x)`, of the inner product as its first
+    argument. This may be the integrand above, or the one obtained after using,
+    e.g., integration by parts.
+
+    The inner product is approximated using quadrature at the collocation points
+
+    .. math::
+        \phi_k &= \int R(x; u) v_k(x) dx \\
+               &\approx \sum_{i=0}^{N-1} w_i R(x_i; u(x_i)) v_k(x_i)
+
+    where :math:`w_i` are the (provided) weights (e.g., quadrature weights).
+
+    The loss is then computed as
+
+    .. math::
+        L = \sum_{k=0}^{K-1} \phi_k^2 / K
+
+    Note that the integral may be manipulated using integration by parts. For
+    example
+
+    .. math::
+        \int u''(x) v_k(x) dx = -\int u'(x) v'_k(x) dx
+
+    if :math:`v_k` vanishes on the boundary. In this case, :math:`f` would
+    contain the term :math:`-u'(x) v'_k(x)`.
+
+    Attributes:
+        x: Collocation points where the residual is evaluated.
+        target: Target values for the residual at the collocation points.
+        weights: Weights for the residual at the collocation points.
+        eqs: Tuple of subequations required to evaluate the residual.
+        keys: Set of keys identifying required evaluations of FlaxFunctions.
+        TD: Dictionary mapping derivative counts to evaluations of test functions
+
+    """  # noqa: E501
 
     def __init__(
         self,
         f: sp.Expr,
         x: Array,
         target: Number | Array = 0,
-        weights: Number | Array = 1,
+        weights: Number | Array | None = None,
     ) -> None:
-        r"""Residual of a single equation.
-
-        .. math::
-            res(x_i) = \mathcal{L}(u(x_i)) - b(x_i)
-
-        where :math:`\mathcal{L}` is the differential operator, :math:`u` is the
-        unknown solution (`FlaxFunction`), and :math:`b` is the target. The target
-        is the part of the equation that does not contain the unknown solution. Hence,
-        the target needs to be computed only once per collocation point, and is reused
-        for all iterations.
-
-        The expression f contains a test functions v_k (`TestFunction`) and represents
-        the integrand of the inner product between the residual and the test functions:
-
-        .. math::
-
-            \int res(x) v_k(x) dx
-
-        Hence :math:`f = res(x) v_k(x)`. Note that the integral may be manipulated using
-        integration by parts. For example
-
-        .. math::
-            \int u''(x) v_k(x) dx = -\int u'(x) v'_k(x) dx
-
-        if :math:`v_k` vanishes on the boundary. In this case, f would contain the term
-        :math:`-u'(x) v'_k(x)`.
-
-        The residual is used to compute losses in a variational sense, and the test
-        functions are identified automatically from the sympy expression f.
-
-        The loss is computed as the sum of squared inner products between the
-        residual and the test functions.
-
-        .. math::
-            L = \sum_{k=0}^{K-1} \left( \int res(x) v_k(x) dx \right)^2 / K
-
-        The integral is computed using
-
-        .. math::
-            \int residual(x) v_k(x) dx \approx \sum_{i=0}^{N-1} w_i residual(x_i) v_k(x_i)
-
-        where x_i are the collocation points and w_i are weights (e.g., quadrature
-        weights).
+        r"""Residual of a single equation using VPINN.
 
         Args:
             f: Sympy expression representing the equation residual. The
@@ -332,8 +355,8 @@ class ResidualVPINN(Residual):
         test = get_testfunction(f)
         V = test.functionspace
 
-        # Place all terms without flaxfunctions in the target,
-        # because these will not need to be computed more than once
+        # Place all terms without flaxfunctions in the target, since these will only be
+        # computed once
 
         # t is now a sum of targets, but contains test functions
         t_args = sp.Add.make_args(t)
@@ -366,7 +389,7 @@ class ResidualVPINN(Residual):
         }
 
         if not isinstance(target, Number | Array):
-            raise ValueError("Target need to be a Number or an Array")
+            raise ValueError("Target needs to be a Number or an Array")
         t0 = jnp.expand_dims(jnp.atleast_1d(target), axis=-1)
         tns = []
         for tn, tv in t_split:
@@ -402,10 +425,10 @@ class ResidualVPINN(Residual):
         self.eqs = tuple(eqs)
         self.keys = keys
 
+        if weights is None:
+            weights = 1 / x.shape[0]
         if not isinstance(weights, Number | Array):
             raise ValueError("Weights need to be a Number or an Array")
-        if isinstance(weights, Number) and weights == 1:
-            weights = weights / x.shape[0]
         weights = jnp.array(weights)
 
         if weights.sharding != x.sharding and jax.local_device_count() > 1:
@@ -488,7 +511,7 @@ class Loss:
     The residual of each subproblem is understood as:
 
     .. math::
-        res(x_i) = \mathcal{L}(u(x_i)) - b(x_i),
+        R(x; u) = \mathcal{L}(u(x)) - b(x),
 
     where \mathcal{L} is the differential operator, u is the unknown solution,
     and b is the target. The target is the part of the subproblem that does not
@@ -496,18 +519,20 @@ class Loss:
     or provided as an explicit array under 3.
 
     The weights are used to weight the contribution at each collocation point.
-    The losses are computed for each subproblem j as:
+    For a regular least squares method the losses are computed for each
+    subproblem j as:
 
     .. math::
-        L_j = sum_{i=0}^{N-1} (w_i * res(x_i)^2)
+        L_j = sum_{i=0}^{N-1} (w_i * R(x_i; u(x_i))^2)
 
     where :math:`w_i` are the weights for each collocation point :math:`x_i`.
 
-    If the subproblem contains a test function v_k, then the loss is
+    If the subproblem contains a test function :math:`v_k`, then the loss is
     interpreted as an inner product, computed as
 
     .. math::
-        \phi_k = sum_{i=0}^{N-1} (w_i * res(x_i, v_k(x_i)))
+        \phi_k &= \int R(x; u) v_k(x) dx \\
+        \phi_k &\approx sum_{i=0}^{N-1} (w_i * R(x_i, u(x_i)) v_k(x_i))
 
     and subsequently the loss for each subproblem j is
 
@@ -523,10 +548,10 @@ class Loss:
     computed automatically to achieve a balanced contribution from each
     subproblem.
 
-    For either loss, sums (not means) are used in the inner computations. Hence
-    an appropriate weight for a least squares loss is weights = 1 / N, where N
-    is the number of collocation points. If weights == (int) 1, which is default,
-    then the weights are automatically scaled to 1 / N.
+    For all losses, sums (not means) are used in the inner computations. Hence
+    an appropriate weight for a least squares loss is 1 / N, where N
+    is the number of collocation points. If weights is None, which is default,
+    then the weights are automatically set to 1 / N.
 
     For VPINN, the weights represent quadrature weights for inner products, and
     the weights should be chosen accordingly.

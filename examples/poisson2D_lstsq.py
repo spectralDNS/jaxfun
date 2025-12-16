@@ -32,13 +32,14 @@ points = C.__class__.__name__.lower()
 xyi = mesh.get_points_inside_domain(N, N, points)
 xyb = mesh.get_points_on_domain(N, N, points, corners=True)
 wi = mesh.get_weights_inside_domain(N, N, points)
+Nb = xyb.shape[0]
 
 x, y = V.system.base_scalars()
 ue = (1 - x**2) * (1 - y**2)  # manufactured solution
 
 f = Div(Grad(w)) + x * w * w.diff(x) - (Div(Grad(ue)) + x * ue * ue.diff(x))
 
-loss_fn = Loss((f, xyi, 0, wi), (w, xyb, 0, 10))
+loss_fn = Loss((f, xyi, 0, wi), (w, xyb, 0, 100 / Nb))
 trainer = Trainer(loss_fn)
 
 t0 = time.time()

@@ -18,7 +18,7 @@ except ImportError:
 import sympy as sp
 from flax import nnx
 
-from jaxfun.operators import Div, Grad, Outer
+from jaxfun.operators import Div, Dot, Grad
 from jaxfun.pinns.bcs import DirichletBC
 from jaxfun.pinns.loss import Loss
 from jaxfun.pinns.mesh import Rectangle
@@ -32,23 +32,25 @@ Re = 10.0
 rho = 1.0
 nu = 2.0 / Re
 
-N = 50
+N = 20
 
 mesh = Rectangle(-1, 1, -1, 1)
-xyi = mesh.get_points_inside_domain(N, N, "legendre")
-xyb = mesh.get_points_on_domain(N, N, "legendre")
+xyi = mesh.get_points_inside_domain(N, N, "random")
+xyb = mesh.get_points_on_domain(N, N, "random")
 xyp = jnp.array([[0.0, 0.0]])
-wi = mesh.get_weights_inside_domain(N, N, "legendre")
-wb = mesh.get_weights_on_domain(N, N, "legendre")
+wi = mesh.get_weights_inside_domain(N, N, "random")
+wb = mesh.get_weights_on_domain(N, N, "random")
+Ni = xyi.shape[0]
+Nb = xyb.shape[0]
 
-V = MLPSpace([30], dims=2, rank=1, name="V")  # Vector space for velocity
-Q = MLPSpace([20], dims=2, rank=0, name="Q")  # Scalar space for pressure
+V = MLPSpace([16], dims=2, rank=1, name="V")  # Vector space for velocity
+Q = MLPSpace([12], dims=2, rank=0, name="Q")  # Scalar space for pressure
 
-u = FlaxFunction(V, "u", rngs=nnx.Rngs(2002), bias_init=nnx.initializers.normal())
-p = FlaxFunction(Q, "p", rngs=nnx.Rngs(2001), bias_init=nnx.initializers.normal())
+u = FlaxFunction(V, "u", rngs=nnx.Rngs(2002))  # , bias_init=nnx.initializers.normal())
+p = FlaxFunction(Q, "p", rngs=nnx.Rngs(2002))  # , bias_init=nnx.initializers.normal())
 
-# eq1 = Dot(Grad(u), u) - nu * Div(Grad(u)) + Grad(p)
-eq1 = Div(Outer(u, u)) - nu * Div(Grad(u)) + Grad(p)  # Alternative form
+eq1 = Dot(Grad(u), u) - nu * Div(Grad(u)) + Grad(p)
+# eq1 = Div(Outer(u, u)) - nu * Div(Grad(u)) + Grad(p)  # Alternative form
 
 eq2 = Div(u)
 
@@ -61,9 +63,9 @@ ub = DirichletBC(
 
 # Each item is (equation, points, target, optional weights)
 loss_fn = Loss(
-    (eq1, xyi, 0, wi),  # momentum vector equation
-    (eq2, xyi, 0, wi),  # Divergence constraint
-    (u, xyb, ub, 2),  # Boundary conditions on u
+    (eq1, xyi),  # momentum vector equation
+    (eq2, xyi),  # Divergence constraint
+    (u, xyb, ub, 2 / Nb),  # Boundary conditions on u
     (p, xyp, 0, 10),  # Pressure pin-point
 )
 

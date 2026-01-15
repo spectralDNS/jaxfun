@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
+from jax.experimental import sparse
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.utils.common import Domain, jit_vmap, n
@@ -72,7 +73,7 @@ class Legendre(Jacobi):
         return c0 + c1 * X
 
     @jit_vmap(in_axes=(0, None))
-    def evaluate3(self, X: float | Array, c: Array) -> Array:
+    def evaluate3(self, X: float, c: Array) -> Array:
         """Evaluate Legendre series via forward recurrence accumulation.
 
         Args:
@@ -95,7 +96,7 @@ class Legendre(Jacobi):
         return jnp.sum(xs, axis=0) + c[0]
 
     @partial(jax.jit, static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int = 0) -> Array:
+    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return Gauss–Legendre quadrature nodes and weights.
 
         Args:
@@ -105,10 +106,11 @@ class Legendre(Jacobi):
             (2, N) array: first row nodes, second row weights.
         """
         N = self.num_quad_points if N == 0 else N
-        return leggauss(N)
+        x, w = leggauss(N)
+        return x, w
 
     @jit_vmap(in_axes=(0, None))
-    def eval_basis_function(self, X: float | Array, i: int) -> Array:
+    def eval_basis_function(self, X: float, i: int) -> float:
         """Evaluate single Legendre polynomial P_i at X.
 
         Args:
@@ -130,7 +132,7 @@ class Legendre(Jacobi):
         return jax.lax.fori_loop(2, i + 1, body_fun, (x0, X))[-1]
 
     @jit_vmap(in_axes=0)
-    def eval_basis_functions(self, X: float | Array) -> Array:
+    def eval_basis_functions(self, X: float) -> Array:
         """Evaluate all Legendre polynomials P_0..P_{N-1} at X.
 
         Args:
@@ -143,7 +145,7 @@ class Legendre(Jacobi):
 
         def inner_loop(
             carry: tuple[float, float], i: int
-        ) -> tuple[tuple[float, float], Array]:
+        ) -> tuple[tuple[float, float], float]:
             x0, x1 = carry
             x2 = (x1 * X * (2 * i - 1) - x0 * (i - 1)) / i
             return (x1, x2), x1
@@ -156,7 +158,9 @@ class Legendre(Jacobi):
         return sp.lambdify(n, 2 / (2 * n + 1), modules="jax")(jnp.arange(self.N))
 
 
-def matrices(test: tuple[Legendre, int], trial: tuple[Legendre, int]) -> Array:
+def matrices(
+    test: tuple[Legendre, int], trial: tuple[Legendre, int]
+) -> sparse.BCOO | None:
     """Return sparse operator matrices for Legendre derivative coupling.
 
     Supported (i,j) derivative orders:
@@ -174,7 +178,6 @@ def matrices(test: tuple[Legendre, int], trial: tuple[Legendre, int]) -> Array:
         BCOO sparse matrix or None if unsupported.
     """
     import numpy as np
-    from jax.experimental import sparse
     from scipy import sparse as scipy_sparse
 
     v, i = test
@@ -196,7 +199,10 @@ def matrices(test: tuple[Legendre, int], trial: tuple[Legendre, int]) -> Array:
             )
         )
     if i == 1 and j == 0:
-        return matrices(trial, test).transpose()
+        m = matrices(trial, test)
+        if m is not None:
+            return m.transpose()
+        return None
     if i == 0 and j == 2:
         k = jnp.arange(max(v.N, u.N))
 
@@ -222,5 +228,7 @@ def matrices(test: tuple[Legendre, int], trial: tuple[Legendre, int]) -> Array:
             )
         )
     if i == 2 and j == 0:
-        return matrices(trial, test).transpose()
+        m = matrices(trial, test)
+        if m is not None:
+            return m.transpose()
     return None

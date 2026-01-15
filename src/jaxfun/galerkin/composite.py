@@ -144,7 +144,7 @@ class Composite(OrthogonalSpace):
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
         OrthogonalSpace.__init__(
-            self, N, domain, system=system, name=name, fun_str=fun_str
+            self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
         self.orthogonal = orthogonal(
             N, domain=domain, alpha=alpha, beta=beta, system=system
@@ -335,7 +335,7 @@ class BCGeneric(Composite):
         domain = Domain(-1, 1) if domain is None else domain
         bcs = BoundaryConditions(bcs, domain=domain)
         OrthogonalSpace.__init__(
-            self, N, domain, system=system, name=name, fun_str=fun_str
+            self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
         self.bcs = bcs
         self.stencil = None
@@ -526,7 +526,7 @@ def get_bc_basis(bcs: BoundaryConditions, orthogonal: Jacobi) -> sp.Matrix:
 
     bcs = BoundaryConditions(bcs)
 
-    def _computematrix(first):
+    def _computematrix(first) -> sp.Matrix:
         bc = {"D": 0, "N": 1, "N2": 2, "N3": 3, "N4": 4}
         lr = {"L": 0, "R": 1}
         lra = {"L": "left", "R": "right"}
@@ -558,6 +558,7 @@ def get_bc_basis(bcs: BoundaryConditions, orthogonal: Jacobi) -> sp.Matrix:
 
     first_basis = bcs.num_derivatives()
     first = 0
+    s = None
     for first in range(first_basis + 1):
         try:
             s = _computematrix(first)

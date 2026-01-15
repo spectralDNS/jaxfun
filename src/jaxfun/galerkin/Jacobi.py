@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
+from jax.experimental import sparse
 from scipy.special import roots_jacobi
 from sympy import Expr, Number, Symbol
 
@@ -22,7 +23,7 @@ class Jacobi(OrthogonalSpace):
     Provides:
       * Series evaluation (Clenshaw-like backward recurrence)
       * Single / all basis function evaluation
-      * Quadrature nodes/weights (Gauss–Jacobi)
+      * Quadrature nodes/weights (Gauss-Jacobi)
       * Norm / derivative normalization factors
 
     Args:
@@ -57,7 +58,7 @@ class Jacobi(OrthogonalSpace):
         self.beta = beta
 
     @jit_vmap(in_axes=(0, None))
-    def evaluate2(self, X: float | Array, c: Array) -> Array:
+    def evaluate2(self, X: float, c: Array) -> Array:
         """Evaluate Jacobi series sum_k c_k P_k^{(α,β)}(X) (backward scheme).
 
         Uses a stable backward recurrence accumulating two running
@@ -98,7 +99,7 @@ class Jacobi(OrthogonalSpace):
         return c0 + c1 * ((a + 1) + (a + b + 2) * (X - 1) / 2)
 
     @partial(jax.jit, static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int = 0) -> Array:
+    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return Gauss–Jacobi quadrature nodes/weights.
 
         Args:
@@ -108,10 +109,11 @@ class Jacobi(OrthogonalSpace):
             jnp.array((2, N)) first row nodes, second row weights.
         """
         N = self.num_quad_points if N == 0 else N
-        return jnp.array(roots_jacobi(N, float(self.alpha), float(self.beta)))
+        x, w = roots_jacobi(N, float(self.alpha), float(self.beta))
+        return jnp.array(x), jnp.array(w)
 
     @jit_vmap(in_axes=(0, None))
-    def eval_basis_function(self, X: float | Array, i: int) -> Array:
+    def eval_basis_function(self, X: float, i: int) -> float:
         """Evaluate single Jacobi polynomial P_i^{(α,β)}(X).
 
         Iterative two-term recurrence:
@@ -144,7 +146,7 @@ class Jacobi(OrthogonalSpace):
         return jax.lax.fori_loop(2, i + 1, body_fun, (x0, X))[-1]
 
     @jit_vmap(in_axes=0)
-    def eval_basis_functions(self, X: float | Array) -> Array:
+    def eval_basis_functions(self, X: float) -> Array:
         """Evaluate all Jacobi polynomials P_0..P_{N-1} at X.
 
         Args:
@@ -158,7 +160,7 @@ class Jacobi(OrthogonalSpace):
 
         def inner_loop(
             carry: tuple[float, float], n: int
-        ) -> tuple[tuple[float, float], Array]:
+        ) -> tuple[tuple[float, float], float]:
             x0_, x1_ = carry
             alf = (2 * n + a + b - 1) * (
                 (2 * n + a + b) * (2 * n + a + b - 2) * X + a**2 - b**2
@@ -204,7 +206,7 @@ class Jacobi(OrthogonalSpace):
         """
         alpha, beta = self.alpha, self.beta
 
-        def gam(i: int) -> Expr:
+        def gam(i: int) -> Expr | int:
             if k > 0:
                 return sp.rf(i + alpha + beta + 1, k) * sp.Rational(1, 2**k)
             return 1
@@ -271,13 +273,12 @@ class Jacobi(OrthogonalSpace):
         f = self.gamma(self.alpha + k, self.beta + k, n - k) * (self.psi(n, k)) ** 2
         return sp.simplify(self.gn(n) ** 2 * f)
 
-    # Scaling function (customizable in subclasses)
-    def gn(self, n: Symbol | Number) -> sp.Expr | Number:
+    def gn(self, n: Symbol | int) -> sp.Expr:
         """Scaling g_n used in alternative normalizations (default 1)."""
-        return 1
+        return sp.S.One
 
 
-def matrices(test: tuple[Jacobi, int], trial: tuple[Jacobi, int]) -> Array:
+def matrices(test: tuple[Jacobi, int], trial: tuple[Jacobi, int]) -> sparse.BCOO | None:
     """Return sparse mass matrix for (i,j)=(0,0) else None.
 
     Args:
@@ -287,8 +288,6 @@ def matrices(test: tuple[Jacobi, int], trial: tuple[Jacobi, int]) -> Array:
     Returns:
         BCOO diagonal mass matrix or None if derivative combo unsupported.
     """
-    from jax.experimental import sparse
-
     v, i = test
     u, j = trial
     if i == 0 and j == 0:

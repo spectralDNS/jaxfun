@@ -15,7 +15,6 @@ Subclasses must implement:
 """
 
 from functools import partial
-from numbers import Number
 
 import jax
 import jax.numpy as jnp
@@ -51,14 +50,15 @@ class OrthogonalSpace(BaseSpace):
     def __init__(
         self,
         N: int,
-        domain: Domain = None,
+        *,
+        domain: Domain,
         system: CoordSys = None,
         name: str = "OrthogonalSpace",
         fun_str: str = "psi",
     ) -> None:
         self.N = N
         self._num_quad_points = N
-        self._domain = Domain(*domain) if domain is not None else None
+        self._domain = Domain(*domain)
         self.bcs = None
         self.orthogonal = self
         self.stencil = {0: 1}
@@ -67,7 +67,8 @@ class OrthogonalSpace(BaseSpace):
         )
         BaseSpace.__init__(self, system, name, fun_str)
 
-    def quad_points_and_weights(self, N: int = 0) -> Array:
+    @partial(jax.jit, static_argnums=(0, 1))
+    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return (points, weights) for orthogonality measure (abstract)."""
         raise NotImplementedError
 
@@ -77,7 +78,7 @@ class OrthogonalSpace(BaseSpace):
         return self._num_quad_points
 
     @jit_vmap(in_axes=(0, None))
-    def evaluate(self, X: float | Array, c: Array) -> Array:
+    def evaluate(self, X: float, c: Array) -> Array:
         """Evaluate truncated series sum_k c_k psi_k(X).
 
         Args:
@@ -101,11 +102,13 @@ class OrthogonalSpace(BaseSpace):
         """
         return self.evaluate_basis_derivative(X, 0)
 
-    def eval_basis_function(self, X: float | Array, i: int) -> Array:
-        """Evaluate single basis function psi_i at points X (abstract)."""
+    @jit_vmap(in_axes=(0, None))
+    def eval_basis_function(self, X: float, i: int) -> Array:
+        """Evaluate single basis function psi_i at point X (abstract)."""
         raise NotImplementedError
 
-    def eval_basis_functions(self, X: float | Array) -> Array:
+    @jit_vmap(in_axes=0)
+    def eval_basis_functions(self, X: float) -> Array:
         """Evaluate all basis functions psi_0..psi_{N-1} at X (abstract)."""
         raise NotImplementedError
 
@@ -151,7 +154,7 @@ class OrthogonalSpace(BaseSpace):
         Pi = self.vandermonde(xj)
         sg = self.system.sg / self.domain_factor
         if sp.sympify(sg).is_number:
-            wj = wj * sg
+            wj = wj * float(sg)
         else:
             sg = lambdify(self.system.base_scalars()[0], self.map_expr_true_domain(sg))(
                 xj
@@ -201,7 +204,7 @@ class OrthogonalSpace(BaseSpace):
 
     @property
     def domain(self) -> Domain:
-        """Return physical domain (or None if using reference)."""
+        """Return physical domain."""
         return self._domain
 
     @property
@@ -210,7 +213,7 @@ class OrthogonalSpace(BaseSpace):
         raise NotImplementedError
 
     @property
-    def domain_factor(self) -> Number:
+    def domain_factor(self) -> int | float:
         """Return scaling factor mapping true -> reference length.
 
         Value = (reference_length / true_length). If lengths are equal
@@ -281,11 +284,11 @@ class OrthogonalSpace(BaseSpace):
             N: Number of uniform points (0 -> num_quad_points).
         """
         if kind == "quadrature":
-            return self.map_true_domain(self.quad_points_and_weights(N)[0])
-        elif kind == "uniform":
-            a, b = self.domain
-            M = N if N != 0 else self.num_quad_points
-            return jnp.linspace(float(a), float(b), M)
+            return self.map_true_domain(self.quad_points_and_weights(N)[0])  # type: ignore[return-value]
+        assert kind == "uniform"
+        a, b = self.domain
+        M = N if N != 0 else self.num_quad_points
+        return jnp.linspace(float(a), float(b), M)
 
     def cartesian_mesh(self, kind: str = "quadrature", N: int = 0) -> tuple[Array, ...]:
         """Return physical Cartesian mesh (tuple) for current coordinate system."""

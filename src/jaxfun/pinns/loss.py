@@ -31,10 +31,10 @@ def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
     """
     for i in range(k):
         fun = jax.jacfwd(fun) if (i % 2 == 0) else jax.jacrev(fun)
-    return jax.vmap(fun, in_axes=0, out_axes=0) if k > 0 else fun
+    return jax.vmap(fun, in_axes=0, out_axes=0) if k > 0 else fun  # type: ignore[return-value]
 
 
-def get_flaxfunction_args(a: sp.Expr) -> tuple[sp.Symbol | BaseScalar, ...]:
+def get_flaxfunction_args(a: sp.Expr) -> tuple[sp.Symbol | BaseScalar, ...] | None:
     for p in sp.core.traversal.iterargs(a):
         if getattr(p, "argument", -1) == 2:
             return p.args
@@ -81,7 +81,7 @@ def evaluate(expr: sp.Expr, x: Array) -> Array:
     return r.evaluate(get_flaxfunctions(expr).pop().module)
 
 
-def expand(forms: sp.Expr) -> list[sp.Expr]:
+def expand(forms: sp.Expr) -> tuple[sp.Expr, list[sp.Expr]]:
     """Expand, and collect all terms without basis functions
 
     Args:
@@ -122,7 +122,7 @@ def _check_input_arrays(arrays: tuple[Array, ...], x: Array) -> tuple[Array, ...
         elif isinstance(array, Number):
             array = jnp.array(array, dtype=float)
         _newarrays.append(array)
-    return _newarrays
+    return tuple(_newarrays)
 
 
 class Residual:
@@ -363,6 +363,8 @@ class ResidualVPINN(Residual):
         t, expr = expand(f)
         s = get_flaxfunction_args(f.doit())
         test = get_testfunction(f)
+        if test is None:
+            raise ValueError("No TestFunction found in VPINN residual expression")
         V = test.functionspace
 
         target, weights = _check_input_arrays((target, weights), x)
@@ -446,12 +448,12 @@ class ResidualVPINN(Residual):
             else:
                 t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))
 
-        self.x, self.target, self.weights = x, t0 * weights[:, None], weights
+        self.x, self.target, self.weights = x, t0 * weights[:, None], weights  # type: ignore[assignment]
 
     def loss(
         self,
         x: Array,
-        target: tuple[Array],
+        target: Array,
         module: nnx.Module,
         Js: dict[tuple[int, int, int], Array] = None,
         x_id: int = None,
@@ -477,7 +479,7 @@ class ResidualVPINN(Residual):
     def __call__(
         self,
         x: Array,
-        target: tuple[Array],
+        target: Array,
         module: nnx.Module,
         Js: dict[tuple[int, int, int], Array] = None,
         x_id: int = None,
@@ -495,6 +497,35 @@ class ResidualVPINN(Residual):
             )
             - target
         )
+
+
+def process_input(*fs, residuals=None):
+    from jaxfun.operators import Dot
+
+    if residuals is None:
+        residuals = []
+    for f in fs:
+        f0 = f[0].doit()
+        f1 = f[1]
+        res = ResidualVPINN if get_testfunction(f0) is not None else Residual
+        if f0.is_Vector:  # Vector equation
+            sys = get_system(f0)
+            for i in range(sys.dims):
+                bt = sys.get_contravariant_basis_vector(i)
+                g = (Dot(f0, bt),) + (f1,)
+                if len(f) > 2:
+                    if isinstance(f[2], Number):
+                        g += (f[2],)
+                    else:
+                        g += (f[2][..., i],)
+                if len(f) > 3:
+                    g += (f[3],)
+
+                residuals.append(res(*g))
+
+        else:
+            residuals.append(res(*((f[0], f1) + f[2:])))
+    return residuals
 
 
 class Loss:
@@ -594,31 +625,8 @@ class Loss:
             >>> xb = jnp.array([[-1.0], [1.0]])
             >>> loss_fn = Loss((eq, xj), (u, xb, 0, 10))
         """
-        from jaxfun.operators import Dot
 
-        self.residuals = []
-
-        for f in fs:
-            f0 = f[0].doit()
-            f1 = f[1]
-            res = ResidualVPINN if get_testfunction(f0) is not None else Residual
-            if f0.is_Vector:  # Vector equation
-                sys = get_system(f0)
-                for i in range(sys.dims):
-                    bt = sys.get_contravariant_basis_vector(i)
-                    g = (Dot(f0, bt),) + (f1,)
-                    if len(f) > 2:
-                        if isinstance(f[2], Number):
-                            g += (f[2],)
-                        else:
-                            g += (f[2][..., i],)
-                    if len(f) > 3:
-                        g += (f[3],)
-
-                    self.residuals.append(res(*g))
-
-            else:
-                self.residuals.append(res(*((f[0], f1) + f[2:])))
+        self.residuals = process_input(*fs, residuals=[])
 
         # Store the unique collocation points and their order for later use
         self.xs = {id(eq.x): eq.x for eq in self.residuals}
@@ -701,7 +709,7 @@ class Loss:
             if len(w.shape) == 0:
                 w = jnp.array([w])
             JTJ.append(((J * w[:, None]).T @ J) / N)
-        return 2 * sum(JTJ)
+        return 2 * sum(JTJ)  # type: ignore[return-value]
 
     @partial(nnx.jit, static_argnums=0)
     def value_and_grad_and_JTJ(
@@ -748,7 +756,7 @@ class Loss:
             )
             loss = loss + rw @ r / N
 
-        return loss, unravel(2 * sum(grads)), 2 * sum(JTJ)
+        return loss, unravel(2 * sum(grads)), 2 * sum(JTJ)  # type: ignore[return-value]
 
     def compute_residual_i(self, module: nnx.Module, i: int) -> Array:
         """Return the residuals for equation i
@@ -952,7 +960,7 @@ class Loss:
                     zip(self.residuals, targets, self.x_ids, strict=True)
                 )
             ]
-        )
+        )  # type: ignore[return-value]
 
 
 def get_fn(

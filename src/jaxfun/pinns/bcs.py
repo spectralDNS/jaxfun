@@ -17,7 +17,7 @@ from .module import FlaxFunction
 
 
 def DirichletBC(
-    u: FlaxFunction, bnd_mesh: jax.Array, *bcs: sp.Expr | Number
+    u: FlaxFunction, bnd_mesh: jax.Array, *bcs: sp.Expr | float | int
 ) -> jax.Array:
     """Assemble Dirichlet boundary values for a field/function.
 

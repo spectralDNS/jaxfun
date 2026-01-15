@@ -8,6 +8,8 @@ The expressions and notation adopted from:
     http://homepages.engineering.auckland.ac.nz/~pkel015/SolidMechanicsBooks/index.html
 """
 
+from __future__ import annotations
+
 import collections
 from itertools import product
 from numbers import Number
@@ -47,7 +49,7 @@ def sign(i: int, j: int) -> int:
     return 1 if ((i + 1) % 3 == j) else -1
 
 
-def _get_coord_systems(expr: Expr) -> set:
+def _get_coord_systems(expr: Expr) -> frozenset:
     g = preorder_traversal(expr)
     ret = set()
     for i in g:
@@ -64,7 +66,7 @@ def _split_mul_args_wrt_coordsys(expr: Expr) -> list[Expr]:
     return list(d.values())
 
 
-def express(expr: Expr, system: CoordSys) -> Expr:
+def express(expr: Expr, system: CoordSys) -> Any:
     system_set = set()
     expr = sp.sympify(expr)
     # Substitute all the coordinate variables
@@ -124,10 +126,10 @@ def outer(v1: Vector, v2: Vector) -> Expr:
     return DyadicAdd(*args)
 
 
-def cross(v1: Vector, v2: Vector) -> Vector:
+def cross(v1: Vector, v2: Vector) -> Expr:
     """Return the cross product of two vectors.
 
-        v1 × v2 = ε_{ijk} √g v1^i v2^j b^k
+        v1 x v2 = ε_{ijk} √g v1^i v2^j b^k
 
     where {b^k} are the contravariant basis vectors, v1^i = v1·b^i and
     ε_{ijk} = ε^{ijk} is the Levi-Civita symbol, and √g the scale factor
@@ -263,7 +265,7 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> Expr:
     if isinstance(t1, BaseDyadic) and isinstance(t2, BaseVector):
         if t1._sys == t2._sys:
             if t1._sys.is_cartesian:
-                return t1.args[0] if t1.args[1] == t2 else sp.vector.VectorZero()
+                return t1.args[0] if t1.args[1] == t2 else sp.vector.VectorZero()  # type: ignore
             else:
                 g = t1._sys.get_covariant_metric_tensor()
                 g0 = g[t1.args[1]._id[0], t2._id[0]]
@@ -277,7 +279,7 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> Expr:
     if isinstance(t1, BaseVector) and isinstance(t2, BaseDyadic):
         if t1._sys == t2._sys:
             if t1._sys.is_cartesian:
-                return t2.args[1] if t1 == t2.args[0] else sp.vector.VectorZero()
+                return t2.args[1] if t1 == t2.args[0] else sp.vector.VectorZero()  # type: ignore
             else:
                 g = t1._sys.get_covariant_metric_tensor()
                 g0 = g[t1._id[0], t2.args[0]._id[0]]
@@ -439,7 +441,7 @@ def divergence(v: Vector | Dyadic, doit: bool = True) -> Expr:
             raise Div(v)
 
 
-def gradient(field: Expr, doit: bool = True, transpose: bool = False) -> Vector:
+def gradient(field: Expr, doit: bool = True, transpose: bool = False) -> Expr:
     """Return gradient of a scalar or (optionally transposed) gradient of a vector.
 
     For scalar f: returns ∇f = ∂f/∂q^j ⊗ b^j.
@@ -532,7 +534,7 @@ def gradient(field: Expr, doit: bool = True, transpose: bool = False) -> Vector:
         return Grad(field, transpose=transpose)
 
 
-def curl(v: Vector, doit: bool = True) -> Vector:
+def curl(v: Vector, doit: bool = True) -> Vector | Curl:
     """Return curl of a 3D vector field.
 
         curl(v) = ∇×v = b^j×(∂v/∂q^j) = ε^{ijk} ∂v_k/∂q^j b_i / √g
@@ -641,7 +643,7 @@ class Grad(Gradient):
         obj._transpose = False if expr.is_scalar else transpose
         return obj
 
-    def doit(self, **hints: dict[Any]) -> Expr:
+    def doit(self, **hints: Any) -> Expr:
         return gradient(self._expr.doit(**hints), doit=True, transpose=self._transpose)
 
     def __hash__(self):
@@ -657,7 +659,7 @@ class Grad(Gradient):
         w = "Grad(" + self._expr.__str__() + ")"
         return w + ".T" if self._transpose else w
 
-    def _pretty(self, printer: Any = None) -> str:
+    def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self.__str__())
 
     def _sympystr(self, printer: Any) -> str:
@@ -675,14 +677,14 @@ class Grad(Gradient):
 class Div(Divergence):
     """Unevaluated divergence wrapper using custom curvilinear implementation."""
 
-    def doit(self, **hints: dict[Any]) -> Expr:
+    def doit(self, **hints: Any) -> Expr:
         return divergence(self._expr.doit(**hints), doit=True)
 
 
 class Curl(sympy_Curl):
     """Unevaluated curl wrapper using custom curvilinear implementation."""
 
-    def doit(self, **hints: dict[Any]) -> Expr:
+    def doit(self, **hints: Any) -> Expr:
         return curl(self._expr.doit(**hints), doit=True)
 
 
@@ -702,7 +704,7 @@ class Dot(sympy_Dot):
         obj._expr2 = expr2
         return obj
 
-    def doit(self, **hints: dict[Any]) -> Expr:
+    def doit(self, **hints: Any) -> Expr:
         return dot(self._expr1.doit(**hints), self._expr2.doit(**hints))
 
 
@@ -738,7 +740,7 @@ class Cross(Expr):
         obj._expr2 = expr2
         return obj
 
-    def doit(self, **hints: dict[Any]) -> Expr:
+    def doit(self, **hints: Any) -> Expr:
         return cross(self._expr1.doit(**hints), self._expr2.doit(**hints))
 
 

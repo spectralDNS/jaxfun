@@ -21,16 +21,11 @@ tmax = 5
 left = -8
 right = 8
 mesh = Rectangle(left, right, t0, tmax)
-xi = mesh.get_points_inside_domain(Nx, Nt)
+xi = mesh.get_points(Nx * Nt, 4 * Nt, domain="inside", kind="random")
+xba = mesh.get_points(Nx * Nt, 4 * Nt, domain="boundary", kind="random")
 
 # Boundary points on three sides of the rectangle:
-xb = jnp.vstack(
-    [
-        points_along_axis(left, jnp.linspace(t0, tmax, Nt)),
-        points_along_axis(right, jnp.linspace(t0, tmax, Nt)),
-        points_along_axis(jnp.linspace(left, right, Nx)[1:-1], t0),
-    ]
-)
+xb = xba[((xba[:, 0] <= left) | (xba[:, 0] >= right)) | (xba[:, 1] <= t0)]
 
 V = MLPSpace([20], dims=1, transient=True, rank=0, name="V")
 x, t = V.base_variables()
@@ -38,7 +33,7 @@ x, t = V.base_variables()
 u = FlaxFunction(V, name="u")
 
 ub = DirichletBC(
-    u, xb, sp.Piecewise((0, x <= -8), (0, x >= 8), (sp.exp(-(x**2) / 2), t <= 0))
+    u, xb, sp.Piecewise((0, x <= left), (0, x >= right), (sp.exp(-(x**2) / 2), t <= t0))
 )
 
 nu = Constant("nu", sp.Rational(1, 10))

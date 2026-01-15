@@ -11,7 +11,7 @@ High-level helper that:
         BCGeneric (boundary lifting space providing fixed values)
 
 This keeps the user-facing API minimal: specify N, the base space class
-(e.g. Chebyshev, Legendre, Jacobi, Fourier, Composite), and an optional
+(e.g. Chebyshev, Legendre, Jacobi, Fourier), and an optional
 boundary condition dictionary.
 
 Boundary condition dictionary format (keys 'left' / 'right'):

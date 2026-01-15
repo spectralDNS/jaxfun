@@ -35,18 +35,19 @@ nu = 2.0 / Re
 N = 20
 
 mesh = Rectangle(-1, 1, -1, 1)
-xyi = mesh.get_points_inside_domain(N, N, "random")
-xyb = mesh.get_points_on_domain(N, N, "random")
+kind = "random"
+xyi = mesh.get_points(N * N, 4 * N, domain="inside", kind=kind)
+xyb = mesh.get_points(N * N, 4 * N, domain="boundary", kind=kind)
 xyp = jnp.array([[0.0, 0.0]])
-wi = mesh.get_weights_inside_domain(N, N, "random")
-wb = mesh.get_weights_on_domain(N, N, "random")
+wi = mesh.get_weights(N * N, 4 * N, domain="inside", kind=kind)
+wb = mesh.get_weights(N * N, 4 * N, domain="boundary", kind=kind)
 Ni = xyi.shape[0]
 Nb = xyb.shape[0]
 
 V = MLPSpace([16], dims=2, rank=1, name="V")  # Vector space for velocity
 Q = MLPSpace([12], dims=2, rank=0, name="Q")  # Scalar space for pressure
 
-u = FlaxFunction(V, "u", rngs=nnx.Rngs(2002))  # , bias_init=nnx.initializers.normal())
+u = FlaxFunction(V, "u", rngs=nnx.Rngs(2001))  # , bias_init=nnx.initializers.normal())
 p = FlaxFunction(Q, "p", rngs=nnx.Rngs(2002))  # , bias_init=nnx.initializers.normal())
 
 eq1 = Dot(Grad(u), u) - nu * Div(Grad(u)) + Grad(p)
@@ -70,7 +71,7 @@ loss_fn = Loss(
 )
 
 opt_adam = adam(module)
-opt_lbfgs = lbfgs(module, memory_size=100)
+opt_lbfgs = lbfgs(module, memory_size=50, max_linesearch_steps=5)
 
 trainer = Trainer(loss_fn)
 

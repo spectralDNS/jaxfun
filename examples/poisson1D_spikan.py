@@ -26,8 +26,8 @@ ue = 5 + sp.summation(sp.sin(i * x), (i, 1, 3))
 
 N = w.dim
 mesh = Line(domain.lower, domain.upper)
-xi = mesh.get_points_inside_domain(N, "random")
-xb = mesh.get_points_on_domain()
+xi = mesh.get_points(N, domain="inside", kind="random")
+xb = mesh.get_points(N, domain="boundary")
 
 eq = Div(Grad(w)) - Div(Grad(ue))
 

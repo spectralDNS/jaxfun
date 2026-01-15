@@ -117,7 +117,7 @@ class BaseTime(Symbol):
 
     precedence = PRECEDENCE["Atom"]
 
-    def doit(self, **hints: dict) -> BaseScalar:
+    def doit(self, **hints: dict) -> BaseTime:
         return self
 
 
@@ -191,7 +191,7 @@ class BaseScalar(AtomicExpr):
     def _latex(self, printer: Any = None) -> str:
         return self._latex_form
 
-    def _pretty(self, printer: Any = None) -> str:
+    def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self._pretty_form)
 
     precedence = PRECEDENCE["Atom"]
@@ -289,7 +289,7 @@ class BaseVector(Vector, AtomicExpr):
         return printer._print(system) + "." + system._vector_names[index]
 
     @property
-    def free_symbols(self) -> set[Symbol]:
+    def free_symbols(self) -> set[BaseVector]:
         return {self}
 
     def to_cartesian(self):
@@ -554,13 +554,13 @@ class CoordSys(Basic):
     def __iter__(self) -> Iterable[BaseVector]:
         return iter(self.base_vectors())
 
-    def base_vectors(self) -> tuple[BaseVector]:
+    def base_vectors(self) -> tuple[BaseVector, ...]:
         return self._base_vectors
 
-    def base_scalars(self) -> tuple[BaseScalar]:
+    def base_scalars(self) -> tuple[BaseScalar, ...]:
         return self._base_scalars
 
-    def base_dyadics(self) -> tuple[BaseDyadic]:
+    def base_dyadics(self) -> tuple[BaseDyadic, ...]:
         return self._base_dyadics
 
     def base_time(self) -> BaseTime:
@@ -573,7 +573,7 @@ class CoordSys(Basic):
     def get_cartesian_basis_vectors(self):
         return self._parent.base_vectors() if self._parent else self.base_vectors()
 
-    def position_vector(self, as_Vector: bool = False) -> tuple[Expr]:
+    def position_vector(self, as_Vector: bool = False) -> tuple[Expr] | Any:
         r = self.refine_replace(self._position_vector)
         base_vectors = self.get_cartesian_basis_vectors()
         return np.array(r) @ np.array(base_vectors) if as_Vector else r
@@ -583,25 +583,25 @@ class CoordSys(Basic):
         return self._base_scalars
 
     @property
-    def b(self) -> np.ndarray[Any, np.dtype[object]]:
+    def b(self) -> np.ndarray[Any, np.dtype[np.object_]]:
         return self.get_covariant_basis()
 
     @property
-    def bt(self) -> np.ndarray[Any, np.dtype[object]]:
+    def bt(self) -> np.ndarray[Any, np.dtype[np.object_]]:
         return self.get_contravariant_basis()
 
     @property
-    def e(self) -> np.ndarray[Any, np.dtype[object]]:
+    def e(self) -> np.ndarray[Any, np.dtype[np.object_]]:
         return self.get_normal_basis()
 
     @property
-    def hi(self) -> np.ndarray[Any, np.dtype[object]]:
+    def hi(self) -> np.ndarray[Any, np.dtype[np.object_]]:
         return self.get_scaling_factors()
 
     @property
     def sg(self) -> Expr:
         if self.is_cartesian:
-            return 1
+            return sp.S(1)
         return self.get_sqrt_det_g(True)
 
     @property
@@ -634,7 +634,7 @@ class CoordSys(Basic):
 
         return v.xreplace(cart_map)
 
-    def from_cartesian(self, v) -> Vector | Dyadic:
+    def from_cartesian(self, v) -> VectorAdd | DyadicAdd:
         from jaxfun.operators import express
 
         if self.is_cartesian:
@@ -774,7 +774,7 @@ class CoordSys(Basic):
         self._sqrt_det_g[covariant] = sg
         return sg
 
-    def get_scaling_factors(self) -> np.ndarray[Any, np.dtype[object]]:
+    def get_scaling_factors(self) -> np.ndarray[Any, np.dtype[np.object_]]:
         """Returns orthogonal scaling factors {h_i}.
 
         Raises:
@@ -802,7 +802,7 @@ class CoordSys(Basic):
 
     def get_covariant_basis(
         self, as_Vector: bool = False
-    ) -> np.ndarray[Any, np.dtype[object]]:
+    ) -> np.ndarray[Any, np.dtype[np.object_]]:
         """Returns covariant basis vectors.
 
         Args:
@@ -866,7 +866,7 @@ class CoordSys(Basic):
 
     def get_contravariant_basis(
         self, as_Vector: bool = False
-    ) -> np.ndarray[Any, np.dtype[object]]:
+    ) -> np.ndarray[Any, np.dtype[np.object_]]:
         """Returns contravariant basis vectors as Cartesian vectors.
 
         Args:
@@ -888,13 +888,13 @@ class CoordSys(Basic):
 
         gt = self.get_contravariant_metric_tensor()
         b = self.b
-        bt = self.simplify(gt @ b)
+        bt = np.array(self.simplify(gt @ b))
         self._bt = bt
         if as_Vector:
             return bt @ np.array(self.get_cartesian_basis_vectors())[: bt.shape[1]]
         return bt
 
-    def get_covariant_metric_tensor(self) -> np.ndarray[Any, np.dtype[object]]:
+    def get_covariant_metric_tensor(self) -> np.ndarray[Any, np.dtype[np.object_]]:
         """Returns covariant metric tensor g_ij.
 
             g_ij = b_i · b_j
@@ -905,11 +905,11 @@ class CoordSys(Basic):
         if self._g is not None:
             return self._g
         b = self.b
-        g = self.refine(self.simplify(b @ b.T))
+        g = np.array(self.refine(self.simplify(b @ b.T)))
         self._g = g
         return g
 
-    def get_contravariant_metric_tensor(self) -> np.ndarray[Any, np.dtype[object]]:
+    def get_contravariant_metric_tensor(self) -> np.ndarray[Any, np.dtype[np.object_]]:
         """Returns contravariant metric tensor g^ij (inverse of g_ij).
 
             g^ij = b^i · b^j
@@ -926,7 +926,7 @@ class CoordSys(Basic):
         self._gt = gt
         return gt
 
-    def get_christoffel_second(self) -> np.ndarray[Any, np.dtype[object]]:
+    def get_christoffel_second(self) -> np.ndarray[Any, np.dtype[np.object_]]:
         """Returns Christoffel symbols Γ^k_{ij} (second kind).
 
             Γ^k_{ij} = ∂b_i/∂q^j · b^k

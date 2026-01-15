@@ -13,12 +13,13 @@ Key constructs:
 import itertools
 from functools import partial
 from numbers import Number
-from typing import Any
+from typing import Any, Self, cast
 
 import jax
 import sympy as sp
 from jax import Array
 from sympy import Expr, Function
+from sympy.core.function import AppliedUndef
 from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
@@ -49,7 +50,7 @@ def get_BasisFunction(
     functionspace: BaseSpace,
     argument: int,
     arg: BaseScalar,
-):
+) -> AppliedUndef:
     """Create a symbolic basis function with enriched printing.
 
     Adds (monkey-patches) __str__, _pretty and _latex methods so tensor
@@ -90,8 +91,9 @@ def get_BasisFunction(
                     ")",
                 )
             )
+        raise NotImplementedError("Rank > 1 basis functions not supported.")
 
-    def _pretty(cls, printer: Any = None) -> str:
+    def _pretty(cls, printer: Any = None) -> prettyForm:
         return prettyForm(cls.__str__())
 
     def _sympystr(cls, printer: Any) -> str:
@@ -124,6 +126,8 @@ def get_BasisFunction(
                     ")",
                 )
             )
+        else:
+            raise NotImplementedError("Rank > 1 basis functions not supported.")
         return s if exp is None else f"\\left({s}\\right)^{{{exp}}}"
 
     b = sp.Function(
@@ -140,12 +144,12 @@ def get_BasisFunction(
     b.__class__._pretty = _pretty
     b.__class__._sympystr = _sympystr
     b.__class__._latex = _latex
-    return b
+    return b  # type: ignore[return-value]
 
 
 def _get_computational_function(
     arg: str, V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
-) -> Expr:
+) -> Expr | AppliedUndef:
     """Return symbolic test or trial function in computational coordinates.
 
     Dispatches on space type and builds a product (scalar) or VectorAdd
@@ -234,9 +238,12 @@ class TestFunction(Function):
         cls,
         V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
-    ) -> Function:
+    ) -> Self:
         coors = V.system
-        obj = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)]))
+        obj = cast(
+            Self,
+            Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)])),
+        )
         obj.functionspace = V
         obj.argument = 0
         if isinstance(V, DirectSum):
@@ -254,7 +261,7 @@ class TestFunction(Function):
         obj.name = name if name is not None else "TestFunction"
         return obj
 
-    def doit(self, **hints: dict) -> Expr:
+    def doit(self, **hints: Any) -> Expr | AppliedUndef:
         return _get_computational_function("test", self.functionspace)
 
     def __str__(self) -> str:
@@ -284,7 +291,7 @@ class TestFunction(Function):
             )
         )
 
-    def _pretty(self, printer: Any = None) -> str:
+    def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self.__str__())
 
     def _sympystr(self, printer: Any) -> str:
@@ -302,15 +309,18 @@ class TrialFunction(Function):
         cls,
         V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
-    ) -> Function:
+    ) -> Self:
         coors = V.system
-        obj = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)]))
+        obj = cast(
+            Self,
+            Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)])),
+        )
         obj.functionspace = V
         obj.name = name if name is not None else "TrialFunction"
         obj.argument = 1
         return obj
 
-    def doit(self, **hints: dict) -> Expr:
+    def doit(self, **hints: dict) -> Expr | AppliedUndef:
         if isinstance(self.functionspace, DirectSum):
             return sp.Add.fromiter(
                 _get_computational_function("trial", f)
@@ -366,7 +376,7 @@ class TrialFunction(Function):
             )
         )
 
-    def _pretty(self, printer: Any = None) -> str:
+    def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self.__str__())
 
     def _sympystr(self, printer: Any) -> str:
@@ -380,15 +390,17 @@ class ScalarFunction(Function):
     U(X) by replacing Cartesian symbols with base scalars.
     """
 
-    def __new__(cls, name: str, system: CoordSys) -> Function:
-        obj = Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
+    def __new__(cls, name: str, system: CoordSys) -> Self:
+        obj = cast(
+            Self, Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
+        )
         obj.system = system
         obj.name = name.lower()
         return obj
 
-    def doit(self, **hints: dict) -> Function:
+    def doit(self, **hints: Any) -> AppliedUndef:
         """Return function in computational domain"""
-        return Function(self.name.upper())(*self.system.base_scalars())
+        return Function(self.name.upper())(*self.system.base_scalars())  # type: ignore[return-value]
 
     def __str__(self) -> str:
         return (
@@ -397,7 +409,7 @@ class ScalarFunction(Function):
             else self.name + str(self.args[:-1])
         )
 
-    def _pretty(self, printer: Any = None) -> str:
+    def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self.__str__())
 
     def _sympystr(self, printer: Any) -> str:
@@ -418,8 +430,10 @@ class VectorFunction(Function):
     times basis vectors in the computational domain.
     """
 
-    def __new__(cls, name: str, system: CoordSys) -> Function:
-        obj = Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
+    def __new__(cls, name: str, system: CoordSys) -> Self:
+        obj = cast(
+            Self, Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
+        )
         obj.system = system
         obj.name = name.lower()
         return obj
@@ -427,7 +441,7 @@ class VectorFunction(Function):
     def __str__(self) -> str:
         return "\033[1m%s\033[0m" % (self.name,) + str(self.args[:-1])  # noqa: UP031
 
-    def doit(self, **hints: dict) -> Function:
+    def doit(self, **hints: Any) -> VectorAdd:
         """Return function in computational domain"""
         vn = self.system._variable_names
         return VectorAdd.fromiter(
@@ -438,7 +452,7 @@ class VectorFunction(Function):
             for i, bi in enumerate(self.system.base_vectors())
         )
 
-    def _pretty(self, printer: Any = None) -> str:
+    def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self.__str__())
 
     def _sympystr(self, printer: Any) -> str:
@@ -460,8 +474,8 @@ class JAXArray(Function):
         array: Array,
         V: OrthogonalSpace | TensorProductSpace | DirectSum,
         name: str = None,
-    ) -> Function:
-        obj = Function.__new__(cls, sp.Dummy())
+    ) -> Self:
+        obj = cast(Self, Function.__new__(cls, sp.Dummy()))
         obj.array = array
         obj.functionspace = V
         obj.argument = 3
@@ -471,7 +485,7 @@ class JAXArray(Function):
     def forward(self):
         return self.functionspace.forward(self.array)
 
-    def doit(self, **hints: dict) -> Function:
+    def doit(self, **hints: Any) -> Function:
         if hints.get("deep", False):
             return self.array
         return self
@@ -479,7 +493,7 @@ class JAXArray(Function):
     def __str__(self) -> str:
         return self.name + f"({self.functionspace.name})"
 
-    def _pretty(self, printer: Any = None) -> str:
+    def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self.__str__())
 
     def _sympystr(self, printer: Any) -> str:
@@ -501,8 +515,8 @@ class Jaxf(Function):
         array: Array,
         V: OrthogonalSpace | TensorProductSpace | DirectSum,
         name: str = None,
-    ) -> Function:
-        obj = Function.__new__(cls, sp.Dummy())
+    ) -> Self:
+        obj = cast(Self, Function.__new__(cls, sp.Dummy()))
         obj.array = array
         obj.functionspace = V
         obj.name = name if name is not None else "Jaxf"
@@ -517,7 +531,7 @@ class Jaxf(Function):
     def __str__(self) -> str:
         return self.name + f"({self.functionspace.name})"
 
-    def _pretty(self, printer: Any = None) -> str:
+    def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self.__str__())
 
     def _sympystr(self, printer: Any) -> str:
@@ -541,9 +555,12 @@ class JAXFunction(Function):
         array: Array,
         V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str = None,
-    ) -> Function:
+    ) -> Self:
         coors = V.system
-        obj = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)]))
+        obj = cast(
+            Self,
+            Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)])),
+        )
         obj.array = array
         obj.functionspace = V
         obj.argument = 2
@@ -553,7 +570,7 @@ class JAXFunction(Function):
     def backward(self):
         return self.functionspace.backward(self.array)
 
-    def doit(self, **hints: dict) -> Expr:
+    def doit(self, **hints: Any) -> Expr:
         return (
             Jaxf(self.array, self.functionspace, self.name)
             * TrialFunction(self.functionspace).doit()
@@ -586,7 +603,7 @@ class JAXFunction(Function):
             )
         )
 
-    def _pretty(self, printer: Any = None) -> str:
+    def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self.__str__())
 
     def _sympystr(self, printer: Any) -> str:

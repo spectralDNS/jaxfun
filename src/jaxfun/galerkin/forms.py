@@ -20,6 +20,7 @@ Main entry points:
 
 import jax.numpy as jnp
 import sympy as sp
+from jax import Array
 
 from jaxfun.coordinates import CoordSys, get_system as get_system
 
@@ -72,7 +73,7 @@ def get_basisfunctions(
 
 def get_jaxarrays(
     a: sp.Expr,
-) -> tuple[set[JAXArray]]:
+) -> set[JAXArray]:
     """Return set of JAXArray symbolic wrappers inside expression.
 
     JAXArray nodes are identified through attribute 'argument' == 3.
@@ -148,7 +149,7 @@ def split_coeff(c0: sp.Expr) -> dict:
     return coeffs
 
 
-def split_linear_coeff(c0: sp.Expr) -> dict:
+def split_linear_coeff(c0: sp.Expr) -> Array:
     """Assemble (possibly array-valued) coefficient for a linear form term.
 
     Accepts at most one JAXArray node (optionally raised to an integer
@@ -235,10 +236,11 @@ def split(forms: sp.Expr) -> dict:
                 d = sp.separatevars(
                     sp.Mul(*rest), dict=True, symbols=V.system._base_scalars
                 )
-            if len(scale) > 0:
-                d["multivar"] = sp.Mul(*scale)
-            if len(jfun) > 0:
-                d["coeff"] = jfun[0]
+            if isinstance(d, dict):
+                if len(scale) > 0:
+                    d["multivar"] = sp.Mul(*scale)
+                if len(jfun) > 0:
+                    d["coeff"] = jfun[0]
         if d is None:
             raise RuntimeError("Could not split form")
         return d

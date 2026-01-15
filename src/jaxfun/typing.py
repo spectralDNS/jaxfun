@@ -12,3 +12,5 @@ type Loss_Tuple = (
 )
 
 type SampleMethod = Literal["uniform", "legendre", "chebyshev", "random"]
+
+type DomainType = Literal["inside", "boundary", "intersection", "all"]

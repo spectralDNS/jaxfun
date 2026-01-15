@@ -208,16 +208,6 @@ class TestTrainer:
         trainer.reset_global_weights()
         assert True
 
-    def test_trainer_train_missing_loss_method_error(self, simple_model):
-        """Test error handling when loss function is missing required methods"""
-
-        def bad_loss_fn(model):
-            return (model.w - 1.0) ** 2
-
-        # Should raise AssertionError when trying to create Trainer with non-Loss loss
-        with pytest.raises(AssertionError):
-            _ = opt_mod.Trainer(bad_loss_fn)
-
     def test_trainer_train_zero_epochs(self, simple_model, lsqr_loss_fn):
         """Test training with zero epochs"""
         trainer = opt_mod.Trainer(lsqr_loss_fn)

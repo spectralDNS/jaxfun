@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import sympy as sp
 from jax import Array
+from jax.experimental import sparse
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.utils.common import Domain, jit_vmap
@@ -70,7 +71,8 @@ class Fourier(OrthogonalSpace):
         c0 = jnp.ones_like(X, dtype=complex) * c[0]
         return jax.lax.fori_loop(1, len(c), body_fun, c0)
 
-    def quad_points_and_weights(self, N: int = 0) -> Array:
+    @partial(jax.jit, static_argnums=(0, 1))
+    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return equispaced quadrature points and uniform weights.
 
         Args:
@@ -84,7 +86,7 @@ class Fourier(OrthogonalSpace):
         return points, jnp.full(N, 2 * jnp.pi / N)
 
     @jit_vmap(in_axes=(0, None))
-    def eval_basis_function(self, X: float | Array, i: int) -> Array:
+    def eval_basis_function(self, X: float, i: int) -> Array:
         """Evaluate single basis function exp(i k_i X).
 
         Args:
@@ -97,7 +99,7 @@ class Fourier(OrthogonalSpace):
         return jax.lax.exp(1j * self._k[i] * X)
 
     @jit_vmap(in_axes=0)
-    def eval_basis_functions(self, X: float | Array) -> Array:
+    def eval_basis_functions(self, X: float) -> Array:
         """Evaluate all basis functions at points X.
 
         Args:
@@ -109,7 +111,7 @@ class Fourier(OrthogonalSpace):
         return jax.lax.exp(1j * self.wavenumbers() * X)
 
     # Cannot jax.jit in case of padding
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:  # type: ignore[override]
         """Inverse (physical) transform with optional zero-padding.
 
         Pads coefficients to length n (> N) before calling _backward.
@@ -187,7 +189,7 @@ class Fourier(OrthogonalSpace):
         return jnp.ones(self.N) * 2 * jnp.pi
 
 
-def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> Array:
+def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> sparse.BCOO:
     """Return sparse operator matrix for Fourier test/trial derivatives.
 
     Builds diagonal matrix with entries:
@@ -201,8 +203,6 @@ def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> Array:
     Returns:
         sparse.BCOO diagonal matrix shape (v.N, u.N).
     """
-    from jax.experimental import sparse
-
     v, i = test
     u, j = trial
     k = (1j * v.wavenumbers()) ** j * (-1j * u.wavenumbers()) ** i

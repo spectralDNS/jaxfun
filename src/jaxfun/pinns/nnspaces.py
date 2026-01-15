@@ -23,7 +23,7 @@ class NNSpace(BaseSpace):
     dimensionality, tensor rank and optional time coordinate.
 
     Args:
-        dims: Number of spatial dimensions (1–3).
+        dims: Number of spatial dimensions (1-3).
         rank: Tensor rank of the field: 0=scalar, 1=vector, 2=dyadic.
         transient: If True, time is appended as an extra input coordinate.
         system: Optional coordinate system. If None, a Cartesian system is
@@ -171,7 +171,7 @@ class PirateSpace(NNSpace):
 
 
 class KANMLPSpace(NNSpace):
-    """Hybrid Kolmogorov–Arnold (KAN) + MLP function space.
+    """Hybrid Kolmogorov-Arnold (KAN) + MLP function space.
 
     The input transformation applies a spectral (e.g. Chebyshev) expansion
     per coordinate (KAN-style outer composition). Subsequent hidden layers
@@ -277,3 +277,33 @@ class sPIKANSpace(NNSpace):
             )
         if hidden_size == 1:
             self.act_fun = lambda x: x  # Pure spectral in 1D
+
+
+class UnionSpace(NNSpace):
+    """Union of multiple neural network function spaces.
+
+    Combines several NNSpace instances into a single space, e.g. for
+    domain decomposition or multi-fidelity modeling.
+
+    Args:
+        spaces: Iterable of NNSpace instances to combine.
+        name: Name of the union space.
+
+    Attributes:
+        spaces: Tuple of constituent NNSpace instances.
+    """
+
+    def __init__(self, *spaces: NNSpace, name: str = "UnionNN") -> None:
+        """Initialize UnionSpace metadata."""
+        self.spaces = tuple(*spaces)
+        NNSpace.__init__(
+            self,
+            dims=self.spaces[0].dims,
+            rank=self.spaces[0].rank,
+            transient=self.spaces[0].is_transient,
+            system=self.spaces[0].system,
+            name=name,
+        )
+
+    def __getitem__(self, i: int) -> NNSpace:
+        return self.spaces[i]

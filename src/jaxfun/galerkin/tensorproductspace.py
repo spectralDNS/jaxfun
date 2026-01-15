@@ -4,6 +4,7 @@ import copy
 import itertools
 from collections.abc import Iterable
 from functools import partial
+from typing import cast
 
 import jax
 import jax.numpy as jnp
@@ -27,16 +28,16 @@ class TensorProductSpace:
     """d-dimensional tensor product of 1D BaseSpace instances.
 
     Provides:
-      * Logical / Cartesian mesh generation
-      * Forward / backward spectral transforms (dimension-wise vmap)
-      * Series evaluation on tensor-product meshes or scattered points
-      * Support for heterogeneous underlying bases (Fourier / polynomial)
-      * Automatic mapping between true and reference domains per axis
+        * Logical / Cartesian mesh generation
+        * Forward / backward spectral transforms (dimension-wise vmap)
+        * Series evaluation on tensor-product meshes or scattered points
+        * Support for heterogeneous underlying bases (Fourier / polynomial)
+        * Automatic mapping between true and reference domains per axis
 
     Boundary condition handling:
-      Each 1D factor may itself be a Composite/DirectSum (BC aware). This
-      class itself stays agnostic; non-homogeneous BC logic is handled by
-      DirectSumTPS wrapper.
+        Each 1D factor may itself be a Composite/DirectSum (BC aware). This
+        class itself stays agnostic; non-homogeneous BC logic is handled by
+        DirectSumTPS wrapper.
 
     Attributes:
         basespaces: Ordered list of 1D BaseSpace objects.
@@ -110,7 +111,7 @@ class TensorProductSpace:
         kind: str = "quadrature",
         N: tuple[int] | None = None,
         broadcast: bool = True,
-    ) -> Array:
+    ) -> tuple[Array, ...]:
         """Return tensor mesh (as tuple of arrays) in true domain.
 
         Args:
@@ -414,7 +415,7 @@ class VectorTensorProductSpace:
         if not isinstance(tensorspace, tuple):
             assert isinstance(tensorspace, TensorProductSpace)
             tensorspace = (tensorspace,) * len(tensorspace)
-        self.tensorspaces = tensorspace
+        self.tensorspaces = cast(tuple[TensorProductSpace], tensorspace)
         self.system = self.tensorspaces[0].system
         self.name = name
         self.tensorname = multiplication_sign.join([b.name for b in self.tensorspaces])
@@ -567,6 +568,7 @@ class DirectSumTPS(TensorProductSpace):
                             val[key] = system.expr_psi_to_base_scalar(v)
 
         two_inhomogeneous = False
+        bcall = []
         if isinstance(basespaces[0], DirectSum) and isinstance(
             basespaces[1], DirectSum
         ):
@@ -577,7 +579,7 @@ class DirectSumTPS(TensorProductSpace):
             bc1bcs = copy.deepcopy(bc1.bcs)
 
             lr = lambda bcz, z: {"left": bcz.domain.lower, "right": bcz.domain.upper}[z]
-            bcall = []
+
             for bcthis, bcother, zother in zip(
                 [bc0bcs, bc1bcs], [bc1bcs, bc0bcs], [bc1, bc0], strict=False
             ):
@@ -676,7 +678,7 @@ class DirectSumTPS(TensorProductSpace):
                 a.append(v.backward(c, kind=kind, N=N))
         return jnp.sum(jnp.array(a), axis=0)
 
-    def forward(self, c: Array) -> Array:
+    def forward(self, c: Array) -> Array:  # type: ignore[override]
         """Solve projection for homogeneous coefficients (lifting removed)."""
         from jaxfun.galerkin import TestFunction, TrialFunction, inner
         from jaxfun.galerkin.arguments import JAXArray
@@ -687,13 +689,13 @@ class DirectSumTPS(TensorProductSpace):
         A, b = inner((u - c) * v)
         return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.num_dofs)
 
-    def scalar_product(self, c: Array):
+    def scalar_product(self, c: Array):  # type: ignore[override]
         """Disabled scalar product (non-homogeneous test space)."""
         raise RuntimeError(
             "Scalar product requires homogeneous test space (call on get_homogeneous())"
         )
 
-    def evaluate(self, x: Array, c: Array, use_einsum: bool = False) -> Array:
+    def evaluate(self, x: Array, c: Array, use_einsum: bool = False) -> Array:  # type: ignore[override]
         """Evaluate direct sum tensor product expansion at scattered points."""
         a = []
         for f, v in self.tpspaces.items():
@@ -703,7 +705,7 @@ class DirectSumTPS(TensorProductSpace):
                 a.append(v.evaluate(x, c, use_einsum))
         return jnp.sum(jnp.array(a), axis=0)
 
-    def evaluate_mesh(
+    def evaluate_mesh(  # type: ignore[override]
         self, x: list[Array], c: Array, use_einsum: bool = False
     ) -> Array:
         """Evaluate expansion on tensor mesh (summing lifting parts)."""
@@ -833,7 +835,7 @@ class TensorMatrix:  # noqa: B903
 
 def tpmats_to_scipy_sparse(
     A: list[TPMatrix], tol: int = 100
-) -> list[tuple[scipy_sparse.csc_array]]:
+) -> list[tuple[scipy_sparse.csc_array, ...]]:
     """Convert list of separable TPMatrix to scipy CSC factors.
 
     Args:

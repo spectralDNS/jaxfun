@@ -1,20 +1,27 @@
 """Sampling meshes for 1D/2D reference domains and mapped geometric regions.
 
 Supported domains:
+- CartesianProductMesh (abstract class for product meshes)
 - UnitLine / Line
 - UnitSquare / Rectangle
 - Annulus (polar -> Cartesian conversion)
+- ShapelyMesh (arbitrary polygonal domains)
 
-Sampling kinds (interior / boundary):
-- 'uniform'   : Equidistant interior points (excludes boundary)
-- 'legendre'  : Gauss–Legendre nodes (mapped to [0,1])
-- 'chebyshev' : Chebyshev nodes of the first kind (mapped to [0,1])
+The Cartesian product mesh can be created from any combination of
+meshes derived from the BaseMesh class. For example, the UnitSqure/Rectangle
+are implemented as the Cartesian product of two Line meshes.
+
+Sampling kinds for lines:
+- 'uniform'   : Equidistant points
+- 'legendre'  : Gauss-Legendre nodes
+- 'chebyshev' : Chebyshev nodes of the first kind
 - 'random'    : Pseudorandom uniform samples
 
 Weights:
 Return 1 when uniform/random (each point equal) or arrays for quadrature-based kinds.
 """
 
+import itertools
 from dataclasses import dataclass, field
 from numbers import Number
 from typing import Literal
@@ -22,443 +29,553 @@ from typing import Literal
 import jax
 import jax.numpy as jnp
 import numpy as np
-import sympy as sp
 from flax import nnx
 from jax.typing import ArrayLike
+from shapely import LineString, Polygon
 
-from jaxfun.typing import Array, SampleMethod
+from jaxfun.typing import Array, DomainType, SampleMethod
 from jaxfun.utils import leggauss
 
 
+class BaseMesh:
+    """Abstract base class for Mesh"""
+
+    def get_points(
+        self,
+        *N: int | tuple[int],
+        domain: DomainType = "all",
+        kind: SampleMethod | list[SampleMethod] = "uniform",
+    ) -> Array:
+        """Return sampled points.
+
+        Args:
+            N: Total number of points in mesh. Identical to length of returned
+                array in case domain is 'all'.
+
+                For CartesianProductMesh, N will represent all arguments needed
+                for all submeshes. For example, a 2D Rectangle mesh, which is
+                the Cartesian product of two lines, will expect two integer
+                arguments.
+
+                For a Rectangle/UnitSquare mesh, it is also possible to draw
+                random points within the domain, and not use a Cartesian product
+                of line meshes. This case is enabled when kind='random', and
+                the 2-tuple N then represents the total number of points and
+                the number of boundary points to sample.
+
+                For ShapelyMesh, N is a single integer representing the total
+                number of points to sample throughout domain.
+            domain: 'inside' | 'boundary' | 'all'
+            kind: Sampling kind(s). For CartesianProductMesh, this should be a
+                list of kinds for each submesh.
+        """
+        if domain == "inside":
+            return self.get_points_inside_domain(*N, kind=kind)
+        elif domain == "boundary":
+            return self.get_points_on_domain(*N, kind=kind)
+        elif domain == "all":
+            return self.get_all_points(*N, kind=kind)
+        raise ValueError("domain must be 'inside', 'boundary' or 'all'")
+
+    def get_weights(
+        self,
+        *N,
+        domain: DomainType = "inside",
+        kind: SampleMethod | list[SampleMethod] = None,
+    ) -> Array | Literal[1]:
+        """Return sampled weights.
+
+        Args:
+            N: Total number of weights in mesh. Identical to length of returned
+                array in case domain is 'all'.
+                For CartesianProductMesh, N will represent all arguments needed
+                for all submeshes. For example, a 2D Rectangle mesh, which is
+                the Cartesian product of two lines, will expect two integer
+                arguments.
+                For ShapelyMesh, N is a single integer representing the total
+                number of weights throughout domain.
+            domain: 'inside' | 'boundary' | 'all'
+            kind: Sampling kind(s). For CartesianProductMesh, this should be a
+                list of kinds for each submesh.
+
+        Returns:
+            Array of weights.
+        """
+        if domain == "inside":
+            return self.get_weights_inside_domain(*N, kind=kind)
+        elif domain == "boundary":
+            return self.get_weights_on_domain(*N, kind=kind)
+        elif domain == "all":
+            return self.get_all_weights(*N, kind=kind)
+        raise ValueError("domain must be 'inside', 'boundary' or 'all'")
+
+    def get_points_inside_domain(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        """Return interior points (exclude boundary)."""
+        raise NotImplementedError
+
+    def get_points_on_domain(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        """Return boundary points."""
+        raise NotImplementedError
+
+    def get_all_points(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        """Return all points including boundary."""
+        raise NotImplementedError
+
+    def get_weights_inside_domain(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array | Literal[1]:
+        """Return interior weights (exclude boundary)."""
+        raise NotImplementedError
+
+    def get_weights_on_domain(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array | Literal[1]:
+        """Return boundary weights."""
+        raise NotImplementedError
+
+    def get_all_weights(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array | Literal[1]:
+        """Return all weights including boundary."""
+        raise NotImplementedError
+
+    def boundary_mask(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        """Return boolean mask for boundary points."""
+        raise NotImplementedError
+
+
+class CartesianProductMesh(BaseMesh):
+    """Cartesian product mesh."""
+
+    def __init__(self, *m0: BaseMesh) -> None:
+        self.submeshes = list(m0)
+
+    def boundary_mask(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        """Return boolean mask for boundary points.
+
+        Args:
+            N: Number of total points for each submesh.
+            kind: List of the kind of sampling used for submeshes. If a single
+                string is provided, it is applied to all submeshes.
+
+        Returns:
+            Boolean array of shape (N[0]*N[1]*...,) with True for boundary points.
+        """
+        if isinstance(kind, str):
+            kind = [kind] * len(self.submeshes)
+        bnd_marks = []
+        for m, Ni, knd in zip(self.submeshes, N, kind, strict=True):
+            args = (Ni,) if np.isscalar(Ni) else tuple(Ni)
+            bnd_marks.append(m.boundary_mask(*args, kind=knd))
+        mask = jnp.array(list(itertools.product(*bnd_marks)))
+
+        return jnp.any(mask, axis=1)
+
+    def get_all_points(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        """Return all points including boundaries.
+
+        Args:
+            N: Number of points for each submesh.
+            kind: List of the kind of sampling used for submeshes. If a single
+                string is provided, it is applied to all submeshes.
+
+        Returns:
+            Array of shape (N[0]*N[1]*..., dims) with coordinates.
+        """
+        if isinstance(kind, str):
+            kind = [kind] * len(self.submeshes)
+        assert len(N) == len(self.submeshes)
+        meshes = []
+        for mi, Ni, knd in zip(self.submeshes, N, kind, strict=True):
+            args = (Ni,) if np.isscalar(Ni) else tuple(Ni)
+            meshes.append(mi.get_all_points(*args, kind=knd))
+
+        if len(meshes) == 2:
+            return jnp.array(
+                [jnp.hstack((xi, yi)) for xi in meshes[0] for yi in meshes[1]]
+            )
+        elif len(meshes) == 3:
+            return jnp.array(
+                [
+                    jnp.hstack((xi, yi, zi))
+                    for xi in meshes[0]
+                    for yi in meshes[1]
+                    for zi in meshes[2]
+                ]
+            )
+        raise NotImplementedError
+
+    def get_points_inside_domain(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        """Return interior points (exclude perimeter).
+
+        Args:
+            N: Number of total points for each submesh.
+            kind: Lis of the kind of sampling used for submeshes. If a single
+                string is provided, it is applied to all submeshes.
+
+        Returns:
+            Array of interior coordinates.
+        """
+        x = self.get_all_points(*N, kind=kind)
+        mask = self.boundary_mask(*N, kind=kind)
+        return x[mask == False]  # noqa: E712
+
+    def get_points_on_domain(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        """Return boundary points.
+
+        Args:
+            N: Number of total points for each submesh.
+            kind: List of the kind of sampling used for submeshes.
+
+        Returns:
+            Array of boundary points.
+        """
+        x = self.get_all_points(*N, kind=kind)
+        mask = self.boundary_mask(*N, kind=kind)
+        return x[mask]
+
+    def get_all_weights(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array | Literal[1]:
+        """Return weights for all points including boundaries.
+
+        Args:
+            N: Total number of points for each submesh.
+            kind: List of the kind of sampling used for submeshes. If a single
+                string is provided, it is applied to all submeshes.
+
+        Returns:
+            Array of weights for all points.
+        """
+        if isinstance(kind, str):
+            kind = [kind] * len(self.submeshes)
+        assert len(N) == len(self.submeshes)
+        weights = []
+        for mi, Ni, knd in zip(self.submeshes, N, kind, strict=True):
+            args = (Ni,) if np.isscalar(Ni) else tuple(Ni)
+            weights.append(mi.get_all_weights(*args, kind=knd))
+
+        if len(weights) == 2:
+            wx = jnp.outer(weights[0], weights[1])
+            if wx.shape == (1, 1):
+                return wx.item()
+            if 1 in wx.shape:
+                return jnp.broadcast_to(wx, N).flatten()
+            return wx.flatten()
+        elif len(weights) == 3:
+            wx = jnp.outer(weights[0], weights[1])
+            wx = jnp.outer(wx.flatten(), weights[2])
+            if wx.shape == (1, 1):
+                return wx.item()
+            if 1 in wx.shape:
+                return jnp.broadcast_to(wx, N).flatten()
+            return wx.flatten()
+        raise NotImplementedError
+
+    def get_weights_inside_domain(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array | Literal[1]:
+        """Return interior weights (exclude perimeter).
+
+        Args:
+            N: Total number of points for each submesh.
+            kind: List of the kind of sampling used for submeshes. If a single
+                string is provided, it is applied to all submeshes.
+
+        Returns:
+            Array of interior weights.
+        """
+        x = self.get_all_weights(*N, kind=kind)
+        mask = self.boundary_mask(*N, kind=kind)
+        if isinstance(x, Number):
+            return x
+        return x[mask == False]  # noqa: E712
+
+    def get_weights_on_domain(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array | Literal[1]:
+        """Return boundary weights.
+
+        Args:
+            N: Total number of points for each submesh.
+            kind: List of the kind of sampling used for submeshes. If a single
+                string is provided, it is applied to all submeshes.
+
+        Returns:
+            Array of boundary weights.
+        """
+        x = self.get_all_weights(*N, kind=kind)
+        mask = self.boundary_mask(*N, kind=kind)
+        if isinstance(x, Number):
+            return x
+        return x[mask]
+
+
 @dataclass
-class UnitLine:
-    """Reference 1D line domain [0, 1].
+class Line(BaseMesh):
+    """Straight domain on the real line.
 
     Attributes:
         key: PRNG key (nnx Rngs) used for random sampling.
+        left: Left boundary.
+        right: Right boundary.
     """
 
+    left: float | int
+    right: float | int
     key: ArrayLike = field(kw_only=True, default_factory=nnx.rnglib.Rngs(101))
 
-    def get_points_inside_domain(self, N: int, kind: SampleMethod = "uniform") -> Array:
-        """Return interior points (exclude 0 and 1).
+    def __post_init__(self) -> None:
+        self.left = float(self.left)
+        self.right = float(self.right)
+        if not self.right > self.left:
+            raise ValueError(
+                f"right ({self.right}) must be greater than left ({self.left})"
+            )
+
+    def get_all_points(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "uniform"
+    ) -> Array:
+        """Return N points including boundaries.
 
         Args:
-            N: Number of interior sample points (excludes boundaries).
-            kind: Sampling strategy: uniform | legendre | chebyshev | random.
+            N: Number of sample points (including boundaries).
+            kind: Sampling strategy.
 
         Returns:
-            Array of shape (N, 1) with interior coordinates in (0,1).
+            Array of shape (N, 1) with coordinates.
         """
+        if N < 2:
+            raise ValueError("N must be >= 2 for line sampling")
+
         if kind == "uniform":
-            return jnp.linspace(0, 1, N + 2)[1:-1, None]
+            return jnp.linspace(self.left, self.right, N)[:, None]
 
         elif kind == "legendre":
-            return (1 + leggauss(N)[0][:, None]) / 2
+            x = (1 + leggauss(N - 2)[0]) / 2  # leggauss(0) is ok.
 
         elif kind == "chebyshev":
-            return (1 + jnp.cos(jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)))[
-                :, None
-            ] / 2
+            x = (
+                1
+                + jnp.cos(jnp.pi + (2 * jnp.arange(N - 2) + 1) * jnp.pi / (2 * (N - 2)))
+            ) / 2
 
         elif kind == "random":
-            return jax.random.uniform(self.key, (N, 1))
+            x = jax.random.uniform(self.key, (N - 2))
 
-        raise NotImplementedError
+        else:
+            raise NotImplementedError
 
-    def get_points_on_domain(self, N: int = 2, kind: SampleMethod = "uniform") -> Array:
+        return jnp.hstack(
+            (
+                jnp.array([self.left]),
+                self.left + x * (self.right - self.left),
+                jnp.array([self.right]),
+            )
+        )[:, None]
+
+    def get_points_inside_domain(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "uniform"
+    ) -> Array:
+        """Return interior points (exclude boundaries).
+
+        Args:
+            N: Total number of sample points (including 2 boundary points).
+            kind: Sampling strategy.
+
+        Returns:
+            Array of shape (N - 2, 1) with interior coordinates.
+        """
+        return self.get_all_points(N, kind=kind)[1:-1]
+
+    def get_points_on_domain(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "uniform"
+    ) -> Array:
         """Return boundary endpoints.
 
         Args:
-            N: Number of boundary points (ignored, always 2).
-            kind: Ignored (kept for API consistency).
+            N: Total number of points (ignored, as number of boundary points is
+                always 2).
+            kind: Sampling strategy. Ignored (kept for API consistency).
 
         Returns:
-            Array [[0.0],[1.0]].
+            Array [[0.0], [1.0]]
         """
-        return jnp.array([[0.0], [1.0]])
+        x = self.get_all_points(2, kind=kind)
+        return jnp.vstack((x[0], x[-1]))
 
-    def get_weights_inside_domain(
+    def get_all_weights(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "uniform"
+    ) -> Array | Literal[1]:
+        """Return quadrature weights for all N points including boundaries.
+
+        Args:
+            N: Number of sample points (including boundaries).
+            kind: Sampling kind.
+
+        Returns:
+            1 for uniform/random (equal weights) or weight array otherwise.
+
+        """
+        if kind in ("uniform", "random"):
+            return 1
+        elif kind == "legendre":
+            return jnp.hstack((jnp.array([1.0]), leggauss(N - 2)[1], jnp.array([1.0])))
+        elif kind == "chebyshev":
+            return jnp.hstack(
+                (jnp.array([1.0]), jnp.pi / (N - 2) * jnp.ones(N - 2), jnp.array([1.0]))
+            )
+        raise NotImplementedError
+
+    def get_weights_inside_domain(  # type: ignore[override]
         self, N: int, kind: SampleMethod = "uniform"
     ) -> Array | Literal[1]:
         """Return quadrature weights for interior points.
 
         Args:
-            N: Number of interior weights.
+            N: Total number of weights (including boundary).
             kind: Sampling kind.
 
         Returns:
             1 for uniform/random (equal weights) or weight array otherwise.
         """
-        if kind in ("uniform", "random"):
-            return 1
-        elif kind == "legendre":
-            return leggauss(N)[1]
-        elif kind == "chebyshev":
-            return jnp.pi / N * jnp.ones(N)
-        raise NotImplementedError
+        w = self.get_all_weights(N, kind=kind)
+        if isinstance(w, jnp.ndarray):
+            return w[1:-1]
+        return w
 
-    def get_weights_on_domain(
-        self, N: int, kind: SampleMethod = "uniform"
+    def get_weights_on_domain(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = None
     ) -> Literal[1]:
         """Return weights for boundary points (always 1 placeholder)."""
         return 1
 
+    def to_shapely(self) -> LineString:
+        """Return shapely LineString for the unit line [0, 1]."""
+        return LineString([(self.left, 0.0), (self.right, 0.0)])
 
-@dataclass
-class Line(UnitLine):
-    """Affine-mapped 1D line [left, right].
+    def boundary_mask(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "uniform"
+    ) -> Array:
+        """Return boolean mask for boundary points.
 
-    Attributes:
-        left: Left boundary.
-        right: Right boundary.
-    """
+        Args:
+            N: Total number of points.
+            kind: Sampling kind (ignored).
 
-    left: Number
-    right: Number
-
-    def __post_init__(self):
-        """Validate and coerce boundaries to float."""
-        self.left = float(self.left)
-        self.right = float(self.right)
-        if not self.right > self.left:
-            raise ValueError(
-                f"right ({self.right}) must be greater than left ({self.left})"
-            )
-
-    def get_points_inside_domain(self, N: int, kind: SampleMethod = "uniform") -> Array:
-        """Return interior points mapped from reference (0,1)."""
-        x = super().get_points_inside_domain(N, kind)
-        return self.left + (self.right - self.left) * x
-
-    def get_points_on_domain(self, N: int = 2, kind: SampleMethod = "uniform") -> Array:
-        """Return boundary endpoints [[left],[right]]."""
-        return jnp.array([[self.left], [self.right]], dtype=float)
+        Returns:
+            Boolean array of shape (N,) with True for boundary points.
+        """
+        return jnp.hstack(
+            (jnp.array([True]), jnp.zeros(N - 2, dtype=bool), jnp.array([True]))
+        )
 
 
 @dataclass
-class UnitSquare:
-    """Reference unit square [0, 1]^2.
+class UnitLine(Line):
+    """Reference 1D line on domain [0, 1].
 
     Attributes:
-        key: PRNG key for random sampling.
+        key: PRNG key (nnx Rngs) used for random sampling.
+
     """
 
     key: ArrayLike = field(kw_only=True, default_factory=nnx.rnglib.Rngs(101))
-
-    def get_points_inside_domain(
-        self, Nx: int, Ny: int, kind: SampleMethod = "uniform"
-    ) -> Array:
-        """Return interior points (exclude perimeter).
-
-        Args:
-            Nx: Number of interior points along x.
-            Ny: Number of interior points along y.
-            kind: uniform | legendre | chebyshev | random.
-
-        Returns:
-            Array (Nx*Ny, 2) of interior coordinates.
-        """
-        if kind == "uniform":
-            x = jnp.linspace(0, 1, Nx + 2)[1:-1]
-            y = jnp.linspace(0, 1, Ny + 2)[1:-1]
-
-        elif kind == "legendre":
-            x = (1 + leggauss(Nx)[0]) / 2
-            y = (1 + leggauss(Ny)[0]) / 2
-
-        elif kind == "chebyshev":
-            x = (1 + jnp.cos(jnp.pi + (2 * jnp.arange(Nx) + 1) * jnp.pi / (2 * Nx))) / 2
-            y = (1 + jnp.cos(jnp.pi + (2 * jnp.arange(Ny) + 1) * jnp.pi / (2 * Ny))) / 2
-
-        else:
-            assert kind == "random", (
-                "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
-            )
-            return jax.random.uniform(self.key, (Nx * Ny, 2))
-
-        return jnp.array(jnp.meshgrid(x, y, indexing="ij")).reshape((2, -1)).T
-
-    def get_points_on_domain(
-        self, Nx: int, Ny: int, kind: SampleMethod = "uniform", corners: bool = True
-    ) -> Array:
-        """Return boundary points in counterclockwise order.
-
-        Args:
-            Nx: Number of boundary points along x.
-            Ny: Number of boundary points along y.
-            kind: uniform | legendre | chebyshev | random.
-            corners: If True, append the 4 corner points explicitly.
-
-        Returns:
-            Array (#boundary_pts, 2).
-        """
-
-        if kind == "uniform":
-            x = np.linspace(0, 1, Nx + 2)[1:-1]
-            y = np.linspace(0, 1, Ny + 2)[1:-1]
-            xy = np.vstack((np.hstack((x, x, y, y)),) * 2).T
-
-        elif kind == "legendre":
-            x = (1 + leggauss(Nx)[0]) / 2
-            y = (1 + leggauss(Ny)[0]) / 2
-            xy = np.vstack((np.hstack((x, x, y, y)),) * 2).T
-
-        elif kind == "chebyshev":
-            x = (1 + np.cos(np.pi + (2 * np.arange(Nx) + 1) * np.pi / (2 * Nx))) / 2
-            y = (1 + np.cos(np.pi + (2 * np.arange(Ny) + 1) * np.pi / (2 * Ny))) / 2
-            xy = np.vstack((np.hstack((x, x, y, y)),) * 2).T
-
-        else:
-            assert kind == "random", (
-                "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
-            )
-            if Nx == 1 or Ny == 1:
-                M = jnp.sqrt(max(Nx, Ny)).astype(int)
-                xy = np.array(jax.random.uniform(self.key, (4 * M, 2)))
-                Nx = M
-                Ny = M
-            else:
-                xy = np.array(jax.random.uniform(self.key, (2 * (Nx + Ny), 2)))
-
-        if corners:
-            c = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=float)
-            xy = np.vstack((xy, c))
-
-        xy[:Nx, 1] = 0
-        xy[Nx : 2 * Nx, 1] = 1
-        xy[2 * Nx : (2 * Nx + Ny), 0] = 0
-        xy[(2 * Nx + Ny) : (2 * Nx + 2 * Ny), 0] = 1
-        return jnp.array(xy)
-
-    def get_weights_inside_domain(
-        self, Nx: int, Ny: int, kind: SampleMethod = "uniform"
-    ) -> Array | Literal[1]:
-        """Return quadrature weights for interior nodes.
-
-        Args:
-            Nx: Number of interior points along x.
-            Ny: Number of interior points along y.
-            kind: Sampling kind.
-
-        Returns:
-            1 for uniform/random or flattened tensor-product weight array.
-        """
-        if kind in ("uniform", "random"):
-            return 1
-        elif kind == "legendre":
-            wx = leggauss(Nx)[1]
-            wy = leggauss(Ny)[1]
-            return jnp.outer(wx, wy).flatten()
-        else:
-            assert kind == "chebyshev", (
-                "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
-            )
-            wx = jnp.pi / Nx * jnp.ones(Nx)
-            wy = jnp.pi / Ny * jnp.ones(Ny)
-            return jnp.outer(wx, wy).flatten()
-
-    def get_weights_on_domain(
-        self, Nx: int, Ny: int, kind: SampleMethod = "uniform", corners: bool = True
-    ) -> Array | Literal[1]:
-        """Return weights for boundary nodes.
-
-        Args:
-            Nx: Number of boundary points along x.
-            Ny: Number of boundary points along y.
-            kind: Sampling kind.
-            corners: Whether 4 corner points are present (affects length).
-
-        Returns:
-            1 for uniform/random else 1D weight array.
-        """
-        if kind in ("uniform", "random"):
-            return 1
-        elif kind == "legendre":
-            wx = leggauss(Nx)[1]
-            wy = leggauss(Ny)[1]
-            w = jnp.hstack((wx, wx, wy, wy))
-            if corners:
-                w = jnp.hstack((w, jnp.ones(4)))
-            return w
-        else:
-            assert kind == "chebyshev", (
-                "Only 'uniform', 'legendre', 'chebyshev' and 'random' are supported"
-            )
-            wx = jnp.pi / Nx * jnp.ones(Nx)
-            wy = jnp.pi / Ny * jnp.ones(Ny)
-            w = jnp.hstack((wx, wx, wy, wy))
-            if corners:
-                w = jnp.hstack((w, jnp.ones(4)))
-            return w
+    left: float | int = field(init=False, default=0.0)
+    right: float | int = field(init=False, default=1.0)
 
 
 @dataclass
-class Rectangle(UnitSquare):
-    """Affine-mapped rectangle [left, right] x [bottom, top].
-
-    Attributes:
-        left: Left x-bound.
-        right: Right x-bound.
-        bottom: Lower y-bound.
-        top: Upper y-bound.
-    """
-
-    left: Number
-    right: Number
-    bottom: Number
-    top: Number
-
-    def __post_init__(self):
-        """Validate and coerce rectangle bounds."""
-        self.left = float(self.left)
-        self.right = float(self.right)
-        self.bottom = float(self.bottom)
-        self.top = float(self.top)
-        if not self.right > self.left:
-            raise ValueError(
-                f"right ({self.right}) must be greater than left ({self.left})"
-            )
-        if not self.top > self.bottom:
-            raise ValueError(
-                f"top ({self.top}) must be greater than bottom ({self.bottom})"
-            )
-
-    def get_points_inside_domain(
-        self, Nx: int, Ny: int, kind: SampleMethod = "uniform"
-    ) -> Array:
-        """Return interior points mapped from UnitSquare."""
-        mesh = super().get_points_inside_domain(Nx, Ny, kind)
-        x = self.left + (self.right - self.left) * mesh[:, 0]
-        y = self.bottom + (self.top - self.bottom) * mesh[:, 1]
-        return jnp.array([x, y]).T
-
-    def get_points_on_domain(
-        self, Nx: int, Ny: int, kind: SampleMethod = "uniform", corners: bool = True
-    ) -> Array:
-        """Return boundary points mapped from UnitSquare."""
-        mesh = super().get_points_on_domain(Nx, Ny, kind, corners=corners)
-        x = self.left + (self.right - self.left) * mesh[:, 0]
-        y = self.bottom + (self.top - self.bottom) * mesh[:, 1]
-        return jnp.array([x, y]).T
-
-
-def points_along_axis(a: Number | Array, b: Array | Number) -> Array:
-    """Return Cartesian product points between 1D arrays a and b.
-
-    Args:
-        a: Scalar or 1D array-like.
-        b: Scalar or 1D array-like.
-
-    Returns:
-        Array of shape (len(a)*len(b), 2) listing all (a_i, b_j) pairs.
-    """
-    a = jnp.atleast_1d(a)
-    b = jnp.atleast_1d(b)
-    return jnp.array(jnp.meshgrid(a, b, indexing="ij")).reshape((2, -1)).T
-
-
-class AnnulusPolar(Rectangle):
-    """Annulus in polar coordinates: radius in [r_in, r_out], theta in [0, 2π).
-
-    Sampling in theta wraps for interior points (exclude duplicate 2π).
-    """
-
-    def __init__(self, radius_inner: Number, radius_outer: Number) -> None:
-        self.radius_inner = radius_inner
-        self.radius_outer = radius_outer
-        Rectangle.__init__(self, radius_inner, radius_outer, 0, 2 * jnp.pi)
-
-    def get_points_inside_domain(
-        self, Nx: int, Ny: int, kind: SampleMethod = "uniform"
-    ) -> Array:
-        """Return interior polar points (r, θ)."""
-        if kind == "uniform":
-            x = jnp.linspace(0, 1, Nx + 2)[1:-1]
-            y = jnp.linspace(0, 1, Ny + 1)[:-1]  # wrap around periodic
-            mesh = jnp.array(jnp.meshgrid(x, y, indexing="ij")).reshape((2, -1)).T
-            x = self.left + (self.right - self.left) * mesh[:, 0]
-            y = self.bottom + (self.top - self.bottom) * mesh[:, 1]
-            return jnp.array([x, y]).T
-
-        return Rectangle.get_points_inside_domain(self, Nx, Ny, kind)
-
-    def get_points_on_domain(
-        self, Nx: int, Ny: int, kind: SampleMethod = "uniform", corners: bool = False
-    ) -> Array:
-        """Return boundary polar points (r=inner/outer)."""
-        if kind == "uniform":
-            y = np.linspace(0, 1, Ny + 1)[:-1]
-            xy = np.vstack((np.hstack((y, y)),) * 2).T
-            xy[:Nx, 0] = 0
-            xy[Nx : 2 * Nx, 0] = 1
-            x = self.left + (self.right - self.left) * xy[:, 0]
-            y = self.bottom + (self.top - self.bottom) * xy[:, 1]
-            return jnp.array((x, y)).T
-
-        return super().get_points_on_domain(Nx, Ny, kind, False)[2 * Nx :]
-
-
-class Annulus(AnnulusPolar):
-    """Cartesian annulus converted from polar samples.
-
-    Interior/boundary sampling occurs in polar coordinates and is then
-    mapped to Cartesian (x, y).
-    """
-
-    def __init__(self, radius_inner: Number, radius_outer: Number) -> None:
-        self.radius_inner = radius_inner
-        self.radius_outer = radius_outer
-        AnnulusPolar.__init__(self, radius_inner, radius_outer)
-
-    def convert_to_cartesian(self, xc) -> Array:
-        """Convert polar (r, θ) points to Cartesian (x, y)."""
-        r, theta = sp.symbols("r,theta", real=True, positive=True)
-        rv = (r * sp.cos(theta), r * sp.sin(theta))
-        mesh = []
-        for xi in rv:
-            mesh.append(sp.lambdify((r, theta), xi, modules="jax")(*xc.T))
-        return jnp.array(mesh).T
-
-    def get_points_inside_domain(
-        self, Nx: int, Ny: int, kind: SampleMethod = "uniform"
-    ) -> Array:
-        """Return interior Cartesian points."""
-        xc = AnnulusPolar.get_points_inside_domain(self, Nx, Ny, kind)
-        return self.convert_to_cartesian(xc)
-
-    def get_points_on_domain(
-        self, Nx: int, Ny: int, kind: SampleMethod = "uniform", corners: bool = False
-    ) -> Array:
-        """Return boundary Cartesian points."""
-        xc = AnnulusPolar.get_points_on_domain(self, Nx, Ny, kind, False)
-        return self.convert_to_cartesian(xc)
-
-
-@dataclass
-class ShapelyMesh:
+class ShapelyMesh(BaseMesh):
     """Polygonal domain using Shapely for sampling.
 
     - Interior: rejection sampling from the bounding box using a prepared polygon
     - Boundary: length-proportional sampling along all boundary segments
 
+    Subclasses must implement `make_polygon()`.
+
+    Attributes:
+        seed: Random seed for sampling.
+        boundary_factor: Fraction of total points allocated to boundary.
+
+    Note: Only 'random' sampling kind is supported for both interior
+        and boundary points.
+
     """
 
     seed: int = 101
+    boundary_factor: float = 0.25
 
-    def make_polygon(self):
+    def make_polygon(self) -> Polygon:
         raise NotImplementedError
 
-    def get_points_inside_domain(self, N: int, kind: SampleMethod = "random") -> Array:
-        """Return interior points (N, 2) inside the domain."""
-        assert kind in ("random",), (
-            "Only 'random' interior sampling is supported for polygons."
-        )
-        from shapely.geometry import Point
-        from shapely.prepared import prep
+    def boundary_mask(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "random"
+    ) -> Array:
+        """Return boolean mask for boundary points.
 
+        Args:
+            N: Total number of points.
+            kind: Sampling method (only 'random' supported).
+
+        Returns:
+            Boolean array of shape (N,) with True for boundary points.
+        """
+        Ni = int(N * (1 - self.boundary_factor))
+        Nb = N - Ni
+        return jnp.hstack(
+            (
+                jnp.zeros(Ni, dtype=bool),
+                jnp.ones(Nb, dtype=bool),
+            )
+        )
+
+    def get_all_points(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "random"
+    ) -> Array:
+        """Return all points (N, 2) inside and on the polygon.
+
+        Args:
+            N: Total number of points (interior + boundary).
+            kind: Sampling method (only 'random' supported).
+
+        Returns:
+            Array of shape (N, 2) with all points.
+        """
+        xi = self.get_points_inside_domain(N, kind=kind)
+        xb = self.get_points_on_domain(N, kind=kind)
+        return jnp.vstack((xi, xb))
+
+    def get_points_inside_domain(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "random"
+    ) -> Array:
+        """Return interior points inside the domain.
+
+        Args:
+            N: Total number of points (interior + boundary).
+            kind: Sampling method (only 'random' supported).
+
+        Returns:
+            Array of shape (Ni, 2) with interior points.
+        """
+        N = int(N * (1 - self.boundary_factor))
         poly = self.make_polygon()
-        prepared = prep(poly)
         lo_x, lo_y, hi_x, hi_y = poly.bounds
         rng = np.random.default_rng(self.seed)
 
@@ -471,26 +588,35 @@ class ShapelyMesh:
             cand = np.empty((k, 2), dtype=float)
             cand[:, 0] = rng.uniform(lo_x, hi_x, size=k)
             cand[:, 1] = rng.uniform(lo_y, hi_y, size=k)
-            mask = np.fromiter(
-                (prepared.contains(Point(x, y)) for x, y in cand),
-                count=k,
-                dtype=bool,
-            )
+            from shapely import contains, points
+
+            pgeom = points(cand[:, 0], cand[:, 1])
+            mask = np.asarray(contains(poly, pgeom), dtype=bool)
             sel = cand[mask]
             if sel.size:
                 need = N - len_pts(pts)
                 pts.append(sel[:need])
 
-        return jnp.asarray(np.vstack(pts))
+        return jnp.vstack(pts)
 
-    def get_points_on_domain(
-        self, N: int, kind: SampleMethod = "random", corners: bool = False
+    def get_points_on_domain(  # type: ignore[override]
+        self,
+        N: int,
+        kind: SampleMethod = "random",
+        specific_points: Array | None = None,
     ) -> Array:
-        """Return boundary points (N, 2) along the polygon edges."""
-        assert kind in ("random",), (
-            "Only 'random' boundary sampling is supported for polygons."
-        )
+        """Return boundary points along the polygon edges.
 
+        Args:
+            N: Total number of points (interior + boundary).
+            kind: Sampling method (only 'random' supported).
+            specific_points: Optional array of specific boundary points to include.
+
+        Returns:
+            Array of shape (Nb, 2) with boundary points.
+        """
+        N = N - int(N * (1 - self.boundary_factor))
+        N = N - (specific_points.shape[0] if specific_points is not None else 0)
         poly = self.make_polygon()
         rings = [poly.exterior] + list(poly.interiors)
 
@@ -519,8 +645,26 @@ class ShapelyMesh:
                 continue
             t = rng.random(m)
             pts.append(a + t[:, None] * (b - a))
+        pts = jnp.vstack(pts)
 
-        return jnp.asarray(np.vstack(pts))
+        return (
+            jnp.vstack((pts, specific_points)) if specific_points is not None else pts
+        )
+
+    def get_all_weights(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "random"
+    ) -> Literal[1]:
+        return 1
+
+    def get_weights_inside_domain(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "random"
+    ) -> Literal[1]:
+        return 1
+
+    def get_weights_on_domain(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "random"
+    ) -> Literal[1]:
+        return 1
 
     def plot_solution(self, X, values, xb=None, levels=30):
         """Plot solution over polygonal mesh using triangulation.
@@ -531,17 +675,18 @@ class ShapelyMesh:
         """
         import matplotlib.pyplot as plt
         import matplotlib.tri as mtri
-        from shapely.geometry import Point
-        from shapely.prepared import prep
 
         poly = self.make_polygon()
 
         tri = mtri.Triangulation(X[:, 0], X[:, 1])
 
         # Mask triangles whose centroid lies outside the polygon (handles holes)
-        prepared = prep(poly)
         centroids = X[tri.triangles].mean(axis=1)
-        mask = np.array([not prepared.contains(Point(c[0], c[1])) for c in centroids])
+        from shapely import contains, points
+
+        pgeom = points(centroids[:, 0], centroids[:, 1])
+        inside = np.asarray(contains(poly, pgeom), dtype=bool)
+        mask = ~inside  # mask True means hide triangle
         tri.set_mask(mask)
 
         fig, ax = plt.subplots(figsize=(6, 6))
@@ -554,6 +699,267 @@ class ShapelyMesh:
         ax.set_title("Solution w(x,y)")
         fig.colorbar(tpc, ax=ax, shrink=0.8, label="w")
         plt.show()
+
+
+@dataclass
+class Rectangle(CartesianProductMesh):
+    """Affine-mapped rectangle [left, right] x [bottom, top].
+
+    Attributes:
+        key: PRNG key for random sampling.
+        left: Left x-bound.
+        right: Right x-bound.
+        bottom: Lower y-bound.
+        top: Upper y-bound.
+    """
+
+    key: ArrayLike = field(kw_only=True, default_factory=nnx.rnglib.Rngs(101))
+    left: float | int
+    right: float | int
+    bottom: float | int
+    top: float | int
+
+    def __post_init__(self) -> None:
+        self.left = float(self.left)
+        self.right = float(self.right)
+        self.bottom = float(self.bottom)
+        self.top = float(self.top)
+        if not self.right > self.left:
+            raise ValueError(
+                f"right ({self.right}) must be greater than left ({self.left})"
+            )
+        if not self.top > self.bottom:
+            raise ValueError(
+                f"top ({self.top}) must be greater than bottom ({self.bottom})"
+            )
+        super().__init__(
+            Line(self.left, self.right, key=self.key),
+            Line(self.bottom, self.top, key=self.key),
+        )
+
+    def boundary_mask(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        x = self.get_all_points(*N, kind=kind)
+        return (
+            (abs(x[:, 0] - self.left) < 1e-8)
+            | (abs(x[:, 0] - self.right) < 1e-8)
+            | (abs(x[:, 1] - self.bottom) < 1e-8)
+            | (abs(x[:, 1] - self.top) < 1e-8)
+        )
+
+    def get_all_points(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        """Return all points including bounaries
+
+        Args:
+            N: The number of points to sample in each direction
+            kind: The kind of points to sample.
+
+        Note:
+            When kind is 'random', we interpret the first element of N as
+            the total number of points to sample and the second as the number
+            of boundary points. Sampling is done radomly in the Cartesian
+            domain [left, right]^2, with boundary points placed along the
+            edges, including the four corners.
+
+            The number of boundary points will be floored to 4 * (N[1] // 4).
+
+            When kind is None or a list of two SampleMethods, we use the
+            standard Cartesian product of two line meshes. The default kind
+            is 'uniform' for both dimensions if kind is None.
+
+            If kind is a string other than 'random', we use that kind for both
+            dimensions.
+
+        Returns:
+            Array of shape (N, 2) with coordinates.
+        """
+        if kind == "random":
+            Ni, Nx = N
+            x = np.array(jax.random.uniform(self.key, (Ni, 2)))
+            x[:, 0] = self.left + x[:, 0] * (self.right - self.left)
+            x[:, 1] = self.bottom + x[:, 1] * (self.top - self.bottom)
+            Nx = Nx // 4
+            x[: (Nx - 1), 0] = self.left
+            x[(Nx - 1) : 2 * (Nx - 1), 0] = self.right
+            x[2 * (Nx - 1) : 3 * (Nx - 1), 1] = self.bottom
+            x[3 * (Nx - 1) : 4 * (Nx - 1), 1] = self.top
+            x[4 * (Nx - 1)] = [self.left, self.bottom]
+            x[4 * (Nx - 1) + 1] = [self.right, self.bottom]
+            x[4 * (Nx - 1) + 2] = [self.right, self.top]
+            x[4 * (Nx - 1) + 3] = [self.left, self.top]
+            return jnp.array(x)
+        if isinstance(kind, str):
+            kind = [kind, kind]
+        return super().get_all_points(*N, kind=kind)
+
+    def get_all_weights(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array | Literal[1]:
+        """Return all weights including bounaries
+
+        Args:
+            N: The number of weights to sample.
+            kind: The kind of weights to sample.
+
+        Note:
+            When kind is 'random', the method returns 1.
+
+            When kind is SampleMethod other than 'random' or a list of two
+            SampleMethods, we use the standard Cartesian product of two line
+            weights. The default kind is 'uniform' for both dimensions.
+
+        Returns:
+            Array of shape (N,) or Literal[1] with weights.
+        """
+        if kind == "random":
+            return 1
+        if isinstance(kind, str):
+            kind = [kind, kind]
+        return super().get_all_weights(*N, kind=kind)
+
+    def to_shapely(self) -> ShapelyMesh:
+        """Return ShapelyMesh for the rectangle."""
+
+        class RectangleShapely(ShapelyMesh):
+            def make_polygon(cls) -> Polygon:
+                return Polygon(
+                    [
+                        (self.left, self.bottom),
+                        (self.right, self.bottom),
+                        (self.right, self.top),
+                        (self.left, self.top),
+                        (self.left, self.bottom),
+                    ]
+                )
+
+            def get_points_on_domain(  # type: ignore[override]
+                cls, N: int, kind: SampleMethod = "random"
+            ) -> Array:
+                specific_points = np.array(
+                    [
+                        [self.left, self.bottom],
+                        [self.right, self.bottom],
+                        [self.right, self.top],
+                        [self.left, self.top],
+                    ],
+                    dtype=float,
+                )
+
+                pts = super().get_points_on_domain(
+                    N, kind=kind, specific_points=specific_points
+                )
+
+                return pts
+
+        return RectangleShapely()
+
+
+@dataclass
+class UnitSquare(Rectangle):
+    """Reference unit square [0, 1]^2.
+
+    Attributes:
+        key: PRNG key for random sampling.
+    """
+
+    key: ArrayLike = field(kw_only=True, default_factory=nnx.rnglib.Rngs(101))
+    left: float | int = field(init=False, default=0.0)
+    right: float | int = field(init=False, default=1.0)
+    bottom: float | int = field(init=False, default=0.0)
+    top: float | int = field(init=False, default=1.0)
+
+
+def points_along_axis(a: Number | Array, b: Array | Number) -> Array:
+    """Return Cartesian product points between 1D arrays a and b.
+
+    Args:
+        a: Scalar or 1D array-like.
+        b: Scalar or 1D array-like.
+
+    Returns:
+        Array of shape (len(a)*len(b), 2) listing all (a_i, b_j) pairs.
+    """
+    a = jnp.atleast_1d(a)
+    b = jnp.atleast_1d(b)
+    return jnp.array(jnp.meshgrid(a, b, indexing="ij")).reshape((2, -1)).T
+
+
+class AnnulusPolar(Rectangle):
+    """Annulus in polar coordinates: radius in [r_in, r_out], theta in [0, 2π).
+
+    Sampling in theta wraps for interior points (exclude duplicate 2π).
+    """
+
+    def __init__(self, radius_inner: Number, radius_outer: Number) -> None:
+        self.radius_inner = radius_inner
+        self.radius_outer = radius_outer
+        Rectangle.__init__(self, radius_inner, radius_outer, 0, 2 * jnp.pi)
+
+    def get_all_points(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        x = Rectangle.get_all_points(self, *N, kind=kind)
+        return x[(abs(x[:, 1] - 2 * jnp.pi) > 1e-8)]
+
+    def get_points_inside_domain(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        x = AnnulusPolar.get_all_points(self, *N, kind=kind)
+        return x[
+            (abs(x[:, 0] - self.radius_inner) > 1e-6)
+            & (abs(x[:, 0] - self.radius_outer) > 1e-6)
+        ]
+
+    def get_points_on_domain(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        x = AnnulusPolar.get_all_points(self, *N, kind=kind)
+        return x[
+            (abs(x[:, 0] - self.radius_inner) < 1e-6)
+            | (abs(x[:, 0] - self.radius_outer) < 1e-6)
+        ]
+
+
+class Annulus(AnnulusPolar):
+    """Cartesian annulus converted from polar samples.
+
+    Interior/boundary sampling occurs in polar coordinates and is then
+    mapped to Cartesian (x, y).
+    """
+
+    def __init__(self, radius_inner: Number, radius_outer: Number) -> None:
+        self.radius_inner = radius_inner
+        self.radius_outer = radius_outer
+        AnnulusPolar.__init__(self, radius_inner, radius_outer)
+
+    def convert_to_cartesian(self, xc) -> Array:
+        """Convert polar (r, θ) points to Cartesian (x, y) using JAX ops."""
+        r = xc[:, 0]
+        theta = xc[:, 1]
+        x = r * jnp.cos(theta)
+        y = r * jnp.sin(theta)
+        return jnp.column_stack((x, y))
+
+    def get_all_points(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        xc = AnnulusPolar.get_all_points(self, *N, kind=kind)
+        return self.convert_to_cartesian(xc)
+
+    def get_points_inside_domain(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        xc = AnnulusPolar.get_points_inside_domain(self, *N, kind=kind)
+        return self.convert_to_cartesian(xc)
+
+    def get_points_on_domain(
+        self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
+    ) -> Array:
+        xc = AnnulusPolar.get_points_on_domain(self, *N, kind=kind)
+        return self.convert_to_cartesian(xc)
 
 
 @dataclass
@@ -582,7 +988,7 @@ class Square_with_hole(ShapelyMesh):
     r: float = 0.4
     hole_resolution: int = 128
 
-    def make_polygon(self):
+    def make_polygon(self) -> Polygon:
         from shapely.geometry import Point, Polygon
 
         outer = [
@@ -599,25 +1005,21 @@ class Square_with_hole(ShapelyMesh):
             )
         return poly
 
-    def get_points_on_domain(
-        self, N: int, kind: SampleMethod = "random", corners: bool = False
+    def get_points_on_domain(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "random"
     ) -> Array:
-        """Return boundary points (N, 2) along outer square and circular
-        hole.
-        """
-        pts = super().get_points_on_domain(N, kind)
-
-        if corners:
-            c = np.array(
-                [
-                    [self.left, self.bottom],
-                    [self.right, self.bottom],
-                    [self.right, self.top],
-                    [self.left, self.top],
-                ],
-                dtype=float,
-            )
-            return jnp.asarray(np.vstack([pts, c]))
+        specific_points = np.array(
+            [
+                [self.left, self.bottom],
+                [self.right, self.bottom],
+                [self.right, self.top],
+                [self.left, self.top],
+            ],
+            dtype=float,
+        )
+        pts = super().get_points_on_domain(
+            N, kind=kind, specific_points=specific_points
+        )
         return pts
 
 
@@ -647,7 +1049,7 @@ class Circle_with_hole(ShapelyMesh):
     inner_hole_resolution: int = 64
     outer_hole_resolution: int = 256
 
-    def make_polygon(self):
+    def make_polygon(self) -> Polygon:
         from shapely.geometry import Point
 
         outer = Point(self.Cx, self.Cy).buffer(
@@ -661,7 +1063,44 @@ class Circle_with_hole(ShapelyMesh):
             raise ValueError(
                 "Invalid polygon configuration (check circle bounds and hole)."
             )
+        return Polygon(poly)
+
+
+@dataclass
+class Triangle(ShapelyMesh):
+    """Triangular domain.
+
+    Attributes:
+
+        seed: Seed passed to NumPy's default_rng for reproducibility.
+    """
+
+    def make_polygon(self) -> Polygon:
+        from shapely.geometry import Polygon
+
+        triangle = [
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (0.0, 1.0),
+        ]
+        poly = Polygon(triangle)
         return poly
+
+    def get_points_on_domain(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "random"
+    ) -> Array:
+        specific_points = np.array(
+            [
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [0.0, 1.0],
+            ],
+            dtype=float,
+        )
+        pts = super().get_points_on_domain(
+            N, kind=kind, specific_points=specific_points
+        )
+        return pts
 
 
 @dataclass
@@ -683,7 +1122,7 @@ class Lshape(ShapelyMesh):
     Lx: float = 1.0
     Ly: float = 1.0
 
-    def make_polygon(self):
+    def make_polygon(self) -> Polygon:
         from shapely.geometry import Polygon
 
         outer = [
@@ -699,54 +1138,92 @@ class Lshape(ShapelyMesh):
             raise ValueError("Invalid polygon configuration for L-shape.")
         return poly
 
-    def get_points_on_domain(
-        self, N: int, kind: SampleMethod = "random", corners: bool = False
+    def get_points_on_domain(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "random"
     ) -> Array:
-        """Return boundary points (N, 2) along outer square and circular
-        hole.
-        """
-        pts = super().get_points_on_domain(N, kind)
-
-        if corners:
-            c = np.array(
-                [
-                    [self.left, self.bottom],
-                    [self.right, self.bottom],
-                    [self.left, self.top],
-                    [self.left + self.Lx, self.bottom + self.Ly],
-                    [self.left + self.Lx, self.top],
-                    [self.right, self.bottom + self.Ly],
-                ],
-                dtype=float,
-            )
-            return jnp.asarray(np.vstack([pts, c]))
-        return pts
+        specific_points = np.array(
+            [
+                [self.left, self.bottom],
+                [self.right, self.bottom],
+                [self.left, self.top],
+                [self.left + self.Lx, self.bottom + self.Ly],
+                [self.left + self.Lx, self.top],
+                [self.right, self.bottom + self.Ly],
+            ],
+            dtype=float,
+        )
+        return super().get_points_on_domain(
+            N, kind=kind, specific_points=specific_points
+        )
 
 
-class CartesianMesh:
-    """Cartesian product mesh from 1D arrays along each axis.
+# Experimental!
+class UnionMesh(BaseMesh):
+    """Union of multiple meshes for composite domains.
 
     Attributes:
-        x: 1D array of x-coordinates.
-        y: 1D array of y-coordinates.
+        meshes: Tuple of mesh objects (e.g., Line, Rectangle, ShapelyMesh).
     """
 
-    def __init__(self, x: ArrayLike, y: ArrayLike) -> None:
-        self.x = jnp.atleast_1d(x)
-        self.y = jnp.atleast_1d(y)
-
-    def get_points_inside_domain(self) -> Array:
-        """Return all Cartesian product points (x_i, y_j)."""
-        return jnp.array(jnp.meshgrid(self.x, self.y, indexing="ij")).reshape((2, -1)).T
-
-    def get_points_on_domain(self) -> Array:
-        """Return boundary points in counterclockwise order."""
-        xb = jnp.vstack(
-            [
-                points_along_axis(self.x, self.y[0]),  # bottom
-                points_along_axis(self.x[-1], self.y[1:-1]),  # right
-                points_along_axis(self.x[::-1], self.y[-1]),  # top
-                points_along_axis(self.x[0], self.y[-2:0:-1]),  # left
-            ]
+    def __init__(self, meshes: tuple) -> None:
+        self.meshes = meshes
+        self.intersection_points = jnp.vstack(
+            [self.meshes[i].get_points_on_domain() for i in range(len(self.meshes))]
         )
-        return xb
+
+    def get_points_inside_domain(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "uniform", domain: int | None = None
+    ) -> list[Array]:
+        """Return interior points from domain.
+
+        Args:
+            N: Number of interior points for the specified mesh.
+            kind: Sampling kind for all meshes.
+            domain: The domain index to sample from.
+
+        Returns:
+            Array with interior points (N, d)
+        """
+        if isinstance(domain, int):
+            return self.meshes[domain].get_points_inside_domain(N, kind=kind)
+        pts = []
+        for i in range(len(self.meshes)):
+            zi = self.meshes[i].get_points_inside_domain(N[i], kind=kind)
+            pts.append(zi)
+        return pts
+
+    def get_points_on_domain(  # type: ignore[override]
+        self, N: int, kind: SampleMethod = "uniform"
+    ) -> tuple:
+        """Return boundary points from all meshes.
+
+        Args:
+            N: Tuple of number of boundary points for each mesh.
+            kind: Sampling kind for all meshes.
+
+        Returns:
+            Arrays with boundary points (N, d)
+        """
+        pts = [jnp.expand_dims(self.meshes[0].get_points_on_domain(N)[0], -1)]
+        for _ in range(1, len(self.meshes) - 1):
+            pts.append(None)
+        pts.append(jnp.expand_dims(self.meshes[-1].get_points_on_domain(N)[-1], -1))
+        return tuple(pts)
+
+    def get_points_on_intersection(
+        self, N: int, kind: SampleMethod = "uniform"
+    ) -> tuple:
+        """Return internal boundary points
+
+        Args:
+            N: Tuple of number of boundary points for each mesh.
+            kind: Sampling kind for all meshes.
+
+        Returns:
+            Arrays with boundary points (N, d)
+        """
+        pts = [jnp.expand_dims(self.meshes[0].get_points_on_domain()[1], -1)]
+        for i in range(1, len(self.meshes) - 1):
+            pts.append(self.meshes[i].get_points_on_domain())
+        pts.append(jnp.expand_dims(self.meshes[-1].get_points_on_domain()[0], -1))
+        return tuple(pts)

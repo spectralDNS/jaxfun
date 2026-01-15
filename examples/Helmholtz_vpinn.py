@@ -23,7 +23,7 @@ V = FunctionSpace(
     domain=domain,
 )
 W = MLPSpace(64, dims=1, rank=0, name="V")
-w = FlaxFunction(W, "w", rngs=nnx.Rngs(1000))
+w = FlaxFunction(W, "w", rngs=nnx.Rngs(11))
 v = TestFunction(V, name="v")
 
 # Manufactured solution
@@ -33,9 +33,9 @@ ue = (1 - x**2) * sp.cos(2 * sp.pi * x)
 N = 1000
 mesh = Line(domain.lower, domain.upper, key=nnx.Rngs(1000)())
 
-xj = mesh.get_points_inside_domain(N, "legendre")
-wj = mesh.get_weights_inside_domain(N, "legendre")
-xb = mesh.get_points_on_domain()
+xj = mesh.get_points_inside_domain(N, kind="legendre")
+wj = mesh.get_weights_inside_domain(N, kind="legendre")
+xb = mesh.get_points_on_domain(N)
 
 # fv = (Div(Grad(w)) + w - (Div(Grad(ue)) + ue)) * v
 fv = -Dot(Grad(w), Grad(v)) + w * v - (-Dot(Grad(ue), Grad(v)) + ue * v)

@@ -1,5 +1,4 @@
 import importlib
-from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -7,7 +6,6 @@ import sympy as sp
 from jax import Array
 from jax.experimental.sparse import BCOO
 
-from jaxfun.coordinates import CoordSys
 from jaxfun.utils.common import lambdify, matmat, tosparse
 
 from .arguments import TestFunction, TrialFunction
@@ -33,7 +31,14 @@ def inner(
     sparse: bool = False,
     sparse_tol: int = 1000,
     return_all_items: bool = False,
-) -> Array | list[Array]:
+) -> (
+    Array
+    | list[Array]
+    | tuple[list[Array], list[Array]]
+    | BCOO
+    | list[BCOO]
+    | tuple[BCOO | Array, Array]
+):
     r"""Assemble Galerkin inner products (bilinear / linear forms).
 
     Supports expressions of the forms:
@@ -67,8 +72,8 @@ def inner(
           * Lists / TensorMatrix / TPMatrix objects for >1D
     """  # noqa: E501
     V, U = get_basisfunctions(expr)
+    assert V is not None, "No TestFunction found in expression"
     test_space = V.functionspace
-    trial_space = U.functionspace if U is not None else None
     measure = test_space.system.sg
     allforms = split(expr * measure)
     a_forms = allforms["bilinear"]
@@ -92,6 +97,7 @@ def inner(
         coeffs = split_coeff(a0["coeff"])
         sc = coeffs.get("bilinear", 1)
 
+        trial_space = getattr(U, "functionspace", None)
         trial = []
         has_bcs = False
 
@@ -100,6 +106,9 @@ def inner(
                 continue
 
             v, u = get_basisfunctions(ai)
+            assert v is not None and u is not None, (
+                "Both test and trial functions required in bilinear form"
+            )
             vf = v.functionspace
             uf = u.functionspace
             trial.append(uf)
@@ -131,9 +140,11 @@ def inner(
 
         elif isinstance(mats[0], tuple):
             # multivariable form, like sqrt(x+y)*u*v, that cannot be separated
+
             Am = assemble_multivar(mats, a0["multivar"], test_space)
 
             if has_bcs:
+                assert trial_space is not None
                 bresults.append(
                     -(Am @ trial_space.bndvals[(tuple(trial))].flatten()).reshape(
                         test_space.num_dofs
@@ -211,6 +222,7 @@ def inner(
                 continue
 
             v, _ = get_basisfunctions(bi)
+            assert v is not None, "Test function required in linear form"
 
             z = inner_linear(
                 bi,
@@ -268,7 +280,14 @@ def process_results(
     dims: int,
     sparse: bool,
     sparse_tol: int,
-) -> Array | list[Array] | BCOO | list[BCOO] | tuple[BCOO | Array, Array]:
+) -> (
+    Array
+    | list[Array]
+    | tuple[list[Array], list[Array]]
+    | BCOO
+    | list[BCOO]
+    | tuple[BCOO | Array, Array]
+):
     """Finalize assembly results (sum terms, optional sparsify).
 
     Args:
@@ -319,7 +338,7 @@ def inner_bilinear(
     u: OrthogonalSpace,
     sc: float | complex,
     multivar: bool,
-) -> Array:
+) -> Array | tuple[Array, Array]:
     """Assemble single bilinear form contribution term.
 
     Detects derivative orders on test/trial factors, applies optional
@@ -410,7 +429,7 @@ def inner_linear(
     v: OrthogonalSpace,
     sc: float | complex,
     multivar: bool,
-) -> Array:
+) -> Array | tuple[Array]:
     """Assemble single linear form contribution.
 
     Args:
@@ -533,36 +552,3 @@ def project(ue: sp.Expr, V: OrthogonalSpace) -> Array:
     M, b = inner(v * (u - ue))
     uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(V.num_dofs)
     return uh
-
-
-# Experimental measure
-class Measure:
-    """Light wrapper enabling custom integration measure multiplication.
-
-    When left-multiplied with an expression (expr * Measure(system)), the
-    system metric determinant (system.sg) is inserted and inner() invoked.
-
-    Attributes:
-        sparse: Whether to sparsify assembled matrices.
-        return_all_items: Return raw lists instead of summed results.
-        sparse_tol: Tolerance for sparsification.
-        system: Coordinate system providing sg (sqrt|g|).
-    """
-
-    sparse = True
-    return_all_items = False
-    sparse_tol = 100
-
-    def __init__(self, system: CoordSys, **kwargs: dict[Any]) -> None:
-        """Store coordinate system and optional override flags."""
-        self.system = system
-        self.__dict__.update(kwargs)
-
-    def __rmul__(self, expr: sp.Expr) -> Array | list[Array]:
-        """Evaluate inner products for expr with inserted measure."""
-        return inner(
-            expr * self.system.sg,
-            sparse=self.sparse,
-            return_all_items=self.return_all_items,
-            sparse_tol=self.sparse_tol,
-        )

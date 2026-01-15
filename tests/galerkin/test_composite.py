@@ -56,7 +56,7 @@ def test_bcgeneric_space():
     assert B.dim == 3
     # quad_points_and_weights should use M when N==0
     xw = B.quad_points_and_weights()
-    assert xw.shape[1] == B.orthogonal.num_quad_points
+    assert xw[0].shape[0] == B.orthogonal.num_quad_points
 
 
 def test_direct_sum_evaluate_backward():

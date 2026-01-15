@@ -344,7 +344,7 @@ def GaussNewton(
 
 def train(
     loss_fn: Loss, allreduce_gradients_and_loss: bool = False
-) -> Callable[[nnx.Module, nnx.Optimizer], float]:
+) -> Callable[[nnx.Module, nnx.Optimizer, Array, tuple[Array], tuple[Array]], Array]:
     """Build a JIT-compiled training step for a loss function.
 
     Args:
@@ -353,7 +353,7 @@ def train(
             processes each epoch.
 
     Returns:
-        A function (module, optimizer) -> loss suitable for epoch loops.
+        A function (module, optimizer, gw, x, target) -> loss suitable for epoch loops.
     """
 
     @nnx.jit
@@ -363,15 +363,14 @@ def train(
         gw: Array,
         xs: tuple[Array],
         targets: tuple[Array],
-    ) -> float:
-        gd, state = nnx.split(module, nnx.Param)
-
+    ) -> Array:
         def value_fn(m: nnx.Module) -> Array:
             return loss_fn.loss_with_gw(m, gw, xs, targets)
 
         def JTJ(m: nnx.Module) -> Array:
             return loss_fn.JTJ(m, gw, xs, targets)
 
+        gd = nnx.graphdef(module)
         loss, gradients = nnx.value_and_grad(value_fn)(module)
         value_fn_state = lambda state: value_fn(nnx.merge(gd, state))
         GN_loss_fn = lambda state: JTJ(nnx.merge(gd, state))
@@ -408,10 +407,8 @@ def train(
         def value_fn(m: nnx.Module) -> Array:
             return loss_fn.loss_with_gw(m, gw, xs, targets)
 
-        gd, state = nnx.split(module, nnx.Param)
-        unravel = jax.flatten_util.ravel_pytree(state)[1]
+        gd = nnx.graphdef(module)
         value_fn_state = lambda state: value_fn(nnx.merge(gd, state))
-        H_loss_fn = lambda flat_weights: value_fn(nnx.merge(gd, unravel(flat_weights)))
         GN_loss_fn = lambda state: loss_fn.JTJ(nnx.merge(gd, state), gw, xs, targets)
         optimizer.update(
             module,
@@ -419,11 +416,10 @@ def train(
             grad=gradients,
             value_fn=value_fn_state,
             value=loss,
-            H_loss_fn=H_loss_fn,
             GN_loss_fn=GN_loss_fn,
         )
 
-    def allreduce(loss: Array, gradients: PyTree) -> None:
+    def allreduce(loss: Array, gradients: PyTree) -> tuple[Array, PyTree]:
         reduced_gradients = process_allmean(gradients)
         reduced_loss = mh.process_allgather(loss).mean(axis=0)
         return reduced_loss, reduced_gradients
@@ -434,7 +430,7 @@ def train(
         gw: Array,
         xs: tuple[Array],
         targets: tuple[Array],
-    ) -> float:
+    ) -> Array:
         loss, gradients = value_and_grad(module, gw, xs, targets)
         loss, gradients = allreduce(loss, gradients)
         update(loss, gradients, module, optimizer, gw, xs, targets)
@@ -447,6 +443,14 @@ def train(
 
 
 class Trainer:
+    """Trainer class to manage optimization loops for PINN models.
+
+    Attributes:
+        loss_fn: Loss function / object (Loss instance) to optimize.
+        global_weights: Global weights array for loss terms.
+        epoch: Current epoch number.
+    """
+
     def __init__(self, loss_fn: Loss) -> None:
         """Trainer for optimization loops.
 
@@ -507,7 +511,6 @@ class Trainer:
             opt: Optimizer instance (NamedOptimizer or custom nnx.Optimizer). If not a
                 NamedOptimizer and 'module' is None, a ValueError is raised.
             num: Maximum number of epochs.
-
             name: Optional name override for logging (defaults to opt.name or
                 'Optimizer').
             module: Optional explicit module reference (required if opt is not a
@@ -554,6 +557,7 @@ class Trainer:
         name = re.sub(r"\([^)]*\)", "", longname)  # Remove parentheses content
         allow_early_break = abs_limit_loss > 0 or abs_limit_change > 0
         loss_old = 1.0
+        loss = 0.0
         xs, targets = self.loss_fn.args  # Extract points and targets for tracing
         self.losses = []
         for epoch in range(1, num + 1):

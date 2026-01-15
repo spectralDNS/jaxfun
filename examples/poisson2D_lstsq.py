@@ -29,9 +29,9 @@ w = FlaxFunction(V, name="w", rngs=nnx.Rngs(1001))
 N = 32
 mesh = Rectangle(-1, 1, -1, 1)
 points = C.__class__.__name__.lower()
-xyi = mesh.get_points_inside_domain(N, N, points)
-xyb = mesh.get_points_on_domain(N, N, points, corners=True)
-wi = mesh.get_weights_inside_domain(N, N, points)
+xyi = mesh.get_points(N, N, domain="inside", kind=points)
+xyb = mesh.get_points(N, N, domain="boundary", kind=points)
+wi = mesh.get_weights(N, N, domain="inside", kind=points)
 Nb = xyb.shape[0]
 
 x, y = V.system.base_scalars()
@@ -65,8 +65,9 @@ if "PYTEST" in os.environ:
 
 
 fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(10, 5))
+M = N - 2
 ax0.contourf(
-    xyi[:, 0].reshape((N, N)), xyi[:, 1].reshape((N, N)), w(xyi).reshape((N, N))
+    xyi[:, 0].reshape((M, M)), xyi[:, 1].reshape((M, M)), w(xyi).reshape((M, M))
 )
-ax1.contourf(xyi[:, 0].reshape((N, N)), xyi[:, 1].reshape((N, N)), uj.reshape((N, N)))
+ax1.contourf(xyi[:, 0].reshape((M, M)), xyi[:, 1].reshape((M, M)), uj.reshape((M, M)))
 # plt.colorbar()

@@ -73,7 +73,7 @@ class Domain(NamedTuple):
     upper: Number
 
 
-def ulp(x: float) -> float:
+def ulp(x: float) -> Array:
     return jnp.nextafter(x, x + 1) - x
 
 
@@ -90,13 +90,13 @@ def diffx(
 ) -> Callable[[Array, int], Array]:
     for _ in range(k):
         fun = jax.grad(fun)
-    return jax.vmap(fun, in_axes=(0, None))
+    return jax.vmap(fun, in_axes=(0, None))  # type: ignore[return-value]
 
 
 def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
     for _ in range(k):
         fun = jax.jacfwd(fun)  # if i % 2 else jax.jacrev(fun)
-    return jax.vmap(fun, in_axes=0, out_axes=0)
+    return jax.vmap(fun, in_axes=0, out_axes=0)  # type: ignore[return-value]
 
 
 @jax.jit

@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
+from jax.experimental import sparse
 from sympy import Expr, Symbol
 
 from jaxfun.coordinates import CoordSys
@@ -90,7 +91,7 @@ class Chebyshev(Jacobi):
         return c0 + c1 * X
 
     @jit_vmap(in_axes=(0, None))
-    def evaluate3(self, X: float | Array, c: Array) -> Array:
+    def evaluate3(self, X: float, c: Array) -> Array:
         """Evaluate Chebyshev series via forward recurrence.
 
         Builds successive T_n(X) terms with a scan, accumulating
@@ -117,7 +118,7 @@ class Chebyshev(Jacobi):
         return jnp.sum(xs, axis=0) + c[0]
 
     @partial(jax.jit, static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int = 0) -> Array:
+    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return Gauss–Chebyshev (first kind) nodes and weights.
 
         Nodes:
@@ -133,15 +134,13 @@ class Chebyshev(Jacobi):
             Array((2, N)) with first row nodes, second row weights.
         """
         N = self.num_quad_points if N == 0 else N
-        return jnp.array(
-            (
-                jnp.cos(jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)),
-                jnp.ones(N) * jnp.pi / N,
-            )
+        return (
+            jnp.cos(jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)),
+            jnp.ones(N) * jnp.pi / N,
         )
 
     @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
-    def eval_basis_function(self, X: float | Array, i: int) -> Array:
+    def eval_basis_function(self, X: float, i: int) -> float:
         """Evaluate single Chebyshev polynomial T_i at points X.
 
         Iterative two-term recurrence:
@@ -182,7 +181,7 @@ class Chebyshev(Jacobi):
 
         def inner_loop(
             carry: tuple[float, float], _
-        ) -> tuple[tuple[float, float], Array]:
+        ) -> tuple[tuple[float, float], float]:
             x0, x1 = carry
             x2 = 2 * X * x1 - x0
             return (x1, x2), x1
@@ -203,7 +202,7 @@ class Chebyshev(Jacobi):
         return jnp.hstack((jnp.array([jnp.pi]), jnp.full(self.N - 1, jnp.pi / 2)))
 
     # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
-    def gn(self, n: Symbol) -> Expr:
+    def gn(self, n: Symbol | int) -> Expr:
         """Return scaling g_n used in Jacobi-based normalization.
 
         Args:
@@ -224,10 +223,12 @@ class Chebyshev(Jacobi):
         Returns:
             SymPy expression for T_i(X).
         """
-        return sp.cos(i * sp.acos(X))
+        return sp.cos(i * sp.acos(X))  # type: ignore[return-value]
 
 
-def matrices(test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]) -> Array:
+def matrices(
+    test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]
+) -> sparse.BCOO | None:
     """Sparse operator matrices between test/trial Chebyshev modes.
 
     Constructs (possibly rectangular) sparse differentiation / mass-like
@@ -248,7 +249,6 @@ def matrices(test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]) -> Array
         jax.experimental.sparse.BCOO or None if combination unsupported.
     """
     import numpy as np
-    from jax.experimental import sparse
     from scipy import sparse as scipy_sparse
 
     v, i = test
@@ -281,7 +281,10 @@ def matrices(test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]) -> Array
         )
 
     if i == 1 and j == 0:
-        return matrices(trial, test).transpose()
+        m = matrices(trial, test)
+        if m is not None:
+            return m.transpose()
+        return None
 
     if i == 0 and j == 2:
         k = jnp.arange(max(v.N, u.N))
@@ -303,6 +306,8 @@ def matrices(test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]) -> Array
             )
         )
     if i == 2 and j == 0:
-        return matrices(trial, test).transpose()
+        m = matrices(trial, test)
+        if m is not None:
+            return m.transpose()
 
     return None

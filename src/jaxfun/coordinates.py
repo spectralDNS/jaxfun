@@ -178,7 +178,7 @@ class BaseScalar(AtomicExpr):
     is_real = True
 
     @property
-    def free_symbols(self) -> set:
+    def free_symbols(self) -> set[Basic]:
         return {self}
 
     _diff_wrt = True
@@ -213,7 +213,7 @@ class BaseScalar(AtomicExpr):
         return self.system._map_base_scalar_to_symbol[self]
 
 
-class BaseVector(Vector, AtomicExpr):
+class BaseVector(Vector, AtomicExpr):  # type: ignore
     """Covariant base vector of a coordinate system
 
         b_j = ∂r/∂q^j
@@ -289,14 +289,14 @@ class BaseVector(Vector, AtomicExpr):
         return printer._print(system) + "." + system._vector_names[index]
 
     @property
-    def free_symbols(self) -> set[BaseVector]:
+    def free_symbols(self) -> set[Basic]:
         return {self}
 
     def to_cartesian(self):
         return self._system.to_cartesian(self)
 
 
-class BaseDyadic(Dyadic, AtomicExpr):
+class BaseDyadic(Dyadic, AtomicExpr):  # type: ignore
     """Dyadic (tensor product) of two base vectors.
 
     Represents a rank-2 basis tensor constructed from two covariant base vectors
@@ -948,7 +948,7 @@ class CoordSys(Basic):
         self._ct = ct
         return ct
 
-    def simplify(self, expr: Expr) -> Expr:
+    def simplify(self, expr: Expr) -> Expr:  # type: ignore
         """Simplifies an expression in this coordinate system context.
 
         Applies:
@@ -974,7 +974,7 @@ class CoordSys(Basic):
             sp.simplify(self.expr_base_scalar_to_psi(expr), measure=self._measure)
         )
 
-    def refine(self, sc: Expr) -> Expr:
+    def refine(self, sc: Expr) -> Expr:  # type: ignore
         """Applies SymPy refine with system assumptions.
 
         Args:
@@ -987,7 +987,7 @@ class CoordSys(Basic):
         sc = sp.refine(sc, self._assumptions)
         return self.expr_psi_to_base_scalar(sc)
 
-    def replace(self, sc: Expr) -> Expr:
+    def replace(self, sc: Expr) -> Expr:  # type: ignore
         """Performs pattern replacements then restores base scalars.
 
         Args:

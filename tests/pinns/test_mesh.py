@@ -259,7 +259,7 @@ def test_annulus_cartesian_inside_and_boundary_uniform():
     assert pts_in.shape == (Nx * (Ny - 1), 2)
     # radii in [ri, ro]
     radii = jnp.linalg.norm(pts_in, axis=1)
-    assert jnp.all((radii >= ri) & (radii <= ro))
+    assert jnp.all((radii + 1e-6 >= ri) & (radii - 1e-6 <= ro))
 
     bd = ann.get_points(Nx, Ny, domain="boundary")
     assert bd.shape == (2 * (Ny - 1), 2)

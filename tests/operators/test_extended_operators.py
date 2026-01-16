@@ -146,10 +146,24 @@ def test_outer_transpose_property():
 
 def test_dot_dyadic_zero_cases():
     # Construct DyadicZero via zero vector inclusion
-    dz = BaseDyadic(N.i, sp.vector.VectorZero())
-    assert dz == sp.vector.DyadicZero()
+    dz = sp.vector.DyadicZero()
+    d0 = N.i | N.j
     assert dot(dz, N.i) == sp.vector.VectorZero()
     assert dot(N.i, dz) == sp.vector.VectorZero()
+    assert dot(dz, d0) == dz
+    assert dot(d0, dz) == dz
+    assert dot(dz, dz) == dz
+
+
+def test_dot_vector_zero_cases():
+    # Construct DyadicZero via zero vector inclusion
+    vz = sp.vector.VectorZero()
+    d0 = N.i | N.j
+    assert dot(vz, N.i) == sp.S.Zero
+    assert dot(N.i, vz) == sp.S.Zero
+    assert dot(vz, d0) == vz
+    assert dot(d0, vz) == vz
+    assert dot(vz, vz) == sp.S.Zero
 
 
 def test_divergence_len2_coord_systems():

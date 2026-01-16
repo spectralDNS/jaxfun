@@ -317,7 +317,18 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> BasisDependent | Expr | Dot
         return Vector.zero
     if isinstance(t1, BaseDyadic) and isinstance(t2, DyadicZero):
         return Dyadic.zero
-    if isinstance(t1, VectorZero) or isinstance(t2, VectorZero):
+    if isinstance(t1, DyadicZero) and isinstance(t2, DyadicZero):
+        return Dyadic.zero
+
+    if isinstance(t1, VectorZero) and isinstance(t2, BaseVector):
+        return sp.S.Zero
+    if isinstance(t1, VectorZero) and isinstance(t2, BaseDyadic):
+        return Vector.zero
+    if isinstance(t1, BaseVector) and isinstance(t2, VectorZero):
+        return sp.S.Zero
+    if isinstance(t1, BaseDyadic) and isinstance(t2, VectorZero):
+        return Vector.zero
+    if isinstance(t1, VectorZero) and isinstance(t2, VectorZero):
         return sp.S.Zero
     if isinstance(t1, VectorMul | DyadicMul):
         v1, m1 = next(iter(t1.components.items()))

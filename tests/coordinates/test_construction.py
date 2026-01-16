@@ -49,5 +49,5 @@ def test_invalid_base_vector_index():
 
 def test_basedyadic_zero_shortcut():
     N = CartCoordSys("N", (x, y, z))
-    dy = BaseDyadic(N.i, sp.vector.VectorZero())
-    assert dy == sp.vector.DyadicZero()
+    with pytest.raises(TypeError):
+        BaseDyadic(N.i, sp.vector.VectorZero())

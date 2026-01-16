@@ -14,7 +14,7 @@ from collections import UserDict
 from collections.abc import Iterable
 from itertools import product
 from types import MethodType
-from typing import Any
+from typing import Any, Self, cast
 
 import numpy as np
 import sympy as sp
@@ -27,6 +27,7 @@ from sympy.core.symbol import Str
 from sympy.core.sympify import _sympify
 from sympy.printing.precedence import PRECEDENCE
 from sympy.printing.pretty.stringpict import prettyForm
+from sympy.vector import VectorZero
 from sympy.vector.dyadic import Dyadic, DyadicAdd
 from sympy.vector.vector import Vector, VectorAdd
 
@@ -92,7 +93,7 @@ class BaseTime(Symbol):
         is_real: Time assumed real-valued.
     """
 
-    def __new__(cls, sys: CoordSys) -> BaseTime:
+    def __new__(cls, sys: CoordSys) -> Self:
         index: int = _sympify(sys.dims)
         obj = super().__new__(cls, "t")
         # The _id is used for equating purposes, and for hashing
@@ -148,7 +149,7 @@ class BaseScalar(AtomicExpr):
 
     def __new__(
         cls, index: int, system: CoordSys, pretty_str: str = None, latex_str: str = None
-    ) -> BaseScalar:
+    ) -> Self:
         if pretty_str is None:
             pretty_str = f"x{index}"
         elif isinstance(pretty_str, sp.Symbol):
@@ -206,7 +207,7 @@ class BaseScalar(AtomicExpr):
     def _jaxcode(self, printer: Any) -> str:
         return self._name
 
-    def doit(self, **hints: dict) -> BaseScalar:
+    def doit(self, **hints: Any) -> BaseScalar:
         return self
 
     def to_symbol(self) -> Symbol:
@@ -244,7 +245,7 @@ class BaseVector(Vector, AtomicExpr):  # type: ignore
 
     def __new__(
         cls, index: int, system: CoordSys, pretty_str: str = None, latex_str: str = None
-    ) -> BaseVector:
+    ) -> Self:
         if pretty_str is None:
             pretty_str = f"x{index}"
         if latex_str is None:
@@ -311,16 +312,13 @@ class BaseDyadic(Dyadic, AtomicExpr):  # type: ignore
         TypeError: If either operand is not a base vector (or zero).
     """
 
-    def __new__(cls, vector1, vector2):
-        VectorZero = sp.vector.VectorZero
+    def __new__(cls, vector1, vector2) -> Self:
         # Verify arguments
-        if not isinstance(vector1, BaseVector | VectorZero) or not isinstance(
-            vector2, BaseVector | VectorZero
-        ):
+        if not isinstance(vector1, BaseVector) or not isinstance(vector2, BaseVector):
             raise TypeError("BaseDyadic cannot be composed of non-base vectors")
         # Handle special case of zero vector
-        elif vector1 == Vector.zero or vector2 == Vector.zero:
-            return Dyadic.zero
+        elif isinstance(vector1, VectorZero) or isinstance(vector2, VectorZero):
+            raise TypeError("BaseDyadic cannot be composed of zero vectors")
         # Initialize instance
         obj = super().__new__(cls, vector1, vector2)
         obj._base_instance = obj
@@ -398,7 +396,7 @@ class CoordSys(Basic):
         assumptions: AssumptionKeys = True,
         replace: list[tuple] | tuple[tuple] = (),
         measure: Function = sp.count_ops,
-    ) -> CoordSys:
+    ) -> Self:
         """Creates and initializes a coordinate system.
 
         Args:
@@ -480,7 +478,9 @@ class CoordSys(Basic):
             k: v for k, v in zip(obj._psi, base_scalars, strict=False)
         }
 
-        position_vector = position_vector.xreplace(obj._map_symbol_to_base_scalar)
+        position_vector: tuple[Expr] = position_vector.xreplace(
+            obj._map_symbol_to_base_scalar
+        )
         obj._map_xyz_to_base_scalar = {
             k: v for k, v in zip(obj._cartesian_xyz, position_vector, strict=False)
         }
@@ -570,13 +570,13 @@ class CoordSys(Basic):
     def rv(self) -> tuple[Expr]:
         return self._position_vector
 
-    def get_cartesian_basis_vectors(self):
+    def get_cartesian_basis_vectors(self) -> tuple[BaseVector, ...]:
         return self._parent.base_vectors() if self._parent else self.base_vectors()
 
-    def position_vector(self, as_Vector: bool = False) -> tuple[Expr] | Any:
-        r = self.refine_replace(self._position_vector)
+    def position_vector(self, as_Vector: bool = False) -> tuple[Expr] | Vector:
+        r: tuple[Expr] = self.refine_replace(self.rv)
         base_vectors = self.get_cartesian_basis_vectors()
-        return np.array(r) @ np.array(base_vectors) if as_Vector else r
+        return np.array(r) @ base_vectors if as_Vector else r
 
     @property
     def psi(self) -> tuple[Symbol]:
@@ -634,7 +634,7 @@ class CoordSys(Basic):
 
         return v.xreplace(cart_map)
 
-    def from_cartesian(self, v) -> VectorAdd | DyadicAdd:
+    def from_cartesian(self, v) -> Vector | Dyadic:
         from jaxfun.operators import express
 
         if self.is_cartesian:
@@ -654,7 +654,7 @@ class CoordSys(Basic):
                 for j in range(len(bt)):
                     a.append(self.simplify(bt[i] & v & bt[j]) * bd[i * len(bv) + j])
             a = sp.vector.DyadicAdd(*a)
-        return express(a, self)
+        return cast(Vector | Dyadic, express(a, self))
 
     def expr_base_scalar_to_psi(self, v) -> Expr:
         return sp.sympify(v).xreplace(self._map_base_scalar_to_symbol)
@@ -743,7 +743,7 @@ class CoordSys(Basic):
         else:
             g = sp.Matrix(self.get_contravariant_metric_tensor()).det()
         g = self.replace(g).factor()
-        g = express(self.refine(self.simplify(g)), self)
+        g: Expr = express(self.refine(self.simplify(g)), self)
         self._det_g[covariant] = g
         return g
 
@@ -770,7 +770,7 @@ class CoordSys(Basic):
                 sg = complex(sg)
             else:
                 raise RuntimeError
-        sg = express(sg, self)
+        sg: Expr = express(sg, self)
         self._sqrt_det_g[covariant] = sg
         return sg
 
@@ -833,7 +833,7 @@ class CoordSys(Basic):
             return b @ np.array(self.get_cartesian_basis_vectors())[: b.shape[1]]
         return b
 
-    def get_contravariant_basis_vector(self, i: int):
+    def get_contravariant_basis_vector(self, i: int) -> Vector | BaseVector:
         """Returns contravariant basis vector i.
 
             b^i = grad(q^i) = g^ij b_j
@@ -849,7 +849,7 @@ class CoordSys(Basic):
         """
         return self.get_contravariant_metric_tensor()[i] @ self.base_vectors()
 
-    def get_covariant_basis_vector(self, i: int):
+    def get_covariant_basis_vector(self, i: int) -> BaseVector:
         """Returns covariant basis vector i.
 
             b_i = ∂r/∂q^i
@@ -948,7 +948,7 @@ class CoordSys(Basic):
         self._ct = ct
         return ct
 
-    def simplify(self, expr: Expr) -> Expr:  # type: ignore
+    def simplify(self, expr: Basic) -> Basic:  # type: ignore
         """Simplifies an expression in this coordinate system context.
 
         Applies:
@@ -974,7 +974,7 @@ class CoordSys(Basic):
             sp.simplify(self.expr_base_scalar_to_psi(expr), measure=self._measure)
         )
 
-    def refine(self, sc: Expr) -> Expr:  # type: ignore
+    def refine(self, sc: Basic) -> Basic:  # type: ignore
         """Applies SymPy refine with system assumptions.
 
         Args:
@@ -987,7 +987,7 @@ class CoordSys(Basic):
         sc = sp.refine(sc, self._assumptions)
         return self.expr_psi_to_base_scalar(sc)
 
-    def replace(self, sc: Expr) -> Expr:  # type: ignore
+    def replace(self, sc: Basic) -> Basic:  # type: ignore
         """Performs pattern replacements then restores base scalars.
 
         Args:
@@ -1001,7 +1001,7 @@ class CoordSys(Basic):
             sc = sc.replace(a, b)
         return self.expr_psi_to_base_scalar(sc)
 
-    def refine_replace(self, sc: Expr) -> Expr:
+    def refine_replace(self, sc: Basic) -> Basic:
         """Runs refine followed by pattern replacements.
 
         Args:

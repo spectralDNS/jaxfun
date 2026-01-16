@@ -13,18 +13,20 @@ from __future__ import annotations
 import collections
 from itertools import product
 from numbers import Number
-from typing import Any
+from typing import Any, Self
 
 import numpy as np
 import sympy as sp
 from sympy import Expr
 from sympy.core import preorder_traversal
 from sympy.core.add import Add
+from sympy.core.basic import Basic
 from sympy.core.function import Derivative, diff as df
 from sympy.core.mul import Mul
 from sympy.printing.latex import LatexPrinter
 from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import Dot as sympy_Dot, VectorAdd, VectorMul, VectorZero
+from sympy.vector.basisdependent import BasisDependent
 from sympy.vector.dyadic import Dyadic, DyadicAdd, DyadicMul, DyadicZero
 from sympy.vector.operators import (
     Curl as sympy_Curl,
@@ -66,7 +68,7 @@ def _split_mul_args_wrt_coordsys(expr: Expr) -> list[Expr]:
     return list(d.values())
 
 
-def express(expr: Expr, system: CoordSys) -> Any:
+def express(expr: Basic, system: CoordSys) -> Basic:
     system_set = set()
     expr = sp.sympify(expr)
     # Substitute all the coordinate variables
@@ -81,8 +83,8 @@ def express(expr: Expr, system: CoordSys) -> Any:
     return expr.subs(subs_dict)
 
 
-def outer(v1: Vector, v2: Vector) -> Expr:
-    """Return the (tensor / dyadic) outer product of two vectors.
+def outer(v1: Vector, v2: Vector) -> Dyadic:
+    """Return the (tensor) outer product of two vectors.
 
     Args:
         v1: Left Vector operand.
@@ -123,10 +125,10 @@ def outer(v1: Vector, v2: Vector) -> Expr:
         for (k1, c1), (k2, c2) in product(v1.components.items(), v2.components.items())
     ]
 
-    return DyadicAdd(*args)
+    return DyadicAdd(*args)  # type: ignore[arg-type]
 
 
-def cross(v1: Vector, v2: Vector) -> Expr:
+def cross(v1: Vector, v2: Vector) -> Vector | Cross:
     """Return the cross product of two vectors.
 
         v1 x v2 = ε_{ijk} √g v1^i v2^j b^k
@@ -203,7 +205,7 @@ def cross(v1: Vector, v2: Vector) -> Expr:
     return Cross(v1, v2)
 
 
-def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> Expr:
+def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> BasisDependent | Expr | Dot:
     """Return the (possibly contracted) inner product of two tensors.
 
     Supports Vector·Vector, Vector·Dyadic, Dyadic·Vector and Dyadic·Dyadic,
@@ -237,14 +239,14 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> Expr:
     elif isinstance(t1, Dyadic) and isinstance(t2, Dyadic):
         rank = 2
 
-    if isinstance(t1, Add | VectorAdd | DyadicAdd):
+    if isinstance(t1, VectorAdd | DyadicAdd):
         if rank == 0:
             return Add.fromiter(dot(i, t2) for i in t1.args)
         elif rank == 1:
             return VectorAdd.fromiter(dot(i, t2) for i in t1.args)
         else:
             return DyadicAdd.fromiter(dot(i, t2) for i in t1.args)
-    if isinstance(t2, Add | VectorAdd | DyadicAdd):
+    if isinstance(t2, VectorAdd | DyadicAdd):
         if rank == 0:
             return Add.fromiter(dot(t1, i) for i in t2.args)
         elif rank == 1:
@@ -270,7 +272,7 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> Expr:
                 g = t1._sys.get_covariant_metric_tensor()
                 g0 = g[t1.args[1]._id[0], t2._id[0]]
                 if g0 == 0:
-                    return VectorZero()
+                    return Vector.zero
                 else:
                     return g0 * t1.args[0]
 
@@ -284,7 +286,7 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> Expr:
                 g = t1._sys.get_covariant_metric_tensor()
                 g0 = g[t1._id[0], t2.args[0]._id[0]]
                 if g0 == 0:
-                    return VectorZero()
+                    return Vector.zero
                 else:
                     return g0 * t2.args[1]
 
@@ -308,13 +310,13 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> Expr:
 
         return dot(t1._sys.to_cartesian(t1), t2._sys.to_cartesian(t2))
     if isinstance(t1, DyadicZero) and isinstance(t2, BaseVector):
-        return VectorZero()
+        return Vector.zero
     if isinstance(t1, DyadicZero) and isinstance(t2, BaseDyadic):
-        return DyadicZero()
+        return Dyadic.zero
     if isinstance(t1, BaseVector) and isinstance(t2, DyadicZero):
-        return VectorZero()
+        return Vector.zero
     if isinstance(t1, BaseDyadic) and isinstance(t2, DyadicZero):
-        return DyadicZero()
+        return Dyadic.zero
     if isinstance(t1, VectorZero) or isinstance(t2, VectorZero):
         return sp.S.Zero
     if isinstance(t1, VectorMul | DyadicMul):
@@ -327,7 +329,7 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> Expr:
     return Dot(t1, t2)
 
 
-def divergence(v: Vector | Dyadic, doit: bool = True) -> Expr:
+def divergence(v: Vector | Dyadic, doit: bool = True) -> Vector | Expr | Basic | Div:
     """Return divergence of a Vector or Dyadic field
 
         div(v) = ∂v/∂q^j·b^j
@@ -366,7 +368,7 @@ def divergence(v: Vector | Dyadic, doit: bool = True) -> Expr:
         if v.is_Vector:
             return sp.S.Zero
         else:
-            return sp.vector.VectorZero()
+            return Vector.zero
     elif len(coord_sys) == 1:
         if isinstance(v, Cross | Curl | Gradient):
             return Div(v)
@@ -424,7 +426,7 @@ def divergence(v: Vector | Dyadic, doit: bool = True) -> Expr:
                 if not isinstance(i, Dyadic | Vector | Cross | Gradient)
             )
             if not vector.is_Vector:
-                res = sp.vector.VectorAdd(
+                res = VectorAdd(
                     dot(vector, gradient(scalar)),
                     scalar * divergence(vector, doit=doit),
                 )
@@ -441,10 +443,12 @@ def divergence(v: Vector | Dyadic, doit: bool = True) -> Expr:
             raise Div(v)
 
 
-def gradient(field: Expr, doit: bool = True, transpose: bool = False) -> Expr:
+def gradient(
+    field: Expr, doit: bool = True, transpose: bool = False
+) -> BasisDependent | Grad:
     """Return gradient of a scalar or (optionally transposed) gradient of a vector.
 
-    For scalar f: returns ∇f = ∂f/∂q^j ⊗ b^j.
+    For scalar f: returns ∇f = ∂f/∂q^j b^j.
     For vector v: returns (∇ ⊗ v)^T = (∂v/∂q^j) ⊗ b^j (or its transpose).
         The tensors are expressed in the covariant basis before returning.
 
@@ -484,7 +488,7 @@ def gradient(field: Expr, doit: bool = True, transpose: bool = False) -> Expr:
 
         if coord_sys.is_cartesian and field.is_scalar:
             h = coord_sys.hi
-            vi = VectorZero()
+            vi = Vector.zero
             for i in range(len(h)):
                 vi += v[i] * field.diff(x[i]) / h[i]
 
@@ -503,7 +507,9 @@ def gradient(field: Expr, doit: bool = True, transpose: bool = False) -> Expr:
                             vi.append(field.diff(x[i]) * gt[i, j] | v[j])
                     else:
                         vi.append(field.diff(x[i]) * gt[i, j] * v[j])
-            vi = DyadicAdd(*vi) if field.is_Vector else VectorAdd(*vi)
+            vi: DyadicAdd | VectorAdd = (
+                DyadicAdd(*vi) if field.is_Vector else VectorAdd(*vi)
+            )
 
             if doit:
                 return vi.doit()
@@ -636,21 +642,23 @@ class Grad(Gradient):
         _transpose: Internal flag (False for scalar fields).
     """
 
-    def __new__(cls, expr, transpose: bool = False):
+    def __new__(cls, expr, transpose: bool = False) -> Self:
         expr = sp.sympify(expr)
         obj = Expr.__new__(cls, expr)
         obj._expr = expr
         obj._transpose = False if expr.is_scalar else transpose
         return obj
 
-    def doit(self, **hints: Any) -> Expr:
+    def doit(  # type: ignore[override]
+        self, **hints: Any
+    ) -> BasisDependent | Grad:
         return gradient(self._expr.doit(**hints), doit=True, transpose=self._transpose)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return Gradient.__hash__(self) + int(self._transpose)
 
     @property
-    def T(self):
+    def T(self) -> Grad:
         if self._expr.doit().is_scalar:
             return self
         return Grad(self._expr, transpose=not self._transpose)
@@ -677,14 +685,16 @@ class Grad(Gradient):
 class Div(Divergence):
     """Unevaluated divergence wrapper using custom curvilinear implementation."""
 
-    def doit(self, **hints: Any) -> Expr:
+    def doit(  # type: ignore[override]
+        self, **hints: Any
+    ) -> Vector | Expr | Basic | Div:
         return divergence(self._expr.doit(**hints), doit=True)
 
 
 class Curl(sympy_Curl):
     """Unevaluated curl wrapper using custom curvilinear implementation."""
 
-    def doit(self, **hints: Any) -> Expr:
+    def doit(self, **hints: Any) -> Vector | Curl:  # type: ignore[override]
         return curl(self._expr.doit(**hints), doit=True)
 
 
@@ -696,7 +706,7 @@ class Dot(sympy_Dot):
         expr2: Right tensor.
     """
 
-    def __new__(cls, expr1, expr2):
+    def __new__(cls, expr1, expr2) -> Self:
         expr1 = sp.sympify(expr1)
         expr2 = sp.sympify(expr2)
         obj = Expr.__new__(cls, expr1, expr2)
@@ -704,7 +714,9 @@ class Dot(sympy_Dot):
         obj._expr2 = expr2
         return obj
 
-    def doit(self, **hints: Any) -> Expr:
+    def doit(  # type: ignore[override]
+        self, **hints: Any
+    ) -> BasisDependent | Expr | Dot:
         return dot(self._expr1.doit(**hints), self._expr2.doit(**hints))
 
 
@@ -732,7 +744,7 @@ class Cross(Expr):
         (-y + z)*N.i + (x - z)*N.j + (-x + y)*N.k
     """
 
-    def __new__(cls, expr1, expr2):
+    def __new__(cls, expr1, expr2) -> Self:
         expr1 = sp.sympify(expr1)
         expr2 = sp.sympify(expr2)
         obj = Expr.__new__(cls, expr1, expr2)
@@ -740,7 +752,7 @@ class Cross(Expr):
         obj._expr2 = expr2
         return obj
 
-    def doit(self, **hints: Any) -> Expr:
+    def doit(self, **hints: Any) -> Vector | Cross:
         return cross(self._expr1.doit(**hints), self._expr2.doit(**hints))
 
 
@@ -766,7 +778,7 @@ class Outer(Expr):
         (N.i⊗N.j)
     """
 
-    def __new__(cls, expr1, expr2):
+    def __new__(cls, expr1, expr2) -> Self:
         expr1 = sp.sympify(expr1)
         expr2 = sp.sympify(expr2)
         obj = Expr.__new__(cls, expr1, expr2)
@@ -775,48 +787,48 @@ class Outer(Expr):
         return obj
 
     @property
-    def T(self):
+    def T(self) -> Outer:
         return Outer(self._expr2, self._expr1)
 
-    def transpose(self):
+    def transpose(self) -> Outer:  # type: ignore[override]
         return self.T
 
-    def doit(self, **hints):
+    def doit(self, **hints) -> Dyadic | Outer:
         return outer(self._expr1.doit(), self._expr2.doit())
 
 
 class Source(Expr):
-    def __new__(cls, expr):
+    def __new__(cls, expr) -> Self:
         expr = sp.sympify(expr)
         obj = Expr.__new__(cls, expr)
         obj._expr = expr
         return obj
 
-    def doit(self, **hints):
+    def doit(self, **hints) -> Expr:
         return self._expr.doit(**hints)
 
 
 class Constant(sp.Symbol):
-    def __new__(cls, name: str, val: Number, **assumptions):
+    def __new__(cls, name: str, val: Number, **assumptions) -> Self:
         obj = super().__new__(cls, name, **assumptions)
         obj.val = val
         return obj
 
-    def doit(self) -> Number:
+    def doit(self, **hints) -> Number:  # type: ignore[override]
         return self.val
 
 
 class Identity(sp.Expr):
-    def __init__(self, sys: CoordSys):
+    def __init__(self, sys: CoordSys) -> None:
         self.sys = sys
 
-    def doit(self):
+    def doit(self) -> Dyadic:  # type: ignore[override]
         return sum(
             self.sys.base_dyadics()[:: self.sys.dims + 1], sp.vector.DyadicZero()
         )
 
 
-def diff(self, *args, **kwargs):
+def diff(self, *args, **kwargs) -> BasisDependent:
     """Differentiate a tensor (vector/dyadic) (component-wise) wrt provided variables.
 
     Converts to Cartesian to avoid differentiating basis vectors, applies
@@ -865,7 +877,7 @@ def diff(self, *args, **kwargs):
 # # -> True
 
 
-def doit(self, **hints):
+def doit(self, **hints) -> Basic:
     if hints.get("deep", True):
         terms = [
             term.doit(**hints) if isinstance(term, sp.Basic) else term
@@ -878,17 +890,17 @@ def doit(self, **hints):
         # Check if should be VectorAdd
         for p in sp.core.traversal.preorder_traversal(z):
             if isinstance(p, BaseVector):
-                return sp.vector.VectorAdd.fromiter(z.args)
+                return VectorAdd.fromiter(z.args)
             elif isinstance(p, BaseDyadic):
-                return sp.vector.DyadicAdd.fromiter(z.args)
+                return DyadicAdd.fromiter(z.args)
 
     elif isinstance(z, sp.Mul):
         # Check if should be VectorMul
         for p in sp.core.traversal.preorder_traversal(z):
             if isinstance(p, BaseVector):
-                return sp.vector.VectorMul.fromiter(z.args)
+                return VectorMul.fromiter(z.args)
             elif isinstance(p, BaseDyadic):
-                return sp.vector.DyadicMul.fromiter(z.args)
+                return DyadicMul.fromiter(z.args)
     return z
 
 

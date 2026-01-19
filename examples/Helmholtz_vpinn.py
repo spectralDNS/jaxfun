@@ -31,7 +31,7 @@ x = V.system.x
 ue = (1 - x**2) * sp.cos(2 * sp.pi * x)
 
 N = 1000
-mesh = Line(domain.lower, domain.upper, key=nnx.Rngs(1000)())
+mesh = Line(domain.lower, domain.upper, key=nnx.Rngs(1001)())
 
 xj = mesh.get_points_inside_domain(N, kind="legendre")
 wj = mesh.get_weights_inside_domain(N, kind="legendre")
@@ -50,7 +50,7 @@ trainer.train(opt_adam, 5000, epoch_print=1000)
 
 print(f"Time Adam {time.time() - t0:.1f}s")
 
-opt_lbfgs = lbfgs(w, memory_size=50, max_linesearch_steps=5)
+opt_lbfgs = lbfgs(w, memory_size=100, max_linesearch_steps=10)
 
 t0 = time.time()
 trainer.train(opt_lbfgs, 5000, epoch_print=1000, update_global_weights=1000)

@@ -666,7 +666,7 @@ class ShapelyMesh(BaseMesh):
     ) -> Literal[1]:
         return 1
 
-    def plot_solution(self, X, values, xb=None, levels=30):
+    def plot_solution(self, X, values, xb=None, levels=30):  # pragma: no cover
         """Plot solution over polygonal mesh using triangulation.
         Args:
             X      : all sample points (N, 2) = vstack((xi, xb))
@@ -824,7 +824,7 @@ class Rectangle(CartesianProductMesh):
         """Return ShapelyMesh for the rectangle."""
 
         class RectangleShapely(ShapelyMesh):
-            def make_polygon(cls) -> Polygon:
+            def make_polygon(cls) -> Polygon:  # type: ignore
                 return Polygon(
                     [
                         (self.left, self.bottom),
@@ -836,7 +836,9 @@ class Rectangle(CartesianProductMesh):
                 )
 
             def get_points_on_domain(  # type: ignore[override]
-                cls, N: int, kind: SampleMethod = "random"
+                cls,
+                N: int,
+                kind: SampleMethod = "random",  # type: ignore
             ) -> Array:
                 specific_points = np.array(
                     [
@@ -1158,7 +1160,7 @@ class Lshape(ShapelyMesh):
 
 
 # Experimental!
-class UnionMesh(BaseMesh):
+class UnionMesh(BaseMesh):  # pragma: no cover
     """Union of multiple meshes for composite domains.
 
     Attributes:

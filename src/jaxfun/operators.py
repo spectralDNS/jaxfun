@@ -106,9 +106,9 @@ def outer(v1: Vector, v2: Vector) -> Dyadic:
         >>> outer(v1, v2)
         r*theta*(P.b_r⊗P.b_theta)
     """
-    if isinstance(v1, Add | VectorAdd):
+    if isinstance(v1, VectorAdd):
         return DyadicAdd.fromiter(outer(i, v2) for i in v1.args)
-    if isinstance(v2, Add | VectorAdd):
+    if isinstance(v2, VectorAdd):
         return DyadicAdd.fromiter(outer(v1, i) for i in v2.args)
     if isinstance(v1, VectorMul):
         v1_inner, m1 = next(iter(v1.components.items()))

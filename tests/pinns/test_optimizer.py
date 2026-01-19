@@ -83,14 +83,14 @@ class TestTrainer:
     @pytest.fixture
     def simple_model(self):
         """Simple model with a single parameter for testing"""
-        m = MLPSpace(4, dims=1, rank=0, name="MLP")
+        m = MLPSpace(5, dims=1, rank=0, name="MLP")
         u = FlaxFunction(m, "u")
         return u.module
 
     @pytest.fixture
     def lsqr_loss_fn(self):
         """Create an Loss loss function for testing"""
-        m = MLPSpace(4, dims=1, rank=0, name="MLP")
+        m = MLPSpace(5, dims=1, rank=0, name="MLP")
         u = FlaxFunction(m, "u")
         x = jnp.array([[1.0]])
         lsqr = Loss((u, x))

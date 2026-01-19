@@ -5,16 +5,18 @@ import sympy as sp
 from flax import nnx
 
 from jaxfun.coordinates import BaseScalar, CartCoordSys, x, y
-from jaxfun.galerkin import FunctionSpace, Legendre
+from jaxfun.galerkin import FunctionSpace, Legendre, TestFunction
 from jaxfun.operators import Grad
 from jaxfun.pinns.loss import (
     Loss,
     Residual,
+    ResidualVPINN,
     evaluate,
     expand,
     get_flaxfunction_args,
     get_flaxfunctions,
     get_fn,
+    get_testfunction,
 )
 from jaxfun.pinns.module import FlaxFunction, MLPSpace
 
@@ -87,7 +89,7 @@ def test_expand_with_constants_only(base_scalars):
 
 
 def test_expand_with_flaxfunctions(flax_func):
-    x_sym = flax_func.functionspace.system.base_scalars()[0]
+    x_sym = flax_func.functionspace.system.x
     expr = 2 * x_sym + flax_func + 3
     const_part, flax_parts = expand(expr)
     assert const_part == 2 * x_sym + 3
@@ -96,7 +98,7 @@ def test_expand_with_flaxfunctions(flax_func):
 
 
 def test_expand_mixed_terms(flax_func):
-    x_sym = flax_func.functionspace.system.base_scalars()[0]
+    x_sym = flax_func.functionspace.system.x
     expr = x_sym * flax_func + 2 * x_sym + 5
     const_part, flax_parts = expand(expr)
     assert const_part == 2 * x_sym + 5
@@ -120,7 +122,7 @@ def test_residual_initialization_with_target():
 
 
 def test_evaluate(flax_func):
-    x = flax_func.functionspace.system.base_scalars()[0]
+    x = flax_func.functionspace.system.x
     expr = flax_func.diff(x)  # derivative with respect to first coordinate
     xj = jnp.array([[1.0, 2.0], [3.0, 4.0]])
     result = evaluate(expr, xj)
@@ -140,7 +142,7 @@ def test_residual_with_flaxfunction(flax_func):
     assert len(residual.eqs) == 1
     assert jnp.allclose(residual.target, -3.0)
     x = flax_func.functionspace.system.base_scalars()[0]
-    with pytest.raises(ValueError):
+    with pytest.raises(TypeError):
         residual = Residual(f, xj, target=x)
 
 
@@ -350,6 +352,281 @@ def test_get_fn_symbolic_with_offset(base_scalars):
     assert np.allclose(result, expected)
 
 
+def test_evaluate_with_2d_input(flax_func):
+    x_sym = flax_func.functionspace.system.x
+    expr = flax_func.diff(x_sym)
+    xj = jnp.array([[1.0, 2.0, 3.0], [1.0, 1.0, 1.0]]).T
+    result = evaluate(expr, xj)
+    assert result.shape[0] == xj.shape[0]
+
+
+def test_evaluate_raises_without_flaxfunction(base_scalars):
+    x_sym = base_scalars[0]
+    expr = x_sym + 3
+    xj = jnp.array([[1.0], [2.0]])
+    with pytest.raises(ValueError, match="does not contain any FlaxFunctions"):
+        evaluate(expr, xj)
+
+
+def test_process_input_arrays_invalid_shape():
+    x = jnp.array([[1.0], [2.0], [3.0]])
+    target = jnp.array([1.0, 2.0])  # Wrong size
+    with pytest.raises(ValueError, match="does not match number of collocation points"):
+        from jaxfun.pinns.loss import _process_input_arrays
+
+        _process_input_arrays((target,), x)
+
+
+def test_process_input_arrays_2d_squeeze():
+    from jaxfun.pinns.loss import _process_input_arrays
+
+    x = jnp.array([[1.0], [2.0]])
+    target = jnp.array([[1.0], [2.0]])
+    result = _process_input_arrays((target,), x)
+    assert len(result[0].shape) == 1
+    assert result[0].shape[0] == 2
+
+
+def test_process_input_arrays_invalid_dimensions():
+    from jaxfun.pinns.loss import _process_input_arrays
+
+    x = jnp.array([[1.0], [2.0]])
+    target = jnp.array([[[1.0], [2.0]]])  # 3D array
+    with pytest.raises(ValueError):
+        _process_input_arrays((target,), x)
+
+
+def test_process_input_arrays_with_none():
+    from jaxfun.pinns.loss import _process_input_arrays
+
+    x = jnp.array([[1.0], [2.0], [3.0]])
+    result = _process_input_arrays((None,), x)
+    expected = 1.0 / x.shape[0]
+    assert jnp.allclose(result[0], expected)
+
+
+def test_process_input_arrays_with_number():
+    from jaxfun.pinns.loss import _process_input_arrays
+
+    x = jnp.array([[1.0], [2.0]])
+    result = _process_input_arrays((5.0,), x)
+    assert jnp.allclose(result[0], 5.0)
+
+
+def test_residual_eval_compute_grad(flax_func):
+    x = jnp.array([[1.0, 2.0]])
+    residual = Residual(flax_func, x)
+    result = residual.eval_compute_grad(x, residual.target, flax_func.module, id(x))
+    assert result.shape[0] == x.shape[0]
+
+
+def test_residual_loss_compute_grad(flax_func):
+    x = jnp.array([[1.0, 2.0]])
+    residual = Residual(flax_func, x)
+    result = residual.loss_compute_grad(x, residual.target, flax_func.module, id(x))
+    assert isinstance(result, jnp.ndarray)
+    assert result.shape == ()
+
+
+def test_loss_compute_residual_i(flax_func):
+    x1 = jnp.array([[1.0, 2.0]])
+    x2 = jnp.array([[3.0, 4.0]])
+    lsqr = Loss((flax_func, x1), (flax_func - 1, x2))
+    result = lsqr.compute_residual_i(flax_func.module, 0)
+    assert result.shape[0] == x1.shape[0]
+
+
+def test_loss_value_and_grad_and_JTJ(flax_func):
+    x = jnp.array([[1.0, 2.0], [3.0, 4.0]])
+    lsqr = Loss((flax_func, x))
+    gw = jnp.array([1.0])
+    loss, grad, JTJ = lsqr.value_and_grad_and_JTJ(flax_func.module, gw, *lsqr.args)
+    assert isinstance(loss, jnp.ndarray)
+    assert loss.shape == ()
+    assert isinstance(grad, nnx.State)
+    assert isinstance(JTJ, jnp.ndarray)
+
+
+def test_loss_JTJ(flax_func):
+    x = jnp.array([[1.0, 2.0], [3.0, 4.0]])
+    lsqr = Loss((flax_func, x))
+    gw = jnp.array([1.0])
+    JTJ = lsqr.JTJ(flax_func.module, gw, *lsqr.args)
+    assert isinstance(JTJ, jnp.ndarray)
+    assert JTJ.ndim == 2
+
+
+def test_get_fn_with_pow_expression(base_scalars):
+    x_sym = base_scalars[0]
+    f = x_sym**2
+    fn = get_fn(f, base_scalars[:1])
+    x = jnp.array([[2.0], [3.0]])
+    result = fn(x, None)
+    expected = x[:, 0] ** 2
+    assert jnp.allclose(result, expected)
+
+
+def test_get_fn_with_mul_and_flaxfunction(flax_func):
+    x_sym = flax_func.functionspace.system.base_scalars()[0]
+    f = 2 * x_sym * flax_func
+    s = flax_func.functionspace.system.base_scalars()
+    fn = get_fn(f.doit(), s)
+    x = jnp.array([[1.0, 2.0]])
+    result = fn(x, flax_func.module)
+    assert result.shape[0] == x.shape[0]
+
+
+def test_loss_with_vector_equation_and_array_target():
+    mlp = MLPSpace([4, 4], dims=2, rank=1, name="MLP")
+    u = FlaxFunction(mlp, "u")
+    pts = jnp.array([[1.0, 2.0], [3.0, 4.0]])
+    target = jnp.array([[1.0, 2.0], [3.0, 4.0]])
+    lsqr = Loss((u, pts, target, jnp.array([1.0, 1.0])))
+    assert len(lsqr.residuals) == 2
+
+
+def test_loss_with_scalar_target():
+    mlp = MLPSpace([4, 4], dims=2, rank=1, name="MLP")
+    u = FlaxFunction(mlp, "u")
+    pts = jnp.array([[1.0, 2.0], [3.0, 4.0]])
+    lsqr = Loss((u, pts, 5.0))
+    assert len(lsqr.residuals) == 2
+    for res in lsqr.residuals:
+        assert jnp.allclose(res.target, 5.0)
+
+
+def test_get_testfunction():
+    V = FunctionSpace(5, Legendre.Legendre, name="V")
+    v = TestFunction(V)
+    x_sym = V.system.base_scalars()[0]
+    expr = v * x_sym
+    result = get_testfunction(expr)
+    assert result is not None
+    assert result.functionspace == V
+
+
+def test_get_testfunction_none(base_scalars):
+    x_sym = base_scalars[0]
+    expr = x_sym + 5
+    result = get_testfunction(expr)
+    assert result is None
+
+
+def test_residual_vpinn_initialization():
+    V = FunctionSpace(5, Legendre.Legendre, name="V")
+    mlp = MLPSpace(4, dims=1, rank=0, name="MLP")
+    u = FlaxFunction(mlp, "u")
+    v = TestFunction(V)
+    x_sym = V.system.x
+    xj = jnp.linspace(-1, 1, 10)[:, None]
+    weights = jnp.ones(10) / 10
+    expr = u.diff(x_sym, 2) * v + u * v
+    residual = ResidualVPINN(expr.doit(), xj, weights=weights)
+    assert residual.V == V
+    assert len(residual.eqs) > 0
+    assert residual.target.shape[0] == xj.shape[0]
+
+
+def test_residual_vpinn_raises_without_testfunction(flax_func):
+    xj = jnp.array([[1.0, 2.0]])
+    with pytest.raises(ValueError, match="No TestFunction found"):
+        ResidualVPINN(flax_func, xj)
+
+
+def test_residual_vpinn_loss():
+    V = FunctionSpace(5, Legendre.Legendre, name="V")
+    mlp = MLPSpace(4, dims=1, rank=0, name="MLP")
+    u = FlaxFunction(mlp, "u")
+    v = TestFunction(V)
+    xj = jnp.linspace(-1, 1, 10)[:, None]
+    weights = jnp.ones(10) / 10
+    expr = u * v
+    residual = ResidualVPINN(expr, xj, weights=weights)
+    loss = residual.loss(xj, residual.target, u.module)
+    assert isinstance(loss, jnp.ndarray)
+    assert loss.shape == ()
+
+
+def test_residual_vpinn_call():
+    V = FunctionSpace(5, Legendre.Legendre, name="V")
+    mlp = MLPSpace(4, dims=1, rank=0, name="MLP")
+    u = FlaxFunction(mlp, "u")
+    v = TestFunction(V)
+    xj = jnp.linspace(-1, 1, 10)[:, None]
+    weights = jnp.ones(10) / 10
+    expr = u * v
+    residual = ResidualVPINN(expr, xj, weights=weights)
+    result = residual(xj, residual.target, u.module)
+    assert result.shape[0] == xj.shape[0]
+    assert result.shape[1] == V.num_dofs
+
+
+def test_loss_with_vpinn():
+    V = FunctionSpace(5, Legendre.Legendre, name="V")
+    mlp = MLPSpace(4, dims=1, rank=0, name="MLP")
+    u = FlaxFunction(mlp, "u")
+    v = TestFunction(V)
+    x_sym = V.system.x
+    xj = jnp.linspace(-1, 1, 20)[:, None]
+    xb = jnp.array([[-1.0], [1.0]])
+    weights = jnp.ones(20) / 20
+    expr = u.diff(x_sym, 2) * v
+    lsqr = Loss((expr, xj, 0, weights), (u, xb, 0))
+    loss = lsqr(u.module)
+    assert isinstance(loss, jnp.ndarray)
+    assert loss.shape == ()
+
+
+def test_residual_with_no_flaxfunctions_in_equation():
+    V = FunctionSpace(5, Legendre.Legendre, name="V")
+    mlp = MLPSpace(4, dims=1, rank=0, name="MLP")
+    u = FlaxFunction(mlp, "u")
+    x_sym = V.system.x
+    xj = jnp.linspace(-1, 1, 10)[:, None]
+    # Create an expression where one term has no FlaxFunction
+    expr = u + x_sym  # x_sym has no FlaxFunction
+    residual = Residual(expr, xj)
+    # The x_sym should be in the target
+    assert jnp.allclose(residual.target, -(xj[:, 0]))
+
+
+def test_evaluate_with_testfunction_raises():
+    V = FunctionSpace(5, Legendre.Legendre, name="V")
+    mlp = MLPSpace(4, dims=1, rank=0, name="MLP")
+    u = FlaxFunction(mlp, "u")
+    v = TestFunction(V)
+    xj = jnp.linspace(-1, 1, 10)[:, None]
+    expr = u * v
+    with pytest.raises(AssertionError, match="Expression contains TestFunction"):
+        evaluate(expr, xj)
+
+
+def test_residual_vpinn_with_target_expr():
+    V = FunctionSpace(5, Legendre.Legendre, name="V")
+    mlp = MLPSpace(4, dims=1, rank=0, name="MLP")
+    u = FlaxFunction(mlp, "u")
+    v = TestFunction(V)
+    x_sym = V.system.x
+    xj = jnp.linspace(-1, 1, 10)[:, None]
+    weights = jnp.ones(10) / 10
+    expr = u * v - x_sym * v
+    residual = ResidualVPINN(expr, xj, weights=weights)
+    assert residual.target.shape[0] == xj.shape[0]
+
+
+def test_residual_vpinn_target_dict():
+    V = FunctionSpace(5, Legendre.Legendre, name="V")
+    mlp = MLPSpace(4, dims=1, rank=0, name="MLP")
+    u = FlaxFunction(mlp, "u")
+    v = TestFunction(V)
+    x_sym = V.system.x
+    xj = jnp.linspace(-1, 1, 10)[:, None]
+    weights = jnp.ones(10) / 10
+    expr = u.diff(x_sym) * v.diff(x_sym) + u * v - v
+    residual = ResidualVPINN(expr, xj, weights=weights)
+    assert len(residual.target_dict) > 0
+
+
 if __name__ == "__main__":
     test_get_flaxfunction_args_with_flaxfunction(flax_func.__wrapped__())
     test_get_flaxfunction_args_with_simple_expr(base_scalars.__wrapped__())
@@ -357,6 +634,8 @@ if __name__ == "__main__":
     test_get_flaxfunctions_multiple(flax_func.__wrapped__())
     test_get_flaxfunctions_none(base_scalars.__wrapped__())
     test_evaluate(flax_func.__wrapped__())
+    test_evaluate_with_2d_input(flax_func.__wrapped__())
+    test_evaluate_raises_without_flaxfunction(base_scalars.__wrapped__())
     test_expand_with_constants_only(base_scalars.__wrapped__())
     test_expand_with_flaxfunctions(flax_func.__wrapped__())
     test_expand_mixed_terms(flax_func.__wrapped__())
@@ -366,8 +645,12 @@ if __name__ == "__main__":
     test_residual_with_array_weights()
     test_residual_with_flaxfunction(flax_func.__wrapped__())
     test_residual_with_symbolic_expression(flax_func.__wrapped__())
+    test_residual_eval_compute_grad(flax_func.__wrapped__())
+    test_residual_loss_compute_grad(flax_func.__wrapped__())
     test_lsqr_vector_equation(flax_func.__wrapped__())
     test_lsqr_vector_equation_with_target()
+    test_loss_with_vector_equation_and_array_target()
+    test_loss_with_scalar_target()
     test_lsqr_loss_i(flax_func.__wrapped__())
     test_lsqr_norm_grad_loss_i()
     test_lsqr_norm_grad_loss()
@@ -375,11 +658,32 @@ if __name__ == "__main__":
     test_lsqr_update_global_weights(flax_func.__wrapped__())
     test_lsqr_call_with_weights(flax_func.__wrapped__())
     test_lsqr_compute_residuals_simple()
+    test_loss_compute_residual_i(flax_func.__wrapped__())
+    test_loss_value_and_grad_and_JTJ(flax_func.__wrapped__())
+    test_loss_JTJ(flax_func.__wrapped__())
     test_lsqr_initialization_single_equation()
     test_lsqr_initialization_multiple_equations()
     test_get_fn_complex_number()
     test_get_fn_power_of_expression(base_scalars.__wrapped__())
+    test_get_fn_with_pow_expression(base_scalars.__wrapped__())
+    test_get_fn_with_mul_and_flaxfunction(flax_func.__wrapped__())
     test_get_fn_no_free_symbols()
     test_get_fn_symbolic_with_offset(base_scalars.__wrapped__())
     test_residual_with_zero_target()
+    test_process_input_arrays_invalid_shape()
+    test_process_input_arrays_2d_squeeze()
+    test_process_input_arrays_invalid_dimensions()
+    test_process_input_arrays_with_none()
+    test_process_input_arrays_with_number()
+    test_get_testfunction()
+    test_get_testfunction_none(base_scalars.__wrapped__())
+    test_residual_vpinn_initialization()
+    test_residual_vpinn_raises_without_testfunction(flax_func.__wrapped__())
+    test_residual_vpinn_loss()
+    test_residual_vpinn_call()
+    test_loss_with_vpinn()
+    test_residual_with_no_flaxfunctions_in_equation()
+    test_evaluate_with_testfunction_raises()
+    test_residual_vpinn_with_target_expr()
+    test_residual_vpinn_target_dict()
     print("All tests passed.")

@@ -1033,7 +1033,7 @@ class Comp(nnx.Module):
 
 
 # Experimental!
-class UnionModule(BaseModule):
+class UnionModule(BaseModule):  # pragma: no cover
     """Module wrapping a UnionSpace of multiple function spaces.
 
     Attributes:

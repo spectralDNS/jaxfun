@@ -105,7 +105,9 @@ def expand(forms: sp.Expr) -> tuple[sp.Expr, list[sp.Expr]]:
     return sp.Add(*consts), flaxs
 
 
-def _check_input_arrays(arrays: tuple[Array, ...], x: Array) -> tuple[Array, ...]:
+def _process_input_arrays(
+    arrays: tuple[Array | Number | None, ...], x: Array
+) -> tuple[Array, ...]:
     _newarrays = []
     for array in arrays:
         if isinstance(array, Array):
@@ -121,6 +123,8 @@ def _check_input_arrays(arrays: tuple[Array, ...], x: Array) -> tuple[Array, ...
             array = jnp.array(1 / x.shape[0], dtype=float)
         elif isinstance(array, Number):
             array = jnp.array(array, dtype=float)
+        else:
+            raise TypeError("Input target/weight must be an Array, a number, or None")
         _newarrays.append(array)
     return tuple(_newarrays)
 
@@ -172,24 +176,25 @@ class Residual:
             weights: Weights for the residual. The weights need to be a number
                 or an array of the same length as the collocation points.
         """
-        t, expr = expand(f)
+        t_expr, expr = expand(f)
         s = get_flaxfunction_args(f.doit())
 
-        target, weights = _check_input_arrays((target, weights), x)
+        target, weights = _process_input_arrays((target, weights), x)
 
         # Place all terms without flaxfunctions in the target,
         # because these will not need to be computed more than once
-        if not isinstance(target, Number | Array):
-            raise ValueError("Target need to be a Number or an Array")
-        if len(t.free_symbols) > 0:
-            assert s is not None, "Could not find base scalars in expression"
-            tx = lambdify(s, t)(*x.T)
-            t0 = target - tx
-        else:
-            assert isinstance(t, Number)
-            t = float(t) if t.is_real else complex(t)
-            t0 = target - t
-        t0 = jnp.atleast_1d(t0)
+        self.target_expr = t_expr
+        self.target0 = target
+        self.base_scalars = s
+        self.target = self._compute_target(x)
+
+        if weights.sharding != x.sharding and jax.local_device_count() > 1:
+            if len(weights.shape) > 0 and weights.shape[0] == x.shape[0]:
+                weights = jax.device_put(weights, x.sharding)
+            else:
+                weights = jax.device_put(weights, NamedSharding(x.sharding.mesh, P()))
+
+        self.x, self.weights = x, weights
 
         # Build list of equations and all required evaluations of flaxfunctions
         eqs = []
@@ -213,19 +218,6 @@ class Residual:
         self.eqs = tuple(eqs)
         self.keys = keys
 
-        if weights.sharding != x.sharding and jax.local_device_count() > 1:
-            if len(weights.shape) > 0 and weights.shape[0] == x.shape[0]:
-                weights = jax.device_put(weights, x.sharding)
-            else:
-                weights = jax.device_put(weights, NamedSharding(x.sharding.mesh, P()))
-        if t0.sharding != x.sharding and jax.local_device_count() > 1:
-            if len(t0.shape) > 0 and t0.shape[0] == x.shape[0]:
-                t0 = jax.device_put(t0, x.sharding)
-            else:
-                t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))
-
-        self.x, self.target, self.weights = x, t0, weights
-
     def __call__(
         self,
         x: Array,
@@ -235,6 +227,27 @@ class Residual:
         x_id: int = None,
     ) -> Array:
         return sum([eq(x, module, Js=Js, x_id=x_id) for eq in self.eqs]) - target
+
+    def _compute_target(
+        self,
+        x: Array,
+        weights: Array | None = None,
+    ) -> Array:
+        t_expr = self.target_expr
+        s = self.base_scalars
+        if len(t_expr.free_symbols) > 0:
+            assert s is not None, "Could not find base scalars in expression"
+            t = lambdify(s, t_expr)(*x.T)
+        else:
+            assert isinstance(t_expr, Number)
+            t = float(t_expr) if t_expr.is_real else complex(t_expr)
+        t0 = jnp.atleast_1d(self.target0 - t)
+        if t0.sharding != x.sharding and jax.local_device_count() > 1:
+            if len(t0.shape) > 0 and t0.shape[0] == x.shape[0]:
+                t0 = jax.device_put(t0, x.sharding)
+            else:
+                t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))
+        return t0
 
     def loss(
         self,
@@ -360,22 +373,29 @@ class ResidualVPINN(Residual):
             weights: Weights for the residual. The weights need to be a number
                 or an array of the same length as the collocation points.
         """  # noqa: E501
-        t, expr = expand(f)
+        t_expr, expr = expand(f)
         s = get_flaxfunction_args(f.doit())
         test = get_testfunction(f)
         if test is None:
             raise ValueError("No TestFunction found in VPINN residual expression")
-        V = test.functionspace
+        self.V = test.functionspace
 
-        target, weights = _check_input_arrays((target, weights), x)
+        target, weights = _process_input_arrays((target, weights), x)
 
         # Place all terms without flaxfunctions in the target, since these will only be
         # computed once
+        # Place all terms without flaxfunctions in the target,
+        # because these will not need to be computed more than once
+        self.target_expr = t_expr
+        self.target0 = target  # Target provided as array
+        self.base_scalars = s
 
-        # t is now a sum of targets, but contains test functions
-        t_args = sp.Add.make_args(t)
+        # t_expr is now a sum of targets, but contains test functions
+        # that may or may not have to be differentiated. Process these
+        # to separate out the derivative counts.
+        t_args = sp.Add.make_args(t_expr)
 
-        def _pop_test_and_get_derivative_count(iterable):
+        def _pop_test_and_get_derivative_count(iterable) -> tuple[sp.Expr, int]:
             test = None
             remains = []
             for z in iterable:
@@ -384,36 +404,31 @@ class ResidualVPINN(Residual):
                     test = z
                 else:
                     remains.append(z)
-            return sp.Mul(*remains), getattr(test, "derivative_count", 0)
+            derivative_count: int = getattr(test, "derivative_count", 0)
+            return sp.Mul(*remains), derivative_count
 
-        t_split = []
+        t_split: list[tuple[sp.Expr | int, int]] = []
         for ta in t_args:
             if isinstance(ta, sp.Mul):
                 t_split.append(_pop_test_and_get_derivative_count(ta.args))
             elif get_testfunction(ta) is not None:
-                t_split.append((1, getattr(ta, "derivative_count", 0)))
+                derivative_count: int = getattr(ta, "derivative_count", 0)
+                t_split.append((1, derivative_count))
+            elif isinstance(ta, Number):
+                t_split.append((ta, 0))
             else:
                 raise ValueError("Could not parse target expression")
+        self.t_split = t_split
 
-        # The test functions should be evaluated once per derivative count
-        # FIXME: only implemented for 1D currently
-        self.TD = {
-            k: V.evaluate_basis_derivative(x[:, 0], k)
-            for k in set(z[1] for z in t_split)
-        }
-
-        t0 = jnp.expand_dims(jnp.atleast_1d(target), axis=-1)
-        tns = []
+        # Add all terms with the same test function derivative count together
+        t_v = {}
         for tn, tv in t_split:
-            if len(tn.free_symbols) > 0:
-                assert s is not None, "Could not find base scalars in expression"
-                tx = lambdify(s, tn)(*x.T)
-                tns.append(self.TD[tv] * tx[:, None])
-            else:
-                assert isinstance(tn, Number)
-                tn = float(tn) if tn.is_real else complex(tn)
-                tns.append(self.TD[tv] * tn)
-        t0 = t0 - jnp.array(tns, dtype=float).sum(axis=0)
+            if tv not in t_v:
+                t_v[tv] = []
+            t_v[tv].append(tn)
+        for tv, tn in t_v.items():
+            t_v[tv] = sp.Add(*tn)
+        self.target_dict: dict[int, sp.Expr] = t_v
 
         # Build list of equations and all required evaluations of flaxfunctions
         eqs = []
@@ -442,13 +457,41 @@ class ResidualVPINN(Residual):
                 weights = jax.device_put(weights, x.sharding)
             else:
                 weights = jax.device_put(weights, NamedSharding(x.sharding.mesh, P()))
+
+        # Compute both the test functions (all derivatives needed)
+        # and the target stored in target_dict.
+        self.TD = self._compute_test_function(x)
+        self.target = self._compute_target(x, weights)
+        self.x, self.weights = x, weights  # type: ignore[assignment]
+
+    def _compute_test_function(self, x: Array) -> dict[int, Array]:
+        # The test functions should be evaluated once per derivative count
+        # FIXME: only implemented for 1D currently
+        TD = {k: self.V.evaluate_basis_derivative(x[:, 0], k) for k in self.target_dict}
+        return TD
+
+    def _compute_target(self, x: Array, weights: Array | None = None) -> Array:
+        s = self.base_scalars
+        assert weights is not None, "Weights must be provided"
+        t0 = jnp.expand_dims(jnp.atleast_1d(self.target0), axis=-1)
+        tns = []
+        for tv, tn in self.target_dict.items():
+            if len(tn.free_symbols) > 0:
+                assert s is not None, "Could not find base scalars in expression"
+                tx = lambdify(s, tn)(*x.T)
+                tns.append(self.TD[tv] * tx[:, None])
+            else:
+                assert isinstance(tn, Number)
+                tn = float(tn) if tn.is_real else complex(tn)
+                tns.append(self.TD[tv] * tn)
+
+        t0 = t0 - jnp.array(tns, dtype=float).sum(axis=0)
         if t0.sharding != x.sharding and jax.local_device_count() > 1:
             if len(t0.shape) > 0 and t0.shape[0] == x.shape[0]:
                 t0 = jax.device_put(t0, x.sharding)
             else:
                 t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))
-
-        self.x, self.target, self.weights = x, t0 * weights[:, None], weights  # type: ignore[assignment]
+        return t0 * weights[:, None]
 
     def loss(
         self,

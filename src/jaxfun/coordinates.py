@@ -673,9 +673,9 @@ class CoordSys(Basic):
         return self.get_scaling_factors()
 
     @property
-    def sg(self) -> Basic:
+    def sg(self) -> Expr:
         if self.is_cartesian:
-            return sp.S(1)
+            return sp.Integer(1)
         return self.get_sqrt_det_g(True)
 
     def get_normal_basis(

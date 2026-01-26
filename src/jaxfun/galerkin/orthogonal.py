@@ -14,6 +14,9 @@ Subclasses must implement:
     reference_domain
 """
 
+from abc import abstractmethod
+from typing import TYPE_CHECKING
+
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -24,6 +27,9 @@ from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
 from jaxfun.typing import Array
 from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
+
+if TYPE_CHECKING:
+    from jaxfun.galerkin.composite import BCGeneric, DirectSum
 
 
 class OrthogonalSpace(BaseSpace):
@@ -65,10 +71,15 @@ class OrthogonalSpace(BaseSpace):
         )
         BaseSpace.__init__(self, system, name, fun_str)
 
-    @jax.jit(static_argnums=(0, 1))
+    @abstractmethod
+    def norm_squared(self) -> Array:
+        """Return norms squared"""
+        pass
+
+    @abstractmethod
     def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return (points, weights) for orthogonality measure (abstract)."""
-        raise NotImplementedError
+        pass
 
     @property
     def num_quad_points(self) -> int:
@@ -100,15 +111,15 @@ class OrthogonalSpace(BaseSpace):
         """
         return self.evaluate_basis_derivative(X, 0)
 
-    @jit_vmap(in_axes=(0, None))
+    @abstractmethod
     def eval_basis_function(self, X: float, i: int) -> Array:
         """Evaluate single basis function psi_i at point X (abstract)."""
-        raise NotImplementedError
+        pass
 
-    @jit_vmap(in_axes=0)
+    @abstractmethod
     def eval_basis_functions(self, X: float) -> Array:
         """Evaluate all basis functions psi_0..psi_{N-1} at X (abstract)."""
-        raise NotImplementedError
+        pass
 
     @jax.jit(static_argnums=(0, 2))
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
@@ -206,9 +217,10 @@ class OrthogonalSpace(BaseSpace):
         return self._domain
 
     @property
+    @abstractmethod
     def reference_domain(self) -> Domain:
         """Return canonical reference domain (implemented in subclass)."""
-        raise NotImplementedError
+        pass
 
     @property
     def domain_factor(self) -> int | float:
@@ -302,7 +314,7 @@ class OrthogonalSpace(BaseSpace):
         """Return number of spatial dimensions (always 1)."""
         return 1
 
-    def __add__(self, b: BaseSpace):
+    def __add__(self, b: "BCGeneric") -> "DirectSum":
         """Direct sum self ⊕ b (delegated to composite.DirectSum)."""
         from jaxfun.galerkin.composite import DirectSum
 

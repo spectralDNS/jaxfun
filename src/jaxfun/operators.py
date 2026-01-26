@@ -211,7 +211,7 @@ def cross(v1: Vector, v2: Vector) -> Vector | Cross:
                 n3 = ({0, 1, 2}.difference({n1, n2})).pop()
                 ei = eijk(n1, n2, n3)
                 b = v1v._sys.base_vectors()
-                return sg * ei * gt[n3] @ b  # ty:ignore[unsupported-operator]
+                return sg * ei * gt[n3] @ b
 
         return cross(
             cast(Vector, v1v._sys.to_cartesian(v1v)),

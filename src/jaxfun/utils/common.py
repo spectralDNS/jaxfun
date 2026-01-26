@@ -123,7 +123,7 @@ def tosparse(a: Array, tol: int = 100) -> sparse.BCOO:
 def lambdify(
     args: tuple[Symbol, ...],
     expr: Expr,
-    modules: list[str | dict[str, Callable]] | None = None,
+    modules: str | list[str | dict[str, Callable]] | None = None,
     printer: Any = None,
     use_imps: bool = True,
     dummify: bool = False,

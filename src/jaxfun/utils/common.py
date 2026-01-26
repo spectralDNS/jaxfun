@@ -1,5 +1,5 @@
 from collections.abc import Callable, Iterable
-from functools import partial, wraps
+from functools import wraps
 from typing import Any, NamedTuple
 
 import jax
@@ -29,7 +29,7 @@ __all__ = (
 
 
 def jit_vmap(
-    in_axes: int | None | tuple[Any] = 0,
+    in_axes: int | None | tuple[int | None, ...] = 0,
     out_axes: Any = 0,
     static_argnums: int | tuple[int] | None = 0,
     ndim: int = 0,
@@ -54,7 +54,7 @@ def jit_vmap(
     in_axes = (None,) + in_axes if isinstance(in_axes, tuple) else (None, in_axes)
 
     def wrap(func):
-        @partial(jax.jit, static_argnums=static_argnums)
+        @jax.jit(static_argnums=static_argnums)
         @wraps(func)
         def wrapper(self, *args, **kwargs):
             if args[0].ndim == ndim:
@@ -73,7 +73,7 @@ class Domain(NamedTuple):
     upper: Number
 
 
-def ulp(x: float) -> Array:
+def ulp(x: float | Array) -> Array:
     return jnp.nextafter(x, x + 1) - x
 
 
@@ -90,13 +90,13 @@ def diffx(
 ) -> Callable[[Array, int], Array]:
     for _ in range(k):
         fun = jax.grad(fun)
-    return jax.vmap(fun, in_axes=(0, None))  # type: ignore[return-value]
+    return jax.vmap(fun, in_axes=(0, None))
 
 
 def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
     for _ in range(k):
         fun = jax.jacfwd(fun)  # if i % 2 else jax.jacrev(fun)
-    return jax.vmap(fun, in_axes=0, out_axes=0)  # type: ignore[return-value]
+    return jax.vmap(fun, in_axes=0, out_axes=0)
 
 
 @jax.jit
@@ -104,9 +104,9 @@ def matmat(a: Array | BCOO, b: Array | BCOO) -> Array | BCOO:
     return a @ b
 
 
-@partial(jax.jit, static_argnums=1)
+@jax.jit(static_argnums=1)
 def eliminate_near_zeros(a: Array, tol: int = 100) -> Array:
-    atol: float = ulp(jnp.abs(a).max()) * tol
+    atol: Array = ulp(jnp.abs(a).max()) * tol
     return jnp.where(jnp.abs(a) < atol, jnp.zeros(a.shape), a)
 
 
@@ -121,9 +121,9 @@ def tosparse(a: Array, tol: int = 100) -> sparse.BCOO:
 
 
 def lambdify(
-    args: tuple[Symbol],
+    args: tuple[Symbol, ...],
     expr: Expr,
-    modules: list[str] = None,
+    modules: list[str | dict[str, Callable]] | None = None,
     printer: Any = None,
     use_imps: bool = True,
     dummify: bool = False,

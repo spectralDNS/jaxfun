@@ -98,7 +98,7 @@ def get_BasisFunction(
     def _sympystr(cls, printer: Any) -> str:
         return cls.__str__()
 
-    def _latex(cls, printer: Any = None, exp: Number = None) -> str:
+    def _latex(cls, printer: Any = None, exp: Number | None = None) -> str:
         index = indices[cls.local_index + cls.offset]
         if cls.rank == 0:
             s = "".join(
@@ -129,7 +129,7 @@ def get_BasisFunction(
             raise NotImplementedError("Rank > 1 basis functions not supported.")
         return s if exp is None else f"\\left({s}\\right)^{{{exp}}}"
 
-    b = sp.Function(
+    b: AppliedUndef = sp.Function(
         name,
         global_index=global_index,
         local_index=local_index,
@@ -137,13 +137,13 @@ def get_BasisFunction(
         offset=offset,
         functionspace=functionspace,
         argument=argument,
-    )(arg)
+    )(arg)  # ty:ignore[call-non-callable]
 
     b.__class__.__str__ = __str__
     b.__class__._pretty = _pretty
     b.__class__._sympystr = _sympystr
     b.__class__._latex = _latex
-    return b  # type: ignore[return-value]
+    return b
 
 
 def _get_computational_function(

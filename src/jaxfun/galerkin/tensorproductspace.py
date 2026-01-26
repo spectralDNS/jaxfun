@@ -15,6 +15,7 @@ from scipy import sparse as scipy_sparse
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
+from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.utils.common import eliminate_near_zeros, jit_vmap, lambdify
 
 from .composite import BCGeneric, Composite, DirectSum
@@ -54,8 +55,8 @@ class TensorProductSpace:
 
     def __init__(
         self,
-        basespaces: list[BaseSpace],
-        system: CoordSys = None,
+        basespaces: list[OrthogonalSpace],
+        system: CoordSys | None = None,
         name: str = "TPS",
     ) -> None:
         from jaxfun.coordinates import CartCoordSys, x, y, z
@@ -65,7 +66,7 @@ class TensorProductSpace:
             if system is None
             else system
         )
-        self.basespaces = basespaces
+        self.basespaces: list[OrthogonalSpace] = basespaces
         self.name = name
         self.system = system
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
@@ -92,7 +93,7 @@ class TensorProductSpace:
         """Return tensor rank (0 for scalar-valued space)."""
         return 0
 
-    def shape(self) -> tuple[int]:
+    def shape(self) -> tuple[int, ...]:
         """Return raw modal shape (N0, N1, ...)."""
         return tuple([space.N for space in self.basespaces])
 
@@ -109,7 +110,7 @@ class TensorProductSpace:
     def mesh(
         self,
         kind: str = "quadrature",
-        N: tuple[int] | None = None,
+        N: tuple[int, ...] | None = None,
         broadcast: bool = True,
     ) -> tuple[Array, ...]:
         """Return tensor mesh (as tuple of arrays) in true domain.
@@ -124,7 +125,7 @@ class TensorProductSpace:
         """
         mesh = []
         if N is None:
-            N = tuple([s.N for s in self.basespaces])
+            N = self.shape()
         for ax, space in enumerate(self.basespaces):
             X = space.mesh(kind, N[ax])
             mesh.append(self.broadcast_to_ndims(X, ax) if broadcast else X)
@@ -150,7 +151,7 @@ class TensorProductSpace:
         )
 
     def cartesian_mesh(
-        self, kind: str = "quadrature", N: tuple[int] | None = None
+        self, kind: str = "quadrature", N: tuple[int, ...] | None = None
     ) -> tuple[Array]:
         """Return mapped Cartesian mesh (position vector evaluation)."""
         rv = self.system.position_vector(False)

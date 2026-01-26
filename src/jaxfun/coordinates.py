@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import numbers
 from collections import UserDict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
 from itertools import product
 from types import MethodType
-from typing import Any, Self, cast
+from typing import Any, Self, TypeGuard
 
 import numpy as np
 import sympy as sp
@@ -22,7 +22,6 @@ from sympy.assumptions.ask import AssumptionKeys
 from sympy.core import AtomicExpr, Expr, Lambda, Symbol, Tuple
 from sympy.core.assumptions import StdFactKB
 from sympy.core.basic import Basic
-from sympy.core.function import Function
 from sympy.core.symbol import Str
 from sympy.core.sympify import _sympify
 from sympy.printing.precedence import PRECEDENCE
@@ -30,6 +29,15 @@ from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorZero
 from sympy.vector.dyadic import Dyadic, DyadicAdd
 from sympy.vector.vector import Vector, VectorAdd
+
+
+def _is_vector_or_dyadic(obj: Basic) -> TypeGuard[Vector | Dyadic]:
+    return isinstance(obj, Vector | Dyadic)
+
+
+def _is_expr(obj: Basic) -> TypeGuard[Expr]:
+    return isinstance(obj, Expr)
+
 
 tensor_product_symbol = "\u2297"
 
@@ -58,8 +66,11 @@ latex_sym_dict = {
     "psi": r"\psi",
     "omega": r"\omega",
 }
-
 t, x, y, z = sp.symbols("t,x,y,z", real=True)
+t: sp.Symbol
+x: sp.Symbol
+y: sp.Symbol
+z: sp.Symbol
 
 CartCoordSys = lambda name, s: CoordSys(name, sp.Lambda(s, s))
 
@@ -116,7 +127,7 @@ class BaseTime(Symbol):
             return sp.S.One
         return sp.S.Zero
 
-    precedence = PRECEDENCE["Atom"]
+    precedence: int = PRECEDENCE["Atom"]
 
     def doit(self, **hints: dict) -> BaseTime:
         return self
@@ -147,8 +158,18 @@ class BaseScalar(AtomicExpr):
         _system: Reference back to the CoordSys.
     """
 
+    _id: tuple[int, CoordSys]
+    _system: CoordSys
+    _name: str
+    _pretty_form: str
+    _latex_form: str
+
     def __new__(
-        cls, index: int, system: CoordSys, pretty_str: str = None, latex_str: str = None
+        cls,
+        index: int,
+        system: CoordSys,
+        pretty_str: str | None = None,
+        latex_str: str | None = None,
     ) -> Self:
         if pretty_str is None:
             pretty_str = f"x{index}"
@@ -214,7 +235,7 @@ class BaseScalar(AtomicExpr):
         return self.system._map_base_scalar_to_symbol[self]
 
 
-class BaseVector(Vector, AtomicExpr):  # type: ignore
+class BaseVector(Vector, AtomicExpr):
     """Covariant base vector of a coordinate system
 
         b_j = ∂r/∂q^j
@@ -243,8 +264,19 @@ class BaseVector(Vector, AtomicExpr):  # type: ignore
         _assumptions: SymPy assumptions (commutative=True).
     """
 
+    _id: tuple[int, CoordSys]
+    _system: CoordSys
+    _sys: CoordSys
+    _name: str
+    _pretty_form: str
+    _latex_form: str
+
     def __new__(
-        cls, index: int, system: CoordSys, pretty_str: str = None, latex_str: str = None
+        cls,
+        index: int,
+        system: CoordSys,
+        pretty_str: str | None = None,
+        latex_str: str | None = None,
     ) -> Self:
         if pretty_str is None:
             pretty_str = f"x{index}"
@@ -293,11 +325,11 @@ class BaseVector(Vector, AtomicExpr):  # type: ignore
     def free_symbols(self) -> set[Basic]:
         return {self}
 
-    def to_cartesian(self):
+    def to_cartesian(self) -> Vector | Dyadic:
         return self._system.to_cartesian(self)
 
 
-class BaseDyadic(Dyadic, AtomicExpr):  # type: ignore
+class BaseDyadic(Dyadic, AtomicExpr):
     """Dyadic (tensor product) of two base vectors.
 
     Represents a rank-2 basis tensor constructed from two covariant base vectors
@@ -311,6 +343,8 @@ class BaseDyadic(Dyadic, AtomicExpr):  # type: ignore
     Raises:
         TypeError: If either operand is not a base vector (or zero).
     """
+
+    _sys: CoordSys
 
     def __new__(cls, vector1, vector2) -> Self:
         # Verify arguments
@@ -355,7 +389,7 @@ class BaseDyadic(Dyadic, AtomicExpr):  # type: ignore
     def to_cartesian(self):
         cart_arg0 = self._sys.to_cartesian(self.args[0])
         cart_arg1 = self._sys.to_cartesian(self.args[1])
-        return cart_arg0 | cart_arg1
+        return cart_arg0 | cart_arg1  # ty:ignore[unsupported-operator]
 
 
 class CoordSys(Basic):
@@ -387,15 +421,47 @@ class CoordSys(Basic):
         _measure: Complexity metric used during simplification.
     """
 
+    _name: str
+    _vector_names: tuple[str, ...]
+    _variable_names: tuple[str, ...]
+    _base_scalars: Tuple
+    _base_vectors: Tuple
+    _base_dyadics: Tuple
+    _position_vector: Tuple
+    _is_cartesian: bool
+    _parent: CoordSys | None
+    _root: CoordSys
+    _psi: Tuple
+    _cartesian_xyz: Tuple
+    _map_base_scalar_to_symbol: dict[BaseScalar, Symbol]
+    _map_symbol_to_base_scalar: dict[Symbol, BaseScalar]
+    _map_xyz_to_base_scalar: dict[Symbol, BaseScalar]
+    _transformation: Lambda
+    _measure: Callable[..., Any]
+    _assumptions: AssumptionKeys | bool
+    _replace: Sequence[tuple[Any, Any]]
+    _hi: np.ndarray[Any, np.dtype[np.object_]] | None
+    _b: np.ndarray[Any, np.dtype[np.object_]] | None
+    _bt: np.ndarray[Any, np.dtype[np.object_]] | None
+    _e: np.ndarray[Any, np.dtype[np.object_]] | None
+    _g: np.ndarray[Any, np.dtype[np.object_]] | None
+    _gt: np.ndarray[Any, np.dtype[np.object_]] | None
+    _gn: np.ndarray[Any, np.dtype[np.object_]] | None
+    _ct: np.ndarray[Any, np.dtype[np.object_]] | None
+    _det_g: dict[bool, Expr | None]
+    _sqrt_det_g: dict[bool, Expr | None]
+    _covariant_basis_map: dict[int, BaseVector]
+    _covariant_basis_dyadic_map: dict[tuple[int, int], BaseDyadic]
+
     def __new__(
         cls,
         name: str,
-        transformation: Lambda = None,
-        vector_names: list[str] = None,
+        transformation: Lambda | None = None,
+        vector_names: list[str] | None = None,
         parent: CoordSys | None = None,
-        assumptions: AssumptionKeys = True,
-        replace: list[tuple] | tuple[tuple] = (),
-        measure: Function = sp.count_ops,
+        assumptions: AssumptionKeys | bool = True,
+        replace: Sequence[tuple[Any, Any]] = (),
+        measure: Callable[..., Any] = sp.count_ops,
     ) -> Self:
         """Creates and initializes a coordinate system.
 
@@ -423,7 +489,11 @@ class CoordSys(Basic):
         if not isinstance(name, str):
             raise TypeError("name should be a string")
 
+        if transformation is None:
+            raise TypeError("transformation must be provided")
         psi, position_vector = transformation.args
+        assert isinstance(psi, Tuple)
+        assert isinstance(position_vector, Tuple)
         variable_names = [i.name for i in psi]
         is_cartesian = False
         if len(position_vector) == len(psi):  # noqa: SIM102
@@ -478,9 +548,8 @@ class CoordSys(Basic):
             k: v for k, v in zip(obj._psi, base_scalars, strict=False)
         }
 
-        position_vector: tuple[Expr] = position_vector.xreplace(
-            obj._map_symbol_to_base_scalar
-        )
+        position_vector = position_vector.xreplace(obj._map_symbol_to_base_scalar)
+        assert isinstance(position_vector, Tuple)
         obj._map_xyz_to_base_scalar = {
             k: v for k, v in zip(obj._cartesian_xyz, position_vector, strict=False)
         }
@@ -554,32 +623,37 @@ class CoordSys(Basic):
     def __iter__(self) -> Iterable[BaseVector]:
         return iter(self.base_vectors())
 
-    def base_vectors(self) -> tuple[BaseVector, ...]:
+    def base_vectors(self) -> Tuple:
         return self._base_vectors
 
-    def base_scalars(self) -> tuple[BaseScalar, ...]:
+    def base_scalars(self) -> Tuple:
         return self._base_scalars
 
-    def base_dyadics(self) -> tuple[BaseDyadic, ...]:
+    def base_dyadics(self) -> Tuple:
         return self._base_dyadics
 
     def base_time(self) -> BaseTime:
         return BaseTime(self)
 
     @property
-    def rv(self) -> tuple[Expr]:
+    def rv(self) -> Tuple:
         return self._position_vector
 
-    def get_cartesian_basis_vectors(self) -> tuple[BaseVector, ...]:
+    def get_cartesian_basis_vectors(self) -> Tuple:
         return self._parent.base_vectors() if self._parent else self.base_vectors()
 
-    def position_vector(self, as_Vector: bool = False) -> tuple[Expr] | Vector:
-        r: tuple[Expr] = self.refine_replace(self.rv)
+    def position_vector(self, as_Vector: bool = False) -> Tuple | Vector:
+        r_out = self.refine_replace(self.rv)
+        assert isinstance(r_out, Tuple)
+        r = r_out
         base_vectors = self.get_cartesian_basis_vectors()
-        return np.array(r) @ base_vectors if as_Vector else r
+        if as_Vector:
+            out: Vector = np.array(r) @ base_vectors
+            return out
+        return r
 
     @property
-    def psi(self) -> tuple[Symbol]:
+    def psi(self) -> Tuple:
         return self._base_scalars
 
     @property
@@ -599,10 +673,45 @@ class CoordSys(Basic):
         return self.get_scaling_factors()
 
     @property
-    def sg(self) -> Expr:
+    def sg(self) -> Basic:
         if self.is_cartesian:
             return sp.S(1)
         return self.get_sqrt_det_g(True)
+
+    def get_normal_basis(
+        self, as_Vector: bool = False
+    ) -> np.ndarray[Any, np.dtype[np.object_]]:
+        """Returns orthonormal ("normal") basis vectors.
+
+        For orthogonal coordinate systems, the normal basis vectors are
+        e_i = b_i / h_i where b_i are covariant basis vectors and h_i are
+        the scaling factors.
+
+        Args:
+            as_Vector: If True, returns SymPy Vectors; otherwise returns a
+                raw component array.
+
+        Returns:
+            Numpy object array representing the normal basis.
+        """
+        if self._e is not None:
+            if as_Vector:
+                return (
+                    self._e
+                    @ np.array(self.get_cartesian_basis_vectors())[: self._e.shape[1]]
+                )
+            return self._e
+
+        if not self.is_orthogonal:
+            raise RuntimeError("Normal basis only defined for orthogonal systems")
+
+        b = self.get_covariant_basis()
+        hi = self.get_scaling_factors()
+        e = np.array(b / hi[:, None])
+        self._e = e
+        if as_Vector:
+            return e @ np.array(self.get_cartesian_basis_vectors())[: e.shape[1]]
+        return e
 
     @property
     def is_orthogonal(self) -> bool:
@@ -627,7 +736,7 @@ class CoordSys(Basic):
         if not v.is_Vector:
             cart_map.update(
                 {
-                    k: cart_map[k.args[0]] | cart_map[k.args[1]]
+                    k: (cart_map[k.args[0]] | cart_map[k.args[1]])
                     for k in self.base_dyadics()
                 }
             )
@@ -643,27 +752,30 @@ class CoordSys(Basic):
         v = v.doit()
         bt = self.get_contravariant_basis(True)
         bv = self.base_vectors()
-        a: list = []
+        terms: list[Any] = []
         if v.is_Vector:
             for i in range(len(bv)):
-                a.append(self.simplify(v & bt[i]) * bv[i])
-            a = sp.vector.VectorAdd(*a)
+                terms.append(self.simplify(v & bt[i]) * bv[i])
+            expr = VectorAdd(*terms)
         else:
             bd = self.base_dyadics()
             for i in range(len(bt)):
                 for j in range(len(bt)):
-                    a.append(self.simplify(bt[i] & v & bt[j]) * bd[i * len(bv) + j])
-            a = sp.vector.DyadicAdd(*a)
-        return cast(Vector | Dyadic, express(a, self))
+                    terms.append(self.simplify(bt[i] & v & bt[j]) * bd[i * len(bv) + j])
+            expr = DyadicAdd(*terms)
+        out = express(expr, self)
+        if _is_vector_or_dyadic(out):
+            return out
+        raise TypeError("from_cartesian produced a non-tensor expression")
 
-    def expr_base_scalar_to_psi(self, v) -> Expr:
+    def expr_base_scalar_to_psi(self, v: Basic) -> Basic:
         return sp.sympify(v).xreplace(self._map_base_scalar_to_symbol)
 
-    def expr_psi_to_base_scalar(self, v: Expr) -> Expr:
+    def expr_psi_to_base_scalar(self, v: Basic) -> Basic:
         return sp.sympify(v).xreplace(self._map_symbol_to_base_scalar)
 
     def get_contravariant_component(
-        self, v: Vector | Dyadic, k: int, j: int = None
+        self, v: Vector | Dyadic, k: int, j: int | None = None
     ) -> Any:
         """Return a contravariant component of a vector or dyadic.
 
@@ -697,7 +809,9 @@ class CoordSys(Basic):
             raise ValueError("Second index j must be provided for Dyadic components.")
         return v.components.get(self._covariant_basis_dyadic_map[k, j], sp.S.Zero)
 
-    def get_covariant_component(self, v: Vector | Dyadic, k: int, j: int = None) -> Any:
+    def get_covariant_component(
+        self, v: Vector | Dyadic, k: int, j: int | None = None
+    ) -> Any:
         """Return a covariant component of a vector or dyadic.
 
         The covariant components are obtained by contracting with the covariant
@@ -736,14 +850,18 @@ class CoordSys(Basic):
         """
         from jaxfun.operators import express
 
-        if self._det_g[covariant] is not None:
-            return self._det_g[covariant]
+        cached = self._det_g[covariant]
+        if cached is not None:
+            return cached
         if covariant:
             g = sp.Matrix(self.get_covariant_metric_tensor()).det()
         else:
             g = sp.Matrix(self.get_contravariant_metric_tensor()).det()
-        g = self.replace(g).factor()
-        g: Expr = express(self.refine(self.simplify(g)), self)
+        g = sp.factor(self.replace(g))
+        g_out = express(self.refine(self.simplify(g)), self)
+        if not _is_expr(g_out):
+            raise TypeError("get_det_g produced a non-scalar expression")
+        g = g_out
         self._det_g[covariant] = g
         return g
 
@@ -758,8 +876,9 @@ class CoordSys(Basic):
         """
         from jaxfun.operators import express
 
-        if self._sqrt_det_g[covariant] is not None:
-            return self._sqrt_det_g[covariant]
+        cached = self._sqrt_det_g[covariant]
+        if cached is not None:
+            return cached
         g = self.get_det_g(covariant)
         # sg = self.refine(self.simplify(sp.sqrt(g)))
         sg = self.refine(sp.sqrt(g))
@@ -770,7 +889,10 @@ class CoordSys(Basic):
                 sg = complex(sg)
             else:
                 raise RuntimeError
-        sg: Expr = express(sg, self)
+        sg_out = express(sp.sympify(sg), self)
+        if not _is_expr(sg_out):
+            raise TypeError("get_sqrt_det_g produced a non-scalar expression")
+        sg = sg_out
         self._sqrt_det_g[covariant] = sg
         return sg
 
@@ -796,7 +918,7 @@ class CoordSys(Basic):
             hi[i] = sp.sqrt(self.refine(self.simplify(s)))
             hi[i] = self.refine(hi[i])
 
-        hi = np.array(express(hi, self))
+        hi = np.array(express(hi, self))  # type: ignore[invalid-argument-type]
         self._hi = hi
         return hi
 
@@ -1089,12 +1211,12 @@ class SubCoordSys:
         return self._base_scalars
 
     @property
-    def rv(self) -> tuple[Expr]:
-        """Return the positional expression (tuple of length 1)."""
+    def rv(self) -> Expr:
+        """Return the positional expression along this axis."""
         return self._position_vector
 
     @property
-    def position_vector(self) -> tuple[Expr]:
+    def position_vector(self) -> Expr:
         """Return the positional expression along this axis."""
         return self._position_vector
 
@@ -1107,10 +1229,10 @@ class SubCoordSys:
 def get_CoordSys(
     name: str,
     transformation: Lambda,
-    vector_names: list[str] = None,
-    assumptions: AssumptionKeys = True,
-    replace: list[tuple] | tuple[tuple] = (),
-    measure: Function = sp.count_ops,
+    vector_names: list[str] | None = None,
+    assumptions: AssumptionKeys | bool = True,
+    replace: Sequence[tuple[Any, Any]] = (),
+    measure: Callable[..., Any] = sp.count_ops,
     cartesian_name: str = "R",
 ) -> CoordSys:
     """Creates a curvilinear coordinate system with a Cartesian parent.
@@ -1130,13 +1252,16 @@ def get_CoordSys(
     Returns:
         A fully constructed CoordSys instance.
     """
+    position_vector = transformation.args[1]
+    assert isinstance(position_vector, Tuple)
+
     return CoordSys(
         name,
         transformation,
         vector_names=vector_names,
         parent=CartCoordSys(
             cartesian_name,
-            {1: (x,), 2: (x, y), 3: (x, y, z)}[len(transformation.args[1])],
+            {1: (x,), 2: (x, y), 3: (x, y, z)}[len(position_vector)],
         ),
         assumptions=assumptions,
         replace=replace,
@@ -1144,18 +1269,18 @@ def get_CoordSys(
     )
 
 
-sp.vector.BaseDyadic = BaseDyadic
-sp.vector.BaseVector = BaseVector
-sp.vector.BaseScalar = BaseScalar
-sp.vector.vector.BaseDyadic = BaseDyadic
-sp.vector.vector.BaseVector = BaseVector
-sp.vector.vector.BaseScalar = BaseScalar
-sp.vector.dyadic.BaseVector = BaseVector
-sp.vector.dyadic.BaseScalar = BaseScalar
-sp.vector.dyadic.BaseDyadic = BaseDyadic
+sp.vector.BaseDyadic = BaseDyadic  # ty:ignore[possibly-missing-attribute]
+sp.vector.BaseVector = BaseVector  # ty:ignore[possibly-missing-attribute]
+sp.vector.BaseScalar = BaseScalar  # ty:ignore[possibly-missing-attribute]
+sp.vector.vector.BaseDyadic = BaseDyadic  # ty:ignore[possibly-missing-attribute]
+sp.vector.vector.BaseVector = BaseVector  # ty:ignore[possibly-missing-attribute]
+sp.vector.vector.BaseScalar = BaseScalar  # ty:ignore[possibly-missing-attribute]
+sp.vector.dyadic.BaseVector = BaseVector  # ty:ignore[possibly-missing-attribute]
+sp.vector.dyadic.BaseScalar = BaseScalar  # ty:ignore[possibly-missing-attribute]
+sp.vector.dyadic.BaseDyadic = BaseDyadic  # ty:ignore[possibly-missing-attribute]
 # sp.vector.Vector._base_func = BaseVector
-sp.vector.vector.VectorMul._base_func = BaseVector
-sp.vector.dyadic.DyadicMul._base_func = BaseDyadic
+sp.vector.vector.VectorMul._base_func = BaseVector  # ty:ignore[possibly-missing-attribute]
+sp.vector.dyadic.DyadicMul._base_func = BaseDyadic  # ty:ignore[possibly-missing-attribute]
 # sp.vector.vector.VectorMul._base_instance = BaseVector
 # sp.vector.functions.BaseVector = BaseVector
 # sp.vector.functions.BaseScalar = BaseScalar

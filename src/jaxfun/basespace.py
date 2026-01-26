@@ -30,7 +30,7 @@ class BaseSpace:
 
     def __init__(
         self,
-        system: CoordSys = None,
+        system: CoordSys | None = None,
         name: str = "BaseSpace",
         fun_str: str = "phi",
     ) -> None:

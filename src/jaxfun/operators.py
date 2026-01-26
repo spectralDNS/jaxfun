@@ -17,8 +17,6 @@ from typing import Any, Protocol, Self, cast
 
 import numpy as np
 import sympy as sp
-import sympy.vector as sp_vector
-import sympy.vector.basisdependent as sp_vector_basisdependent
 from sympy import Expr
 from sympy.core import preorder_traversal
 from sympy.core.add import Add
@@ -213,7 +211,7 @@ def cross(v1: Vector, v2: Vector) -> Vector | Cross:
                 n3 = ({0, 1, 2}.difference({n1, n2})).pop()
                 ei = eijk(n1, n2, n3)
                 b = v1v._sys.base_vectors()
-                return sg * ei * gt[n3] @ b
+                return sg * ei * gt[n3] @ b  # ty:ignore[unsupported-operator]
 
         return cross(
             cast(Vector, v1v._sys.to_cartesian(v1v)),
@@ -1000,21 +998,21 @@ def doit(self, **hints) -> Basic:
     return z
 
 
-cast(Any, sp.core.Expr).doit = doit
-cast(Any, sp_vector.vector).dot = dot
-cast(Any, sp_vector.vector).cross = cross
-cast(Any, sp_vector.operators).gradient = gradient
-cast(Any, sp_vector.operators).curl = curl
-cast(Any, sp_vector.operators).divergence = divergence
-cast(Any, sp_vector.vector).Cross = Cross
-cast(Any, sp_vector.vector).Dot = Dot
-cast(Any, sp_vector.operators).Curl = Curl
-cast(Any, sp_vector.operators).Gradient = Grad
-cast(Any, sp_vector.operators).Divergence = Div
-cast(Any, sp_vector).Cross = Cross
-cast(Any, sp_vector).Dot = Dot
-cast(Any, sp_vector).Curl = Curl
-cast(Any, sp_vector).Gradient = Grad
-cast(Any, sp_vector).Divergence = Div
-cast(Any, sp_vector_basisdependent.BasisDependent).diff = diff
-cast(Any, sp_vector.Dyadic).is_Dyadic = True
+sp.core.Expr.doit = doit  # ty:ignore[invalid-assignment]
+sp.vector.vector.dot = dot  # ty:ignore[possibly-missing-attribute]
+sp.vector.vector.cross = cross  # ty:ignore[possibly-missing-attribute]
+sp.vector.operators.gradient = gradient  # ty:ignore[possibly-missing-attribute]
+sp.vector.operators.curl = curl  # ty:ignore[possibly-missing-attribute]
+sp.vector.operators.divergence = divergence  # ty:ignore[possibly-missing-attribute]
+sp.vector.vector.Cross = Cross  # ty:ignore[possibly-missing-attribute]
+sp.vector.vector.Dot = Dot  # ty:ignore[possibly-missing-attribute]
+sp.vector.operators.Curl = Curl  # ty:ignore[possibly-missing-attribute]
+sp.vector.operators.Gradient = Grad  # ty:ignore[possibly-missing-attribute]
+sp.vector.operators.Divergence = Div  # ty:ignore[possibly-missing-attribute]
+sp.vector.Cross = Cross  # ty:ignore[possibly-missing-attribute]
+sp.vector.Dot = Dot  # ty:ignore[possibly-missing-attribute]
+sp.vector.Curl = Curl  # ty:ignore[possibly-missing-attribute]
+sp.vector.Gradient = Grad  # ty:ignore[possibly-missing-attribute]
+sp.vector.Divergence = Div  # ty:ignore[possibly-missing-attribute]
+sp.vector.basisdependent.BasisDependent.diff = diff  # ty:ignore[possibly-missing-attribute]
+sp.vector.Dyadic.is_Dyadic = True  # ty:ignore[possibly-missing-attribute]

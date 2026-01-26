@@ -130,33 +130,37 @@ class Composite(OrthogonalSpace):
     def __init__(  # noqa: D401  (docstring above)
         self,
         N: int,
-        orthogonal: OrthogonalSpace,
-        bcs: BoundaryConditions,
-        domain: Domain = None,
+        orthogonal: type[Jacobi],
+        bcs: BoundaryConditions | dict,
+        domain: Domain | None = None,
         name: str = "Composite",
         fun_str: str = "phi",
-        system: CoordSys = None,
-        stencil: dict = None,
-        alpha: Number = 0,
-        beta: Number = 0,
+        system: CoordSys | None = None,
+        stencil: dict | None = None,
+        alpha: Number | float = 0,
+        beta: Number | float = 0,
         scaling: sp.Expr = sp.S.One,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
         OrthogonalSpace.__init__(
             self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
-        self.orthogonal = orthogonal(
+        self.orthogonal: Jacobi = orthogonal(
             N, domain=domain, alpha=alpha, beta=beta, system=system
         )
-        self.bcs = BoundaryConditions(bcs)
+        self.bcs: BoundaryConditions = BoundaryConditions(bcs)
         if stencil is None:
+            assert isinstance(self.orthogonal, Jacobi), (
+                "Automatic stencil derivation only supported for Jacobi-based "
+                "orthogonal bases. Provide custom stencil dict otherwise."
+            )
             stencil = get_stencil_matrix(self.bcs, self.orthogonal)
         self.scaling = scaling
         self.stencil = {(si[0]): si[1] / scaling for si in sorted(stencil.items())}
         self.S = BCOO.from_scipy_sparse(self.stencil_to_scipy_sparse())
 
     @jax.jit(static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int = 0) -> Array:
+    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return quadrature nodes/weights (delegated to underlying basis)."""
         return self.orthogonal.quad_points_and_weights(N)
 
@@ -320,15 +324,15 @@ class BCGeneric(Composite):
     def __init__(  # noqa: D401
         self,
         N: int,
-        orthogonal: OrthogonalSpace,
+        orthogonal: type[Jacobi],
         bcs: dict,
-        domain: Domain = None,
+        domain: Domain | None = None,
         name: str = "BCGeneric",
         fun_str: str = "B",
-        system: CoordSys = None,
-        stencil: dict = None,
-        alpha: Number = 0,
-        beta: Number = 0,
+        system: CoordSys | None = None,
+        stencil: dict | None = None,
+        alpha: Number | float = 0,
+        beta: Number | float = 0,
         num_quad_points: int = 0,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
@@ -388,9 +392,9 @@ class DirectSum:
         num_dofs: Free DOFs (from Composite part).
     """
 
-    def __init__(self, a: Composite, b: BCGeneric) -> None:
+    def __init__(self, a: Composite | OrthogonalSpace, b: BCGeneric) -> None:
         assert isinstance(b, BCGeneric)
-        self.basespaces = [a, b]
+        self.basespaces: tuple[Composite, BCGeneric] = (a, b)
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
         self.system = a.system
@@ -575,7 +579,6 @@ if __name__ == "__main__":
 
     from jaxfun.galerkin.arguments import TestFunction, TrialFunction
     from jaxfun.galerkin.Chebyshev import Chebyshev
-    from jaxfun.galerkin.composite import Composite
     from jaxfun.galerkin.inner import inner
     from jaxfun.galerkin.Legendre import Legendre
 
@@ -591,7 +594,7 @@ if __name__ == "__main__":
 
     D = C.stencil_to_scipy_sparse()
     vn = v.__array__()
-    gn = D @ vn @ D.T
+    gn = D @ vn @ D.T  # ty:ignore[unresolved-attribute]
 
     assert jnp.linalg.norm(gn - g) < 1e-7
     assert jnp.linalg.norm(gn - g1) < 1e-7
@@ -599,7 +602,7 @@ if __name__ == "__main__":
     # Galerkin (dense)
     u = TrialFunction(C, name="u")
     v = TestFunction(C, name="v")
-    x = C.system.x
+    x = C.system.x  # ty:ignore[possibly-missing-attribute]
     D = inner(v * sp.diff(u, x, 2), sparse=True, sparse_tol=1000)
 
     # Petrov-Galerkin method (https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
@@ -638,10 +641,10 @@ if __name__ == "__main__":
         sparse_tol=1000,
     )  # bidiagonal
     fig, (ax0, ax1, ax2) = plt.subplots(1, 3, sharey=True)
-    ax0.spy(D.todense())
+    ax0.spy(D.todense())  # ty:ignore[possibly-missing-attribute]
     ax0.set_title("Galerkin Cheb")
-    ax1.spy(A0.todense())
+    ax1.spy(A0.todense())  # ty:ignore[possibly-missing-attribute]
     ax1.set_title("PG Chebyshev")
-    ax2.spy(A1.todense())
+    ax2.spy(A1.todense())  # ty:ignore[possibly-missing-attribute]
     ax2.set_title("PG Legendre")
     plt.show()

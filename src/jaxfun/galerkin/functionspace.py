@@ -25,6 +25,8 @@ derivatives, Robin, weighted, etc., as interpreted by BoundaryConditions.
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
+from jaxfun.galerkin.Jacobi import Jacobi
+from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.utils.common import Domain
 
 from .composite import (
@@ -37,10 +39,10 @@ from .composite import (
 
 def FunctionSpace(
     N: int,
-    space: BaseSpace,
-    bcs: BoundaryConditions | dict = None,
-    domain: Domain = None,
-    system: CoordSys = None,
+    space: type[OrthogonalSpace],
+    bcs: BoundaryConditions | dict | None = None,
+    domain: Domain | None = None,
+    system: CoordSys | None = None,
     name: str = "fun",
     fun_str: str = "psi",
     **kw,
@@ -91,6 +93,7 @@ def FunctionSpace(
     """
     if bcs is not None:
         bcs = BoundaryConditions(bcs, domain=domain)
+        assert issubclass(space, Jacobi)
         C = Composite(
             N,
             space,
@@ -116,7 +119,7 @@ def FunctionSpace(
         return DirectSum(C, B)
     return space(
         N,
-        domain=domain,
+        domain=domain,  # ty:ignore[invalid-argument-type]
         system=system,
         name=name,
         fun_str=fun_str,

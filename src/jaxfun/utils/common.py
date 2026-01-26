@@ -31,7 +31,7 @@ __all__ = (
 def jit_vmap(
     in_axes: int | None | tuple[int | None, ...] = 0,
     out_axes: Any = 0,
-    static_argnums: int | tuple[int] | None = 0,
+    static_argnums: int | tuple[int, ...] | None = 0,
     ndim: int = 0,
 ):
     """Decorator that JIT compiles a function and applies vmap if the first argument is
@@ -69,8 +69,8 @@ def jit_vmap(
 
 
 class Domain(NamedTuple):
-    lower: Number
-    upper: Number
+    lower: Number | float
+    upper: Number | float
 
 
 def ulp(x: float | Array) -> Array:

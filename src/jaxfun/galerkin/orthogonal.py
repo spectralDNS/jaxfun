@@ -59,6 +59,7 @@ class OrthogonalSpace(BaseSpace):
         system: CoordSys | None = None,
         name: str = "OrthogonalSpace",
         fun_str: str = "psi",
+        **kw,
     ) -> None:
         self.N = N
         self._num_quad_points = N

@@ -34,8 +34,8 @@ class Fourier(OrthogonalSpace):
     def __init__(
         self,
         N: int,
-        domain: Domain = None,
-        system: CoordSys = None,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
         name: str = "Fourier",
         fun_str: str = "E",
     ) -> None:
@@ -109,7 +109,7 @@ class Fourier(OrthogonalSpace):
         return jax.lax.exp(1j * self.wavenumbers() * X)
 
     # Cannot jax.jit in case of padding
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:  # type: ignore[override]
+    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Inverse (physical) transform with optional zero-padding.
 
         Pads coefficients to length n (> N) before calling _backward.

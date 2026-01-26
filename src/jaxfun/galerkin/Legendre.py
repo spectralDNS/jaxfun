@@ -21,8 +21,8 @@ class Legendre(Jacobi):
     def __init__(
         self,
         N: int,
-        domain: Domain = None,
-        system: CoordSys = None,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
         name: str = "Legendre",
         fun_str: str = "P",
         **kw,

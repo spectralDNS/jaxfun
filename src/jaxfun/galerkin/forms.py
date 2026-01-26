@@ -129,6 +129,7 @@ def split_coeff(c0: sp.Expr) -> dict:
             if isinstance(ci, Jaxf):
                 coeffs["linear"]["jaxfunction"] = ci
             else:
+                assert coeffs["linear"]["scale"] is not None
                 coeffs["linear"]["scale"] *= float(ci) if ci.is_real else complex(ci)
 
     elif isinstance(c0, sp.Add):

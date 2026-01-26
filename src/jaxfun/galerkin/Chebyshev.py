@@ -36,8 +36,8 @@ class Chebyshev(Jacobi):
     def __init__(
         self,
         N: int,
-        domain: Domain = None,
-        system: CoordSys = None,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
         name: str = "Chebyshev",
         fun_str: str = "T",
         **kw,
@@ -221,7 +221,7 @@ class Chebyshev(Jacobi):
         Returns:
             SymPy expression for T_i(X).
         """
-        return sp.cos(i * sp.acos(X))  # type: ignore[return-value]
+        return sp.cos(i * sp.acos(X))
 
 
 def matrices(

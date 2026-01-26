@@ -180,7 +180,7 @@ class TensorProductSpace:
         return u
 
     # Cannot jit_vmap since tensor product mesh.
-    @partial(jax.jit, static_argnums=(0, 3))
+    @jax.jit(static_argnums=(0, 3))
     def evaluate_mesh(
         self, x: list[Array], c: Array, use_einsum: bool = False
     ) -> Array:
@@ -317,7 +317,7 @@ class TensorProductSpace:
             c = jnp.array(c0)
         return self._backward(c, kind, N)
 
-    @partial(jax.jit, static_argnums=(0, 2, 3))
+    @jax.jit(static_argnums=(0, 2, 3))
     def _backward(
         self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
     ) -> Array:
@@ -347,7 +347,7 @@ class TensorProductSpace:
                 )(c)
         return c
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
         """Return tensor of inner products along each axis (separable)."""
         dim: int = len(self)
@@ -373,7 +373,7 @@ class TensorProductSpace:
                 )(u)
         return u
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
         """Forward transform (samples -> coefficients) per axis."""
         dim: int = len(self)
@@ -728,12 +728,12 @@ class TPMatrices:
     def __init__(self, tpmats: list[TPMatrix]):
         self.tpmats: list[TPMatrix] = tpmats
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def __call__(self, u: Array):
         """Apply summed tensor product operator to u."""
         return jnp.sum(jnp.array([mat(u) for mat in self.tpmats]), axis=0)
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def precond(self, u: Array):
         """Apply summed diagonal preconditioner to u."""
         return jnp.sum(jnp.array([mat.M(u) for mat in self.tpmats]), axis=0)
@@ -745,7 +745,7 @@ class precond:
     def __init__(self, M):
         self.M = M
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def __call__(self, u):
         """Return M * u (element-wise scaling)."""
         return self.M * u
@@ -790,22 +790,22 @@ class TPMatrix:  # noqa: B903
         """Return explicit Kronecker product (dense)."""
         return jnp.kron(*self.mats)
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def __call__(self, u: Array):
         """Apply matrix to rank-2 coefficient array u."""
         return self.mats[0] @ u @ self.mats[1].T
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def precond(self, u: Array):
         """Apply diagonal preconditioner to u."""
         return self.M(u)
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def __matmul__(self, u: Array) -> Array:
         """Alias to __call__ for @ operator."""
         return self.mats[0] @ u @ self.mats[1].T
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def __rmatmul__(self, u: Array) -> Array:
         """Right matmul (u @ A) treating u as left factor."""
         return self.mats[0].T @ u @ self.mats[1]

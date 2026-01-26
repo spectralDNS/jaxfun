@@ -1,5 +1,4 @@
 from collections.abc import Callable
-from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -98,7 +97,7 @@ class Jacobi(OrthogonalSpace):
         _, c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (n, c0, c1))
         return c0 + c1 * ((a + 1) + (a + b + 2) * (X - 1) / 2)
 
-    @partial(jax.jit, static_argnums=(0, 1))
+    @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return Gauss–Jacobi quadrature nodes/weights.
 

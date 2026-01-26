@@ -1,5 +1,3 @@
-from functools import partial
-
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -95,7 +93,7 @@ class Legendre(Jacobi):
         _, xs = jax.lax.scan(inner_loop, (x0, X), jnp.arange(2, self.N + 1))
         return jnp.sum(xs, axis=0) + c[0]
 
-    @partial(jax.jit, static_argnums=(0, 1))
+    @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return Gauss–Legendre quadrature nodes and weights.
 

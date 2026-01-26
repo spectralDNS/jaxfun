@@ -1,5 +1,3 @@
-from functools import partial
-
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -117,7 +115,7 @@ class Chebyshev(Jacobi):
 
         return jnp.sum(xs, axis=0) + c[0]
 
-    @partial(jax.jit, static_argnums=(0, 1))
+    @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return Gauss–Chebyshev (first kind) nodes and weights.
 

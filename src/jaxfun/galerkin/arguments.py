@@ -11,7 +11,6 @@ Key constructs:
 """
 
 import itertools
-from functools import partial
 from numbers import Number
 from typing import Any, Self, cast
 
@@ -609,10 +608,10 @@ class JAXFunction(Function):
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def __matmul__(self, a: Array) -> Array:
         return self.array @ a
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def __rmatmul__(self, a: Array) -> Array:
         return a @ self.array

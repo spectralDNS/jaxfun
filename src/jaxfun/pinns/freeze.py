@@ -1,5 +1,3 @@
-from functools import partial
-
 import jax
 
 
@@ -7,7 +5,7 @@ class FrozenLayer:
     def __init__(self, layer):
         self.layer = layer
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def __call__(self, x):
         return self.layer(x)
 

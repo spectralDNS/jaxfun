@@ -14,8 +14,6 @@ Subclasses must implement:
     reference_domain
 """
 
-from functools import partial
-
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -52,7 +50,7 @@ class OrthogonalSpace(BaseSpace):
         N: int,
         *,
         domain: Domain,
-        system: CoordSys = None,
+        system: CoordSys | None = None,
         name: str = "OrthogonalSpace",
         fun_str: str = "psi",
     ) -> None:
@@ -67,7 +65,7 @@ class OrthogonalSpace(BaseSpace):
         )
         BaseSpace.__init__(self, system, name, fun_str)
 
-    @partial(jax.jit, static_argnums=(0, 1))
+    @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return (points, weights) for orthogonality measure (abstract)."""
         raise NotImplementedError
@@ -90,7 +88,7 @@ class OrthogonalSpace(BaseSpace):
         """
         return self.eval_basis_functions(X)[: c.shape[0]] @ c
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def vandermonde(self, X: Array) -> Array:
         r"""Return pseudo-Vandermonde matrix V_{m,k}=psi_k(X_m).
 
@@ -112,24 +110,24 @@ class OrthogonalSpace(BaseSpace):
         """Evaluate all basis functions psi_0..psi_{N-1} at X (abstract)."""
         raise NotImplementedError
 
-    @partial(jax.jit, static_argnums=(0, 2))
+    @jax.jit(static_argnums=(0, 2))
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
         """Return k-th derivative Vandermonde (automatic Jacobian stack)."""
         return jacn(self.eval_basis_functions, k)(X)
 
     # backward is wrapped because padding may require non-jitable code
-    @partial(jax.jit, static_argnums=(0, 2, 3))
+    @jax.jit(static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Backward transform (coefficients -> samples) via evaluate."""
         return self._backward(c, kind, N)
 
-    @partial(jax.jit, static_argnums=(0, 2, 3))
+    @jax.jit(static_argnums=(0, 2, 3))
     def _backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Implementation of backward (allows subclass override)."""
         xj = self.mesh(kind=kind, N=N)
         return self.evaluate(self.map_reference_domain(xj), c)
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def mass_matrix(self) -> BCOO:
         """Return diagonal mass matrix (orthogonality) in sparse format."""
         return BCOO(
@@ -140,14 +138,14 @@ class OrthogonalSpace(BaseSpace):
             shape=(self.N, self.N),
         )
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
         """Forward projection (samples -> coefficients) using orthogonality."""
         A = self.norm_squared() / self.domain_factor
         L = self.scalar_product(u)
         return L / A
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
         """Return vector of inner products <u, psi_i> (weighted)."""
         xj, wj = self.quad_points_and_weights()
@@ -162,22 +160,22 @@ class OrthogonalSpace(BaseSpace):
             wj = wj * sg
         return (u * wj) @ jnp.conj(Pi)
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def apply_stencil_galerkin(self, b: Array) -> Array:
         """Apply (left,right) stencil in Galerkin case (identity here)."""
         return b
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def apply_stencils_petrovgalerkin(self, b: Array, P: BCOO) -> Array:
         """Apply trial stencil only (identity left) for Petrov–Galerkin."""
         return b @ P.T
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def apply_stencil_left(self, b: Array) -> Array:
         """Apply test-side stencil (identity in pure orthogonal space)."""
         return b
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def apply_stencil_right(self, a: Array) -> Array:
         """Apply trial-side stencil (identity in pure orthogonal space)."""
         return a
@@ -275,7 +273,7 @@ class OrthogonalSpace(BaseSpace):
                 x = a + (X - c) / self.domain_factor
         return x
 
-    @partial(jax.jit, static_argnums=(0, 1, 2))
+    @jax.jit(static_argnums=(0, 1, 2))
     def mesh(self, kind: str = "quadrature", N: int = 0) -> Array:
         """Return sampling mesh in true domain.
 

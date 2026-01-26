@@ -66,6 +66,7 @@ dev = [
   "marimo[recommended]>=0.15.2",
   "pre-commit>=4.3.0",
   "shapely>=2.1.0",
+  "ty>=0.0.13",
 ]
 
 [tool.uv.sources]

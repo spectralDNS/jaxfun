@@ -83,7 +83,7 @@ def _gradient_descent_based_optimizer(
         lr = optax.linear_schedule(learning_rate, end_learning_rate, decay_steps)
         lr_str += f"->{end_learning_rate} in {decay_steps} steps"
     opt = opt_constructor(lr, **opt_kwargs)
-    base_name = opt_constructor.__name__.capitalize()
+    base_name: str = opt_constructor.__name__.capitalize()  # ty:ignore[unresolved-attribute]
     name = f"{base_name}({lr_str})"
     opt = NamedOptimizer(module, opt, nnx.Param, name=name)
     return opt
@@ -92,8 +92,8 @@ def _gradient_descent_based_optimizer(
 def sgd(
     u: FlaxFunction | nnx.Module,
     learning_rate: float = 1e-3,
-    end_learning_rate: float = None,
-    decay_steps: int = None,
+    end_learning_rate: float | None = None,
+    decay_steps: int | None = None,
     *,
     momentum: float | None = None,
     nesterov: bool = False,
@@ -130,8 +130,8 @@ def sgd(
 def adam(
     u: FlaxFunction | nnx.Module,
     learning_rate: float = 1e-3,
-    end_learning_rate: float = None,
-    decay_steps: int = None,
+    end_learning_rate: float | None = None,
+    decay_steps: int | None = None,
     *,
     b1: float = 0.9,
     b2: float = 0.999,
@@ -181,8 +181,8 @@ def adam(
 def soap(
     u: FlaxFunction | nnx.Module,
     learning_rate: float = 1e-3,
-    end_learning_rate: float = None,
-    decay_steps: int = None,
+    end_learning_rate: float | None = None,
+    decay_steps: int | None = None,
     *,
     b1: float = 0.95,
     b2: float = 0.95,
@@ -483,12 +483,12 @@ class Trainer:
 
     def train(
         self,
-        opt: nnx.Optimizer,
+        opt: nnx.Optimizer | NamedOptimizer,
         num: int,
         *,
         epoch_print: int = 100,
-        name: str = None,
-        module: nnx.Module = None,
+        name: str | None = None,
+        module: nnx.Module | None = None,
         abs_limit_loss: float = 0,
         abs_limit_change: float = 0,
         print_final_loss: bool = False,
@@ -541,7 +541,7 @@ class Trainer:
                 raise ValueError(
                     "Module must be provided if opt is not a NamedOptimizer"
                 )
-            module = opt.module
+            module: nnx.Module = opt.module  # ty:ignore[invalid-assignment]
 
         if alpha <= 0 or alpha >= 1:
             raise ValueError("alpha must be in the range (0, 1)")

@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from collections.abc import Callable, Iterable
 from functools import wraps
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -11,6 +13,9 @@ from jax.experimental.sparse import BCOO
 from scipy import sparse as scipy_sparse
 from scipy.special import sph_harm
 from sympy import Expr, Number, Symbol
+
+if TYPE_CHECKING:
+    from jaxfun.coordinates import BaseScalar
 
 Ynm = lambda n, m, x, y: sph_harm(m, n, y, x)
 n = Symbol("n", positive=True, integer=True)
@@ -121,7 +126,7 @@ def tosparse(a: Array, tol: int = 100) -> sparse.BCOO:
 
 
 def lambdify(
-    args: sp.Basic | tuple[Symbol, ...] | sp.Tuple,
+    args: sp.Basic | tuple[Symbol | BaseScalar, ...] | sp.Tuple,
     expr: Expr | sp.Basic,
     modules: str | list[str | dict[str, Callable]] | None = None,
     printer: Any = None,

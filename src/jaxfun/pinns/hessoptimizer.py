@@ -13,7 +13,9 @@ def hess(
     use_GN: bool = False,
     cg_max_iter: int = 100,
     cg_tol: float = 1e-5,
-    linesearch: base.GradientTransformationExtraArgs | None = default_linesearch,
+    linesearch: base.GradientTransformationExtraArgs
+    | base.GradientTransformation
+    | None = default_linesearch,
 ) -> base.GradientTransformationExtraArgs:
     r"""Hessian optimizer.
 

@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.flatten_util import ravel_pytree
 from jax.sharding import PartitionSpec as P
 from jaxtyping import PyTree
 
@@ -22,7 +23,7 @@ def process_allmean(inp: PyTree) -> PyTree:
     """
     if jax.process_count() == 1:
         return inp
-    flat_arr, unravel = jax.flatten_util.ravel_pytree(inp)
+    flat_arr, unravel = ravel_pytree(inp)
     flat_arr = jnp.expand_dims(flat_arr, axis=0)
     devices = np.array(jax.devices()).reshape(
         jax.process_count(), jax.local_device_count()

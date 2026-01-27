@@ -15,7 +15,7 @@ Subclasses must implement:
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, overload
 
 import jax
 import jax.numpy as jnp
@@ -88,7 +88,7 @@ class OrthogonalSpace(BaseSpace):
         return self._num_quad_points
 
     @jit_vmap(in_axes=(0, None))
-    def evaluate(self, X: float, c: Array) -> Array:
+    def evaluate(self, X: float | Array, c: Array) -> Array:
         """Evaluate truncated series sum_k c_k psi_k(X).
 
         Args:
@@ -113,12 +113,12 @@ class OrthogonalSpace(BaseSpace):
         return self.evaluate_basis_derivative(X, 0)
 
     @abstractmethod
-    def eval_basis_function(self, X: float, i: int) -> Array:
+    def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single basis function psi_i at point X (abstract)."""
         pass
 
     @abstractmethod
-    def eval_basis_functions(self, X: float) -> Array:
+    def eval_basis_functions(self, X: float | Array) -> Array:
         """Evaluate all basis functions psi_0..psi_{N-1} at X (abstract)."""
         pass
 
@@ -262,6 +262,12 @@ class OrthogonalSpace(BaseSpace):
         x = self.system.base_scalars()[0]
         return u.xreplace({x: a + (x - c) / d})
 
+    @overload
+    def map_reference_domain(self, x: Array) -> Array: ...
+
+    @overload
+    def map_reference_domain(self, x: sp.Symbol) -> sp.Expr: ...
+
     def map_reference_domain(self, x: sp.Symbol | Array) -> sp.Expr | Array:
         """Map true domain point x to reference coordinate X."""
         X = x
@@ -273,6 +279,12 @@ class OrthogonalSpace(BaseSpace):
             else:
                 X = c + (x - a) * self.domain_factor
         return X
+
+    @overload
+    def map_true_domain(self, X: Array) -> Array: ...
+
+    @overload
+    def map_true_domain(self, X: sp.Symbol) -> sp.Expr: ...
 
     def map_true_domain(self, X: sp.Symbol | Array) -> sp.Expr | Array:
         """Map reference coordinate X to true domain point x."""
@@ -295,7 +307,7 @@ class OrthogonalSpace(BaseSpace):
             N: Number of uniform points (0 -> num_quad_points).
         """
         if kind == "quadrature":
-            return self.map_true_domain(self.quad_points_and_weights(N)[0])  # type: ignore[return-value]
+            return self.map_true_domain(self.quad_points_and_weights(N)[0])
         assert kind == "uniform"
         a, b = self.domain
         M = N if N != 0 else self.num_quad_points

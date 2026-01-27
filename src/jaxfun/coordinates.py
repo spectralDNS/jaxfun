@@ -72,7 +72,11 @@ x: sp.Symbol
 y: sp.Symbol
 z: sp.Symbol
 
-CartCoordSys = lambda name, s: CoordSys(name, sp.Lambda(s, s))
+
+def CartCoordSys(
+    name: str, s: sp.Symbol | tuple[sp.Symbol, ...] | sp.Tuple
+) -> CoordSys:
+    return CoordSys(name, sp.Lambda(s, s))
 
 
 class defaultdict(UserDict):

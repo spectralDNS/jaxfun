@@ -191,12 +191,12 @@ def _get_computational_function(
                 argument=0 if arg == "test" else 1,
                 arg=a,
             )
-            for a, v in zip(base_scalars, V, strict=False)  # ty:ignore[invalid-argument-type]
+            for a, v in zip(base_scalars, V.basespaces, strict=False)
         )
 
     elif isinstance(V, VectorTensorProductSpace):
         b = V.system.base_vectors()
-        for Vi in V:  # ty:ignore[not-iterable]
+        for Vi in V:
             for v in Vi:
                 functionspacedict[v.name] = v
         return VectorAdd.fromiter(
@@ -214,7 +214,7 @@ def _get_computational_function(
                 for a, v in zip(base_scalars, Vi, strict=False)
             )
             * b[i]
-            for i, Vi in enumerate(V)  # ty:ignore[invalid-argument-type]
+            for i, Vi in enumerate(V)
         )
 
 
@@ -255,6 +255,7 @@ class TestFunction(_FunctionWithSpace):
     """
 
     __test__ = False  # prevent pytest from considering this a test.
+    functionspace: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
 
     def __new__(
         cls,
@@ -266,7 +267,6 @@ class TestFunction(_FunctionWithSpace):
             Self,
             Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)])),
         )
-        obj.functionspace = V
         obj.argument = 0
         if isinstance(V, DirectSum):
             obj.functionspace = V[0].get_homogeneous()
@@ -280,13 +280,15 @@ class TestFunction(_FunctionWithSpace):
                 else:
                     f.append(space)
             obj.functionspace = TensorProductSpace(f, name=vname, system=V.system)
+        else:
+            obj.functionspace = V
         obj.name = name if name is not None else "TestFunction"
         return obj
 
     def doit(self, **hints: Any) -> Expr | AppliedUndef:
         return _get_computational_function(
             "test",
-            self.functionspace,  # ty:ignore[invalid-argument-type]
+            self.functionspace,
         )
 
     def __str__(self) -> str:
@@ -303,7 +305,7 @@ class TestFunction(_FunctionWithSpace):
 
     def _latex(self, printer: Any = None) -> str:
         name = self.name
-        if name != "TestFunction" and self.functionspace.rank == 1:  # ty:ignore[possibly-missing-attribute]
+        if name != "TestFunction" and self.functionspace.rank == 1:
             name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return "".join(
             (
@@ -388,8 +390,10 @@ class TrialFunction(_FunctionWithSpace):
 
     def _latex(self, printer: Any = None) -> str:
         name = self.name
-        if name != "TrialFunction" and self.functionspace.rank == 1:  # ty:ignore[possibly-missing-attribute]
-            name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
+        if name != "TrialFunction":
+            assert not isinstance(self.functionspace, DirectSum)
+            if self.functionspace.rank == 1:
+                name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return "".join(
             (
                 name,
@@ -499,7 +503,7 @@ class JAXArray(_ArrayBackedFunction):
     def __new__(
         cls,
         array: Array,
-        V: OrthogonalSpace | TensorProductSpace | DirectSum,
+        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str | None = None,
     ) -> Self:
         obj = cast(Self, Function.__new__(cls, sp.Dummy()))
@@ -510,7 +514,8 @@ class JAXArray(_ArrayBackedFunction):
         return obj
 
     def forward(self):
-        return self.functionspace.forward(self.array)  # ty:ignore[possibly-missing-attribute]
+        assert not isinstance(self.functionspace, VectorTensorProductSpace | DirectSum)
+        return self.functionspace.forward(self.array)
 
     def doit(self, **hints: Any) -> Function | Array:
         if hints.get("deep", False):
@@ -550,7 +555,8 @@ class Jaxf(_ArrayBackedFunction):
         return obj
 
     def backward(self):
-        return self.functionspace.backward(self.array)  # ty:ignore[possibly-missing-attribute]
+        assert not isinstance(self.functionspace, VectorTensorProductSpace)
+        return self.functionspace.backward(self.array)
 
     def doit(self, **hints: dict) -> Function:
         return self
@@ -595,7 +601,8 @@ class JAXFunction(_ArrayBackedFunction):
         return obj
 
     def backward(self):
-        return self.functionspace.backward(self.array)  # ty:ignore[possibly-missing-attribute]
+        assert not isinstance(self.functionspace, VectorTensorProductSpace)
+        return self.functionspace.backward(self.array)
 
     def doit(self, **hints: Any) -> Expr:
         return (
@@ -617,8 +624,10 @@ class JAXFunction(_ArrayBackedFunction):
 
     def _latex(self, printer: Any = None) -> str:
         name = self.name
-        if name != "JAXFunction" and self.functionspace.rank == 1:  # ty:ignore[possibly-missing-attribute]
-            name = r"\mathbf{ {%s} }" % (self.name,)  # noqa: UP031
+        if name != "JAXFunction":
+            assert not isinstance(self.functionspace, DirectSum)
+            if self.functionspace.rank == 1:
+                name = r"\mathbf{ {%s} }" % (self.name,)  # noqa: UP031
         return "".join(
             (
                 name,

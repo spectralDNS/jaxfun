@@ -1,3 +1,4 @@
+from enum import StrEnum
 from numbers import Number
 from typing import Literal
 
@@ -11,6 +12,12 @@ type Loss_Tuple = (
     | tuple[sp.Expr, Array, Number | Array, Number | Array]
 )
 
-type SampleMethod = Literal["uniform", "legendre", "chebyshev", "random"]
+
+class SampleMethod(StrEnum):
+    UNIFORM = "uniform"
+    LEGENDRE = "legendre"
+    CHEBYSHEV = "chebyshev"
+    RANDOM = "random"
+
 
 type DomainType = Literal["inside", "boundary", "intersection", "all"]

@@ -4,7 +4,7 @@ import copy
 import itertools
 from collections.abc import Iterator
 from functools import partial
-from typing import TypeGuard
+from typing import Any, TypeGuard
 
 import jax
 import jax.numpy as jnp
@@ -18,7 +18,7 @@ from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.utils.common import eliminate_near_zeros, jit_vmap, lambdify
 
-from .composite import BCGeneric, Composite, DirectSum
+from .composite import BCGeneric, BoundaryConditions, Composite, DirectSum
 from .Fourier import Fourier
 
 tensor_product_symbol = "\u2297"
@@ -593,11 +593,16 @@ class DirectSumTPS(TensorProductSpace):
             bc0bcs = copy.deepcopy(bc0.bcs)
             bc1bcs = copy.deepcopy(bc1.bcs)
 
-            lr = lambda bcz, z: {"left": bcz.domain.lower, "right": bcz.domain.upper}[z]
+            def lr(bcz: BCGeneric, z: str) -> sp.Number | float:
+                return {"left": bcz.domain.lower, "right": bcz.domain.upper}[z]
 
             for bcthis, bcother, zother in zip(
                 [bc0bcs, bc1bcs], [bc1bcs, bc0bcs], [bc1, bc0], strict=False
             ):
+                assert isinstance(bcthis, BoundaryConditions)
+                assert isinstance(bcother, BoundaryConditions)
+                assert isinstance(zother, BCGeneric)
+
                 bcall.append([])
                 df = 2.0 / (zother.domain.upper - zother.domain.lower)
                 for bcval in bcthis.orderedvals():
@@ -620,7 +625,7 @@ class DirectSumTPS(TensorProductSpace):
                     bcall[-1].append(bcs)
             self.bndvals[bcspaces] = jnp.array([z.orderedvals() for z in bcall[0]])
 
-        self.tpspaces = self.split(basespaces)
+        self.tpspaces: dict[Any, TensorProductSpace] = self.split(basespaces)
 
         # Precompute lifting coefficients
         for tensorspace in self.tpspaces:
@@ -639,16 +644,20 @@ class DirectSumTPS(TensorProductSpace):
                 for j, bc in enumerate(bcspace.bcs.orderedvals()):
                     otherspace = otherspaces[0]
                     if two_inhomogeneous:
-                        bco = copy.deepcopy(two_inhomogeneous[(bcsindex[0] + 1) % 2])
+                        bco: BCGeneric = copy.deepcopy(
+                            two_inhomogeneous[(bcsindex[0] + 1) % 2]
+                        )
                         bco.bcs = bcall[bcsindex[0]][j]
-                        otherspace = otherspace + bco
-                    uh.append(project1D(bc, otherspace))
+                        otherspace = otherspace + bco  # ty:ignore[unsupported-operator]
+                    uh.append(project1D(bc, otherspace))  # ty:ignore[invalid-argument-type]
                 if bcsindex[0] == 0:
                     self.bndvals[tensorspace] = jnp.array(uh)
                 else:
                     self.bndvals[tensorspace] = jnp.array(uh).T
 
-    def split(self, spaces: list[BaseSpace | DirectSum]) -> dict:
+    def split(
+        self, spaces: list[BaseSpace | DirectSum]
+    ) -> dict[tuple[BaseSpace, ...], TensorProductSpace]:
         """Return dict of all homogeneous tensor combinations."""
         f = []
         for space in spaces:

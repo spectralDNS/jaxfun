@@ -1,4 +1,5 @@
 import importlib
+from typing import TypeGuard
 
 import jax
 import jax.numpy as jnp
@@ -11,6 +12,7 @@ from jaxfun.utils.common import lambdify, matmat, tosparse
 from .arguments import TestFunction, TrialFunction
 from .composite import BCGeneric, Composite
 from .forms import (
+    _has_functionspace,
     get_basisfunctions,
     get_jaxarrays,
     split,
@@ -32,12 +34,7 @@ def inner(
     sparse_tol: int = 1000,
     return_all_items: bool = False,
 ) -> (
-    Array
-    | list[Array]
-    | tuple[list[Array], list[Array]]
-    | BCOO
-    | list[BCOO]
-    | tuple[BCOO | Array, Array]
+    Array | list[Array] | BCOO | tuple[list[Array] | Array | BCOO, list[Array] | Array]
 ):
     r"""Assemble Galerkin inner products (bilinear / linear forms).
 
@@ -73,6 +70,7 @@ def inner(
     """  # noqa: E501
     V, U = get_basisfunctions(expr)
     assert V is not None, "No TestFunction found in expression"
+    assert _has_functionspace(V), "TestFunction has no associated function space"
     test_space = V.functionspace
     measure = test_space.system.sg
     allforms = split(expr * measure)
@@ -109,8 +107,17 @@ def inner(
             assert v is not None and u is not None, (
                 "Both test and trial functions required in bilinear form"
             )
+            assert _has_functionspace(v), (
+                "TestFunction has no associated function space"
+            )
+            assert _has_functionspace(u), (
+                "TrialFunction has no associated function space"
+            )
             vf = v.functionspace
             uf = u.functionspace
+            assert isinstance(vf, OrthogonalSpace)
+            assert isinstance(uf, OrthogonalSpace)
+
             trial.append(uf)
             if isinstance(uf, BCGeneric):
                 has_bcs = True
@@ -122,7 +129,7 @@ def inner(
                 continue
             if z.size == 0:
                 continue
-            if has_bcs and test_space.dims == 1:
+            if isinstance(uf, BCGeneric) and test_space.dims == 1:
                 bresults.append(-(z @ jnp.array(uf.bcs.orderedvals())))
                 continue
             if "linear" in coeffs and test_space.dims == 1:
@@ -140,7 +147,7 @@ def inner(
 
         elif isinstance(mats[0], tuple):
             # multivariable form, like sqrt(x+y)*u*v, that cannot be separated
-
+            assert isinstance(test_space, TensorProductSpace)
             Am = assemble_multivar(mats, a0["multivar"], test_space)
 
             if has_bcs:
@@ -161,6 +168,7 @@ def inner(
                     )
                 if "bilinear" in coeffs:
                     assert coeffs["bilinear"] == 1
+                    assert isinstance(trial_space, TensorProductSpace)
                     aresults.append(
                         TensorMatrix(
                             Am,
@@ -188,6 +196,8 @@ def inner(
                     )
 
                 if "bilinear" in coeffs:
+                    assert isinstance(test_space, TensorProductSpace)
+                    assert isinstance(trial_space, TensorProductSpace)
                     aresults.append(
                         TPMatrix(
                             mats,
@@ -223,6 +233,8 @@ def inner(
 
             v, _ = get_basisfunctions(bi)
             assert v is not None, "Test function required in linear form"
+            assert _has_functionspace(v)
+            assert isinstance(v.functionspace, OrthogonalSpace)
 
             z = inner_linear(
                 bi,
@@ -239,6 +251,7 @@ def inner(
             if isinstance(bs[0], tuple):
                 # multivar
                 if "multivar" in b0:
+                    assert isinstance(test_space, TensorProductSpace)
                     s = test_space.system.base_scalars()
                     xj = test_space.mesh()
                     uj = lambdify(s, b0["multivar"], modules="jax")(*xj)
@@ -266,10 +279,10 @@ def tosparse_and_attach(z: Array, sparse_tol: int) -> BCOO:
         BCOO sparse matrix with copied metadata attributes.
     """
     a0 = tosparse(z, tol=sparse_tol)
-    a0.test_derivatives = z.test_derivatives
-    a0.trial_derivatives = z.trial_derivatives
-    a0.test_name = z.test_name
-    a0.trial_name = z.trial_name
+    a0.test_derivatives = z.test_derivatives  # ty:ignore[unresolved-attribute]
+    a0.trial_derivatives = z.trial_derivatives  # ty:ignore[unresolved-attribute]
+    a0.test_name = z.test_name  # ty:ignore[unresolved-attribute]
+    a0.trial_name = z.trial_name  # ty:ignore[unresolved-attribute]
     return a0
 
 
@@ -281,12 +294,7 @@ def process_results(
     sparse: bool,
     sparse_tol: int,
 ) -> (
-    Array
-    | list[Array]
-    | tuple[list[Array], list[Array]]
-    | BCOO
-    | list[BCOO]
-    | tuple[BCOO | Array, Array]
+    Array | list[Array] | BCOO | tuple[list[Array] | Array | BCOO, list[Array] | Array]
 ):
     """Finalize assembly results (sum terms, optional sparsify).
 
@@ -305,22 +313,22 @@ def process_results(
         return aresults, bresults
 
     if len(aresults) > 0 and dims == 1:
-        aresults = jnp.sum(jnp.array(aresults), axis=0)
+        aresults: Array = jnp.sum(jnp.array(aresults), axis=0)
         if sparse:
-            aresults = tosparse(aresults, tol=sparse_tol)
+            aresults: BCOO = tosparse(aresults, tol=sparse_tol)
 
     if len(aresults) > 0 and dims > 1 and sparse:
         for a0 in aresults:
-            a0.mats = [
+            a0.mats: list[BCOO] = [
                 tosparse_and_attach(
-                    a0.mats[i],
+                    a0.mats[i],  # ty:ignore[possibly-missing-attribute]
                     sparse_tol,
                 )
-                for i in range(a0.dims)
+                for i in range(a0.dims)  # ty:ignore[possibly-missing-attribute]
             ]
 
     if len(bresults) > 0:
-        bresults = jnp.sum(jnp.array(bresults), axis=0)
+        bresults: Array = jnp.sum(jnp.array(bresults), axis=0)
 
     # Return just the one matrix/vector if 1D and only bilinear or linear forms
     if len(aresults) > 0 and len(bresults) == 0:
@@ -380,7 +388,7 @@ def inner_bilinear(
             s = aii.free_symbols.pop()
             scale *= lambdify(s, uo.map_expr_true_domain(aii), modules="jax")(xj)
         else:
-            scale *= float(aii)
+            scale *= float(aii)  # ty:ignore[invalid-argument-type]
 
     z = None
     if len(scale) == 1 and not multivar:
@@ -468,7 +476,7 @@ def inner_linear(
                 s = bii.free_symbols.pop()
                 uj *= lambdify(s, vo.map_expr_true_domain(bii), modules="jax")(xj)
             else:
-                uj *= float(bii)
+                uj *= float(bii)  # ty:ignore[invalid-argument-type]
 
     Pi = vo.evaluate_basis_derivative(xj, k=i)
     w = wj * df ** (i - 1)  # Account for domain different from reference
@@ -481,8 +489,14 @@ def inner_linear(
     return z
 
 
+def contains_sympy_symbols(obj: object) -> TypeGuard[sp.Expr]:
+    return len(sp.sympify(obj).free_symbols) > 0
+
+
 def assemble_multivar(
-    mats: list[tuple[Array, Array]], scale: Array, test_space: TensorProductSpace
+    mats: list[tuple[Array, Array]],
+    scale: sp.Expr | Array,
+    test_space: TensorProductSpace,
 ) -> Array:
     """Contract separated multivariable factors into global matrix.
 
@@ -501,7 +515,7 @@ def assemble_multivar(
     P2, P3 = mats[1]
     i, k = P0.shape[1], P1.shape[1]
     j, l = P2.shape[1], P3.shape[1]  # noqa: E741
-    if len(sp.sympify(scale).free_symbols) > 0:
+    if contains_sympy_symbols(scale):
         s = test_space.system.base_scalars()
         xj = test_space.mesh()
         scale = lambdify(s, scale, modules="jax")(*xj)
@@ -550,5 +564,5 @@ def project(ue: sp.Expr, V: OrthogonalSpace) -> Array:
     u = TrialFunction(V)
     v = TestFunction(V)
     M, b = inner(v * (u - ue))
-    uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(V.num_dofs)
+    uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(V.num_dofs)  # ty:ignore[possibly-missing-attribute]
     return uh

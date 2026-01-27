@@ -18,19 +18,24 @@ Main entry points:
   split(form_expr)         -> decompose full weak form into grouped terms
 """
 
-from typing import Any, Protocol, TypeGuard
+from typing import Protocol, TypeGuard
 
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
 
 from jaxfun.coordinates import CoordSys, get_system as get_system
+from jaxfun.galerkin.orthogonal import OrthogonalSpace
+from jaxfun.galerkin.tensorproductspace import (
+    TensorProductSpace,
+    VectorTensorProductSpace,
+)
 
 from .arguments import JAXArray, Jaxf, JAXFunction
 
 
 class _HasFunctionSpace(Protocol):
-    functionspace: Any
+    functionspace: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
 
 
 def _has_functionspace(obj: object) -> TypeGuard[_HasFunctionSpace]:

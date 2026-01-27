@@ -29,7 +29,7 @@ from jaxfun.typing import Array
 from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
 
 if TYPE_CHECKING:
-    from jaxfun.galerkin.composite import BCGeneric, DirectSum
+    from jaxfun.galerkin.composite import BCGeneric, BoundaryConditions, DirectSum
 
 
 class OrthogonalSpace(BaseSpace):
@@ -64,7 +64,7 @@ class OrthogonalSpace(BaseSpace):
         self.N = N
         self._num_quad_points = N
         self._domain = Domain(*domain)
-        self.bcs = None
+        self.bcs: BoundaryConditions | None = None
         self.orthogonal = self
         self.stencil = {0: 1}
         self.S = sparse.BCOO(
@@ -236,7 +236,12 @@ class OrthogonalSpace(BaseSpace):
         R = d - c
         return R / L if abs(L - R) > 1e-12 else 1
 
-    def map_expr_reference_domain(self, u: sp.Expr) -> sp.Expr:
+    @overload
+    def map_expr_reference_domain(self, u: sp.Expr) -> sp.Expr: ...
+    @overload
+    def map_expr_reference_domain(self, u: sp.Basic) -> sp.Basic: ...
+
+    def map_expr_reference_domain(self, u: sp.Expr | sp.Basic) -> sp.Expr | sp.Basic:
         """Return expression u(x) rewritten with reference coord X.
 
         Maps physical x into reference X so u can be evaluated in
@@ -251,7 +256,12 @@ class OrthogonalSpace(BaseSpace):
         x = self.system.base_scalars()[0]
         return u.xreplace({x: c + (x - a) * d})
 
-    def map_expr_true_domain(self, u: sp.Expr) -> sp.Expr:
+    @overload
+    def map_expr_true_domain(self, u: sp.Expr) -> sp.Expr: ...
+    @overload
+    def map_expr_true_domain(self, u: sp.Basic) -> sp.Basic: ...
+
+    def map_expr_true_domain(self, u: sp.Expr | sp.Basic) -> sp.Expr | sp.Basic:
         """Return expression u(X) rewritten with true coordinate x."""
         x = u.free_symbols
         if len(x) == 0:

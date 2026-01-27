@@ -336,7 +336,7 @@ class BCGeneric(Composite):
         num_quad_points: int = 0,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
-        bcs = BoundaryConditions(bcs, domain=domain)
+        bcs: BoundaryConditions = BoundaryConditions(bcs, domain=domain)
         OrthogonalSpace.__init__(
             self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )

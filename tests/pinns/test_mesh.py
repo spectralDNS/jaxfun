@@ -142,7 +142,7 @@ def test_unitline_points_and_weights():
 def test_line_affine_mapping():
     N = 5
     left, right = -2.5, 3.0
-    line = Line(left=left, right=right)
+    line = Line(left, right)
 
     p = line.get_points(N, domain="inside", kind="uniform")
     assert p.shape == (N - 2, 1)
@@ -300,7 +300,7 @@ def test_unitline_points_union_property():
 def test_line_points_union_property():
     """Test get_all_points equals union of inside + boundary points."""
     N = 6
-    line = Line(left=-1.0, right=2.0)
+    line = Line(-1.0, 2.0)
 
     for kind in ["uniform", "legendre", "chebyshev"]:
         all_pts = line.get_points(N, domain="all", kind=kind)
@@ -420,7 +420,7 @@ def test_unitline_weights_union_property():
 def test_line_weights_union_property():
     """Test get_all_weights equals union of inside + boundary weights."""
     N = 6
-    line = Line(left=-2.0, right=3.0)
+    line = Line(-2.0, 3.0)
 
     for kind in ["uniform", "random"]:
         all_w = line.get_weights(N, domain="all", kind=kind)
@@ -504,7 +504,7 @@ def test_rectangle_weights_union_property():
 def test_line_boundary_mask():
     """Test boundary_mask method for Line."""
     N = 6
-    line = Line(left=-1.0, right=1.0)
+    line = Line(-1.0, 1.0)
 
     mask = line.boundary_mask(N, kind="uniform")
     assert mask.shape == (N,)
@@ -798,7 +798,8 @@ def test_shapely_meshes_union_property():
 def test_line_invalid_bounds():
     """Test Line raises error for invalid bounds."""
     try:
-        Line(left=2.0, right=1.0)
+        Line(2.0, 1.0)
+
         raise AssertionError("Should raise ValueError")
     except ValueError as e:
         assert "greater than" in str(e).lower()
@@ -858,7 +859,8 @@ def test_unitline_to_shapely():
 
 def test_line_to_shapely():
     """Test Line.to_shapely() returns a LineString."""
-    line = Line(left=-2.0, right=3.0)
+    line = Line(-2.0, 3.0)
+
     linestring = line.to_shapely()
 
     assert hasattr(linestring, "coords")
@@ -870,9 +872,11 @@ def test_line_to_shapely():
 def test_3d_mesh_from_three_lines_basic():
     """Test 3D CartesianProductMesh created from three Line meshes."""
     Nx, Ny, Nz = 4, 5, 6
-    line_x = Line(left=-1.0, right=1.0)
-    line_y = Line(left=0.0, right=2.0)
-    line_z = Line(left=-0.5, right=0.5)
+    line_x = Line(-1.0, 1.0)
+
+    line_y = Line(0.0, 2.0)
+
+    line_z = Line(-0.5, 0.5)
 
     mesh_3d = CartesianProductMesh(line_x, line_y, line_z)
 
@@ -889,9 +893,11 @@ def test_3d_mesh_from_three_lines_basic():
 def test_3d_mesh_from_three_lines_inside_points():
     """Test interior points for 3D mesh from three lines."""
     Nx, Ny, Nz = 4, 5, 6
-    line_x = Line(left=-1.0, right=1.0)
-    line_y = Line(left=0.0, right=2.0)
-    line_z = Line(left=-0.5, right=0.5)
+    line_x = Line(-1.0, 1.0)
+
+    line_y = Line(0.0, 2.0)
+
+    line_z = Line(-0.5, 0.5)
 
     mesh_3d = CartesianProductMesh(line_x, line_y, line_z)
 
@@ -909,9 +915,11 @@ def test_3d_mesh_from_three_lines_inside_points():
 def test_3d_mesh_from_three_lines_boundary_points():
     """Test boundary points for 3D mesh from three lines."""
     Nx, Ny, Nz = 4, 5, 6
-    line_x = Line(left=-1.0, right=1.0)
-    line_y = Line(left=0.0, right=2.0)
-    line_z = Line(left=-0.5, right=0.5)
+    line_x = Line(-1.0, 1.0)
+
+    line_y = Line(0.0, 2.0)
+
+    line_z = Line(-0.5, 0.5)
 
     mesh_3d = CartesianProductMesh(line_x, line_y, line_z)
 
@@ -940,9 +948,11 @@ def test_3d_mesh_from_three_lines_boundary_points():
 def test_3d_mesh_from_three_lines_boundary_mask():
     """Test boundary_mask for 3D mesh from three lines."""
     Nx, Ny, Nz = 4, 5, 6
-    line_x = Line(left=-1.0, right=1.0)
-    line_y = Line(left=0.0, right=2.0)
-    line_z = Line(left=-0.5, right=0.5)
+    line_x = Line(-1.0, 1.0)
+
+    line_y = Line(0.0, 2.0)
+
+    line_z = Line(-0.5, 0.5)
 
     mesh_3d = CartesianProductMesh(line_x, line_y, line_z)
 
@@ -969,9 +979,11 @@ def test_3d_mesh_from_three_lines_boundary_mask():
 def test_3d_mesh_from_three_lines_union_property():
     """Test union property for 3D mesh from three lines."""
     Nx, Ny, Nz = 4, 5, 6
-    line_x = Line(left=-1.0, right=1.0)
-    line_y = Line(left=0.0, right=2.0)
-    line_z = Line(left=-0.5, right=0.5)
+    line_x = Line(-1.0, 1.0)
+
+    line_y = Line(0.0, 2.0)
+
+    line_z = Line(-0.5, 0.5)
 
     mesh_3d = CartesianProductMesh(line_x, line_y, line_z)
 
@@ -993,9 +1005,11 @@ def test_3d_mesh_from_three_lines_union_property():
 def test_3d_mesh_from_three_lines_weights_union_property():
     """Test weights union property for 3D mesh from three lines."""
     Nx, Ny, Nz = 4, 5, 6
-    line_x = Line(left=-1.0, right=1.0)
-    line_y = Line(left=0.0, right=2.0)
-    line_z = Line(left=-0.5, right=0.5)
+    line_x = Line(-1.0, 1.0)
+
+    line_y = Line(0.0, 2.0)
+
+    line_z = Line(-0.5, 0.5)
 
     mesh_3d = CartesianProductMesh(line_x, line_y, line_z)
 
@@ -1029,7 +1043,7 @@ def test_3d_mesh_from_unitsquare_and_line_basic():
     """Test 3D CartesianProductMesh created from UnitSquare and Line."""
     Nx, Ny, Nz = 4, 5, 6
     unit_square = UnitSquare()
-    line_z = Line(left=-1.0, right=1.0)
+    line_z = Line(-1.0, 1.0)
 
     mesh_3d = CartesianProductMesh(unit_square, line_z)
 
@@ -1050,7 +1064,7 @@ def test_3d_mesh_from_unitsquare_and_line_inside_points():
     """Test interior points for 3D mesh from UnitSquare and Line."""
     Nx, Ny, Nz = 4, 5, 6
     unit_square = UnitSquare()
-    line_z = Line(left=-1.0, right=1.0)
+    line_z = Line(-1.0, 1.0)
 
     mesh_3d = CartesianProductMesh(unit_square, line_z)
 
@@ -1069,7 +1083,7 @@ def test_3d_mesh_from_unitsquare_and_line_boundary_points():
     """Test boundary points for 3D mesh from UnitSquare and Line."""
     Nx, Ny, Nz = 4, 5, 6
     unit_square = UnitSquare()
-    line_z = Line(left=-1.0, right=1.0)
+    line_z = Line(-1.0, 1.0)
 
     mesh_3d = CartesianProductMesh(unit_square, line_z)
 
@@ -1099,7 +1113,7 @@ def test_3d_mesh_from_unitsquare_and_line_boundary_mask():
     """Test boundary_mask for 3D mesh from UnitSquare and Line."""
     Nx, Ny, Nz = 4, 5, 6
     unit_square = UnitSquare()
-    line_z = Line(left=-1.0, right=1.0)
+    line_z = Line(-1.0, 1.0)
 
     mesh_3d = CartesianProductMesh(unit_square, line_z)
 
@@ -1127,7 +1141,7 @@ def test_3d_mesh_from_unitsquare_and_line_union_property():
     """Test union property for 3D mesh from UnitSquare and Line."""
     Nx, Ny, Nz = 4, 5, 6
     unit_square = UnitSquare()
-    line_z = Line(left=-1.0, right=1.0)
+    line_z = Line(-1.0, 1.0)
 
     mesh_3d = CartesianProductMesh(unit_square, line_z)
 
@@ -1150,7 +1164,7 @@ def test_3d_mesh_from_unitsquare_and_line_weights_union_property():
     """Test weights union property for 3D mesh from UnitSquare and Line."""
     Nx, Ny, Nz = 4, 5, 6
     unit_square = UnitSquare()
-    line_z = Line(left=-1.0, right=1.0)
+    line_z = Line(-1.0, 1.0)
 
     mesh_3d = CartesianProductMesh(unit_square, line_z)
 

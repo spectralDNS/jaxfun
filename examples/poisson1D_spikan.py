@@ -50,7 +50,7 @@ if "PYTEST" in os.environ:
     sys.exit(1)
 
 print(f"L2 Error {error:.2e} ({error / ulp(1):.1f} ulp)")
-xj = jnp.linspace(domain.lower, domain.upper, 1000)
+xj = jnp.linspace(float(domain.lower), float(domain.upper), 1000)
 plt.plot(xj, lambdify(x, ue)(xj), label="Exact", lw=3)
 plt.plot(xj, w(xj[:, None]), "--", label="Approx", lw=3)
 plt.legend()

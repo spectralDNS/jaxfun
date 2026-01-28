@@ -26,7 +26,7 @@ derivatives, Robin, weighted, etc., as interpreted by BoundaryConditions.
 from typing import overload
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.utils.common import Domain
+from jaxfun.utils.common import Domain, FloatLike
 
 from .composite import (
     BCGeneric,
@@ -43,7 +43,7 @@ def FunctionSpace(
     N: int,
     space: type[OrthogonalSpace],
     bcs: None = None,
-    domain: Domain | tuple[float, float] | None = None,
+    domain: Domain | tuple[FloatLike, FloatLike] | None = None,
     system: CoordSys | None = None,
     name: str = "fun",
     fun_str: str = "psi",
@@ -56,7 +56,7 @@ def FunctionSpace(
     N: int,
     space: type[OrthogonalSpace],
     bcs: BoundaryConditions | dict,
-    domain: Domain | tuple[float, float] | None = None,
+    domain: Domain | tuple[FloatLike, FloatLike] | None = None,
     system: CoordSys | None = None,
     name: str = "fun",
     fun_str: str = "psi",
@@ -68,7 +68,7 @@ def FunctionSpace(
     N: int,
     space: type[OrthogonalSpace],
     bcs: BoundaryConditions | dict | None = None,
-    domain: Domain | tuple[float, float] | None = None,
+    domain: Domain | tuple[FloatLike, FloatLike] | None = None,
     system: CoordSys | None = None,
     name: str = "fun",
     fun_str: str = "psi",
@@ -118,8 +118,10 @@ def FunctionSpace(
         No boundary conditions:
             V = FunctionSpace(32, Chebyshev)
     """
-    domain = domain if domain is None or isinstance(domain, Domain) else Domain(*domain)
-    # domain: Domain | None
+    if domain is None or isinstance(domain, Domain):
+        domain = domain
+    else:
+        domain = Domain(float(domain[0]), float(domain[1]))
 
     if bcs is not None:
         bcs = BoundaryConditions(bcs, domain=domain)

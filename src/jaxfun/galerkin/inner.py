@@ -1,5 +1,5 @@
 import importlib
-from typing import TypeGuard
+from typing import Any, TypeGuard
 
 import jax
 import jax.numpy as jnp
@@ -33,9 +33,7 @@ def inner(
     sparse: bool = False,
     sparse_tol: int = 1000,
     return_all_items: bool = False,
-) -> (
-    Array | list[Array] | BCOO | tuple[list[Array] | Array | BCOO, list[Array] | Array]
-):
+) -> Any:
     r"""Assemble Galerkin inner products (bilinear / linear forms).
 
     Supports expressions of the forms:
@@ -564,5 +562,5 @@ def project(ue: sp.Basic, V: OrthogonalSpace | TensorProductSpace) -> Array:
     u = TrialFunction(V)
     v = TestFunction(V)
     M, b = inner(v * (u - ue))
-    uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(V.num_dofs)  # ty:ignore[possibly-missing-attribute]
+    uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(V.num_dofs)
     return uh

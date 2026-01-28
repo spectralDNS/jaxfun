@@ -55,6 +55,14 @@ exclude_also = [
 [tool.ty.src]
 exclude = [ "sandbox", "examples/notebooks", "**/*.ipynb" ]
 
+[[tool.ty.overrides]]
+include = [ "examples/DrivenCavity_lstsq.py" ]
+rules = { "invalid-assignment" = "ignore" }
+
+[[tool.ty.overrides]]
+include = [ "examples/sphere_helmholtz.py" ]
+rules = { "possibly-missing-attribute" = "ignore" }
+
 [dependency-groups]
 dev = [
   "ipython>=8.37.0",

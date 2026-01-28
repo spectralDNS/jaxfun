@@ -24,7 +24,7 @@ Return 1 when uniform/random (each point equal) or arrays for quadrature-based k
 import itertools
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from typing import Literal
 
 import jax
@@ -34,7 +34,7 @@ from flax import nnx
 from jax.typing import ArrayLike
 from shapely import LineString, Polygon
 
-from jaxfun.typing import Array, DomainType, SampleMethod
+from jaxfun.typing import Array, DomainType, FloatLike, SampleMethod
 from jaxfun.utils import leggauss
 
 type SampleMethodLike = SampleMethod | str
@@ -473,22 +473,17 @@ class CartesianProductMesh(MeshWithDomain):
 
 @dataclass
 class Line(OneDimMesh):
-    """Straight domain on the real line.
-
-    Attributes:
-        key: PRNG key (nnx Rngs) used for random sampling.
-        left: Left boundary.
-        right: Right boundary.
-    """
-
-    left: float | int
-    right: float | int
+    _left: InitVar[FloatLike]
+    _right: InitVar[FloatLike]
     key: ArrayLike = field(kw_only=True, default_factory=nnx.rnglib.Rngs(101))
 
-    def __post_init__(self) -> None:
-        self.left = float(self.left)
-        self.right = float(self.right)
-        if not self.right > self.left:
+    left: float = field(init=False)
+    right: float = field(init=False)
+
+    def __post_init__(self, _left: FloatLike, _right: FloatLike) -> None:
+        self.left = float(_left)
+        self.right = float(_right)
+        if self.right <= self.left:
             raise ValueError(
                 f"right ({self.right}) must be greater than left ({self.left})"
             )
@@ -639,16 +634,8 @@ class Line(OneDimMesh):
 
 @dataclass
 class UnitLine(Line):
-    """Reference 1D line on domain [0, 1].
-
-    Attributes:
-        key: PRNG key (nnx Rngs) used for random sampling.
-
-    """
-
-    key: ArrayLike = field(kw_only=True, default_factory=nnx.rnglib.Rngs(101))
-    left: float | int = field(init=False, default=0.0)
-    right: float | int = field(init=False, default=1.0)
+    _left: InitVar[FloatLike] = 0.0
+    _right: InitVar[FloatLike] = 1.0
 
 
 @dataclass

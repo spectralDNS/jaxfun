@@ -12,7 +12,9 @@ from jax.experimental import sparse
 from jax.experimental.sparse import BCOO
 from scipy import sparse as scipy_sparse
 from scipy.special import sph_harm
-from sympy import Expr, Number, Symbol
+from sympy import Expr, Symbol
+
+from jaxfun.typing import FloatLike
 
 if TYPE_CHECKING:
     from jaxfun.coordinates import BaseScalar
@@ -74,8 +76,8 @@ def jit_vmap(
 
 
 class Domain(NamedTuple):
-    lower: Number | float
-    upper: Number | float
+    lower: FloatLike
+    upper: FloatLike
 
 
 def ulp(x: float | Array) -> Array:

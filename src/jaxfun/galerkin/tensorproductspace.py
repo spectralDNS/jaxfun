@@ -706,10 +706,7 @@ class DirectSumTPS(TensorProductSpace):
         u = TrialFunction(self)
         c_sym = JAXArray(c, v.functionspace)
         A, b = inner((u - c_sym) * v)
-        return jnp.linalg.solve(
-            A[0].mat,  # ty:ignore[possibly-missing-attribute]
-            b.flatten(),  # ty:ignore[possibly-missing-attribute]
-        ).reshape(v.functionspace.num_dofs)
+        return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.num_dofs)
 
     def scalar_product(self, c: Array):
         """Disabled scalar product (non-homogeneous test space)."""

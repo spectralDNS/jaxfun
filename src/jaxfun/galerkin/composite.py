@@ -412,6 +412,11 @@ class DirectSum:
         """Return number of summands (always 2)."""
         return len(self.basespaces)
 
+    @property
+    def orthogonal(self) -> OrthogonalSpace:
+        """Return underlying orthogonal basis (from homogeneous component)."""
+        return self.basespaces[0].orthogonal
+
     def mesh(self, kind: str = "quadrature", N: int = 0) -> Array:
         """Return mesh from homogeneous Composite summand."""
         return self.basespaces[0].mesh(kind=kind, N=N)
@@ -642,10 +647,10 @@ if __name__ == "__main__":
         sparse_tol=1000,
     )  # bidiagonal
     fig, (ax0, ax1, ax2) = plt.subplots(1, 3, sharey=True)
-    ax0.spy(D.todense())  # ty:ignore[possibly-missing-attribute]
+    ax0.spy(D.todense())
     ax0.set_title("Galerkin Cheb")
-    ax1.spy(A0.todense())  # ty:ignore[possibly-missing-attribute]
+    ax1.spy(A0.todense())
     ax1.set_title("PG Chebyshev")
-    ax2.spy(A1.todense())  # ty:ignore[possibly-missing-attribute]
+    ax2.spy(A1.todense())
     ax2.set_title("PG Legendre")
     plt.show()

@@ -7,6 +7,8 @@ import sympy as sp
 from jax import Array as Array
 from jax.typing import ArrayLike as ArrayLike
 
+type FloatLike = float | sp.Number
+
 
 class SympyExpr(Protocol):
     def doit(self, **hints: Any) -> Any: ...

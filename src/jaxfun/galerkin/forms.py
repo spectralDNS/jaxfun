@@ -18,6 +18,8 @@ Main entry points:
   split(form_expr)         -> decompose full weak form into grouped terms
 """
 
+from typing import Protocol, TypeGuard
+
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
@@ -25,6 +27,19 @@ from jax import Array
 from jaxfun.coordinates import CoordSys, get_system as get_system
 
 from .arguments import JAXArray, Jaxf, JAXFunction
+from .orthogonal import OrthogonalSpace
+from .tensorproductspace import (
+    TensorProductSpace,
+    VectorTensorProductSpace,
+)
+
+
+class _HasFunctionSpace(Protocol):
+    functionspace: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+
+
+def _has_functionspace(obj: object) -> TypeGuard[_HasFunctionSpace]:
+    return hasattr(obj, "functionspace")
 
 
 def get_basisfunctions(
@@ -129,6 +144,7 @@ def split_coeff(c0: sp.Expr) -> dict:
             if isinstance(ci, Jaxf):
                 coeffs["linear"]["jaxfunction"] = ci
             else:
+                assert coeffs["linear"]["scale"] is not None
                 coeffs["linear"]["scale"] *= float(ci) if ci.is_real else complex(ci)
 
     elif isinstance(c0, sp.Add):
@@ -217,6 +233,8 @@ def split(forms: sp.Expr) -> dict:
     """
     v, _ = get_basisfunctions(forms)
     assert v is not None, "A test function is required"
+    assert not isinstance(v, set), "Multiple test functions not supported"
+    assert _has_functionspace(v)
     V = v.functionspace
 
     def _split(ms):

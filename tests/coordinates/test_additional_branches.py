@@ -53,6 +53,7 @@ def test_to_from_cartesian_cartesian_shortcuts_and_dyadic():
     w = C.b_r
     c = C.to_cartesian(w)
     R = C._parent
+    assert R is not None
     assert c.components[R.i] == sp.cos(C.theta)
     assert c.components[R.j] == sp.sin(C.theta)
 
@@ -91,7 +92,7 @@ def test_simplify_vectoradd_and_dyadicadd_paths():
     dy = BaseDyadic(N.i, N.i) + BaseDyadic(N.j, N.j)
     vs = N.simplify(v)
     dys = N.simplify(dy)
-    assert vs.is_Vector and dys.is_Dyadic
+    assert getattr(vs, "is_Vector", False) and getattr(dys, "is_Dyadic", False)
 
 
 def test_refine_replace_and_refine_replace_combined():
@@ -123,7 +124,7 @@ def test_basedyadic_invalid_input():
     x, y, z = sp.symbols("x y z", real=True)
     N = CartCoordSys("N", (x, y, z))
     with pytest.raises(TypeError):
-        BaseDyadic(1, N.i)  # type: ignore[arg-type]
+        BaseDyadic(1, N.i)
 
 
 def test_coord_sys_custom_vector_names():

@@ -1,5 +1,6 @@
 import pytest
 import sympy as sp
+import sympy.vector as sp_vector
 
 from jaxfun.coordinates import (
     BaseDyadic,
@@ -26,6 +27,7 @@ def test_curvilinear_construction():
         "C", sp.Lambda((r, theta, zeta), (r * sp.cos(theta), r * sp.sin(theta), zeta))
     )
     assert not C.is_cartesian
+    assert C._parent is not None
     assert C._parent.is_cartesian
     # base vector names derive from variable names
     names = {v._name for v in C.base_vectors()}
@@ -50,4 +52,4 @@ def test_invalid_base_vector_index():
 def test_basedyadic_zero_shortcut():
     N = CartCoordSys("N", (x, y, z))
     with pytest.raises(TypeError):
-        BaseDyadic(N.i, sp.vector.VectorZero())
+        BaseDyadic(N.i, sp_vector.VectorZero())

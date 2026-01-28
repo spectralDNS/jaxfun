@@ -1,5 +1,3 @@
-from functools import partial
-
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -38,8 +36,8 @@ class Chebyshev(Jacobi):
     def __init__(
         self,
         N: int,
-        domain: Domain = None,
-        system: CoordSys = None,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
         name: str = "Chebyshev",
         fun_str: str = "T",
         **kw,
@@ -117,7 +115,7 @@ class Chebyshev(Jacobi):
 
         return jnp.sum(xs, axis=0) + c[0]
 
-    @partial(jax.jit, static_argnums=(0, 1))
+    @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return Gauss–Chebyshev (first kind) nodes and weights.
 
@@ -223,7 +221,7 @@ class Chebyshev(Jacobi):
         Returns:
             SymPy expression for T_i(X).
         """
-        return sp.cos(i * sp.acos(X))  # type: ignore[return-value]
+        return sp.cos(i * sp.acos(X))
 
 
 def matrices(

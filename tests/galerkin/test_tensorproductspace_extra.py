@@ -1,3 +1,5 @@
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -14,6 +16,7 @@ from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.tensorproductspace import (
     DirectSumTPS,
     TPMatrices,
+    TPMatrix,
     tpmats_to_scipy_sparse,
 )
 
@@ -24,6 +27,9 @@ def test_directsum_two_inhomogeneous_bnd_assembly_and_backward():
     bcs2 = {"left": {"D": 3}, "right": {"D": 4}}
     F1 = FunctionSpace(5, Legendre.Legendre, bcs=bcs1)
     F2 = FunctionSpace(6, Legendre.Legendre, bcs=bcs2)
+    from jaxfun.galerkin.composite import DirectSum
+
+    assert isinstance(F1, DirectSum) and isinstance(F2, DirectSum)
     T = TensorProduct(F1, F2)
     assert isinstance(T, DirectSumTPS)
     # Coefficient array for homogeneous parts
@@ -46,7 +52,9 @@ def test_tensorproduct_get_homogeneous_and_tpmatrices_precond():
     v = TestFunction(H)
     u = TrialFunction(H)
     A = inner(v * u)
-    mats = TPMatrices([m for m in A if hasattr(m, "M")])
+    assert isinstance(A, list)
+    mats_list = [m for m in cast(list[TPMatrix], A) if hasattr(m, "M")]
+    mats = TPMatrices(cast(list[TPMatrix], mats_list))
     X = jax.random.normal(jax.random.PRNGKey(0), shape=T.num_dofs)
     Z = mats.precond(X)
     assert Z.shape == X.shape
@@ -79,5 +87,7 @@ def test_tpmats_to_scipy_sparse():
     v = TestFunction(T)
     u = TrialFunction(T)
     A = inner(v * u)
-    S = tpmats_to_scipy_sparse(A)
-    assert len(S) == len(A)
+    assert isinstance(A, list)
+    A_tp = cast(list[TPMatrix], A)
+    S = tpmats_to_scipy_sparse(A_tp)
+    assert len(S) == len(A_tp)

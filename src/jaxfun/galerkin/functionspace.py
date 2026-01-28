@@ -23,9 +23,10 @@ Keys like "D", "N", "N2", "R", "W" correspond to Dirichlet, Neuman with first/se
 derivatives, Robin, weighted, etc., as interpreted by BoundaryConditions.
 """
 
-from jaxfun.basespace import BaseSpace
+from typing import overload
+
 from jaxfun.coordinates import CoordSys
-from jaxfun.utils.common import Domain
+from jaxfun.utils.common import Domain, FloatLike
 
 from .composite import (
     BCGeneric,
@@ -33,18 +34,46 @@ from .composite import (
     Composite,
     DirectSum,
 )
+from .Jacobi import Jacobi
+from .orthogonal import OrthogonalSpace
+
+
+@overload
+def FunctionSpace(
+    N: int,
+    space: type[OrthogonalSpace],
+    bcs: None = None,
+    domain: Domain | tuple[FloatLike, FloatLike] | None = None,
+    system: CoordSys | None = None,
+    name: str = "fun",
+    fun_str: str = "psi",
+    **kw,
+) -> OrthogonalSpace: ...
+
+
+@overload
+def FunctionSpace(
+    N: int,
+    space: type[OrthogonalSpace],
+    bcs: BoundaryConditions | dict,
+    domain: Domain | tuple[FloatLike, FloatLike] | None = None,
+    system: CoordSys | None = None,
+    name: str = "fun",
+    fun_str: str = "psi",
+    **kw,
+) -> DirectSum | Composite: ...
 
 
 def FunctionSpace(
     N: int,
-    space: BaseSpace,
-    bcs: BoundaryConditions | dict = None,
-    domain: Domain = None,
-    system: CoordSys = None,
+    space: type[OrthogonalSpace],
+    bcs: BoundaryConditions | dict | None = None,
+    domain: Domain | tuple[FloatLike, FloatLike] | None = None,
+    system: CoordSys | None = None,
     name: str = "fun",
     fun_str: str = "psi",
     **kw,
-) -> BaseSpace | DirectSum | Composite:
+) -> OrthogonalSpace | DirectSum | Composite:
     """Return a (possibly boundary-constrained) function space instance.
 
     If bcs is None:
@@ -89,8 +118,14 @@ def FunctionSpace(
         No boundary conditions:
             V = FunctionSpace(32, Chebyshev)
     """
+    if domain is None or isinstance(domain, Domain):
+        domain = domain
+    else:
+        domain = Domain(float(domain[0]), float(domain[1]))
+
     if bcs is not None:
         bcs = BoundaryConditions(bcs, domain=domain)
+        assert issubclass(space, Jacobi)
         C = Composite(
             N,
             space,

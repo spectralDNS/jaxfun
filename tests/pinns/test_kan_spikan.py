@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 import jax.numpy as jnp
 import pytest
 from flax import nnx
@@ -7,7 +9,6 @@ from jaxfun.pinns import module as mod, nnspaces as nns
 
 
 def test_kanlayer_forward_shape_and_params():
-    global x
     rngs = nnx.Rngs(0)
     system = CartCoordSys("N", (x,))
     layer = mod.KANLayer(
@@ -18,8 +19,8 @@ def test_kanlayer_forward_shape_and_params():
         rngs=rngs,
         hidden=True,
     )
-    x = jnp.linspace(-1.0, 1.0, 15).reshape(3, 5)
-    y = layer(x)
+    x_arr = jnp.linspace(-1.0, 1.0, 15).reshape(3, 5)
+    y = layer(x_arr)
     assert y.shape == (3, 3)
     assert hasattr(layer, "kernel")
     assert layer.kernel.value.shape[-1] == 3
@@ -123,6 +124,8 @@ def test_flaxfunction_with_kanmlpspace_hidden_list():
     y = f(x)
     assert y.shape == (4,)
     assert hasattr(f, "module")
+    assert isinstance(f.module, mod.KANMLPModule)
+    assert isinstance(V.hidden_size, list | tuple)
     assert f.module.layer_in.kernel.shape == (
         V.in_size,
         V.spectral_size,
@@ -132,7 +135,9 @@ def test_flaxfunction_with_kanmlpspace_hidden_list():
         V.hidden_size[0],
         V.hidden_size[0],
     )
-    assert f.module.layer_out.kernel.shape == (V.hidden_size[-1], 1)
+    layer_out = f.module.layer_out
+    assert hasattr(layer_out, "kernel")
+    assert cast(Any, layer_out).kernel.shape == (V.hidden_size[-1], 1)
 
 
 def test_flaxfunction_with_kanmlpspace_transient():
@@ -148,6 +153,8 @@ def test_flaxfunction_with_kanmlpspace_transient():
     x = jnp.zeros((4, V.in_size))
     y = f(x)
     assert y.shape == (4,)
+    assert isinstance(f.module, mod.KANMLPModule)
+    assert isinstance(V.hidden_size, list | tuple)
     assert f.module.layer_in.kernel.shape == (
         V.in_size,
         V.spectral_size,
@@ -157,7 +164,9 @@ def test_flaxfunction_with_kanmlpspace_transient():
         V.hidden_size[0],
         V.hidden_size[0],
     )
-    assert f.module.layer_out.kernel.shape == (V.hidden_size[-1], 1)
+    layer_out = f.module.layer_out
+    assert hasattr(layer_out, "kernel")
+    assert cast(Any, layer_out).kernel.shape == (V.hidden_size[-1], 1)
 
 
 def test_flaxfunction_with_kanmlpspace_hidden_int():
@@ -175,12 +184,15 @@ def test_flaxfunction_with_kanmlpspace_hidden_int():
     y = f(x)
     assert y.shape == (4,)
     assert hasattr(f, "module")
+    assert isinstance(f.module, mod.KANMLPModule)
     assert f.module.layer_in.kernel.shape == (
         V.in_size,
         V.spectral_size,
         V.hidden_size,
     )
-    assert f.module.layer_out.kernel.shape == (V.hidden_size, 1)
+    layer_out = f.module.layer_out
+    assert hasattr(layer_out, "kernel")
+    assert cast(Any, layer_out).kernel.shape == (V.hidden_size, 1)
 
 
 def test_flaxfunction_with_spikanspace_hidden_list():
@@ -197,6 +209,8 @@ def test_flaxfunction_with_spikanspace_hidden_list():
     x = jnp.zeros((3, V.in_size))
     y = f(x)
     assert y.shape == (3,)
+    assert isinstance(f.module, mod.sPIKANModule)
+    assert isinstance(V.hidden_size, list | tuple)
     assert f.module.layer_in.kernel.shape == (
         V.in_size,
         V.spectral_size,
@@ -207,7 +221,9 @@ def test_flaxfunction_with_spikanspace_hidden_list():
         V.spectral_size,
         V.hidden_size[0],
     )
-    assert f.module.layer_out.kernel.shape == (V.hidden_size[-1], V.spectral_size, 1)
+    layer_out = f.module.layer_out
+    assert hasattr(layer_out, "kernel")
+    assert cast(Any, layer_out).kernel.shape == (V.hidden_size[-1], V.spectral_size, 1)
 
 
 def test_flaxfunction_with_spikanspace_hidden_int():
@@ -224,12 +240,15 @@ def test_flaxfunction_with_spikanspace_hidden_int():
     x = jnp.zeros((3, V.in_size))
     y = f(x)
     assert y.shape == (3,)
+    assert isinstance(f.module, mod.sPIKANModule)
     assert f.module.layer_in.kernel.shape == (
         V.in_size,
         V.spectral_size,
         V.hidden_size,
     )
-    assert f.module.layer_out.kernel.shape == (V.hidden_size, V.spectral_size, 1)
+    layer_out = f.module.layer_out
+    assert hasattr(layer_out, "kernel")
+    assert cast(Any, layer_out).kernel.shape == (V.hidden_size, V.spectral_size, 1)
 
 
 def test_comp_with_kan_and_spikan_spaces():

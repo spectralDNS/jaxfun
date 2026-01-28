@@ -1,4 +1,3 @@
-from functools import partial
 from typing import NamedTuple
 
 import jax
@@ -509,7 +508,7 @@ def GLPairS(n: int, k: int) -> QuadPair:
 
 
 # Returns tabulated theta and weight values: valid for l <= 100
-@partial(jax.jit, static_argnums=0)
+@jax.jit(static_argnums=0)
 def GLPairTabulated(n: int, k: int) -> QuadPair:
     if n % 2 == 1:
         n2: int = (n - 1) // 2
@@ -545,7 +544,7 @@ def GLPairTabulated(n: int, k: int) -> QuadPair:
 
 
 # This function computes the kth GL pair of an n-point rule
-@partial(jax.jit, static_argnames=["n"])
+@jax.jit(static_argnames=["n"])
 def GLPair(n: int, k: int) -> QuadPair:
     def getpair(m: int, s: int) -> QuadPair:
         Q: QuadPair = GLPairS(m, m - s + 1)
@@ -559,7 +558,7 @@ def GLPair(n: int, k: int) -> QuadPair:
     )
 
 
-@partial(jax.jit, static_argnames=["N"])
+@jax.jit(static_argnames=["N"])
 def leggauss(N: int) -> Array:
     f = jax.vmap(lambda i: GLPair(N, N - i).quad())(jnp.arange(N))
     # Leads to very long compilation time, huge memory and recompilation every new N.

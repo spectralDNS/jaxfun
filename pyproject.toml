@@ -52,6 +52,9 @@ exclude_also = [
   "@(abc\\.)?abstractmethod",
 ]
 
+[tool.ty.src]
+exclude = [ "sandbox", "examples/notebooks", "**/*.ipynb" ]
+
 [dependency-groups]
 dev = [
   "ipython>=8.37.0",

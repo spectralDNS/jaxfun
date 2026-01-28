@@ -944,14 +944,14 @@ class Source(Expr):
 
 
 class Constant(sp.Symbol):
-    val: Number
+    val: sp.Expr | Number
 
-    def __new__(cls, name: str, val: Number | int | float, **assumptions) -> Self:
+    def __new__(cls, name: str, val: sp.Expr | Number | float, **assumptions) -> Self:
         obj = super().__new__(cls, name, **assumptions)
         obj.val = val
         return obj
 
-    def doit(self, **hints) -> Number:
+    def doit(self, **hints) -> sp.Expr | Number:
         return self.val
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import partial
 from numbers import Number
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import jax
 import jax.numpy as jnp
@@ -42,7 +42,7 @@ def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
     return jax.vmap(fun, in_axes=0, out_axes=0) if k > 0 else fun  # type: ignore[return-value]
 
 
-def get_flaxfunction_args(a: sp.Expr) -> tuple[sp.Symbol | BaseScalar, ...] | None:
+def get_flaxfunction_args(a: sp.Basic) -> tuple[sp.Symbol | BaseScalar, ...] | None:
     for p in sp.core.traversal.iterargs(a):
         if getattr(p, "argument", -1) == 2:
             return p.args
@@ -50,7 +50,7 @@ def get_flaxfunction_args(a: sp.Expr) -> tuple[sp.Symbol | BaseScalar, ...] | No
 
 
 def get_flaxfunctions(
-    a: sp.Expr,
+    a: sp.Basic,
 ) -> set[FlaxFunction]:
     flax_found = set()
     for p in sp.core.traversal.iterargs(a):
@@ -60,7 +60,7 @@ def get_flaxfunctions(
 
 
 def get_testfunction(
-    a: sp.Expr,
+    a: sp.Basic,
 ) -> TestFunction | None:
     for p in sp.core.traversal.iterargs(a):
         if getattr(p, "argument", -1) == 0:
@@ -229,8 +229,8 @@ class Residual:
     def __call__(
         self,
         x: Array,
-        target: Array,
-        module: nnx.Module,
+        target: Array | float | int,
+        module: nnx.Module | None,
         Js: dict[tuple[int, int, int], Array] | None = None,
         x_id: int | None = None,
     ) -> Array:
@@ -504,11 +504,12 @@ class ResidualVPINN(Residual):
     def loss(
         self,
         x: Array,
-        target: Array,
-        module: nnx.Module,
+        target: Array | float | int,
+        module: nnx.Module | None,
         Js: dict[tuple[int, int, int], Array] | None = None,
         x_id: int | None = None,
     ) -> Array:
+        target = jnp.atleast_1d(jnp.array(target))
         # rk = self(x, target, module, Js=Js, x_id=x_id)
         # return (rk.sum(axis=0)**2).mean() # slower
         return (
@@ -530,11 +531,12 @@ class ResidualVPINN(Residual):
     def __call__(
         self,
         x: Array,
-        target: Array,
-        module: nnx.Module,
+        target: Array | float | int,
+        module: nnx.Module | None,
         Js: dict[tuple[int, int, int], Array] | None = None,
         x_id: int | None = None,
     ) -> Array:
+        target = jnp.atleast_1d(jnp.array(target))
         # Return N x K array of residuals for all points N and test functions K
         return jnp.array(
             sum(
@@ -1012,11 +1014,17 @@ class Loss:
         )
 
 
-def get_fn(
-    f: sp.Expr, s: tuple[BaseScalar | sp.Symbol, ...] | None
-) -> Callable[
-    [Array, nnx.Module, dict[tuple[int, int, int], Array] | None, int | None], Array
-]:
+class ResidualFn(Protocol):
+    def __call__(
+        self,
+        x: Array,
+        mod: nnx.Module | None = None,
+        Js: dict[tuple[int, int, int], Array] | None = None,
+        x_id: int | None = None,
+    ) -> Array: ...
+
+
+def get_fn(f: sp.Expr, s: tuple[BaseScalar | sp.Symbol, ...] | None) -> ResidualFn:
     """Return Sympy Expr as function evaluated by points and gradients
 
     Args:
@@ -1033,10 +1041,10 @@ def get_fn(
         # Coefficient independent of basis function
         if len(f.free_symbols) > 0:
             fun = lambdify(s, f)
-            return lambda x, mod, Js=None, x_id=None, fun=fun: fun(*x.T)
+            return lambda x, mod=None, Js=None, x_id=None, fun=fun: fun(*x.T)
         else:
             arr = jnp.array(float(f) if f.is_real else complex(f))
-            return lambda x, mod, Js=None, x_id=None, arr=arr: arr
+            return lambda x, mod=None, Js=None, x_id=None, arr=arr: arr
 
     if isinstance(f, sp.Mul):
         # Multiplication of terms that either contain the basis function or not
@@ -1055,30 +1063,27 @@ def get_fn(
 
         def res_fun(
             x: Array,
-            mod: nnx.Module,
+            mod: nnx.Module | None = None,
             Js: dict[tuple[int, int, int], Array] | None = None,
             x_id: int | None = None,
-            s: tuple[BaseScalar | sp.Symbol, ...] | None = s,
-            f: list[sp.Expr] = f_flax,
         ) -> Array:
             return fun(x, mod, Js, x_id) * jnp.prod(
-                jnp.array([get_fn(fi, s)(x, mod, Js, x_id) for fi in f]), axis=0
+                jnp.array([get_fn(fi, s)(x, mod, Js, x_id) for fi in f_flax]), axis=0
             )
 
         return res_fun
 
     elif isinstance(f, sp.Pow):
+        f0: sp.Expr = f.args[0]
+        p0: int = int(f.args[1])
 
         def res_fun(
             x: Array,
-            mod: nnx.Module,
+            mod: nnx.Module | None = None,
             Js: dict[tuple[int, int, int], Array] | None = None,
             x_id: int | None = None,
-            s: tuple[BaseScalar | sp.Symbol, ...] | None = s,
-            f: sp.Expr = f.args[0],
-            p: int = int(f.args[1]),
         ) -> Array:
-            return get_fn(f, s)(x, mod, Js, x_id) ** p
+            return get_fn(f0, s)(x, mod, Js, x_id) ** p0
 
         return res_fun
 

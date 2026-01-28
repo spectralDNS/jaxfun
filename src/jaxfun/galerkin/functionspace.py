@@ -23,10 +23,9 @@ Keys like "D", "N", "N2", "R", "W" correspond to Dirichlet, Neuman with first/se
 derivatives, Robin, weighted, etc., as interpreted by BoundaryConditions.
 """
 
-from jaxfun.basespace import BaseSpace
+from typing import overload
+
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.Jacobi import Jacobi
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.utils.common import Domain
 
 from .composite import (
@@ -35,18 +34,46 @@ from .composite import (
     Composite,
     DirectSum,
 )
+from .Jacobi import Jacobi
+from .orthogonal import OrthogonalSpace
+
+
+@overload
+def FunctionSpace(
+    N: int,
+    space: type[OrthogonalSpace],
+    bcs: None = None,
+    domain: Domain | tuple[float, float] | None = None,
+    system: CoordSys | None = None,
+    name: str = "fun",
+    fun_str: str = "psi",
+    **kw,
+) -> OrthogonalSpace: ...
+
+
+@overload
+def FunctionSpace(
+    N: int,
+    space: type[OrthogonalSpace],
+    bcs: BoundaryConditions | dict,
+    domain: Domain | tuple[float, float] | None = None,
+    system: CoordSys | None = None,
+    name: str = "fun",
+    fun_str: str = "psi",
+    **kw,
+) -> DirectSum | Composite: ...
 
 
 def FunctionSpace(
     N: int,
     space: type[OrthogonalSpace],
     bcs: BoundaryConditions | dict | None = None,
-    domain: Domain | None = None,
+    domain: Domain | tuple[float, float] | None = None,
     system: CoordSys | None = None,
     name: str = "fun",
     fun_str: str = "psi",
     **kw,
-) -> BaseSpace | DirectSum | Composite:
+) -> OrthogonalSpace | DirectSum | Composite:
     """Return a (possibly boundary-constrained) function space instance.
 
     If bcs is None:
@@ -91,6 +118,9 @@ def FunctionSpace(
         No boundary conditions:
             V = FunctionSpace(32, Chebyshev)
     """
+    domain = domain if domain is None or isinstance(domain, Domain) else Domain(*domain)
+    # domain: Domain | None
+
     if bcs is not None:
         bcs = BoundaryConditions(bcs, domain=domain)
         assert issubclass(space, Jacobi)
@@ -119,7 +149,7 @@ def FunctionSpace(
         return DirectSum(C, B)
     return space(
         N,
-        domain=domain,  # ty:ignore[invalid-argument-type]
+        domain=domain,
         system=system,
         name=name,
         fun_str=fun_str,

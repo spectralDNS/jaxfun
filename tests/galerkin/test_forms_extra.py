@@ -19,7 +19,7 @@ def test_split_coeff_add_mul_jaxf_and_numbers():
     assert len(parts["bilinear"]) == 2 and len(parts["linear"]) == 0
     # split_coeff only supports numeric/Jaxf combos without raw JAXFunction
     # symbolic additions
-    sc = split_coeff(3)
+    sc = split_coeff(sp.Integer(3))
     assert "bilinear" in sc and sc["bilinear"] == 3.0
 
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from functools import wraps
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
 
 import jax
 import jax.numpy as jnp
@@ -83,22 +83,22 @@ def ulp(x: float | Array) -> Array:
 
 
 def diff(
-    fun: Callable[[float, Array], float], k: int = 1
-) -> Callable[[Array, Array], Array]:
+    fun: Callable[[Array, Any], Array], k: int = 1
+) -> Callable[[Array, Any], Array]:
     for _ in range(k):
         fun = jax.grad(fun)
     return jax.jit(jax.vmap(fun, in_axes=(0, None)))
 
 
 def diffx(
-    fun: Callable[[float, int], float], k: int = 1
-) -> Callable[[Array, int], Array]:
+    fun: Callable[[Array, Any], Array], k: int = 1
+) -> Callable[[Array, Any], Array]:
     for _ in range(k):
         fun = jax.grad(fun)
     return jax.vmap(fun, in_axes=(0, None))
 
 
-def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
+def jacn(fun: Callable[[Array], Array], k: int = 1) -> Callable[[Array], Array]:
     for _ in range(k):
         fun = jax.jacfwd(fun)  # if i % 2 else jax.jacrev(fun)
     return jax.vmap(fun, in_axes=0, out_axes=0)
@@ -125,6 +125,10 @@ def tosparse(a: Array, tol: int = 100) -> sparse.BCOO:
     return sparse.BCOO.from_scipy_sparse(scipy_sparse.csr_matrix(a0))
 
 
+class ArrayFn(Protocol):
+    def __call__(self, *args: Array) -> Array: ...
+
+
 def lambdify(
     args: sp.Basic | tuple[Symbol | BaseScalar, ...] | sp.Tuple | None,
     expr: Expr | sp.Basic,
@@ -134,7 +138,7 @@ def lambdify(
     dummify: bool = False,
     cse: bool = False,
     doctring_limit: int = 1000,
-) -> Callable[[Iterable[Array]], Array]:
+) -> ArrayFn:
     modules_default = ["jax", {"Ynm": Ynm}]
     modules = modules_default if modules is None else [modules] + modules_default
     return sp.lambdify(

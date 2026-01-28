@@ -17,6 +17,8 @@ from jaxfun.pinns.distributed import process_allmean
 
 from .loss import Loss
 
+LossFn = Loss | Callable[[nnx.Module], Array]
+
 
 class NamedOptimizer[M: nnx.Module](nnx.Optimizer[M]):
     """Wrapper optimizer that stores a human-readable name and module reference.
@@ -343,7 +345,7 @@ def GaussNewton(
 
 
 def train(
-    loss_fn: Loss, allreduce_gradients_and_loss: bool = False
+    loss_fn: LossFn, allreduce_gradients_and_loss: bool = False
 ) -> Callable[[nnx.Module, nnx.Optimizer, Array, tuple[Array], tuple[Array]], Array]:
     """Build a JIT-compiled training step for a loss function.
 
@@ -356,6 +358,29 @@ def train(
         A function (module, optimizer, gw, x, target) -> loss suitable for epoch loops.
     """
 
+    if isinstance(loss_fn, Loss):
+
+        def loss_with_gw(
+            m: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+        ) -> Array:
+            return loss_fn.loss_with_gw(m, gw, xs, targets)
+
+        def JTJ_with_gw(
+            m: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+        ) -> Array:
+            return loss_fn.JTJ(m, gw, xs, targets)
+    else:
+
+        def loss_with_gw(
+            m: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+        ) -> Array:
+            return loss_fn(m)
+
+        def JTJ_with_gw(
+            m: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+        ) -> Array:
+            return jnp.array(0.0)
+
     @nnx.jit
     def train_step(
         module: nnx.Module,
@@ -365,10 +390,10 @@ def train(
         targets: tuple[Array],
     ) -> Array:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, gw, xs, targets)
+            return loss_with_gw(m, gw, xs, targets)
 
         def JTJ(m: nnx.Module) -> Array:
-            return loss_fn.JTJ(m, gw, xs, targets)
+            return JTJ_with_gw(m, gw, xs, targets)
 
         gd = nnx.graphdef(module)
         loss, gradients = nnx.value_and_grad(value_fn)(module)
@@ -390,7 +415,7 @@ def train(
         module: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
     ) -> tuple[Array, PyTree]:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, gw, xs, targets)
+            return loss_with_gw(m, gw, xs, targets)
 
         return nnx.value_and_grad(value_fn)(module)
 
@@ -405,11 +430,11 @@ def train(
         targets: tuple[Array],
     ) -> None:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, gw, xs, targets)
+            return loss_with_gw(m, gw, xs, targets)
 
         gd = nnx.graphdef(module)
         value_fn_state = lambda state: value_fn(nnx.merge(gd, state))
-        GN_loss_fn = lambda state: loss_fn.JTJ(nnx.merge(gd, state), gw, xs, targets)
+        GN_loss_fn = lambda state: JTJ_with_gw(nnx.merge(gd, state), gw, xs, targets)
         optimizer.update(
             module,
             gradients,

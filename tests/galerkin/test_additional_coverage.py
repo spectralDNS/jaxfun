@@ -1,3 +1,5 @@
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -51,14 +53,15 @@ def test_inner_return_all_items_and_sparse_paths():
     assert isinstance(As, BCOO)
     # Pure linear form only vector return
     b = inner(sp.sin(x) * v)
-    assert b.shape[0] == C.N
+    assert cast(jax.Array, b).shape[0] == C.N
     # 2D sparse path (matrices become sparse individually)
     T = TensorProduct(Chebyshev.Chebyshev(4), Chebyshev.Chebyshev(4))
     v2 = TestFunction(T)
     u2 = TrialFunction(T)
     A2 = inner(v2 * u2, sparse=True)
+    assert isinstance(A2, list)
     # Expect list of TPMatrix with sparse mats
-    for tp in A2:
+    for tp in cast(list, A2):
         from jax.experimental.sparse import BCOO
 
         assert all(isinstance(m, BCOO) for m in tp.mats)

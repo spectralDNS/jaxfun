@@ -55,7 +55,7 @@ class OrthogonalSpace(BaseSpace):
         self,
         N: int,
         *,
-        domain: Domain,
+        domain: Domain | None = None,
         system: CoordSys | None = None,
         name: str = "OrthogonalSpace",
         fun_str: str = "psi",
@@ -63,6 +63,8 @@ class OrthogonalSpace(BaseSpace):
     ) -> None:
         self.N = N
         self._num_quad_points = N
+        if domain is None:
+            domain = self.reference_domain
         self._domain = Domain(*domain)
         self.bcs: BoundaryConditions | None = None
         self.orthogonal = self

@@ -134,8 +134,8 @@ def test_unitline_points_and_weights():
 
     assert w[0] == 1
     assert w[3] == 1
-    assert w[1].shape == (N - 2,)
-    assert w[2].shape == (N - 2,)
+    assert jnp.asarray(w[1]).shape == (N - 2,)
+    assert jnp.asarray(w[2]).shape == (N - 2,)
     assert jnp.allclose(w[2], (jnp.pi / (N - 2)) * jnp.ones(N - 2))
 
 
@@ -174,23 +174,23 @@ def test_unitsquare_weights_inside_and_boundary():
 
     assert wi[0] == 1
     assert wi[1] == 1
-    assert wi[2].shape == (Nx * Ny,)
-    assert wi[3].shape == (Nx * Ny,)
+    assert jnp.asarray(wi[2]).shape == (Nx * Ny,)
+    assert jnp.asarray(wi[3]).shape == (Nx * Ny,)
 
     wi = [us.get_weights(Nx, Ny, domain="inside", kind=[kind] * 2) for kind in kinds]
 
     assert wi[0] == 1
     assert wi[1] == 1
-    assert wi[2].shape == ((Nx - 2) * (Ny - 2),)
-    assert wi[3].shape == ((Nx - 2) * (Ny - 2),)
+    assert jnp.asarray(wi[2]).shape == ((Nx - 2) * (Ny - 2),)
+    assert jnp.asarray(wi[3]).shape == ((Nx - 2) * (Ny - 2),)
 
     # boundary weights
     wi = [us.get_weights(Nx, Ny, domain="boundary", kind=[kind] * 2) for kind in kinds]
 
     assert wi[0] == 1
     assert wi[1] == 1
-    assert wi[2].shape == (2 * Nx + 2 * Ny - 4,)
-    assert wi[3].shape == (2 * Nx + 2 * Ny - 4,)
+    assert jnp.asarray(wi[2]).shape == (2 * Nx + 2 * Ny - 4,)
+    assert jnp.asarray(wi[3]).shape == (2 * Nx + 2 * Ny - 4,)
 
 
 def test_rectangle_maps_unitsquare():

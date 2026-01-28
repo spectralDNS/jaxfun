@@ -16,7 +16,7 @@ class DummyModule(nnx.Module):
 def test_adam_no_decay_name_and_module():
     m = DummyModule()
     opt = opt_mod.adam(m, learning_rate=1e-3)
-    assert isinstance(opt, nnx.Optimizer)
+    assert isinstance(opt, opt_mod.NamedOptimizer)
     assert opt.module is m
     assert opt.name == "Adam(lr=0.001)"
 
@@ -25,7 +25,7 @@ def test_adam_with_decay_and_end_lr_default_and_custom():
     m = DummyModule()
     # default end lr = lr/10
     opt = opt_mod.adam(m, learning_rate=1e-3, decay_steps=100)
-    assert isinstance(opt, nnx.Optimizer)
+    assert isinstance(opt, opt_mod.NamedOptimizer)
     assert opt.name == "Adam(lr=0.001->0.0001 in 100 steps)"
 
     # custom end lr
@@ -40,7 +40,7 @@ def test_adam_with_decay_and_end_lr_default_and_custom():
 def test_soap_no_decay_and_with_decay():
     m = DummyModule()
     s1 = opt_mod.soap(m, learning_rate=1e-3)
-    assert isinstance(s1, nnx.Optimizer)
+    assert isinstance(s1, opt_mod.NamedOptimizer)
     assert s1.name == "Soap(lr=0.001)"
     assert s1.module is m
 
@@ -52,7 +52,7 @@ def test_soap_no_decay_and_with_decay():
 def test_lbfgs_name_and_memory_size():
     m = DummyModule()
     opt = opt_mod.lbfgs(m, memory_size=32, max_linesearch_steps=17)
-    assert isinstance(opt, nnx.Optimizer)
+    assert isinstance(opt, opt_mod.NamedOptimizer)
     assert opt.module is m
     assert opt.name == "LBFGS(memory_size=32)"
 
@@ -60,17 +60,19 @@ def test_lbfgs_name_and_memory_size():
 def test_gaussnewton_uses_fake_hess_and_names():
     m = DummyModule()
     g1 = opt_mod.GaussNewton(m, use_lstsq=True, cg_max_iter=5, max_linesearch_steps=7)
-    assert isinstance(g1, nnx.Optimizer)
+    assert isinstance(g1, opt_mod.NamedOptimizer)
     assert g1.module is m
     assert g1.name == "Hessian(lstsq=True)"
 
     g2 = opt_mod.GaussNewton(m, use_lstsq=False)
+    assert isinstance(g2, opt_mod.NamedOptimizer)
     assert g2.name == "Hessian(lstsq=False)"
 
 
 def test_train_returns_callable():
     # simple differentiable loss: (w - 2)^2
     def loss_fn(model: nnx.Module):
+        assert isinstance(model, DummyModule)
         return (model.w - 2.0) ** 2
 
     step = opt_mod.train(loss_fn)

@@ -13,7 +13,7 @@ from __future__ import annotations
 import collections
 from itertools import product
 from numbers import Number
-from typing import Any, Protocol, Self, cast
+from typing import Any, Literal, Protocol, Self, cast, overload
 
 import numpy as np
 import sympy as sp
@@ -146,6 +146,14 @@ def outer(v1: Vector, v2: Vector) -> Dyadic:
     ]
 
     return DyadicAdd(*args)
+
+
+@overload
+def cross(v1: BaseVector, v2: BaseVector) -> Vector: ...
+
+
+@overload
+def cross(v1: Vector, v2: Vector) -> Vector | Cross: ...
 
 
 def cross(v1: Vector, v2: Vector) -> Vector | Cross:
@@ -381,7 +389,24 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> BasisDependent | Expr | Dot
     return Dot(t1, t2)
 
 
-def divergence(v: Vector | Dyadic, doit: bool = True) -> Vector | Expr | Basic | Div:
+@overload
+def divergence(
+    v: Vector | Dyadic | Cross | sympy_Curl | Gradient | BasisDependent,
+    doit: Literal[False],
+) -> Div: ...
+
+
+@overload
+def divergence(
+    v: Vector | Dyadic | Cross | sympy_Curl | Gradient | BasisDependent,
+    doit: Literal[True] = True,
+) -> Vector | Expr: ...
+
+
+def divergence(
+    v: Vector | Dyadic | Cross | sympy_Curl | Gradient | BasisDependent,
+    doit: bool = True,
+) -> Vector | Expr | Basic | Div:
     """Return divergence of a Vector or Dyadic field
 
         div(v) = ∂v/∂q^j·b^j
@@ -508,8 +533,24 @@ def divergence(v: Vector | Dyadic, doit: bool = True) -> Vector | Expr | Basic |
             raise Div(v)  # type: ignore[invalid-raise]
 
 
+@overload
 def gradient(
-    field: Expr, doit: bool = True, transpose: bool = False
+    field: Expr | Vector,
+    doit: Literal[False],
+    transpose: bool = False,
+) -> Grad: ...
+
+
+@overload
+def gradient(
+    field: Expr | Vector,
+    doit: Literal[True] = True,
+    transpose: bool = False,
+) -> BasisDependent: ...
+
+
+def gradient(
+    field: Expr | Vector, doit: bool = True, transpose: bool = False
 ) -> BasisDependent | Grad:
     """Return gradient of a scalar or (optionally transposed) gradient of a vector.
 
@@ -905,7 +946,7 @@ class Source(Expr):
 class Constant(sp.Symbol):
     val: Number
 
-    def __new__(cls, name: str, val: Number, **assumptions) -> Self:
+    def __new__(cls, name: str, val: Number | int | float, **assumptions) -> Self:
         obj = super().__new__(cls, name, **assumptions)
         obj.val = val
         return obj

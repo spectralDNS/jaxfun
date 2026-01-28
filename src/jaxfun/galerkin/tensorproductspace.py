@@ -15,11 +15,11 @@ from scipy import sparse as scipy_sparse
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.utils.common import eliminate_near_zeros, jit_vmap, lambdify
 
 from .composite import BCGeneric, BoundaryConditions, Composite, DirectSum
 from .Fourier import Fourier
+from .orthogonal import OrthogonalSpace
 
 tensor_product_symbol = "\u2297"
 multiplication_sign = "\u00d7"
@@ -275,7 +275,7 @@ class TensorProductSpace:
             c = jnp.einsum(path, *C, c)
         return c
 
-    def get_padded(self, N: tuple[int]) -> TensorProductSpace:
+    def get_padded(self, N: tuple[int, ...]) -> TensorProductSpace:
         """Return new tensor space with each axis padded/truncated to N."""
         paddedspaces = [
             s.get_padded(n) for s, n in zip(self.basespaces, N, strict=False)
@@ -285,7 +285,7 @@ class TensorProductSpace:
         )
 
     def backward(
-        self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
+        self, c: Array, kind: str = "quadrature", N: tuple[int, ...] | None = None
     ) -> Array:
         """Transform coefficients -> samples (optional padding).
 
@@ -478,7 +478,7 @@ class VectorTensorProductSpace:
 
 def TensorProduct(
     *basespaces: BaseSpace | DirectSum, system: CoordSys | None = None, name: str = "T"
-) -> TensorProductSpace | list[TensorProductSpace]:
+) -> TensorProductSpace:
     """Factory returning TensorProductSpace or DirectSumTPS.
 
     Handles:
@@ -686,7 +686,7 @@ class DirectSumTPS(TensorProductSpace):
         return self.tpspaces[(a0, a1)]
 
     def backward(
-        self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
+        self, c: Array, kind: str = "quadrature", N: tuple[int, ...] | None = None
     ) -> Array:
         """Evaluate total (homogeneous + lifting) backward transform."""
         a = []

@@ -14,7 +14,7 @@ from collections import UserDict
 from collections.abc import Callable, Iterable, Sequence
 from itertools import product
 from types import MethodType
-from typing import Any, Self, TypeGuard
+from typing import Any, Literal, Self, TypeGuard, overload
 
 import numpy as np
 import sympy as sp
@@ -74,9 +74,9 @@ z: sp.Symbol
 
 
 def CartCoordSys(
-    name: str, s: sp.Symbol | tuple[sp.Symbol, ...] | sp.Tuple
+    name: str | int, s: sp.Symbol | tuple[sp.Symbol, ...] | sp.Tuple
 ) -> CoordSys:
-    return CoordSys(name, sp.Lambda(s, s))
+    return CoordSys(str(name), sp.Lambda(s, s))
 
 
 class defaultdict(UserDict):
@@ -114,6 +114,8 @@ class BaseTime(Symbol):
         # The _id is used for equating purposes, and for hashing
         obj._id = (index,)
         return obj
+
+    _id: tuple[int, ...]
 
     is_commutative = True
     is_symbol = True
@@ -457,6 +459,26 @@ class CoordSys(Basic):
     _covariant_basis_map: dict[int, BaseVector]
     _covariant_basis_dyadic_map: dict[tuple[int, int], BaseDyadic]
 
+    # NOTE: Many coordinate and basis attributes are set dynamically during
+    # construction (e.g. CartCoordSys adds x/y/z, get_CoordSys adds r/theta/zz and
+    # corresponding basis vectors). We annotate common ones here for static type
+    # checkers without changing runtime behavior.
+    t: BaseScalar
+    x: BaseScalar
+    y: BaseScalar
+    z: BaseScalar
+    r: BaseScalar
+    theta: BaseScalar
+    zz: BaseScalar
+
+    i: BaseVector
+    j: BaseVector
+    k: BaseVector
+    b_r: BaseVector
+    b_theta: BaseVector
+    b_z: BaseVector
+    b_zz: BaseVector
+
     def __new__(
         cls,
         name: str,
@@ -645,6 +667,12 @@ class CoordSys(Basic):
 
     def get_cartesian_basis_vectors(self) -> Tuple:
         return self._parent.base_vectors() if self._parent else self.base_vectors()
+
+    @overload
+    def position_vector(self, as_Vector: Literal[False] = False) -> Tuple: ...
+
+    @overload
+    def position_vector(self, as_Vector: Literal[True]) -> Vector: ...
 
     def position_vector(self, as_Vector: bool = False) -> Tuple | Vector:
         r_out = self.refine_replace(self.rv)

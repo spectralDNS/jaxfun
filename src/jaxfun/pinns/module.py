@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from collections.abc import Callable
+from collections.abc import Sequence
 from typing import Any, NotRequired, Self, TypedDict, cast
 
 import jax
@@ -27,6 +27,7 @@ from jaxfun.galerkin.tensorproductspace import (
     TensorProductSpace,
     VectorTensorProductSpace,
 )
+from jaxfun.typing import Activation
 from jaxfun.utils.common import Domain, lambdify
 
 from .embeddings import Embedding
@@ -413,7 +414,7 @@ class PIModifiedBottleneck(nnx.Module):
         hidden_dim: int,
         output_dim: int,
         nonlinearity: float,
-        act_fun: Callable[[Array], Array] = nnx.tanh,
+        act_fun: Activation = nnx.tanh,
         *,
         rngs: nnx.Rngs,
         name: str = "PIModifiedBottleneck",
@@ -482,11 +483,11 @@ class PirateNet(BaseModule):
         rngs: nnx.Rngs,
         name: str = "PirateNet",
     ) -> None:
-        hidden_size = (
-            V.hidden_size
-            if isinstance(V.hidden_size, list | tuple)
-            else [V.hidden_size]
-        )
+        hidden_size: list[int]
+        if isinstance(V.hidden_size, int):
+            hidden_size = [V.hidden_size]
+        else:
+            hidden_size = list(cast(Sequence[int], V.hidden_size))
         # TODO: Need a smarter way to handle the input size at each step
         self.embedder = Embedding(
             periodicity=V.periodicity, fourier_emb=V.fourier_emb, rngs=rngs
@@ -868,7 +869,9 @@ class FlaxFunction(Function):
         rngs: RNG container used for module initialization.
     """
 
-    functionspace: NNSpace
+    functionspace: (
+        NNSpace | OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+    )
     t: BaseTime
     module: BaseModule
     name: str
@@ -878,7 +881,7 @@ class FlaxFunction(Function):
 
     def __new__(
         cls: type[Self],
-        V: NNSpace,
+        V: NNSpace | OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace,
         name: str,
         *,
         module: BaseModule | None = None,
@@ -1030,7 +1033,7 @@ class FlaxFunction(Function):
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
 
-    def __call__(self, x):
+    def __call__(self, x: Array) -> Array:
         """Evaluate underlying module; flatten scalar output if rank 0."""
         y = self.module(x)
         if self.rank == 0:

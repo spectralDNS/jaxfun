@@ -10,6 +10,7 @@ from jaxfun.galerkin import (
     Legendre,
     TensorProduct,
 )
+from jaxfun.galerkin.composite import Composite
 from jaxfun.galerkin.inner import project, project1D
 from jaxfun.utils.common import ulp
 
@@ -18,7 +19,9 @@ from jaxfun.utils.common import ulp
     "space", (Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi)
 )
 def test_forward_backward(
-    space: Legendre.Legendre | Chebyshev.Chebyshev | Fourier.Fourier | Chebyshev.Jacobi,
+    space: type[
+        Legendre.Legendre | Chebyshev.Chebyshev | Fourier.Fourier | Chebyshev.Jacobi
+    ],
 ) -> None:
     D = space(8)
     x = D.system.x
@@ -32,9 +35,10 @@ def test_forward_backward(
     "space", (Legendre.Legendre, Chebyshev.Chebyshev, Jacobi.Jacobi)
 )
 def test_forward_backward_composite(
-    space: Legendre.Legendre | Chebyshev.Chebyshev | Chebyshev.Jacobi,
+    space: type[Legendre.Legendre | Chebyshev.Chebyshev | Chebyshev.Jacobi],
 ) -> None:
     D = FunctionSpace(8, space, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    assert isinstance(D, Composite)
     x = D.system.x
     ue = project1D(sp.sin(x * 2 * sp.pi), D)
     uj = D.backward(ue)
@@ -46,7 +50,9 @@ def test_forward_backward_composite(
     "space", (Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi)
 )
 def test_forward_backward_2d(
-    space: Legendre.Legendre | Chebyshev.Chebyshev | Fourier.Fourier | Chebyshev.Jacobi,
+    space: type[
+        Legendre.Legendre | Chebyshev.Chebyshev | Fourier.Fourier | Chebyshev.Jacobi
+    ],
 ) -> None:
     D = space(8)
     T = TensorProduct(D, D)

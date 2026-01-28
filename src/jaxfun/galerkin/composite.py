@@ -13,11 +13,12 @@ from scipy import sparse as scipy_sparse
 from sympy import Number
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.Chebyshev import Chebyshev
-from jaxfun.galerkin.Jacobi import Jacobi
-from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.utils.common import Domain, matmat, n
+
+from .Chebyshev import Chebyshev
+from .Jacobi import Jacobi
+from .Legendre import Legendre
+from .orthogonal import OrthogonalSpace
 
 direct_sum_symbol = "\u2295"
 
@@ -602,7 +603,7 @@ if __name__ == "__main__":
     # Galerkin (dense)
     u = TrialFunction(C, name="u")
     v = TestFunction(C, name="v")
-    x = C.system.x  # ty:ignore[possibly-missing-attribute]
+    x = C.system.x
     D = inner(v * sp.diff(u, x, 2), sparse=True, sparse_tol=1000)
 
     # Petrov-Galerkin method (https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)

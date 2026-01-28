@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Sequence
 from functools import partial
 
 import jax.numpy as jnp
@@ -13,7 +13,7 @@ from jaxfun.coordinates import (
 )
 from jaxfun.galerkin import Chebyshev
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
-from jaxfun.typing import Array
+from jaxfun.typing import Activation
 from jaxfun.utils.common import Domain
 
 
@@ -102,7 +102,7 @@ class MLPSpace(NNSpace):
         rank: int = 0,
         system: CoordSys | None = None,
         transient: bool = False,
-        act_fun: Callable[[Array], Array] = nnx.tanh,
+        act_fun: Activation = nnx.tanh,
         weight_factorization: bool = False,
         *,
         name: str,
@@ -143,14 +143,14 @@ class PirateSpace(NNSpace):
 
     def __init__(
         self,
-        hidden_size: list[int] | int,
+        hidden_size: Sequence[int] | int,
         dims: int = 1,
         rank: int = 0,
         system: CoordSys | None = None,
         name: str = "PirateNet",
         transient: bool = False,
-        act_fun: Callable[[Array], Array] = nnx.tanh,
-        act_fun_hidden: Callable[[Array], Array] = nnx.tanh,
+        act_fun: Activation = nnx.tanh,
+        act_fun_hidden: Activation = nnx.tanh,
         # PirateNet specific parameters
         nonlinearity: float = 0.0,
         periodicity: dict | None = None,
@@ -207,7 +207,7 @@ class KANMLPSpace(NNSpace):
         system: CoordSys | None = None,
         name: str = "KANMLP",
         transient: bool = False,
-        act_fun: Callable[[Array], Array] = nnx.tanh,
+        act_fun: Activation = nnx.tanh,
         basespace: type[OrthogonalSpace] = Chebyshev.Chebyshev,
         domains: list[tuple[float, float]] | None = None,
     ) -> None:
@@ -263,7 +263,7 @@ class sPIKANSpace(NNSpace):
         system: CoordSys | None = None,
         name: str = "sPIKAN",
         transient: bool = False,
-        act_fun: Callable[[Array], Array] = nnx.tanh,
+        act_fun: Activation = nnx.tanh,
         basespace: type[OrthogonalSpace] = Chebyshev.Chebyshev,
         domains: list[Domain] | None = None,
     ) -> None:

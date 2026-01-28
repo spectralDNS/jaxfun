@@ -1,15 +1,23 @@
+from collections.abc import Callable
 from enum import StrEnum
 from numbers import Number
-from typing import Literal
+from typing import Any, Literal, Protocol
 
 import sympy as sp
 from jax import Array as Array
 from jax.typing import ArrayLike as ArrayLike
 
+
+class SympyExpr(Protocol):
+    def doit(self, **hints: Any) -> Any: ...
+
+
+type Activation = Callable[[ArrayLike], Array]
+type LossValue = Number | sp.Number | int | float | complex | Array
 type Loss_Tuple = (
-    tuple[sp.Expr, Array]
-    | tuple[sp.Expr, Array, Number | Array]
-    | tuple[sp.Expr, Array, Number | Array, Number | Array]
+    tuple[SympyExpr, Array]
+    | tuple[SympyExpr, Array, LossValue]
+    | tuple[SympyExpr, Array, LossValue, LossValue]
 )
 
 

@@ -25,13 +25,13 @@ import sympy as sp
 from jax import Array
 
 from jaxfun.coordinates import CoordSys, get_system as get_system
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
-from jaxfun.galerkin.tensorproductspace import (
+
+from .arguments import JAXArray, Jaxf, JAXFunction
+from .orthogonal import OrthogonalSpace
+from .tensorproductspace import (
     TensorProductSpace,
     VectorTensorProductSpace,
 )
-
-from .arguments import JAXArray, Jaxf, JAXFunction
 
 
 class _HasFunctionSpace(Protocol):

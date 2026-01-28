@@ -10,7 +10,7 @@ from jax.experimental.sparse import BCOO
 from jaxfun.utils.common import lambdify, matmat, tosparse
 
 from .arguments import TestFunction, TrialFunction
-from .composite import BCGeneric, Composite
+from .composite import BCGeneric, Composite, DirectSum
 from .forms import (
     _has_functionspace,
     get_basisfunctions,
@@ -534,12 +534,12 @@ def assemble_multivar(
     return a.reshape((i * j, k * l))
 
 
-def project1D(ue: sp.Expr, V: OrthogonalSpace) -> Array:
+def project1D(ue: sp.Expr, V: OrthogonalSpace | Composite | DirectSum) -> Array:
     """Project scalar expression ue onto 1D space V.
 
     Args:
         ue: SymPy expression in physical coordinate.
-        V: Orthogonal (or Composite) space.
+        V: Orthogonal / Composite / DirectSum space.
 
     Returns:
         Coefficient vector uh.
@@ -551,7 +551,7 @@ def project1D(ue: sp.Expr, V: OrthogonalSpace) -> Array:
     return uh
 
 
-def project(ue: sp.Expr, V: OrthogonalSpace) -> Array:
+def project(ue: sp.Basic, V: OrthogonalSpace | TensorProductSpace) -> Array:
     """Project expression onto (possibly tensor) space V.
 
     Args:

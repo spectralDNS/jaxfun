@@ -126,7 +126,7 @@ def tosparse(a: Array, tol: int = 100) -> sparse.BCOO:
 
 
 def lambdify(
-    args: sp.Basic | tuple[Symbol | BaseScalar, ...] | sp.Tuple,
+    args: sp.Basic | tuple[Symbol | BaseScalar, ...] | sp.Tuple | None,
     expr: Expr | sp.Basic,
     modules: str | list[str | dict[str, Callable]] | None = None,
     printer: Any = None,

@@ -1013,7 +1013,7 @@ class Loss:
 
 
 def get_fn(
-    f: sp.Expr | list[sp.Expr], s: tuple[BaseScalar | sp.Symbol, ...] | None
+    f: sp.Expr, s: tuple[BaseScalar | sp.Symbol, ...] | None
 ) -> Callable[
     [Array, nnx.Module, dict[tuple[int, int, int], Array] | None, int | None], Array
 ]:
@@ -1050,7 +1050,7 @@ def get_fn(
                 continue
             f_flax.append(fx)
 
-        f_const = sp.Mul(*f_const)  # ty:ignore[invalid-assignment]
+        f_const: sp.Expr = sp.Mul(*f_const)
         fun = get_fn(f_const, s)
 
         def res_fun(
@@ -1087,7 +1087,7 @@ def get_fn(
     return partial(
         _lookup_or_eval,
         mod_id=hash(v.module),
-        global_index=v.global_index,
+        global_index=v.global_index,  # ty:ignore[unresolved-attribute]
         k=int(getattr(f, "derivative_count", "0")),
         variables=getattr(f, "variables", ()),
     )
@@ -1096,7 +1096,7 @@ def get_fn(
 def _lookup_or_eval(
     x: Array,
     mod: nnx.Module,
-    Js: dict[tuple[int, int, int], Array] = None,
+    Js: dict[tuple[int, int, int], Array] | None = None,
     x_id: int = 0,
     mod_id: int = 0,
     global_index: int = 0,
@@ -1108,13 +1108,11 @@ def _lookup_or_eval(
         Js = {}
     module = mod.data[mod.mod_index[str(mod_id)]] if isinstance(mod, Comp) else mod
     assert mod_id == hash(module)
-    var: tuple[int] = tuple((slice(None), global_index)) + tuple(
-        int(s._id[0]) for s in variables
-    )
+    var = tuple((slice(None), global_index)) + tuple(int(s._id[0]) for s in variables)
     key: tuple[int, int, int] = (x_id, mod_id, k)
     if key not in Js:
         # Compute gradient
-        z = jacn(module, k)(x)
+        z = jacn(module, k)(x)  # ty:ignore[invalid-argument-type]
         return z[var]
     # look up gradient
     return Js[key][var]

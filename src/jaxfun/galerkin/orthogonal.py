@@ -14,6 +14,8 @@ Subclasses must implement:
     reference_domain
 """
 
+from __future__ import annotations
+
 from abc import abstractmethod
 from typing import TYPE_CHECKING, overload
 
@@ -72,7 +74,7 @@ class OrthogonalSpace(BaseSpace):
         self.S = sparse.BCOO(
             (jnp.ones(N), jnp.vstack((jnp.arange(N),) * 2).T), shape=(N, N)
         )
-        BaseSpace.__init__(self, system, name, fun_str)
+        super().__init__(system, name, fun_str)
 
     @abstractmethod
     def norm_squared(self) -> Array:
@@ -339,7 +341,7 @@ class OrthogonalSpace(BaseSpace):
         """Return number of spatial dimensions (always 1)."""
         return 1
 
-    def __add__(self, b: "BCGeneric") -> "DirectSum":
+    def __add__(self, b: BCGeneric) -> DirectSum:
         """Direct sum self ⊕ b (delegated to composite.DirectSum)."""
         from jaxfun.galerkin.composite import DirectSum
 

@@ -18,24 +18,21 @@ Main entry points:
   split(form_expr)         -> decompose full weak form into grouped terms
 """
 
-from typing import Protocol, TypeGuard
+from typing import NotRequired, Protocol, TypeGuard
 
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
+from typing_extensions import TypedDict
 
 from jaxfun.coordinates import CoordSys, get_system as get_system
+from jaxfun.typing import FunctionSpaceType
 
 from .arguments import JAXArray, Jaxf, JAXFunction
-from .orthogonal import OrthogonalSpace
-from .tensorproductspace import (
-    TensorProductSpace,
-    VectorTensorProductSpace,
-)
 
 
 class _HasFunctionSpace(Protocol):
-    functionspace: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+    functionspace: FunctionSpaceType
 
 
 def _has_functionspace(obj: object) -> TypeGuard[_HasFunctionSpace]:
@@ -87,7 +84,7 @@ def get_basisfunctions(
 
 
 def get_jaxarrays(
-    a: sp.Expr,
+    a: sp.Expr | float,
 ) -> set[JAXArray]:
     """Return set of JAXArray symbolic wrappers inside expression.
 
@@ -106,7 +103,17 @@ def get_jaxarrays(
     return array_found
 
 
-def split_coeff(c0: sp.Expr) -> dict:
+class LinearCoeffDict(TypedDict, total=False):
+    scale: float
+    jaxfunction: NotRequired[Jaxf]
+
+
+class CoeffDict(TypedDict, total=False):
+    bilinear: complex
+    linear: LinearCoeffDict
+
+
+def split_coeff(c0: sp.Expr | float) -> CoeffDict:
     """Split coefficient for bilinear form into linear / bilinear pieces.
 
     Patterns handled:
@@ -121,12 +128,12 @@ def split_coeff(c0: sp.Expr) -> dict:
     Returns:
         Dictionary with possible keys:
           'bilinear': numeric scalar (if present)
-          'linear': {'scale': number, 'jaxfunction': Jaxf | None}
+          'linear': {'scale': number, NotRequired('jaxfunction': Jaxf)}
 
     Raises:
         AssertionError: If basis functions are present in the coefficient.
     """
-    coeffs = {}
+    coeffs = CoeffDict()
     c0 = sp.sympify(c0)
     assert get_basisfunctions(c0) == (None, None), (
         "Basis functions found in coefficient"
@@ -136,19 +143,20 @@ def split_coeff(c0: sp.Expr) -> dict:
         coeffs["bilinear"] = float(c0) if c0.is_real else complex(c0)
 
     elif isinstance(c0, Jaxf):
-        coeffs["linear"] = {"scale": 1, "jaxfunction": c0}
+        coeffs["linear"] = LinearCoeffDict(scale=1, jaxfunction=c0)
 
     elif isinstance(c0, sp.Mul):
-        coeffs["linear"] = {"scale": 1, "jaxfunction": None}
+        coeffs["linear"] = LinearCoeffDict(scale=1)
         for ci in c0.args:
             if isinstance(ci, Jaxf):
                 coeffs["linear"]["jaxfunction"] = ci
             else:
-                assert coeffs["linear"]["scale"] is not None
                 coeffs["linear"]["scale"] *= float(ci) if ci.is_real else complex(ci)
 
     elif isinstance(c0, sp.Add):
-        coeffs.update({"linear": {"scale": 1, "jaxfunction": None}, "bilinear": 0})
+        linear_coeffs = LinearCoeffDict(scale=1)
+        coeffs.update(CoeffDict(linear=linear_coeffs, bilinear=0))
+        # coeffs.update({"linear": {"scale": 1, "jaxfunction": None}, "bilinear": 0})
         for arg in c0.args:
             if arg.is_number:
                 coeffs["bilinear"] = float(arg) if arg.is_real else complex(arg)
@@ -165,7 +173,7 @@ def split_coeff(c0: sp.Expr) -> dict:
     return coeffs
 
 
-def split_linear_coeff(c0: sp.Expr) -> Array:
+def split_linear_coeff(c0: sp.Expr | float) -> Array:
     """Assemble (possibly array-valued) coefficient for a linear form term.
 
     Accepts at most one JAXArray node (optionally raised to an integer
@@ -207,7 +215,17 @@ def split_linear_coeff(c0: sp.Expr) -> Array:
     return scale
 
 
-def split(forms: sp.Expr) -> dict:
+class InnerResultDict(TypedDict, extra_items=sp.Expr):
+    coeff: sp.Expr | float
+    multivar: NotRequired[sp.Expr]
+
+
+class ResultDict(TypedDict):
+    linear: list[InnerResultDict]
+    bilinear: list[InnerResultDict]
+
+
+def split(forms: sp.Expr) -> ResultDict:
     """Split a full weak form expression into linear and bilinear parts.
 
     For each additive term:
@@ -237,7 +255,7 @@ def split(forms: sp.Expr) -> dict:
     assert _has_functionspace(v)
     V = v.functionspace
 
-    def _split(ms):
+    def _split(ms: sp.Expr) -> InnerResultDict:
         d = sp.separatevars(ms, dict=True, symbols=V.system._base_scalars)
         if d is None and isinstance(ms, sp.Mul):
             scale = []
@@ -251,7 +269,7 @@ def split(forms: sp.Expr) -> dict:
                 else:
                     scale.append(arg)
             if len(rest) > 0:
-                d = sp.separatevars(
+                d: InnerResultDict = sp.separatevars(
                     sp.Mul(*rest), dict=True, symbols=V.system._base_scalars
                 )
             if isinstance(d, dict):
@@ -263,7 +281,7 @@ def split(forms: sp.Expr) -> dict:
             raise RuntimeError("Could not split form")
         return d
 
-    result = {"linear": [], "bilinear": []}
+    result = ResultDict(linear=[], bilinear=[])
     for arg in sp.Add.make_args(forms.doit().factor().expand()):
         basisfunctions = get_basisfunctions(arg)
         d = _split(arg)
@@ -275,7 +293,9 @@ def split(forms: sp.Expr) -> dict:
     return result
 
 
-def add_result(res: list[dict], d: dict, system: CoordSys) -> list[dict]:
+def add_result(
+    res: list[InnerResultDict], d: InnerResultDict, system: CoordSys
+) -> list[InnerResultDict]:
     """Accumulate result dictionary into list merging like basis factors.
 
     Two dictionaries are considered identical if they match on every
@@ -297,9 +317,10 @@ def add_result(res: list[dict], d: dict, system: CoordSys) -> list[dict]:
             if "multivar" not in d:
                 g["coeff"] += d["coeff"]
             else:
-                g["multivar"] = g["coeff"] * g["multivar"] + d["coeff"] * d["multivar"]
+                g["multivar"] = (
+                    g["coeff"] * g["multivar"] + d["coeff"] * d["multivar"]
+                ).factor()
                 g["coeff"] = 1
-                g["multivar"] = g["multivar"].factor()
             found_d = True
             break
 

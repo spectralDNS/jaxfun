@@ -11,7 +11,6 @@ Key constructs:
 """
 
 import itertools
-from numbers import Number
 from typing import Any, Self, cast
 
 import jax
@@ -98,7 +97,7 @@ def get_BasisFunction(
     def _sympystr(cls, printer: Any) -> str:
         return cls.__str__()
 
-    def _latex(cls, printer: Any = None, exp: Number | None = None) -> str:
+    def _latex(cls, printer: Any = None, exp: float | None = None) -> str:
         index = indices[cls.local_index + cls.offset]
         if cls.rank == 0:
             s = "".join(
@@ -589,7 +588,7 @@ class JAXFunction(_ArrayBackedFunction):
         V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str | None = None,
     ) -> Self:
-        coors = V.system
+        coors: CoordSys = V.system
         obj = cast(
             Self,
             Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)])),
@@ -624,20 +623,14 @@ class JAXFunction(_ArrayBackedFunction):
 
     def _latex(self, printer: Any = None) -> str:
         name = self.name
+        fspace = self.functionspace
         if name != "JAXFunction":
-            assert not isinstance(self.functionspace, DirectSum)
-            if self.functionspace.rank == 1:
+            assert not isinstance(fspace, DirectSum)
+            if fspace.rank == 1:
                 name = r"\mathbf{ {%s} }" % (self.name,)  # noqa: UP031
-        return "".join(
-            (
-                name,
-                "(",
-                ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
-                "; ",
-                self.functionspace.name,
-                ")",
-            )
-        )
+
+        all_names: str = ",".join([i.name for i in fspace.system._cartesian_xyz])
+        return "".join((name, "(", all_names, "; ", fspace.name, ")"))
 
     def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self.__str__())

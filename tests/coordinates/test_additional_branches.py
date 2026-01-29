@@ -124,7 +124,7 @@ def test_basedyadic_invalid_input():
     x, y, z = sp.symbols("x y z", real=True)
     N = CartCoordSys("N", (x, y, z))
     with pytest.raises(TypeError):
-        BaseDyadic(1, N.i)
+        BaseDyadic(1, N.i)  # ty:ignore[invalid-argument-type]
 
 
 def test_coord_sys_custom_vector_names():

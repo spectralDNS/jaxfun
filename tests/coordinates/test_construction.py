@@ -52,4 +52,4 @@ def test_invalid_base_vector_index():
 def test_basedyadic_zero_shortcut():
     N = CartCoordSys("N", (x, y, z))
     with pytest.raises(TypeError):
-        BaseDyadic(N.i, sp_vector.VectorZero())
+        BaseDyadic(N.i, sp_vector.VectorZero())  # ty:ignore[invalid-argument-type]

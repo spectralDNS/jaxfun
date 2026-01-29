@@ -36,4 +36,4 @@ class BaseSpace:
     ) -> None:
         self.name = name
         self.fun_str = fun_str
-        self.system = CartCoordSys("N", (x,)) if system is None else system
+        self.system: CoordSys = CartCoordSys("N", (x,)) if system is None else system

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterator
 
 import jax
 import jax.numpy as jnp
@@ -143,9 +144,7 @@ class Composite(OrthogonalSpace):
         scaling: sp.Expr = sp.S.One,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
-        OrthogonalSpace.__init__(
-            self, N, domain=domain, system=system, name=name, fun_str=fun_str
-        )
+        super().__init__(N, domain=domain, system=system, name=name, fun_str=fun_str)
         self.orthogonal: Jacobi = orthogonal(
             N, domain=domain, alpha=alpha, beta=beta, system=system
         )
@@ -398,7 +397,7 @@ class DirectSum:
         self.basespaces: tuple[Composite, BCGeneric] = (a, b)
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
-        self.system = a.system
+        self.system: CoordSys = a.system
         self.N = a.N
         self._num_quad_points = a._num_quad_points
         self.map_reference_domain = a.map_reference_domain
@@ -411,6 +410,10 @@ class DirectSum:
     def __len__(self) -> int:
         """Return number of summands (always 2)."""
         return len(self.basespaces)
+
+    def __iter__(self) -> Iterator[Composite | BCGeneric]:
+        """Iterate over summands."""
+        return iter(self.basespaces)
 
     @property
     def orthogonal(self) -> OrthogonalSpace:

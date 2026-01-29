@@ -939,13 +939,18 @@ class FlaxFunction(Function):
         """Return flattened parameter count of underlying module."""
         return self.module.dim
 
-    def get_args(self, Cartesian=True):
+    def get_args(self, Cartesian=True) -> tuple[sp.Symbol, ...] | sp.Tuple:
         """Return symbolic arguments (Cartesian or base scalars + time)."""
         if Cartesian:
             return self.args[:-1]
         V = self.functionspace
         s = V.system.base_scalars()
-        return s + (self.t,) if V.is_transient else s
+        res = s + (self.t,) if V.is_transient else s
+        if V.is_transient:
+            res: tuple[sp.Symbol] = s + (self.t,)
+        else:
+            res: sp.Tuple = s
+        return res
 
     def doit(self, **hints: Any) -> sp.Expr | AppliedUndef:
         """Return an evaluated SymPy expression (vector or scalar).

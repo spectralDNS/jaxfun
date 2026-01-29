@@ -5,8 +5,6 @@ Currently provides:
       multiple (component) expressions over a boundary mesh.
 """
 
-from numbers import Number
-
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -17,7 +15,7 @@ from .module import FlaxFunction
 
 
 def DirichletBC(
-    u: FlaxFunction, bnd_mesh: jax.Array, *bcs: sp.Expr | float | int
+    u: FlaxFunction, bnd_mesh: jax.Array, *bcs: sp.Expr | float
 ) -> jax.Array:
     """Assemble Dirichlet boundary values for a field/function.
 
@@ -49,7 +47,7 @@ def DirichletBC(
     g = []
     for b in bcs:
         s = u.get_args(Cartesian=False)
-        if isinstance(b, Number | float | int):  # overkill check for ty
+        if isinstance(b, sp.Number | float | int):  # overkill check for ty
             g.append(float(b) * jnp.ones(bnd_mesh.shape[0]))
         else:
             g.append(lambdify(s, b)(*bnd_mesh.T))

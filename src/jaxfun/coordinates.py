@@ -276,6 +276,7 @@ class BaseVector(Vector, AtomicExpr):
     _name: str
     _pretty_form: str
     _latex_form: str
+    args: tuple[Literal[0, 1, 2]]
 
     def __new__(
         cls,
@@ -351,8 +352,9 @@ class BaseDyadic(Dyadic, AtomicExpr):
     """
 
     _sys: CoordSys
+    args: tuple[BaseVector, BaseVector]
 
-    def __new__(cls, vector1, vector2) -> Self:
+    def __new__(cls, vector1: BaseVector, vector2: BaseVector) -> Self:
         # Verify arguments
         if not isinstance(vector1, BaseVector) or not isinstance(vector2, BaseVector):
             raise TypeError("BaseDyadic cannot be composed of non-base vectors")
@@ -395,7 +397,7 @@ class BaseDyadic(Dyadic, AtomicExpr):
     def to_cartesian(self):
         cart_arg0 = self._sys.to_cartesian(self.args[0])
         cart_arg1 = self._sys.to_cartesian(self.args[1])
-        return cart_arg0 | cart_arg1  # ty:ignore[unsupported-operator]
+        return cart_arg0 | cart_arg1
 
 
 class CoordSys(Basic):
@@ -531,7 +533,7 @@ class CoordSys(Basic):
             else:
                 vector_names = [f"b_{s}" for s in variable_names]
 
-        obj = super().__new__(cls, Str(name), transformation)
+        obj: Self = super().__new__(cls, Str(name), transformation)
         obj._name = name
 
         vector_names = list(vector_names)
@@ -547,7 +549,7 @@ class CoordSys(Basic):
         obj._vector_names = tuple(vector_names)
 
         # Create covariant basis vectors in case of curvilinear
-        v = []
+        v: list[BaseVector] = []
         for i in range(len(psi)):
             v.append(BaseVector(i, obj, pretty_vects[i], latex_vects[i]))
 
@@ -559,7 +561,7 @@ class CoordSys(Basic):
 
         obj._variable_names = tuple(variable_names)
 
-        base_scalars = []
+        base_scalars: list[BaseScalar] = []
         for i in range(len(psi)):
             base_scalars.append(BaseScalar(i, obj, pretty_scalars[i], latex_scalars[i]))
         obj._psi = psi
@@ -753,7 +755,11 @@ class CoordSys(Basic):
     def is_cartesian(self) -> bool:
         return self._is_cartesian
 
-    def to_cartesian(self, v) -> Vector | Dyadic:
+    @overload
+    def to_cartesian(self, v: BaseVector) -> Vector: ...
+    @overload
+    def to_cartesian(self, v: BaseDyadic) -> Dyadic: ...
+    def to_cartesian(self, v: BaseVector | BaseDyadic) -> Vector | Dyadic:
         # v either Cartesian or a vector/dyadic with covariant basis vectors
         if v._sys.is_cartesian:
             return v
@@ -808,7 +814,7 @@ class CoordSys(Basic):
 
     def get_contravariant_component(
         self, v: Vector | Dyadic, k: int, j: int | None = None
-    ) -> Any:
+    ) -> BaseVector | BaseDyadic:
         """Return a contravariant component of a vector or dyadic.
 
         For a vector expressed in this coordinate system using the covariant
@@ -836,10 +842,14 @@ class CoordSys(Basic):
         # We use covariant basis vectors, so the vector v already contains the
         # contravariant components.
         if v.is_Vector:
-            return v.components.get(self._covariant_basis_map[k], sp.S.Zero)
+            res: BaseVector = v.components.get(self._covariant_basis_map[k], sp.S.Zero)
+            return res
         if j is None:
             raise ValueError("Second index j must be provided for Dyadic components.")
-        return v.components.get(self._covariant_basis_dyadic_map[k, j], sp.S.Zero)
+        res: BaseDyadic = v.components.get(
+            self._covariant_basis_dyadic_map[k, j], sp.S.Zero
+        )
+        return res
 
     def get_covariant_component(
         self, v: Vector | Dyadic, k: int, j: int | None = None
@@ -1102,7 +1112,11 @@ class CoordSys(Basic):
         self._ct = ct
         return ct
 
-    def simplify(self, expr: Basic) -> Basic:  # type: ignore
+    @overload
+    def simplify(self, expr: VectorAdd) -> VectorAdd: ...
+    @overload
+    def simplify(self, expr: DyadicAdd) -> DyadicAdd: ...
+    def simplify(self, expr: Basic) -> Basic:  # ty:ignore[invalid-method-override]
         """Simplifies an expression in this coordinate system context.
 
         Applies:
@@ -1220,6 +1234,7 @@ class SubCoordSys:
         """
         assert system.dims > 1
         self._base_scalars = (system._base_scalars[index],)
+        # print(self._base_scalars)
         self._base_vectors = (system._base_vectors[index],)
         self._psi = (system._psi[index],)
         self._cartesian_xyz = [system._cartesian_xyz[index]]

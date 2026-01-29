@@ -1,13 +1,19 @@
+from __future__ import annotations
+
 from collections.abc import Callable
 from enum import StrEnum
-from numbers import Number
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import sympy as sp
 from jax import Array as Array
 from jax.typing import ArrayLike as ArrayLike
 
+if TYPE_CHECKING:
+    from jaxfun.galerkin import TensorProductSpace, VectorTensorProductSpace
+    from jaxfun.galerkin.orthogonal import OrthogonalSpace
+
 type FloatLike = float | sp.Number
+type FunctionSpaceType = OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
 
 
 class SympyExpr(Protocol):
@@ -15,7 +21,7 @@ class SympyExpr(Protocol):
 
 
 type Activation = Callable[[ArrayLike], Array]
-type LossValue = Number | sp.Number | int | float | complex | Array
+type LossValue = sp.Number | complex | Array
 type Loss_Tuple = (
     tuple[SympyExpr, Array]
     | tuple[SympyExpr, Array, LossValue]

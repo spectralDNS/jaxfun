@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import copy
 import itertools
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from functools import partial
-from typing import Any, TypeGuard
+from typing import TypeGuard
 
 import jax
 import jax.numpy as jnp
@@ -13,7 +13,6 @@ import sympy as sp
 from jax import Array
 from scipy import sparse as scipy_sparse
 
-from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
 from jaxfun.utils.common import eliminate_near_zeros, jit_vmap, lambdify
 
@@ -68,7 +67,7 @@ class TensorProductSpace:
         )
         self.basespaces: list[OrthogonalSpace] = basespaces
         self.name = name
-        self.system = system
+        self.system: CoordSys = system
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
 
     def __len__(self) -> int:
@@ -420,7 +419,7 @@ class VectorTensorProductSpace:
         else:
             tensorspaces = tensorspace
         self.tensorspaces = tensorspaces
-        self.system = self.tensorspaces[0].system
+        self.system: CoordSys = self.tensorspaces[0].system
         self.name = name
         self.tensorname = multiplication_sign.join([b.name for b in self.tensorspaces])
 
@@ -477,7 +476,9 @@ class VectorTensorProductSpace:
 
 
 def TensorProduct(
-    *basespaces: BaseSpace | DirectSum, system: CoordSys | None = None, name: str = "T"
+    *basespaces: OrthogonalSpace | DirectSum,
+    system: CoordSys | None = None,
+    name: str = "T",
 ) -> TensorProductSpace:
     """Factory returning TensorProductSpace or DirectSumTPS.
 
@@ -504,7 +505,7 @@ def TensorProduct(
         else system
     )
 
-    basespaces_list: list[BaseSpace | DirectSum] = [
+    basespaces_list: list[OrthogonalSpace | DirectSum] = [
         copy.deepcopy(space) for space in basespaces
     ]
     names = [space.name for space in basespaces_list]
@@ -518,15 +519,16 @@ def TensorProduct(
                 space.name = space.name + str(i)
 
     for i, space in enumerate(basespaces_list):
-        space.system = system.sub_system(i)
+        # ty does not like this weird duck typing
+        space.system = system.sub_system(i)  # ty:ignore[invalid-assignment]
         if isinstance(space, Composite):
-            space.orthogonal.system = system.sub_system(i)
+            space.orthogonal.system = system.sub_system(i)  # ty:ignore[invalid-assignment]
         if isinstance(space, DirectSum):
-            space.basespaces[0].system = system.sub_system(i)
+            space.basespaces[0].system = system.sub_system(i)  # ty:ignore[invalid-assignment]
             if isinstance(space.basespaces[0], Composite):
-                space.basespaces[0].orthogonal.system = system.sub_system(i)
-            space.basespaces[1].system = system.sub_system(i)
-            space.basespaces[1].orthogonal.system = system.sub_system(i)
+                space.basespaces[0].orthogonal.system = system.sub_system(i)  # ty:ignore[invalid-assignment]
+            space.basespaces[1].system = system.sub_system(i)  # ty:ignore[invalid-assignment]
+            space.basespaces[1].orthogonal.system = system.sub_system(i)  # ty:ignore[invalid-assignment]
 
     if isinstance(basespaces_list[0], DirectSum) or isinstance(
         basespaces_list[1], DirectSum
@@ -534,7 +536,7 @@ def TensorProduct(
         return DirectSumTPS(basespaces_list, system, name)
 
     def _all_orthogonal(
-        spaces: list[BaseSpace | DirectSum],
+        spaces: list[OrthogonalSpace | DirectSum],
     ) -> TypeGuard[list[OrthogonalSpace]]:
         return all(isinstance(s, OrthogonalSpace) for s in spaces)
 
@@ -557,23 +559,23 @@ class DirectSumTPS(TensorProductSpace):
 
     def __init__(
         self,
-        basespaces: list[BaseSpace | DirectSum],
+        basespaces: list[OrthogonalSpace | DirectSum],
         system: CoordSys,
         name: str = "DSTPS",
     ) -> None:
         from jaxfun.galerkin.inner import project1D
 
-        self.basespaces: list[BaseSpace | DirectSum] = basespaces
+        self.basespaces: list[OrthogonalSpace | DirectSum] = basespaces
         self.system = system
         self.name = name
-        self.bndvals = {}
+        self.bndvals: dict[tuple[OrthogonalSpace, ...], Array] = {}
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
 
         # Normalize symbolic BC expressions to base scalar form
         for space in basespaces:
-            if space.bcs is None:  # ty:ignore[possibly-missing-attribute]
+            if space.bcs is None:
                 continue
-            if space.bcs.is_homogeneous():  # ty:ignore[possibly-missing-attribute]
+            if space.bcs.is_homogeneous():
                 continue
             if isinstance(space, DirectSum):
                 s0 = space.basespaces[1]
@@ -583,7 +585,7 @@ class DirectSumTPS(TensorProductSpace):
                             val[key] = system.expr_psi_to_base_scalar(v)
 
         two_inhomogeneous = False
-        bcall = []
+        bcall: list[list[BoundaryConditions]] = []
         if isinstance(basespaces[0], DirectSum) and isinstance(
             basespaces[1], DirectSum
         ):
@@ -606,7 +608,7 @@ class DirectSumTPS(TensorProductSpace):
                 bcall.append([])
                 df = 2.0 / (zother.domain.upper - zother.domain.lower)
                 for bcval in bcthis.orderedvals():
-                    bcs = copy.deepcopy(bcother)
+                    bcs: BoundaryConditions = copy.deepcopy(bcother)
                     for lr_other, bco in bcs.items():
                         z = lr(zother, lr_other)
                         for key in bco:
@@ -625,13 +627,17 @@ class DirectSumTPS(TensorProductSpace):
                     bcall[-1].append(bcs)
             self.bndvals[bcspaces] = jnp.array([z.orderedvals() for z in bcall[0]])
 
-        self.tpspaces: dict[Any, TensorProductSpace] = self.split(basespaces)
+        self.tpspaces = self.split(basespaces)
 
         # Precompute lifting coefficients
         for tensorspace in self.tpspaces:
-            otherspaces = [p for p in tensorspace if not isinstance(p, BCGeneric)]
-            bcspaces = [p for p in tensorspace if isinstance(p, BCGeneric)]
-            bcsindex = [
+            otherspaces: list[OrthogonalSpace] = [
+                p for p in tensorspace if not isinstance(p, BCGeneric)
+            ]
+            bcspaces: list[BCGeneric] = [
+                p for p in tensorspace if isinstance(p, BCGeneric)
+            ]
+            bcsindex: list[int] = [
                 i for i, p in enumerate(tensorspace) if isinstance(p, BCGeneric)
             ]
             if len(otherspaces) == 0:
@@ -640,26 +646,26 @@ class DirectSumTPS(TensorProductSpace):
                 assert len(bcspaces) == 1
                 bcspace = bcspaces[0]
                 otherspace = otherspaces[0]
-                uh = []
+                uh: list[Array] = []
                 for j, bc in enumerate(bcspace.bcs.orderedvals()):
-                    otherspace = otherspaces[0]
+                    otherspace: OrthogonalSpace = otherspaces[0]
                     if two_inhomogeneous:
                         bco: BCGeneric = copy.deepcopy(
                             two_inhomogeneous[(bcsindex[0] + 1) % 2]
                         )
                         bco.bcs = bcall[bcsindex[0]][j]
-                        otherspace = otherspace + bco  # ty:ignore[unsupported-operator]
-                    uh.append(project1D(bc, otherspace))  # ty:ignore[invalid-argument-type]
+                        otherspace: DirectSum = otherspace + bco
+                    uh.append(project1D(bc, otherspace))
                 if bcsindex[0] == 0:
                     self.bndvals[tensorspace] = jnp.array(uh)
                 else:
                     self.bndvals[tensorspace] = jnp.array(uh).T
 
     def split(
-        self, spaces: list[BaseSpace | DirectSum]
-    ) -> dict[tuple[BaseSpace, ...], TensorProductSpace]:
+        self, spaces: list[OrthogonalSpace | DirectSum]
+    ) -> dict[tuple[OrthogonalSpace, ...], TensorProductSpace]:
         """Return dict of all homogeneous tensor combinations."""
-        f = []
+        f: list[Iterable[OrthogonalSpace]] = []
         for space in spaces:
             if isinstance(space, DirectSum):
                 f.append(space)
@@ -786,7 +792,7 @@ class TPMatrix:  # noqa: B903
     def __init__(
         self,
         mats: list[Array],
-        scale: float,
+        scale: complex,
         test_space: TensorProductSpace,
         trial_space: TensorProductSpace,
     ) -> None:

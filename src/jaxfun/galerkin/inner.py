@@ -1,5 +1,5 @@
 import importlib
-from typing import Any, TypeGuard
+from typing import TypeGuard
 
 import jax
 import jax.numpy as jnp
@@ -7,6 +7,7 @@ import sympy as sp
 from jax import Array
 from jax.experimental.sparse import BCOO
 
+from jaxfun.typing import FunctionSpaceType
 from jaxfun.utils.common import lambdify, matmat, tosparse
 
 from .arguments import TestFunction, TrialFunction
@@ -33,7 +34,7 @@ def inner(
     sparse: bool = False,
     sparse_tol: int = 1000,
     return_all_items: bool = False,
-) -> Any:
+):
     r"""Assemble Galerkin inner products (bilinear / linear forms).
 
     Supports expressions of the forms:
@@ -93,14 +94,15 @@ def inner(
         coeffs = split_coeff(a0["coeff"])
         sc = coeffs.get("bilinear", 1)
 
-        trial_space = getattr(U, "functionspace", None)
-        trial = []
+        trial_space: FunctionSpaceType | None = getattr(U, "functionspace", None)
+        trial: list[OrthogonalSpace] = []
         has_bcs = False
 
         for key, ai in a0.items():
             if key in ("coeff", "multivar"):
                 continue
 
+            assert isinstance(ai, sp.Expr)
             v, u = get_basisfunctions(ai)
             assert v is not None and u is not None, (
                 "Both test and trial functions required in bilinear form"
@@ -149,7 +151,7 @@ def inner(
             Am = assemble_multivar(mats, a0["multivar"], test_space)
 
             if has_bcs:
-                assert trial_space is not None
+                assert isinstance(trial_space, TensorProductSpace)
                 bresults.append(
                     -(Am @ trial_space.bndvals[(tuple(trial))].flatten()).reshape(
                         test_space.num_dofs
@@ -179,10 +181,11 @@ def inner(
 
         else:  # regular separable multivariable form
             if has_bcs:
+                # The else branch here is unreachable? Jaxf has no attribute .space
                 fun = (
                     trial_space.bndvals[tuple(trial)]
                     if trial_space
-                    else coeffs["linear"]["jaxfunction"].space.bndvals[tuple(trial)]
+                    else coeffs["linear"]["jaxfunction"].space.bndvals[tuple(trial)]  # ty:ignore[unresolved-attribute]
                 )
                 bresults.append(-(mats[0] @ fun @ mats[1].T))
             else:
@@ -229,6 +232,7 @@ def inner(
             if key in ("coeff", "multivar"):
                 continue
 
+            assert isinstance(bi, sp.Expr)
             v, _ = get_basisfunctions(bi)
             assert v is not None, "Test function required in linear form"
             assert _has_functionspace(v)
@@ -361,8 +365,8 @@ def inner_bilinear(
     Returns:
         Dense matrix, or (Pi, Pj) tuple for multivar separation.
     """
-    vo = v.orthogonal
-    uo = u.orthogonal
+    vo: OrthogonalSpace = v.orthogonal
+    uo: OrthogonalSpace = u.orthogonal
     xj, wj = vo.quad_points_and_weights()
     df = float(vo.domain_factor)
     i, j = 0, 0

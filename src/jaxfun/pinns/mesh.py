@@ -151,12 +151,28 @@ class BaseMesh:
         """Return boolean mask for boundary points."""
         raise NotImplementedError
 
+    @property
+    def dim(self) -> int:
+        """Return spatial dimension of the mesh."""
+        raise NotImplementedError
+
 
 class CartesianProductMesh(BaseMesh):
     """Cartesian product mesh."""
 
     def __init__(self, *m0: BaseMesh) -> None:
+        """Cartesian product mesh.
+
+        Args:
+            *m0: Submeshes to form the Cartesian product.
+
+        """
         self.submeshes = list(m0)
+
+    @property
+    def dim(self) -> int:
+        """Return spatial dimension of the mesh."""
+        return sum(m.dim for m in self.submeshes)
 
     def boundary_mask(
         self, *N: int, kind: SampleMethod | list[SampleMethod] = "uniform"
@@ -327,6 +343,82 @@ class CartesianProductMesh(BaseMesh):
         return x[mask]
 
 
+class TimeMarchingMesh(CartesianProductMesh):
+    """Time-marching mesh as Cartesian product with time axis along the last
+    dimension.
+
+    Attributes:
+        deltat: Time step size.
+        timestep: Current time step index.
+    """
+
+    def __init__(self, *m0: BaseMesh) -> None:
+        """Initialize time-marching mesh.
+
+        Args:
+            *m0: Submeshes to form the Cartesian product. The last submesh
+                must be a Line representing the time axis. This Line represents
+                the first time step; subsequent time steps are obtained by
+                shifting this Line forward by a constant deltat corresponding
+                to the length of the first time interval.
+        """
+        assert isinstance(m0[-1], Line), "Last submesh must be a Line (time axis)"
+        self.deltat: float = float(m0[-1].right - m0[-1].left)
+        self.timestep: int = 0
+        self._spatial_mesh: CartesianProductMesh | BaseMesh = None
+        super().__init__(*m0)
+
+    @property
+    def dt(self):
+        return jnp.hstack((jnp.zeros(self.dim - 1), self.deltat))[None, :]
+
+    def update_time(self):
+        """Shift time axis forward by deltat."""
+        self.timestep += 1
+        time_mesh = self.submeshes[-1]
+        time_mesh.left += self.deltat
+        time_mesh.right += self.deltat
+
+    def get_points(
+        self,
+        *N: int | tuple[int],
+        domain: DomainType = "all",
+        kind: SampleMethod | list[SampleMethod] = "uniform",
+    ) -> Array:
+        """Return sampled points.
+
+        Args:
+            N: Number of total points in mesh. Identical to length of returned
+                array in case domain is 'all'. N represents all arguments needed
+                for all submeshes.
+            domain: 'inside' | 'boundary' | 'all' | 'initial-time' | 'end-time'
+            kind: Sampling kind(s). List of kinds for each submesh.
+        """
+        if domain == "initial-time":
+            xi = self.get_points(*N, domain="boundary", kind=kind)
+            return xi[xi[:, -1] <= self.submeshes[-1].left + 1e-7]
+        elif domain == "end-time":
+            xi = self.get_points(*N, domain="boundary", kind=kind)
+            return xi[xi[:, -1] >= self.submeshes[-1].right - 1e-7]
+        return super().get_points(*N, domain=domain, kind=kind)
+
+    def get_spatial_mesh(self) -> CartesianProductMesh | BaseMesh:
+        """Return spatial mesh (excluding time axis)."""
+        if self._spatial_mesh is None:
+            if len(self.submeshes) == 2:
+                self._spatial_mesh = self.submeshes[0]
+            else:
+                self._spatial_mesh = CartesianProductMesh(*self.submeshes[:-1])
+        return self._spatial_mesh
+
+    def get_points_at_time(
+        self, *N: int | tuple[int], t: float | int = 0, kind: SampleMethod = "uniform"
+    ) -> Array:
+        mesh = self.get_spatial_mesh()
+        x = mesh.get_points(*N, domain="all", kind=kind)
+        return jnp.hstack((x, jnp.full((x.shape[0], 1), float(t))))
+
+
 @dataclass
 class Line(BaseMesh):
     """Straight domain on the real line.
@@ -348,6 +440,11 @@ class Line(BaseMesh):
             raise ValueError(
                 f"right ({self.right}) must be greater than left ({self.left})"
             )
+
+    @property
+    def dim(self) -> int:
+        """Return spatial dimension of the mesh."""
+        return 1
 
     def get_all_points(  # type: ignore[override]
         self, N: int, kind: SampleMethod = "uniform"
@@ -521,6 +618,11 @@ class ShapelyMesh(BaseMesh):
 
     seed: int = 101
     boundary_factor: float = 0.25
+
+    @property
+    def dim(self) -> int:
+        """Return spatial dimension of the mesh."""
+        return 2
 
     def make_polygon(self) -> Polygon:
         raise NotImplementedError

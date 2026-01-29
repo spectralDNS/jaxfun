@@ -70,3 +70,4 @@ dev = [
 
 [tool.uv.sources]
 soap-jax = { git = "https://github.com/mikaem/SOAP_JAX" }
+# soap-jax = { git = "https://github.com/haydn-jones/SOAP_JAX" }

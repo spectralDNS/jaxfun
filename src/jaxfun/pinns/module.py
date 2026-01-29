@@ -50,6 +50,10 @@ class BaseModule(nnx.Module):
             return NotImplemented
         return nnx.graphdef(self) == nnx.graphdef(other) and self.name == other.name
 
+    def update_time(self, deltat: float) -> None:
+        """Update internal time-dependent parameters by deltat"""
+        pass
+
 
 class RWFLinear(nnx.Module):
     """Linear layer with RWF (Random Weight Factorization) style scaling.
@@ -239,6 +243,30 @@ class KANLayer(nnx.Module):
             ]  # Hidden layer domain [-1, 1] matches tanh activation range
         )
 
+    def update_time(self, deltat: float) -> None:
+        if not self.hidden:
+            d = self.basespaces[-1]._domain
+            self.basespaces[-1]._domain = Domain(
+                float(d.lower + deltat), float(d.upper + deltat)
+            )
+
+    def compute_basis(self, x: Array) -> list[Array]:
+        if not self.hidden:
+            # Expand each input dimension independently.
+            T = [
+                self.basespaces[j].eval_basis_functions(
+                    self.basespaces[j].map_reference_domain(x[..., j])
+                )
+                for j in range(self.in_features)
+            ]
+        else:
+            # Hidden layer, all with the same domain [-1, 1]: reuse one basis.
+            T = [
+                self.basespaces[0].eval_basis_functions(x[..., j])
+                for j in range(self.in_features)
+            ]
+        return T
+
     def __call__(self, inputs: Array) -> Array:
         """Apply spectral expansion + linear projection.
 
@@ -250,21 +278,7 @@ class KANLayer(nnx.Module):
         """
         kernel = self.kernel.value
         inputs, kernel = self.promote_dtype((inputs, kernel), dtype=self.dtype)
-
-        if not self.hidden:
-            # Expand each input dimension independently.
-            T = [
-                self.basespaces[j].eval_basis_functions(
-                    self.basespaces[j].map_reference_domain(inputs[..., j])
-                )
-                for j in range(self.in_features)
-            ]
-        else:
-            # Hidden layer, all with the same domain [-1, 1]: reuse one basis.
-            T = [
-                self.basespaces[0].eval_basis_functions(inputs[..., j])
-                for j in range(self.in_features)
-            ]
+        T = self.compute_basis(inputs)
 
         return sum(
             [
@@ -339,7 +353,11 @@ class MLP(BaseModule):
             param_dtype=float,
             dtype=float,
         )
-        self.act_fun = V.act_fun
+        self.act_fun = (
+            [V.act_fun] * (len(self.hidden) + 1) + [lambda x: x]
+            if isinstance(V.act_fun, Callable)
+            else V.act_fun
+        )
         self.name = name
 
     @property
@@ -357,10 +375,10 @@ class MLP(BaseModule):
         Returns:
             Output batch (N, out_size).
         """
-        x = self.act_fun(self.linear_in(x))
-        for z in self.hidden:
-            x = self.act_fun(z(x))
-        return self.linear_out(x)
+        x = self.act_fun[0](self.linear_in(x))
+        for i, z in enumerate(self.hidden):
+            x = self.act_fun[i](z(x))
+        return self.act_fun[-1](self.linear_out(x))
 
 
 class PIModifiedBottleneck(nnx.Module):
@@ -477,6 +495,7 @@ class PirateNet(BaseModule):
             in_dim = V.fourier_emb["embed_dim"]
 
         self.act_fun = V.act_fun
+        self.act_fun_final = V.act_fun_final
         self.name = name
 
         self.u_net = RWFLinear(
@@ -544,8 +563,7 @@ class PirateNet(BaseModule):
         for layer in self.hidden:
             x = layer(x, u, v)
 
-        y = self.output_layer(x)
-        return y
+        return self.act_fun_final(self.output_layer(x))
 
 
 class SpectralModule(BaseModule):
@@ -630,6 +648,7 @@ class KANMLPModule(BaseModule):
         name: str = "KANMLPModule",
     ) -> None:
         self.kanspace = V
+        linlayer = RWFLinear if V.weight_factorization else nnx.Linear
         hidden_size = (
             V.hidden_size
             if isinstance(V.hidden_size, list | tuple)
@@ -652,7 +671,7 @@ class KANMLPModule(BaseModule):
         )
         self.hidden = (
             nnx.List(
-                RWFLinear(
+                linlayer(
                     hidden_size[i],
                     hidden_size[min(i + 1, len(hidden_size) - 1)],
                     rngs=rngs,
@@ -667,7 +686,7 @@ class KANMLPModule(BaseModule):
             else []
         )
         if hidden_size[-1] > 1:
-            self.layer_out = RWFLinear(
+            self.layer_out = linlayer(
                 hidden_size[-1],
                 V.out_size,
                 rngs=rngs,
@@ -684,6 +703,9 @@ class KANMLPModule(BaseModule):
         """Return flattened parameter count."""
         st = nnx.split(self, nnx.Param)[1]
         return jax.flatten_util.ravel_pytree(st)[0].shape[0]
+
+    def update_time(self, deltat: float) -> None:
+        self.layer_in.update_time(deltat)
 
     def __call__(self, x: Array) -> Array:
         """Forward pass through KAN + MLP stack.
@@ -778,6 +800,9 @@ class sPIKANModule(BaseModule):
         """Return flattened parameter count."""
         st = nnx.state(self)
         return jax.flatten_util.ravel_pytree(st)[0].shape[0]
+
+    def update_time(self, deltat: float) -> None:
+        self.layer_in.update_time(deltat)
 
     def __call__(self, x: Array) -> Array:
         """Forward pass through fully spectral KAN stack.

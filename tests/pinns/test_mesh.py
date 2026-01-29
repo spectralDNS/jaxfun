@@ -312,6 +312,8 @@ def test_line_points_union_property():
         assert all_pts.shape == (N, 1)
         assert inside_pts.shape == (N - 2, 1)
         assert boundary_pts.shape == (2, 1)
+        assert boundary_pts[0] == line.left
+        assert boundary_pts[1] == line.right
 
 
 def test_unitsquare_points_union_property():

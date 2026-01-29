@@ -16,7 +16,7 @@ from jaxfun.utils.common import Domain, jacn, lambdify
 
 domain = Domain(-1, 1)
 V = FunctionSpace(
-    32,
+    20,
     Legendre.Legendre,
     bcs={"left": {"D": 0}, "right": {"D": 0}},
     name="V",
@@ -33,13 +33,13 @@ ue = (1 - x**2) * sp.cos(2 * sp.pi * x)
 N = 1000
 mesh = Line(domain.lower, domain.upper, key=nnx.Rngs(1001)())
 
-xj = mesh.get_points_inside_domain(N, kind="legendre")
-wj = mesh.get_weights_inside_domain(N, kind="legendre")
-xb = mesh.get_points_on_domain(N)
+xj = mesh.get_points(N, domain="inside", kind="legendre")
+wj = mesh.get_weights(N, domain="inside", kind="legendre")
+xb = mesh.get_points(N, domain="boundary")
 
 # fv = (Div(Grad(w)) + w - (Div(Grad(ue)) + ue)) * v
 fv = -Dot(Grad(w), Grad(v)) + w * v - (-Dot(Grad(ue), Grad(v)) + ue * v)
-loss_fn = Loss((fv, xj, 0, wj), (w, xb, 0, 1))
+loss_fn = Loss((fv, xj, 0, wj), (w, xb))
 trainer = Trainer(loss_fn)
 
 opt_adam = adam(w, learning_rate=1e-3)

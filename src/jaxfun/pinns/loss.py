@@ -228,6 +228,15 @@ class Residual:
     ) -> Array:
         return sum([eq(x, module, Js=Js, x_id=x_id) for eq in self.eqs]) - target
 
+    def update_arrays(self, x: Array) -> None:
+        """Update the collocation points and target values
+
+        Args:
+            x: New collocation points where the residual is evaluated.
+        """
+        self.x = x
+        self.target = self._compute_target(x)
+
     def _compute_target(
         self,
         x: Array,
@@ -420,7 +429,7 @@ class ResidualVPINN(Residual):
                 raise ValueError("Could not parse target expression")
         self.t_split = t_split
 
-        # Add all terms with the same test function derivative count together
+        # Add all terms with the same test function derivative count
         t_v = {}
         for tn, tv in t_split:
             if tv not in t_v:
@@ -637,7 +646,7 @@ class Loss:
 
     """
 
-    def __init__(self, *fs: Loss_Tuple):
+    def __init__(self, *fs: Loss_Tuple) -> None:
         r"""Computes the total loss over all input equations at all collocation
         points.
 
@@ -679,6 +688,7 @@ class Loss:
         for i, eq in enumerate(self.residuals):
             eq.keys = set([(self.x_ids[i], mod_id, k) for (_, mod_id, k) in eq.keys])
             eq.x_id = self.x_ids[i]
+
         # Store all keys needed for gradient computations
         self.keys = set(key for i, eq in enumerate(self.residuals) for key in eq.keys)
 
@@ -1097,3 +1107,67 @@ def _lookup_or_eval(
         return z[var]
     # look up gradient
     return Js[key][var]
+
+
+class TimeMarchingLoss(Loss):
+    r"""Loss function for time-marching problems
+
+    Extends the Loss class to handle time-marching problems. The initial
+    condition is treated specially, and only evaluated at the initial
+    time step.
+
+    Attributes:
+        initial_conditions: Index of the subproblem that represents the initial
+            condition. This subproblem will be treated specially in case of a
+            marching problem.
+    """
+
+    def __init__(self, *fs: Loss_Tuple, initial_conditions: int = 1) -> None:
+        r"""Computes the total loss over all input equations at all collocation
+        points, with special treatment of the initial condition.
+
+        Args:
+            fs:
+                One or several tuples. The tuples contain the subproblems that
+                are to be solved. The subproblem tuples are defined by items:
+
+                    1. The equation residual (sympy expression)
+                    2. The collocation points (Array of shape (N, D))
+                    3. (optional) The target (Number or Array of shape (N,))
+                    4. (optional) The weights (Number or Array of shape (N,))
+
+                For VPINN the equation residual needs to contain a `TestFunction`,
+                and the equation residual is the integrand of the inner product,
+                except the weight.
+            initial_conditions: The number of initial conditions for the problem.
+                For example, the wave equation requires two, whereas the heat equation
+                requires one. The initial conditions must be the last subproblems in
+                the input fs.
+
+        """
+        self.initial_conditions = initial_conditions
+        super().__init__(*fs)
+
+    def update_time(self, module: nnx.Module, march: Array) -> None:
+        """Update the collocation points and targets used in the residuals
+
+        Args:
+            module: The module (nnx.Module)
+            march: Array to be added to all collocation points
+        """
+        xs = tuple(self.xs.values())
+        if xs[0].shape[-1] != march.shape[-1]:
+            raise ValueError("Cannot update collocation points, dimension mismatch")
+
+        for ic in range(
+            len(self.residuals) - self.initial_conditions, len(self.residuals)
+        ):
+            init_res = self.residuals[ic]
+            # Compute the initial value at the new time.
+            init_res.target0 = init_res(init_res.x + march, 0, module)
+            # The only term in the target independent of the solution is the
+            # initial condition. Set to zero.
+            init_res.target_expr = sp.S.Zero
+        for eq, x_id in zip(self.residuals, self.x_ids, strict=True):
+            eq.update_arrays(xs[x_id] + march)
+        self.xs = {id(eq.x): eq.x for eq in self.residuals}

@@ -89,7 +89,8 @@ class MLPSpace(NNSpace):
         system: Optional coordinate system (defaults to Cartesian).
         transient: If True, time is appended as input coordinate.
         act_fun: Activation function used for all hidden layers.
-        weight_factorization: Optional weight factorization method.
+        weight_factorization: If True, use weight factorization in linear
+            layers.
         name: Space name.
     """
 
@@ -100,7 +101,7 @@ class MLPSpace(NNSpace):
         rank: int = 0,
         system: CoordSys = None,
         transient: bool = False,
-        act_fun: Callable[[Array], Array] = nnx.tanh,
+        act_fun: Callable[[Array], Array] | tuple[Callable[[Array], Array]] = nnx.tanh,
         weight_factorization: bool = False,
         *,
         name: str,
@@ -149,6 +150,7 @@ class PirateSpace(NNSpace):
         transient: bool = False,
         act_fun: Callable[[Array], Array] = nnx.tanh,
         act_fun_hidden: Callable[[Array], Array] = nnx.tanh,
+        act_fun_final: Callable[[Array], Array] = lambda x: x,
         # PirateNet specific parameters
         nonlinearity: float = 0.0,
         periodicity: dict | None = None,
@@ -163,6 +165,7 @@ class PirateSpace(NNSpace):
         )
         self.act_fun = act_fun
         self.act_fun_hidden = act_fun_hidden
+        self.act_fun_final = act_fun_final
 
         self.nonlinearity = nonlinearity
         self.periodicity = periodicity
@@ -191,6 +194,8 @@ class KANMLPSpace(NNSpace):
         basespace: Spectral base class (e.g. Chebyshev.Chebyshev).
         domains: List of (a, b) tuples for input domain mapping. If None,
             defaults to (-1, 1) per dimension.
+        weight_factorization: If True, use weight factorization in linear
+            layers.
 
     Raises:
         ValueError: If hidden_size == 1 while dims != 1.
@@ -208,6 +213,7 @@ class KANMLPSpace(NNSpace):
         act_fun: Callable[[Array], Array] = nnx.tanh,
         basespace: BaseSpace = Chebyshev.Chebyshev,
         domains: list[tuple[float, float]] | None = None,
+        weight_factorization: bool = False,
     ) -> None:
         """Initialize KANMLPSpace metadata."""
         NNSpace.__init__(self, dims, rank, transient, system, name)
@@ -216,6 +222,7 @@ class KANMLPSpace(NNSpace):
         self.act_fun = act_fun
         self.basespace = basespace
         self.domains = domains
+        self.weight_factorization = weight_factorization
         if hidden_size == 1 and self.dims != 1:
             raise ValueError(
                 "hidden_size=1 only allowed for dims=1. Consider using a "

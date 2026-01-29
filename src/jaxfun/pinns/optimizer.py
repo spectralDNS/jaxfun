@@ -1,10 +1,12 @@
 import re
 from collections.abc import Callable
+from copy import deepcopy
 from typing import Any
 
 import jax
 import jax.numpy as jnp
 import optax
+import sympy as sp
 from flax import nnx
 from jax import Array
 from jax.experimental import multihost_utils as mh
@@ -15,7 +17,8 @@ from optax._src import base as optax_base
 from jaxfun.pinns import FlaxFunction
 from jaxfun.pinns.distributed import process_allmean
 
-from .loss import Loss
+from .loss import Loss, TimeMarchingLoss
+from .mesh import TimeMarchingMesh
 
 
 class NamedOptimizer[M: nnx.Module](nnx.Optimizer[M]):
@@ -586,3 +589,70 @@ class Trainer:
 
         if print_final_loss and rank == 0:
             print(f"Final loss for {longname}: {loss}")
+
+
+class TimeMarchingTrainer(Trainer):
+    """Trainer subclass for time-marching PINNs.
+
+    Extends Trainer to update time domain after each training segment.
+
+    Attributes:
+        mesh: TimeMarchingMesh instance managing time segments.
+        states: Dictionary storing module states at given time steps.
+
+    """
+
+    def __init__(self, loss_fn: TimeMarchingLoss, mesh: TimeMarchingMesh) -> None:
+        """Time-marching Trainer for optimization loops.
+
+        Args:
+            loss_fn: Loss function / object (Loss instance) to optimize.
+            mesh: TimeMarchingMesh instance managing time segments.
+        """
+        self.mesh = mesh
+        self.states = {}
+        super().__init__(loss_fn)
+
+    def update_time(self, module: nnx.Module, save_state: bool = True) -> None:
+        """Update the mesh, loss function and module for the next time segment.
+
+        Args:
+            module: The module to update.
+            save_state: If True, saves the current module state in self.states
+
+        """
+        if save_state:
+            self.states[self.mesh.timestep] = deepcopy(nnx.state(module))
+        self.mesh.update_time()
+        self.loss_fn.update_time(module, self.mesh.dt)
+        if self.mesh.timestep > 1:  # Use extrapolation for new initial condition
+            new_params = jax.tree.map(
+                lambda u, p: 2 * u - p,
+                self.states[self.mesh.timestep - 1],
+                self.states[self.mesh.timestep - 2],
+            )
+            nnx.update(module, new_params)
+        module.update_time(self.mesh.dt[0, -1])
+
+    def evaluate_at_time(
+        self, *N: int | tuple[int], u: nnx.Module | FlaxFunction | sp.Expr, t: float
+    ) -> tuple[Array, Array]:
+        """Evaluate the solution u(x, ..., t) at a specific time t.
+
+        Args:
+            u: The solution to evaluate. Can be an nnx.Module, FlaxFunction, or sympy
+                Expr.
+            t: Time value to evaluate at.
+
+        Returns:
+            A tuple (x0, u0) where x0 are the spatial points at time t, and u0 are the
+            evaluated solution values at those points.
+        """
+        from jaxfun.pinns.loss import evaluate
+
+        x0 = self.mesh.get_points_at_time(*N, t=t)
+        if isinstance(u, nnx.Module | FlaxFunction):
+            u0 = u(x0)
+        elif isinstance(u, sp.Expr):
+            u0 = evaluate(u, x0)
+        return x0, u0

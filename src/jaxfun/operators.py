@@ -32,6 +32,8 @@ from sympy.vector.dyadic import Dyadic, DyadicAdd, DyadicMul, DyadicZero
 from sympy.vector.operators import Curl as sympy_Curl, Divergence, Gradient
 from sympy.vector.vector import Vector
 
+from jaxfun.typing import cast_args, cast_bs, cast_bv
+
 from .coordinates import BaseDyadic, BaseScalar, BaseVector, CoordSys
 
 
@@ -65,30 +67,20 @@ def _split_mul_args_wrt_coordsys(expr: Expr) -> list[Expr]:
     return list(d.values())
 
 
-def express(expr: Basic, system: CoordSys) -> Basic:
-    system_set = set()
-    expr = sp.sympify(expr)
+def express[T: Expr](expr: T, system: CoordSys) -> T:
+    system_set: set[CoordSys] = set()
+    expr: T = sp.sympify(expr)  # ty:ignore[invalid-assignment]
     # Substitute all the coordinate variables
     for x in expr.atoms(BaseScalar):
         if x.system != system:
             system_set.add(x.system)
-    subs_dict = {}
+    subs_dict: dict[BaseScalar, BaseScalar] = {}
     for f in system_set:
-        wrong_scalars = f.base_scalars()
-        scalars = system.base_scalars()
+        wrong_scalars = cast_bs(f.base_scalars())
+        scalars = cast_bs(system.base_scalars())
         subs_dict.update({k: v for k, v in zip(wrong_scalars, scalars, strict=False)})
-    return expr.subs(subs_dict)
 
-
-@overload
-def cast_args(t: VectorAdd) -> tuple[Vector, ...]: ...
-@overload
-def cast_args(t: DyadicAdd) -> tuple[Dyadic, ...]: ...
-def cast_args(t: VectorAdd | DyadicAdd) -> tuple[Vector, ...] | tuple[Dyadic, ...]:
-    if isinstance(t, VectorAdd):
-        return cast(tuple[Vector, ...], t.args)
-    else:
-        return cast(tuple[Dyadic, ...], t.args)
+    return expr.subs(subs_dict)  # ty:ignore[no-matching-overload]
 
 
 def outer(v1: Vector, v2: Vector) -> Dyadic:
@@ -550,10 +542,10 @@ def gradient(
         return Vector.zero
     elif len(coord_sys) == 1:
         coord_sys = cast(CoordSys, next(iter(coord_sys)))
-        v = cast(tuple[BaseVector, ...], coord_sys.base_vectors())
-        x = cast(tuple[BaseScalar, ...], coord_sys.base_scalars())
+        v = cast_bv(coord_sys.base_vectors())
+        x = cast_bs(coord_sys.base_scalars())
 
-        if coord_sys.is_cartesian and field.is_scalar:
+        if coord_sys.is_cartesian and not isinstance(field, Vector):
             h = coord_sys.hi
             vi: BaseVector | VectorZero = sum(
                 (v[i] * field.diff(x[i]) / h[i] for i in range(len(h))),
@@ -636,8 +628,8 @@ def curl(v: Vector, doit: bool = True) -> Vector | Curl:
         return VectorZero()
     elif len(coord_sys) == 1:
         coord_sys = cast(CoordSys, next(iter(coord_sys)))
-        bv = cast(tuple[BaseVector, ...], coord_sys.base_vectors())
-        x = cast(tuple[BaseScalar, ...], coord_sys.base_scalars())
+        bv = cast_bv(coord_sys.base_vectors())
+        x = cast_bs(coord_sys.base_scalars())
         sg = coord_sys.sg
         comp = coord_sys.get_covariant_component
         assert len(x) == 3

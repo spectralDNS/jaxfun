@@ -30,6 +30,8 @@ from sympy.vector import VectorZero
 from sympy.vector.dyadic import Dyadic, DyadicAdd
 from sympy.vector.vector import Vector, VectorAdd
 
+from jaxfun.typing import cast_bd, cast_bv
+
 
 def _is_vector_or_dyadic(obj: Basic) -> TypeGuard[Vector | Dyadic]:
     return isinstance(obj, Vector | Dyadic)
@@ -786,15 +788,16 @@ class CoordSys(Basic):
             return v
 
         v = v.doit()
-        bt = self.get_contravariant_basis(True)
-        bv = self.base_vectors()
-        terms: list[Any] = []
-        if v.is_Vector:
+        bt = cast(tuple[Vector, ...], self.get_contravariant_basis(True))
+        bv = cast_bv(self.base_vectors())
+        if isinstance(v, Vector):
+            terms: list[Vector] = []
             for i in range(len(bv)):
                 terms.append(self.simplify(v & bt[i]) * bv[i])
             expr = VectorAdd(*terms)
         else:
-            bd = self.base_dyadics()
+            bd = cast_bd(self.base_dyadics())
+            terms: list[Dyadic] = []
             for i in range(len(bt)):
                 for j in range(len(bt)):
                     terms.append(self.simplify(bt[i] & v & bt[j]) * bd[i * len(bv) + j])
@@ -882,7 +885,7 @@ class CoordSys(Basic):
         Raises:
             ValueError: If j is None when requesting a Dyadic component.
         """
-        b = cast(tuple[BaseVector, ...], self.base_vectors())
+        b = cast_bv(self.base_vectors())
         if v.is_Vector:
             return v & b[k]
         if j is None:

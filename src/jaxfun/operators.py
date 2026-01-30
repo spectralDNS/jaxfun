@@ -221,14 +221,14 @@ type BuilderType = Add | VectorAdd | DyadicAdd
 
 
 @overload
-def _rank_of(t1: Vector, t2: Vector) -> Literal[0]: ...
+def _rank_of_dot(t1: Vector, t2: Vector) -> Literal[0]: ...
 @overload
-def _rank_of(t1: Vector, t2: Dyadic) -> Literal[1]: ...
+def _rank_of_dot(t1: Vector, t2: Dyadic) -> Literal[1]: ...
 @overload
-def _rank_of(t1: Dyadic, t2: Vector) -> Literal[1]: ...
+def _rank_of_dot(t1: Dyadic, t2: Vector) -> Literal[1]: ...
 @overload
-def _rank_of(t1: Dyadic, t2: Dyadic) -> Literal[2]: ...
-def _rank_of(t1: Vector | Dyadic, t2: Vector | Dyadic) -> Rank:
+def _rank_of_dot(t1: Dyadic, t2: Dyadic) -> Literal[2]: ...
+def _rank_of_dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> Rank:
     if isinstance(t1, Vector):
         return 0 if isinstance(t2, Vector) else 1
     else:
@@ -308,7 +308,7 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> BasisDependent | Expr | Dot
         >>> dot(v1, v2)
         r**2*theta + r
     """
-    rank = _rank_of(t1, t2)
+    rank = _rank_of_dot(t1, t2)
     builder = _builder_for(rank)
     rank_zero = _zero_for_dot(rank)
 

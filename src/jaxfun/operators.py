@@ -13,6 +13,7 @@ from __future__ import annotations
 import collections
 from collections.abc import Iterator
 from itertools import product
+from types import UnionType
 from typing import Any, Literal, Self, cast, overload
 
 import numpy as np
@@ -28,11 +29,7 @@ from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import Dot as sympy_Dot, VectorAdd, VectorMul, VectorZero
 from sympy.vector.basisdependent import BasisDependent, BasisDependentZero
 from sympy.vector.dyadic import Dyadic, DyadicAdd, DyadicMul, DyadicZero
-from sympy.vector.operators import (
-    Curl as sympy_Curl,
-    Divergence,
-    Gradient,
-)
+from sympy.vector.operators import Curl as sympy_Curl, Divergence, Gradient
 from sympy.vector.vector import Vector
 
 from .coordinates import BaseDyadic, BaseScalar, BaseVector, CoordSys
@@ -254,13 +251,16 @@ def _builder_for(rank: Rank) -> type[BuilderType]:
             return DyadicAdd
 
 
+type BasisZero = BasisDependentZero | sp.core.numbers.Zero
+
+
 @overload
-def _zero_for(rank: Literal[0]) -> Expr: ...
+def _zero_for_dot(rank: Literal[0]) -> sp.core.numbers.Zero: ...
 @overload
-def _zero_for(rank: Literal[1]) -> VectorZero: ...
+def _zero_for_dot(rank: Literal[1]) -> VectorZero: ...
 @overload
-def _zero_for(rank: Literal[2]) -> DyadicZero: ...
-def _zero_for(rank: Rank) -> BasisDependent | Expr:
+def _zero_for_dot(rank: Literal[2]) -> DyadicZero: ...
+def _zero_for_dot(rank: Rank) -> BasisZero:
     match rank:
         case 0:
             return sp.S.Zero
@@ -270,7 +270,7 @@ def _zero_for(rank: Rank) -> BasisDependent | Expr:
             return Dyadic.zero
 
 
-def fromiter[T: BuilderType](cls: type[T], args: Iterator[sp.Expr], **assumptions) -> T:
+def fromiter[T: BuilderType](cls: type[T], args: Iterator[Expr], **assumptions) -> T:
     return cls.fromiter(args, **assumptions)
 
 
@@ -310,7 +310,7 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> BasisDependent | Expr | Dot
     """
     rank = _rank_of(t1, t2)
     builder = _builder_for(rank)
-    rank_zero = _zero_for(rank)
+    rank_zero = _zero_for_dot(rank)
 
     if isinstance(t1, VectorAdd | DyadicAdd):
         args = cast_args(t1)
@@ -383,7 +383,7 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> BasisDependent | Expr | Dot
     return Dot(t1, t2)
 
 
-type DivType = Vector | BaseVector | Dyadic | BaseDyadic | Cross | Curl | Gradient
+type DivType = Vector | BaseVector | Dyadic | BaseDyadic | Cross | Curl | Grad
 
 
 @overload
@@ -430,7 +430,7 @@ def divergence(v: DivType, doit: bool = True) -> Vector | Expr | Basic | Div:
             return sp.S.Zero
         return Vector.zero
     elif len(coord_sys) == 1:
-        if isinstance(v, Cross | Curl | Gradient):
+        if isinstance(v, Cross | Curl | Grad):
             return Div(v)
         # v should be a vector/dyadic with Cartesian or covariant basis vectors
         # Note: In the formulas below we could also simply use the definition
@@ -441,11 +441,10 @@ def divergence(v: DivType, doit: bool = True) -> Vector | Expr | Basic | Div:
         x = coord_sys.base_scalars()
         comp = coord_sys.get_contravariant_component
         sg = coord_sys.sg
-        if v.is_Vector:
+        if isinstance(v, Vector):
             res = sp.S.Zero
             for i in range(len(x)):
                 res += Derivative(express(comp(v, i) * sg, coord_sys), x[i]) / sg
-
         else:
             bv = coord_sys.base_vectors()
             ct = coord_sys.get_christoffel_second()
@@ -473,42 +472,33 @@ def divergence(v: DivType, doit: bool = True) -> Vector | Expr | Basic | Div:
         )
         not_cart = np.nonzero(mask)[0]
         assert len(not_cart) == 1
-        return divergence(
-            cast(CoordSys, coord_sys_arr[not_cart[0]]).from_cartesian(v), doit=doit
-        )
-
+        not_cart_sys = cast(CoordSys, coord_sys_arr[not_cart[0]])
+        return divergence(not_cart_sys.from_cartesian(v), doit=doit)
     else:
         if isinstance(v, DyadicAdd):
             return VectorAdd.fromiter(divergence(i, doit=doit) for i in cast_args(v))
-        elif isinstance(v, Add | VectorAdd):
-            return Add.fromiter(
-                divergence(cast(Vector | Dyadic, i), doit=doit) for i in v.args
+        elif isinstance(v, Add):
+            return Add.fromiter(divergence(cast(Vector, i), doit=doit) for i in v.args)
+        elif isinstance(v, Mul):
+            PossType: UnionType = Vector | Dyadic | Cross | Grad
+            vector = cast(PossType, [i for i in v.args if isinstance(i, PossType)][0])
+            scalar = cast(
+                Expr, Mul.fromiter(i for i in v.args if not isinstance(i, PossType))
             )
-        elif isinstance(v, Mul | VectorMul):
-            vector = [
-                i for i in v.args if isinstance(i, Dyadic | Vector | Cross | Gradient)
-            ][0]
-            scalar = Mul.fromiter(
-                i
-                for i in v.args
-                if not isinstance(i, Dyadic | Vector | Cross | Gradient)
-            )
-            if not vector.is_Vector:
+            if not isinstance(vector, Vector):
+                vector = cast(Dyadic, vector)
                 res = VectorAdd(
-                    dot(
-                        cast(Vector | Dyadic, vector),
-                        cast(Vector | Dyadic, gradient(scalar)),
-                    ),
-                    scalar * divergence(cast(Vector | Dyadic, vector), doit=doit),
+                    dot(vector, gradient(scalar)),
+                    scalar * divergence(vector, doit=doit),
                 )
             else:
                 res = Dot(vector, gradient(scalar)) + scalar * divergence(
-                    cast(Vector | Dyadic, vector), doit=doit
+                    vector, doit=doit
                 )
             if doit:
                 return res.doit()
             return res
-        elif isinstance(v, Cross | Curl | Gradient):
+        elif isinstance(v, Cross | Curl | Grad):
             return Div(v)
         else:
             raise Div(v)  # type: ignore[invalid-raise]
@@ -520,8 +510,12 @@ def gradient(
 ) -> Grad: ...
 @overload
 def gradient(
-    field: Expr | Vector, doit: Literal[True] = True, transpose: bool = False
-) -> BasisDependent: ...
+    field: Vector, doit: Literal[True] = True, transpose: bool = False
+) -> Dyadic: ...
+@overload
+def gradient(
+    field: Expr, doit: Literal[True] = True, transpose: bool = False
+) -> Vector: ...
 def gradient(
     field: Expr | Vector, doit: bool = True, transpose: bool = False
 ) -> BasisDependent | Grad:
@@ -561,67 +555,52 @@ def gradient(
     if len(coord_sys) == 0:
         return Vector.zero
     elif len(coord_sys) == 1:
-        coord_sys = next(iter(coord_sys))
-        v = coord_sys.base_vectors()
-        x = coord_sys.base_scalars()
+        coord_sys = cast(CoordSys, next(iter(coord_sys)))
+        v = cast(tuple[BaseVector, ...], coord_sys.base_vectors())
+        x = cast(tuple[BaseScalar, ...], coord_sys.base_scalars())
 
         if coord_sys.is_cartesian and field.is_scalar:
             h = coord_sys.hi
-            vi = Vector.zero
-            for i in range(len(h)):
-                vi += v[i] * field.diff(x[i]) / h[i]
-
-            if doit:
-                return (vi).doit()
-            return vi
+            vi: BaseVector | VectorZero = sum(
+                (v[i] * field.diff(x[i]) / h[i] for i in range(len(h))),
+                start=Vector.zero,
+            )
         else:
             gt = coord_sys.get_contravariant_metric_tensor()
             vi = []
             for i in range(gt.shape[0]):
                 for j in range(gt.shape[1]):
+                    f_x_g: Expr = field.diff(x[i]) * gt[i, j]
                     if field.is_Vector:
-                        if transpose:
-                            vi.append(v[j] | field.diff(x[i]) * gt[i, j])
-                        else:
-                            vi.append(field.diff(x[i]) * gt[i, j] | v[j])
+                        vj: Vector = v[j] | f_x_g if transpose else f_x_g | v[j]
                     else:
-                        vi.append(field.diff(x[i]) * gt[i, j] * v[j])
+                        vj: Dyadic = f_x_g * v[j]
+                    vi.append(vj)
             vi: DyadicAdd | VectorAdd = (
                 DyadicAdd(*vi) if field.is_Vector else VectorAdd(*vi)
             )
 
-            if doit:
-                return vi.doit()
-            return vi
+        if doit:
+            return vi.doit()
+        return vi
 
     elif len(coord_sys) == 2:
         # For example a vector expressed using Cartesian basis vectors and
         # Curvilinear BaseScalars. Like CoordSys.position_vector(True)
         coord_sys_arr = np.array(list(coord_sys))
 
-        mask = np.array(
-            [not si.is_cartesian for si in coord_sys],
-            dtype=bool,
-        )
+        mask = np.array([not si.is_cartesian for si in coord_sys], dtype=bool)
         not_cart = np.nonzero(mask)[0]
         assert len(not_cart) == 1
-        return gradient(
-            cast(CoordSys, coord_sys_arr[not_cart[0]]).from_cartesian(field),
-            doit=doit,
-            transpose=transpose,
-        )
+        not_cart_sys = cast(CoordSys, coord_sys_arr[not_cart[0]])
+        return gradient(not_cart_sys.from_cartesian(field), doit, transpose)
 
-    else:
-        if isinstance(field, Add | VectorAdd):
-            return VectorAdd.fromiter(
-                gradient(i, doit=doit, transpose=transpose) for i in field.args
-            )
-        if isinstance(field, Mul | VectorMul):
-            s = _split_mul_args_wrt_coordsys(field)
-            return VectorAdd.fromiter(
-                field / i * gradient(i, doit=doit, transpose=transpose) for i in s
-            )
-        return Grad(field, transpose=transpose)
+    if isinstance(field, Add):
+        return VectorAdd.fromiter(gradient(i, doit, transpose) for i in field.args)
+    if isinstance(field, Mul):
+        s = _split_mul_args_wrt_coordsys(field)
+        return VectorAdd.fromiter(field / i * gradient(i, doit, transpose) for i in s)
+    return Grad(field, transpose=transpose)
 
 
 def curl(v: Vector, doit: bool = True) -> Vector | Curl:
@@ -662,9 +641,9 @@ def curl(v: Vector, doit: bool = True) -> Vector | Curl:
     if len(coord_sys) == 0:
         return VectorZero()
     elif len(coord_sys) == 1:
-        coord_sys = next(iter(coord_sys))
-        bv = coord_sys.base_vectors()
-        x = coord_sys.base_scalars()
+        coord_sys = cast(CoordSys, next(iter(coord_sys)))
+        bv = cast(tuple[BaseVector, ...], coord_sys.base_vectors())
+        x = cast(tuple[BaseScalar, ...], coord_sys.base_scalars())
         sg = coord_sys.sg
         comp = coord_sys.get_covariant_component
         assert len(x) == 3
@@ -691,31 +670,30 @@ def curl(v: Vector, doit: bool = True) -> Vector | Curl:
             doit=doit,
         )
 
-    else:
-        if isinstance(v, Add | VectorAdd):
-            from sympy.vector import express
+    if isinstance(v, Add | VectorAdd):
+        from sympy.vector import express
 
-            try:
-                cs = next(iter(coord_sys))
-                args = [express(i, cs, variables=True) for i in v.args]
-            except ValueError:
-                args = v.args
-            return VectorAdd.fromiter(curl(cast(Vector, i), doit=doit) for i in args)
-        elif isinstance(v, Mul | VectorMul):
-            vector = [i for i in v.args if isinstance(i, Vector | Cross | Gradient)][0]
-            scalar = Mul.fromiter(
-                i for i in v.args if not isinstance(i, Vector | Cross | Gradient)
-            )
-            res = Cross(gradient(scalar), vector).doit() + scalar * curl(
-                cast(Vector, vector), doit=doit
-            )
-            if doit:
-                return res.doit()
-            return res
-        elif isinstance(v, Cross | Curl | Gradient):
-            return Curl(v)
-        else:
-            raise Curl(v)  # type: ignore[invalid-raise]
+        try:
+            cs = cast(CoordSys, next(iter(coord_sys)))
+            args = [express(i, cs, variables=True) for i in v.args]
+        except ValueError:
+            args = v.args
+
+        args = cast(tuple[Vector, ...], args)
+        return VectorAdd.fromiter(curl(i, doit=doit) for i in args)
+
+    elif isinstance(v, Mul | VectorMul):
+        VCG: UnionType = Vector | Cross | Grad
+        vector = cast(Vector, [i for i in v.args if isinstance(i, VCG)][0])
+        scalar = cast(Expr, Mul.fromiter(i for i in v.args if not isinstance(i, VCG)))
+        res = Cross(gradient(scalar), vector).doit() + scalar * curl(vector, doit=doit)
+        if doit:
+            return res.doit()
+        return res
+    elif isinstance(v, Cross | Curl | Grad):
+        return Curl(v)
+    else:
+        raise Curl(v)  # type: ignore[invalid-raise]
 
 
 class Grad(Gradient):
@@ -736,14 +714,14 @@ class Grad(Gradient):
     _expr: Expr
     _transpose: bool
 
-    def __new__(cls, expr, transpose: bool = False) -> Self:
+    def __new__(cls, expr: Expr, transpose: bool = False) -> Self:
         expr = sp.sympify(expr)
-        obj = Expr.__new__(cls, expr)
+        obj: Self = Expr.__new__(cls, expr)
         obj._expr = expr
         obj._transpose = False if expr.is_scalar else transpose
         return obj
 
-    def doit(self, **hints: Any) -> BasisDependent | Grad:
+    def doit(self, **hints: Any) -> Vector | Dyadic:
         return gradient(self._expr.doit(**hints), doit=True, transpose=self._transpose)
 
     def __hash__(self) -> int:
@@ -918,22 +896,22 @@ class Source(Expr):
 
 
 class Constant(sp.Symbol):
-    val: sp.Expr | float
+    val: Expr | float
 
-    def __new__(cls, name: str, val: sp.Expr | float, **assumptions) -> Self:
+    def __new__(cls, name: str, val: Expr | float, **assumptions) -> Self:
         obj = super().__new__(cls, name, **assumptions)
         obj.val = val
         return obj
 
-    def doit(self, **hints) -> sp.Expr | float:
+    def doit(self, **hints) -> Expr | float:
         return self.val
 
 
-class Identity(sp.Expr):
+class Identity(Expr):
     def __init__(self, sys: CoordSys) -> None:
         self.sys = sys
 
-    def doit(self) -> Dyadic:  # type: ignore[override]
+    def doit(self, **hints) -> Dyadic:
         return sum(self.sys.base_dyadics()[:: self.sys.dims + 1], DyadicZero())
 
 

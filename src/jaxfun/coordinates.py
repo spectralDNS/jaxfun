@@ -14,7 +14,7 @@ from collections import UserDict
 from collections.abc import Callable, Iterable, Sequence
 from itertools import product
 from types import MethodType
-from typing import Any, Literal, Self, TypeGuard, overload
+from typing import Any, Literal, Self, TypeGuard, cast, overload
 
 import numpy as np
 import sympy as sp
@@ -672,10 +672,8 @@ class CoordSys(Basic):
 
     @overload
     def position_vector(self, as_Vector: Literal[False] = False) -> Tuple: ...
-
     @overload
     def position_vector(self, as_Vector: Literal[True]) -> Vector: ...
-
     def position_vector(self, as_Vector: bool = False) -> Tuple | Vector:
         r_out = self.refine_replace(self.rv)
         assert isinstance(r_out, Tuple)
@@ -806,12 +804,18 @@ class CoordSys(Basic):
             return out
         raise TypeError("from_cartesian produced a non-tensor expression")
 
-    def expr_base_scalar_to_psi(self, v: Basic) -> Basic:
+    def expr_base_scalar_to_psi[T: sp.Basic](self, v: T) -> T:
         return sp.sympify(v).xreplace(self._map_base_scalar_to_symbol)
 
-    def expr_psi_to_base_scalar(self, v: Basic) -> Basic:
+    def expr_psi_to_base_scalar[T: sp.Basic](self, v: T) -> T:
         return sp.sympify(v).xreplace(self._map_symbol_to_base_scalar)
 
+    @overload
+    def get_contravariant_component(
+        self, v: Vector, k: int, j: None = None
+    ) -> BaseVector: ...
+    @overload
+    def get_contravariant_component(self, v: Dyadic, k: int, j: int) -> BaseDyadic: ...
     def get_contravariant_component(
         self, v: Vector | Dyadic, k: int, j: int | None = None
     ) -> BaseVector | BaseDyadic:
@@ -851,9 +855,13 @@ class CoordSys(Basic):
         )
         return res
 
+    @overload
+    def get_covariant_component(self, v: Vector, k: int, j: None = None) -> Expr: ...
+    @overload
+    def get_covariant_component(self, v: Dyadic, k: int, j: int) -> Expr: ...
     def get_covariant_component(
         self, v: Vector | Dyadic, k: int, j: int | None = None
-    ) -> Any:
+    ) -> Expr:
         """Return a covariant component of a vector or dyadic.
 
         The covariant components are obtained by contracting with the covariant
@@ -874,7 +882,7 @@ class CoordSys(Basic):
         Raises:
             ValueError: If j is None when requesting a Dyadic component.
         """
-        b = self.base_vectors()
+        b = cast(tuple[BaseVector, ...], self.base_vectors())
         if v.is_Vector:
             return v & b[k]
         if j is None:
@@ -896,9 +904,9 @@ class CoordSys(Basic):
         if cached is not None:
             return cached
         if covariant:
-            g = sp.Matrix(self.get_covariant_metric_tensor()).det()
+            g: sp.Basic = sp.Matrix(self.get_covariant_metric_tensor()).det()
         else:
-            g = sp.Matrix(self.get_contravariant_metric_tensor()).det()
+            g: sp.Basic = sp.Matrix(self.get_contravariant_metric_tensor()).det()
         g = sp.factor(self.replace(g))
         g_out = express(self.refine(self.simplify(g)), self)
         if not _is_expr(g_out):
@@ -960,7 +968,7 @@ class CoordSys(Basic):
             hi[i] = sp.sqrt(self.refine(self.simplify(s)))
             hi[i] = self.refine(hi[i])
 
-        hi = np.array(express(hi, self))  # type: ignore[invalid-argument-type]
+        hi = np.array(express(hi, self))  # ty: ignore[invalid-argument-type]
         self._hi = hi
         return hi
 
@@ -1116,7 +1124,11 @@ class CoordSys(Basic):
     def simplify(self, expr: VectorAdd) -> VectorAdd: ...
     @overload
     def simplify(self, expr: DyadicAdd) -> DyadicAdd: ...
-    def simplify(self, expr: Basic) -> Basic:  # ty:ignore[invalid-method-override]
+    @overload
+    def simplify(self, expr: sp.Expr) -> sp.Expr: ...
+    def simplify(
+        self, expr: VectorAdd | DyadicAdd | sp.Expr
+    ) -> VectorAdd | DyadicAdd | sp.Expr:  # ty:ignore[invalid-method-override]
         """Simplifies an expression in this coordinate system context.
 
         Applies:
@@ -1142,7 +1154,7 @@ class CoordSys(Basic):
             sp.simplify(self.expr_base_scalar_to_psi(expr), measure=self._measure)
         )
 
-    def refine(self, sc: Basic) -> Basic:  # type: ignore
+    def refine[T: sp.Basic](self, sc: T) -> T:  # ty:ignore[invalid-method-override]
         """Applies SymPy refine with system assumptions.
 
         Args:
@@ -1155,7 +1167,7 @@ class CoordSys(Basic):
         sc = sp.refine(sc, self._assumptions)
         return self.expr_psi_to_base_scalar(sc)
 
-    def replace(self, sc: Basic) -> Basic:  # type: ignore
+    def replace[T: sp.Basic](self, sc: T) -> T:  # ty:ignore[invalid-method-override]
         """Performs pattern replacements then restores base scalars.
 
         Args:
@@ -1166,10 +1178,10 @@ class CoordSys(Basic):
         """
         sc = self.expr_base_scalar_to_psi(sc)
         for a, b in self._replace:
-            sc = sc.replace(a, b)
+            sc = cast(T, sc.replace(a, b))
         return self.expr_psi_to_base_scalar(sc)
 
-    def refine_replace(self, sc: Basic) -> Basic:
+    def refine_replace[T: sp.Basic](self, sc: T) -> T:
         """Runs refine followed by pattern replacements.
 
         Args:
@@ -1182,6 +1194,7 @@ class CoordSys(Basic):
         sc = sp.refine(sc, self._assumptions)
         for a, b in self._replace:
             sc = sc.replace(a, b)
+        cast(T, sc)
         return self.expr_psi_to_base_scalar(sc)
 
 

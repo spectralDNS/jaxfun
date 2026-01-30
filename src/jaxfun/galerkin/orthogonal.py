@@ -244,7 +244,6 @@ class OrthogonalSpace(BaseSpace):
     def map_expr_reference_domain(self, u: sp.Expr) -> sp.Expr: ...
     @overload
     def map_expr_reference_domain(self, u: sp.Basic) -> sp.Basic: ...
-
     def map_expr_reference_domain(self, u: sp.Expr | sp.Basic) -> sp.Expr | sp.Basic:
         """Return expression u(x) rewritten with reference coord X.
 
@@ -264,7 +263,6 @@ class OrthogonalSpace(BaseSpace):
     def map_expr_true_domain(self, u: sp.Expr) -> sp.Expr: ...
     @overload
     def map_expr_true_domain(self, u: sp.Basic) -> sp.Basic: ...
-
     def map_expr_true_domain(self, u: sp.Expr | sp.Basic) -> sp.Expr | sp.Basic:
         """Return expression u(X) rewritten with true coordinate x."""
         x = u.free_symbols
@@ -278,10 +276,8 @@ class OrthogonalSpace(BaseSpace):
 
     @overload
     def map_reference_domain(self, x: Array) -> Array: ...
-
     @overload
     def map_reference_domain(self, x: sp.Symbol) -> sp.Expr: ...
-
     def map_reference_domain(self, x: sp.Symbol | Array) -> sp.Expr | Array:
         """Map true domain point x to reference coordinate X."""
         X = x
@@ -296,10 +292,8 @@ class OrthogonalSpace(BaseSpace):
 
     @overload
     def map_true_domain(self, X: Array) -> Array: ...
-
     @overload
     def map_true_domain(self, X: sp.Symbol) -> sp.Expr: ...
-
     def map_true_domain(self, X: sp.Symbol | Array) -> sp.Expr | Array:
         """Map reference coordinate X to true domain point x."""
         x = X

@@ -11,7 +11,9 @@ Key constructs:
 """
 
 import itertools
-from typing import Any, Self, cast
+from abc import abstractmethod
+from functools import partial
+from typing import Any, Self
 
 import jax
 import sympy as sp
@@ -217,36 +219,51 @@ def _get_computational_function(
         )
 
 
+class BaseFunction(Function):
+    """Abstract base class for symbolic functions with enriched printing."""
+
+    name: str
+
+    @abstractmethod
+    def doit(self, **hints: Any) -> Any:
+        pass
+
+    def _pretty(self, printer: Any = None) -> prettyForm:
+        return prettyForm(self.__str__())
+
+    def _sympystr(self, printer: Any = None) -> str:
+        return self.__str__()
+
+    @abstractmethod
+    def _latex(self, printer: Any = None) -> str:
+        pass
+
+
+class ManySpaceFunction(BaseFunction):
+    functionspace: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+    own_name: str
+
+    @property
+    def c_names(self) -> list[str]:
+        return ", ".join([i.name for i in self.functionspace.system._cartesian_xyz])
+
+    def __str__(self) -> str:
+        return f"{self.name}({self.c_names}; {self.functionspace.name})"
+
+    def _latex(self, printer: Any = None) -> str:
+        name = self.name
+        if name != self.own_name:
+            assert not isinstance(self.functionspace, DirectSum)
+            if self.functionspace.rank == 1:
+                name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
+        return f"{name}({self.c_names}; {self.functionspace.name})"
+
+
 # NOTE
 # Need a unique Symbol in order to create a new TestFunction/TrialFunction for a new
 # space. Without it all TestFunctions/TrialFunctions created with the same Cartesian
 # coordinates will be the same object.
-
-
-class _FunctionWithSpace(Function):
-    """Intermediary base for SymPy Function wrappers with a functionspace."""
-
-    functionspace: (
-        OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum
-    )
-    argument: int
-    name: str
-
-
-class _FunctionWithSystem(Function):
-    """Intermediary base for SymPy Function wrappers with a coordinate system."""
-
-    system: CoordSys
-    name: str
-
-
-class _ArrayBackedFunction(_FunctionWithSpace):
-    """Intermediary base for wrappers that carry a JAX array."""
-
-    array: Array
-
-
-class TestFunction(_FunctionWithSpace):
+class TestFunction(ManySpaceFunction):
     """Symbolic test function T(x; V) for weak form assembly.
 
     Holds a reference to its functionspace and lazily expands (via doit)
@@ -254,7 +271,7 @@ class TestFunction(_FunctionWithSpace):
     """
 
     __test__ = False  # prevent pytest from considering this a test.
-    functionspace: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+    argument: int
 
     def __new__(
         cls,
@@ -262,9 +279,8 @@ class TestFunction(_FunctionWithSpace):
         name: str | None = None,
     ) -> Self:
         coors = V.system
-        obj = cast(
-            Self,
-            Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)])),
+        obj: Self = Function.__new__(
+            cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)])
         )
         obj.argument = 0
         if isinstance(V, DirectSum):
@@ -282,54 +298,24 @@ class TestFunction(_FunctionWithSpace):
         else:
             obj.functionspace = V
         obj.name = name if name is not None else "TestFunction"
+        obj.own_name = "TestFunction"
         return obj
 
     def doit(self, **hints: Any) -> Expr | AppliedUndef:
-        return _get_computational_function(
-            "test",
-            self.functionspace,
-        )
-
-    def __str__(self) -> str:
-        return "".join(
-            (
-                self.name,
-                "(",
-                ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
-                "; ",
-                self.functionspace.name,
-                ")",
-            )
-        )
-
-    def _latex(self, printer: Any = None) -> str:
-        name = self.name
-        if name != "TestFunction" and self.functionspace.rank == 1:
-            name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
-        return "".join(
-            (
-                name,
-                "(",
-                ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
-                "; ",
-                self.functionspace.name,
-                ")",
-            )
-        )
-
-    def _pretty(self, printer: Any = None) -> prettyForm:
-        return prettyForm(self.__str__())
-
-    def _sympystr(self, printer: Any) -> str:
-        return self.__str__()
+        return _get_computational_function("test", self.functionspace)
 
 
-class TrialFunction(_FunctionWithSpace):
+class TrialFunction(ManySpaceFunction):
     """Symbolic trial function U(x; V) for weak form assembly.
 
     Direct sums expand to sum of component spaces. Tensor product spaces
     with direct-sum factors expand into additive combinations of products.
     """
+
+    argument: int
+    functionspace: (
+        OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum
+    )
 
     def __new__(
         cls,
@@ -337,23 +323,22 @@ class TrialFunction(_FunctionWithSpace):
         name: str | None = None,
     ) -> Self:
         coors = V.system
-        obj = cast(
-            Self,
-            Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)])),
+        obj: Self = Function.__new__(
+            cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)])
         )
         obj.functionspace = V
         obj.name = name if name is not None else "TrialFunction"
+        obj.own_name = "TrialFunction"
         obj.argument = 1
         return obj
 
     def doit(self, **hints: dict) -> Expr | AppliedUndef:
-        if isinstance(self.functionspace, DirectSum):
-            return sp.Add.fromiter(
-                _get_computational_function("trial", f)
-                for f in self.functionspace.basespaces
-            )
-        elif isinstance(self.functionspace, TensorProductSpace):
-            spaces = self.functionspace.basespaces
+        fspace = self.functionspace
+        comp_fun = partial(_get_computational_function, "trial")
+        if isinstance(fspace, DirectSum):
+            return sp.Add.fromiter(comp_fun(f) for f in fspace.basespaces)
+        elif isinstance(fspace, TensorProductSpace):
+            spaces = fspace.basespaces
             f = []
             for space in spaces:
                 if isinstance(space, DirectSum):
@@ -362,108 +347,54 @@ class TrialFunction(_FunctionWithSpace):
                     f.append([space])
             tensorspaces = itertools.product(*f)
             return sp.Add.fromiter(
-                _get_computational_function(
-                    "trial",
-                    TensorProductSpace(
-                        s,
-                        name=self.functionspace.name + f"{i}",
-                        system=self.functionspace.system,
-                    ),
-                )
+                comp_fun(TensorProductSpace(s, fspace.system, f"{fspace.name}{i}"))
                 for i, s in enumerate(tensorspaces)
             )
 
-        return _get_computational_function("trial", self.functionspace)
-
-    def __str__(self) -> str:
-        return "".join(
-            (
-                self.name,
-                "(",
-                ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
-                "; ",
-                self.functionspace.name,
-                ")",
-            )
-        )
-
-    def _latex(self, printer: Any = None) -> str:
-        name = self.name
-        if name != "TrialFunction":
-            assert not isinstance(self.functionspace, DirectSum)
-            if self.functionspace.rank == 1:
-                name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
-        return "".join(
-            (
-                name,
-                "(",
-                ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
-                "; ",
-                self.functionspace.name,
-                ")",
-            )
-        )
-
-    def _pretty(self, printer: Any = None) -> prettyForm:
-        return prettyForm(self.__str__())
-
-    def _sympystr(self, printer: Any) -> str:
-        return self.__str__()
+        return comp_fun(fspace)
 
 
-class ScalarFunction(_FunctionWithSystem):
+class ScalarFunction(BaseFunction):
     """Physical-domain scalar field placeholder u(x) with mapping support.
 
     Calling .doit() returns the computational-domain representation
     U(X) by replacing Cartesian symbols with base scalars.
     """
 
+    system: CoordSys
+
     def __new__(cls, name: str, system: CoordSys) -> Self:
-        obj = cast(
-            Self, Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
-        )
+        obj: Self = Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
         obj.system = system
         obj.name = name.lower()
         return obj
 
     def doit(self, **hints: Any) -> AppliedUndef:
         """Return function in computational domain"""
-        return Function(self.name.upper())(  # ty:ignore[call-non-callable]
-            *self.system.base_scalars()
-        )
+        return Function(self.name.upper())(*self.system.base_scalars())  # ty:ignore[call-non-callable]
+
+    @property
+    def arg_str(self) -> str:
+        return f"({self.args[0]})" if len(self.args) == 2 else str(self.args[:-1])
 
     def __str__(self) -> str:
-        return (
-            self.name + f"({self.args[0]})"
-            if len(self.args) == 2
-            else self.name + str(self.args[:-1])
-        )
+        return f"{self.name}{self.arg_str}"
 
-    def _pretty(self, printer: Any = None) -> prettyForm:
-        return prettyForm(self.__str__())
-
-    def _sympystr(self, printer: Any) -> str:
-        return self.__str__()
-
-    def _latex(self, printer: Any = None) -> str:
-        return (
-            latex_symbols[self.name] + f"({self.args[0]})"
-            if len(self.args) == 2
-            else self.name + str(self.args[:-1])
-        )
+    def _latex(self, printer: Any = None) -> str:  # prob always want latex here?
+        return f"{latex_symbols[self.name]}{self.arg_str}"
 
 
-class VectorFunction(_FunctionWithSystem):
+class VectorFunction(BaseFunction):
     """Physical-domain vector field placeholder v(x).
 
     The .doit() method builds a VectorAdd of component scalar Functions
     times basis vectors in the computational domain.
     """
 
+    system: CoordSys
+
     def __new__(cls, name: str, system: CoordSys) -> Self:
-        obj = cast(
-            Self, Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
-        )
+        obj: Self = Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
         obj.system = system
         obj.name = name.lower()
         return obj
@@ -475,29 +406,29 @@ class VectorFunction(_FunctionWithSystem):
         """Return function in computational domain"""
         vn = self.system._variable_names
         return VectorAdd.fromiter(
-            Function(self.name.upper() + f"_{latex_symbols[vn[i]]}")(  # ty:ignore[call-non-callable]
+            Function(f"{self.name.upper()}_{latex_symbols[vn[i]]}")(
                 *self.system.base_scalars()
-            )
+            )  # ty:ignore[call-non-callable]
             * bi
             for i, bi in enumerate(self.system.base_vectors())
         )
-
-    def _pretty(self, printer: Any = None) -> prettyForm:
-        return prettyForm(self.__str__())
-
-    def _sympystr(self, printer: Any) -> str:
-        return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
         return r"\mathbf{{%s}}" % (latex_symbols[self.name],) + str(self.args[:-1])  # noqa: UP031
 
 
-class JAXArray(_ArrayBackedFunction):
+class JAXArray(BaseFunction):
     """Wrapper for a raw JAX array tied to a function space.
 
     Primarily used as an intermediate symbolic handle that can forward
     (apply) basis transforms through functionspace.forward().
     """
+
+    array: Array
+    functionspace: (
+        OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum
+    )
+    argument: int
 
     def __new__(
         cls,
@@ -505,7 +436,7 @@ class JAXArray(_ArrayBackedFunction):
         V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
         name: str | None = None,
     ) -> Self:
-        obj = cast(Self, Function.__new__(cls, sp.Dummy()))
+        obj: Self = Function.__new__(cls, sp.Dummy())
         obj.array = array
         obj.functionspace = V
         obj.argument = 3
@@ -522,58 +453,48 @@ class JAXArray(_ArrayBackedFunction):
         return self
 
     def __str__(self) -> str:
-        return self.name + f"({self.functionspace.name})"
-
-    def _pretty(self, printer: Any = None) -> prettyForm:
-        return prettyForm(self.__str__())
-
-    def _sympystr(self, printer: Any) -> str:
-        return self.__str__()
+        return f"{self.name}({self.functionspace.name})"
 
     def _latex(self, printer: Any = None) -> str:
-        return latex_symbols[self.name] + f"({self.functionspace.name})"
+        return f"{latex_symbols[self.name]}({self.functionspace.name})"
 
 
-class Jaxf(_ArrayBackedFunction):
+class Jaxf(BaseFunction):
     """Symbolic wrapper for a JAX array interpreted in backward transform.
 
     Used when converting coefficient arrays back to physical space via
     functionspace.backward().
     """
 
+    array: Array
+    functionspace: OrthogonalSpace | TensorProductSpace | DirectSum
+
     def __new__(
         cls,
         array: Array,
-        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
+        V: OrthogonalSpace | TensorProductSpace | DirectSum,
         name: str | None = None,
     ) -> Self:
-        obj = cast(Self, Function.__new__(cls, sp.Dummy()))
+        obj: Self = Function.__new__(cls, sp.Dummy())
         obj.array = array
         obj.functionspace = V
         obj.name = name if name is not None else "Jaxf"
         return obj
 
     def backward(self):
-        assert not isinstance(self.functionspace, VectorTensorProductSpace)
         return self.functionspace.backward(self.array)
 
     def doit(self, **hints: dict) -> Function:
         return self
 
     def __str__(self) -> str:
-        return self.name + f"({self.functionspace.name})"
-
-    def _pretty(self, printer: Any = None) -> prettyForm:
-        return prettyForm(self.__str__())
-
-    def _sympystr(self, printer: Any) -> str:
-        return self.__str__()
+        return f"{self.name}({self.functionspace.name})"
 
     def _latex(self, printer: Any = None) -> str:
-        return latex_symbols[self.name] + f"({self.functionspace.name})"
+        return f"{latex_symbols[self.name]}({self.functionspace.name})"
 
 
-class JAXFunction(_ArrayBackedFunction):
+class JAXFunction(ManySpaceFunction):
     """Symbolic + numeric hybrid representing coefficients in a space.
 
     Represents a function on a given space with a JAX array of expansion coefficients.
@@ -582,21 +503,25 @@ class JAXFunction(_ArrayBackedFunction):
     product of coefficients (Jaxf) and test basis (TrialFunction).
     """
 
+    array: Array
+    argument: int
+    functionspace: OrthogonalSpace | TensorProductSpace | DirectSum
+
     def __new__(
         cls,
         array: Array,
-        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
+        V: OrthogonalSpace | TensorProductSpace | DirectSum,
         name: str | None = None,
     ) -> Self:
         coors: CoordSys = V.system
-        obj = cast(
-            Self,
-            Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)])),
+        obj: Self = Function.__new__(
+            cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)])
         )
         obj.array = array
         obj.functionspace = V
         obj.argument = 2
         obj.name = name if name is not None else "JAXFunction"
+        obj.own_name = "JAXFunction"
         return obj
 
     def backward(self):
@@ -604,39 +529,8 @@ class JAXFunction(_ArrayBackedFunction):
         return self.functionspace.backward(self.array)
 
     def doit(self, **hints: Any) -> Expr:
-        return (
-            Jaxf(self.array, self.functionspace, self.name)
-            * TrialFunction(self.functionspace).doit()
-        )
-
-    def __str__(self) -> str:
-        return "".join(
-            (
-                self.name,
-                "(",
-                ", ".join([i.name for i in self.functionspace.system._cartesian_xyz]),
-                "; ",
-                self.functionspace.name,
-                ")",
-            )
-        )
-
-    def _latex(self, printer: Any = None) -> str:
-        name = self.name
-        fspace = self.functionspace
-        if name != "JAXFunction":
-            assert not isinstance(fspace, DirectSum)
-            if fspace.rank == 1:
-                name = r"\mathbf{ {%s} }" % (self.name,)  # noqa: UP031
-
-        all_names: str = ",".join([i.name for i in fspace.system._cartesian_xyz])
-        return "".join((name, "(", all_names, "; ", fspace.name, ")"))
-
-    def _pretty(self, printer: Any = None) -> prettyForm:
-        return prettyForm(self.__str__())
-
-    def _sympystr(self, printer: Any) -> str:
-        return self.__str__()
+        fs = self.functionspace
+        return Jaxf(self.array, fs, self.name) * TrialFunction(fs).doit()
 
     @jax.jit(static_argnums=0)
     def __matmul__(self, a: Array) -> Array:

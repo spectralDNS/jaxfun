@@ -302,6 +302,7 @@ def GaussNewton(
     | None = None,
     max_linesearch_steps: int = 25,
     max_learning_rate: float = 1.0,
+    initial_guess_strategy: str = "one",
 ) -> nnx.Optimizer:
     """Create a Gauss-Newton / Hessian-based optimizer.
 
@@ -318,8 +319,8 @@ def GaussNewton(
             linesearch is used.
         max_linesearch_steps: Maximum steps for the zoom line search. Only used if
             linesearch is None.
-        max_learning_rate: Maximum learning rate for line search. Only used if
-            linesearch is None.
+        initial_guess_strategy: Strategy for initial step size guess in line search.
+            Only used if linesearch is None. Either 'one' or  'keep'.
 
     Returns:
         NamedOptimizer with Hessian / Gauss-Newton updates.
@@ -327,7 +328,8 @@ def GaussNewton(
     from jaxfun.pinns.hessoptimizer import hess
 
     linesearch = linesearch or optax.scale_by_zoom_linesearch(
-        max_linesearch_steps, max_learning_rate=max_learning_rate
+        max_linesearch_steps=max_linesearch_steps,
+        initial_guess_strategy=initial_guess_strategy,
     )
 
     opt = hess(
@@ -571,6 +573,7 @@ class Trainer:
 
             if allow_early_break:  # noqa: SIM102
                 if loss < abs_limit_loss or abs(loss - loss_old) < abs_limit_change:
+                    self.losses.append(loss)
                     break
 
             loss_old = loss
@@ -588,7 +591,7 @@ class Trainer:
             self.losses.append(loss)
 
         if print_final_loss and rank == 0:
-            print(f"Final loss for {longname}: {loss}")
+            print(f"Final loss for {longname}: {loss} after {epoch} epochs")
 
 
 class TimeMarchingTrainer(Trainer):
@@ -613,19 +616,24 @@ class TimeMarchingTrainer(Trainer):
         self.states = {}
         super().__init__(loss_fn)
 
-    def update_time(self, module: nnx.Module, save_state: bool = True) -> None:
+    def update_time(
+        self, module: nnx.Module, save_state: bool = True, extrapolate: bool = False
+    ) -> None:
         """Update the mesh, loss function and module for the next time segment.
 
         Args:
             module: The module to update.
             save_state: If True, saves the current module state in self.states
+            extrapolate: If True, uses extrapolation for new initial condition.
 
         """
         if save_state:
             self.states[self.mesh.timestep] = deepcopy(nnx.state(module))
         self.mesh.update_time()
         self.loss_fn.update_time(module, self.mesh.dt)
-        if self.mesh.timestep > 1:  # Use extrapolation for new initial condition
+        if (
+            self.mesh.timestep > 1 and extrapolate
+        ):  # Use extrapolation for new initial condition
             new_params = jax.tree.map(
                 lambda u, p: 2 * u - p,
                 self.states[self.mesh.timestep - 1],
@@ -656,3 +664,47 @@ class TimeMarchingTrainer(Trainer):
         elif isinstance(u, sp.Expr):
             u0 = evaluate(u, x0)
         return x0, u0
+
+
+class DiscreteTimeTrainer(Trainer):
+    """Trainer subclass for time-dependent PINNs using discrete time.
+
+    Extends Trainer to update target after each training segment.
+
+    Attributes:
+        states: Dictionary storing module states at given time steps.
+
+    """
+
+    def __init__(self, loss_fn: Loss) -> None:
+        """Time-dependent Trainer for optimization loops.
+
+        Args:
+            loss_fn: Loss function / object (Loss instance) to optimize.
+        """
+        self.timestep: int = 0
+        self.states = {}
+        super().__init__(loss_fn)
+
+    def step(
+        self, module: nnx.Module, save_state: bool = True, extrapolate: bool = False
+    ) -> None:
+        """Move to next timestep, updating module parameters.
+
+        Args:
+            module: The module to update.
+            save_state: If True, saves the current module state in self.states
+
+        """
+        if save_state:
+            self.states[self.timestep] = deepcopy(nnx.state(module))
+        if (
+            self.timestep > 1 and extrapolate
+        ):  # Use extrapolation for new initial condition
+            new_params = jax.tree.map(
+                lambda u, p: 2 * u - p,
+                self.states[self.timestep - 1],
+                self.states[self.timestep - 2],
+            )
+            nnx.update(module, new_params)
+        self.timestep += 1

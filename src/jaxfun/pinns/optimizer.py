@@ -17,6 +17,8 @@ from jaxfun.pinns.distributed import process_allmean
 
 from .loss import Loss
 
+LossFn = Loss | Callable[[nnx.Module], Array]
+
 
 class NamedOptimizer[M: nnx.Module](nnx.Optimizer[M]):
     """Wrapper optimizer that stores a human-readable name and module reference.
@@ -83,7 +85,7 @@ def _gradient_descent_based_optimizer(
         lr = optax.linear_schedule(learning_rate, end_learning_rate, decay_steps)
         lr_str += f"->{end_learning_rate} in {decay_steps} steps"
     opt = opt_constructor(lr, **opt_kwargs)
-    base_name = opt_constructor.__name__.capitalize()
+    base_name: str = opt_constructor.__name__.capitalize()  # ty:ignore[unresolved-attribute]
     name = f"{base_name}({lr_str})"
     opt = NamedOptimizer(module, opt, nnx.Param, name=name)
     return opt
@@ -92,8 +94,8 @@ def _gradient_descent_based_optimizer(
 def sgd(
     u: FlaxFunction | nnx.Module,
     learning_rate: float = 1e-3,
-    end_learning_rate: float = None,
-    decay_steps: int = None,
+    end_learning_rate: float | None = None,
+    decay_steps: int | None = None,
     *,
     momentum: float | None = None,
     nesterov: bool = False,
@@ -130,8 +132,8 @@ def sgd(
 def adam(
     u: FlaxFunction | nnx.Module,
     learning_rate: float = 1e-3,
-    end_learning_rate: float = None,
-    decay_steps: int = None,
+    end_learning_rate: float | None = None,
+    decay_steps: int | None = None,
     *,
     b1: float = 0.9,
     b2: float = 0.999,
@@ -181,8 +183,8 @@ def adam(
 def soap(
     u: FlaxFunction | nnx.Module,
     learning_rate: float = 1e-3,
-    end_learning_rate: float = None,
-    decay_steps: int = None,
+    end_learning_rate: float | None = None,
+    decay_steps: int | None = None,
     *,
     b1: float = 0.95,
     b2: float = 0.95,
@@ -343,7 +345,7 @@ def GaussNewton(
 
 
 def train(
-    loss_fn: Loss, allreduce_gradients_and_loss: bool = False
+    loss_fn: LossFn, allreduce_gradients_and_loss: bool = False
 ) -> Callable[[nnx.Module, nnx.Optimizer, Array, tuple[Array], tuple[Array]], Array]:
     """Build a JIT-compiled training step for a loss function.
 
@@ -356,6 +358,29 @@ def train(
         A function (module, optimizer, gw, x, target) -> loss suitable for epoch loops.
     """
 
+    if isinstance(loss_fn, Loss):
+
+        def loss_with_gw(
+            m: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+        ) -> Array:
+            return loss_fn.loss_with_gw(m, gw, xs, targets)
+
+        def JTJ_with_gw(
+            m: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+        ) -> Array:
+            return loss_fn.JTJ(m, gw, xs, targets)
+    else:
+
+        def loss_with_gw(
+            m: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+        ) -> Array:
+            return loss_fn(m)
+
+        def JTJ_with_gw(
+            m: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+        ) -> Array:
+            return jnp.array(0.0)
+
     @nnx.jit
     def train_step(
         module: nnx.Module,
@@ -365,10 +390,10 @@ def train(
         targets: tuple[Array],
     ) -> Array:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, gw, xs, targets)
+            return loss_with_gw(m, gw, xs, targets)
 
         def JTJ(m: nnx.Module) -> Array:
-            return loss_fn.JTJ(m, gw, xs, targets)
+            return JTJ_with_gw(m, gw, xs, targets)
 
         gd = nnx.graphdef(module)
         loss, gradients = nnx.value_and_grad(value_fn)(module)
@@ -390,7 +415,7 @@ def train(
         module: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
     ) -> tuple[Array, PyTree]:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, gw, xs, targets)
+            return loss_with_gw(m, gw, xs, targets)
 
         return nnx.value_and_grad(value_fn)(module)
 
@@ -405,11 +430,11 @@ def train(
         targets: tuple[Array],
     ) -> None:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_fn.loss_with_gw(m, gw, xs, targets)
+            return loss_with_gw(m, gw, xs, targets)
 
         gd = nnx.graphdef(module)
         value_fn_state = lambda state: value_fn(nnx.merge(gd, state))
-        GN_loss_fn = lambda state: loss_fn.JTJ(nnx.merge(gd, state), gw, xs, targets)
+        GN_loss_fn = lambda state: JTJ_with_gw(nnx.merge(gd, state), gw, xs, targets)
         optimizer.update(
             module,
             gradients,
@@ -483,12 +508,12 @@ class Trainer:
 
     def train(
         self,
-        opt: nnx.Optimizer,
+        opt: nnx.Optimizer | NamedOptimizer,
         num: int,
         *,
         epoch_print: int = 100,
-        name: str = None,
-        module: nnx.Module = None,
+        name: str | None = None,
+        module: nnx.Module | None = None,
         abs_limit_loss: float = 0,
         abs_limit_change: float = 0,
         print_final_loss: bool = False,
@@ -541,7 +566,7 @@ class Trainer:
                 raise ValueError(
                     "Module must be provided if opt is not a NamedOptimizer"
                 )
-            module = opt.module
+            module: nnx.Module = opt.module  # ty:ignore[invalid-assignment]
 
         if alpha <= 0 or alpha >= 1:
             raise ValueError("alpha must be in the range (0, 1)")

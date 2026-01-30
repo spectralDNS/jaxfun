@@ -1,3 +1,5 @@
+from typing import cast
+
 import sympy as sp
 
 from jaxfun.coordinates import CartCoordSys, get_CoordSys
@@ -29,7 +31,8 @@ def test_contravariant_basis_properties():
     )
     # bt rows are gt @ b rows
     b = C.get_covariant_basis()
-    check = C.simplify(gt @ b)
+    check = cast(sp.MatrixBase, C.simplify(gt @ b))
+    bt = cast(sp.MatrixBase, bt)
     assert all(
         sp.simplify(bt[i, j] - check[i, j]) == 0 for i in range(3) for j in range(3)
     )

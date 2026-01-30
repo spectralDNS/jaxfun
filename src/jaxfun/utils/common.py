@@ -1,16 +1,22 @@
-from collections.abc import Callable, Iterable
-from functools import partial, wraps
-from typing import Any, NamedTuple
+from __future__ import annotations
+
+from collections.abc import Callable
+from functools import wraps
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, overload
 
 import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
-from jax.experimental import sparse
 from jax.experimental.sparse import BCOO
 from scipy import sparse as scipy_sparse
 from scipy.special import sph_harm
-from sympy import Expr, Number, Symbol
+from sympy import Expr, Symbol
+
+from jaxfun.typing import FloatLike
+
+if TYPE_CHECKING:
+    from jaxfun.coordinates import BaseScalar
 
 Ynm = lambda n, m, x, y: sph_harm(m, n, y, x)
 n = Symbol("n", positive=True, integer=True)
@@ -29,9 +35,9 @@ __all__ = (
 
 
 def jit_vmap(
-    in_axes: int | None | tuple[Any] = 0,
+    in_axes: int | None | tuple[int | None, ...] = 0,
     out_axes: Any = 0,
-    static_argnums: int | tuple[int] | None = 0,
+    static_argnums: int | tuple[int, ...] | None = 0,
     ndim: int = 0,
 ):
     """Decorator that JIT compiles a function and applies vmap if the first argument is
@@ -54,7 +60,7 @@ def jit_vmap(
     in_axes = (None,) + in_axes if isinstance(in_axes, tuple) else (None, in_axes)
 
     def wrap(func):
-        @partial(jax.jit, static_argnums=static_argnums)
+        @jax.jit(static_argnums=static_argnums)
         @wraps(func)
         def wrapper(self, *args, **kwargs):
             if args[0].ndim == ndim:
@@ -69,67 +75,79 @@ def jit_vmap(
 
 
 class Domain(NamedTuple):
-    lower: Number
-    upper: Number
+    lower: FloatLike
+    upper: FloatLike
 
 
-def ulp(x: float) -> Array:
+def ulp(x: float | Array) -> Array:
     return jnp.nextafter(x, x + 1) - x
 
 
 def diff(
-    fun: Callable[[float, Array], float], k: int = 1
-) -> Callable[[Array, Array], Array]:
+    fun: Callable[[Array, Any], Array], k: int = 1
+) -> Callable[[Array, Any], Array]:
     for _ in range(k):
         fun = jax.grad(fun)
     return jax.jit(jax.vmap(fun, in_axes=(0, None)))
 
 
 def diffx(
-    fun: Callable[[float, int], float], k: int = 1
-) -> Callable[[Array, int], Array]:
+    fun: Callable[[Array, Any], Array], k: int = 1
+) -> Callable[[Array, Any], Array]:
     for _ in range(k):
         fun = jax.grad(fun)
-    return jax.vmap(fun, in_axes=(0, None))  # type: ignore[return-value]
+    return jax.vmap(fun, in_axes=(0, None))
 
 
-def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
+def jacn(fun: Callable[[Array], Array], k: int = 1) -> Callable[[Array], Array]:
     for _ in range(k):
         fun = jax.jacfwd(fun)  # if i % 2 else jax.jacrev(fun)
-    return jax.vmap(fun, in_axes=0, out_axes=0)  # type: ignore[return-value]
+    return jax.vmap(fun, in_axes=0, out_axes=0)
 
 
+@overload
+def matmat(a: Array, b: Array) -> Array: ...
+@overload
+def matmat(a: BCOO, b: BCOO) -> BCOO: ...
+@overload
+def matmat(a: Array, b: BCOO) -> Array: ...  # unchecked
+@overload
+def matmat(a: BCOO, b: Array) -> Array: ...  # unchecked
 @jax.jit
 def matmat(a: Array | BCOO, b: Array | BCOO) -> Array | BCOO:
     return a @ b
 
 
-@partial(jax.jit, static_argnums=1)
+@jax.jit(static_argnums=1)
 def eliminate_near_zeros(a: Array, tol: int = 100) -> Array:
-    atol: float = ulp(jnp.abs(a).max()) * tol
+    atol: Array = ulp(jnp.abs(a).max()) * tol
     return jnp.where(jnp.abs(a) < atol, jnp.zeros(a.shape), a)
 
 
-def fromdense(a: Array, tol: int = 100) -> sparse.BCOO:
+def fromdense(a: Array, tol: int = 100) -> BCOO:
     a0: Array = eliminate_near_zeros(a, tol=tol)
-    return sparse.BCOO.fromdense(a0)
+    return BCOO.fromdense(a0)
 
 
-def tosparse(a: Array, tol: int = 100) -> sparse.BCOO:
+def tosparse(a: Array, tol: int = 100) -> BCOO:
     a0: Array = eliminate_near_zeros(a, tol=tol)
-    return sparse.BCOO.from_scipy_sparse(scipy_sparse.csr_matrix(a0))
+    return BCOO.from_scipy_sparse(scipy_sparse.csr_matrix(a0))
+
+
+class ArrayFn(Protocol):
+    def __call__(self, *args: Array) -> Array: ...
 
 
 def lambdify(
-    args: tuple[Symbol],
-    expr: Expr,
-    modules: list[str] = None,
+    args: sp.Basic | tuple[Symbol | BaseScalar, ...] | sp.Tuple | None,
+    expr: Expr | sp.Basic,
+    modules: str | list[str | dict[str, Callable]] | None = None,
     printer: Any = None,
     use_imps: bool = True,
     dummify: bool = False,
     cse: bool = False,
     doctring_limit: int = 1000,
-) -> Callable[[Iterable[Array]], Array]:
+) -> ArrayFn:
     modules_default = ["jax", {"Ynm": Ynm}]
     modules = modules_default if modules is None else [modules] + modules_default
     return sp.lambdify(

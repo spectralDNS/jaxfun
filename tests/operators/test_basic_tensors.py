@@ -1,5 +1,8 @@
+from typing import cast
+
 import pytest
 import sympy as sp
+import sympy.vector as sp_vector
 
 from jaxfun.coordinates import BaseDyadic, CartCoordSys, get_CoordSys
 from jaxfun.operators import (
@@ -60,7 +63,7 @@ def test_sign(i, j):
 def test_outer_basic_and_linear():
     v1, v2 = N.i, N.j
     o = outer(v1, v2)
-    assert isinstance(o, BaseDyadic | sp.vector.DyadicAdd)
+    assert isinstance(o, BaseDyadic | sp_vector.DyadicAdd)
     if isinstance(o, BaseDyadic):
         assert o.args == (v1, v2)
     else:
@@ -104,9 +107,9 @@ def test_cross_cartesian_basis(a, b, expected):
 
 
 def test_cross_same_vectors_zero():
-    assert cross(N.i, N.i) == sp.vector.VectorZero()
-    assert cross(N.j, N.j) == sp.vector.VectorZero()
-    assert cross(N.k, N.k) == sp.vector.VectorZero()
+    assert cross(N.i, N.i) == sp_vector.VectorZero()
+    assert cross(N.j, N.j) == sp_vector.VectorZero()
+    assert cross(N.k, N.k) == sp_vector.VectorZero()
 
 
 def test_cross_cylindrical():
@@ -148,7 +151,7 @@ def test_cross_with_scalars():
 
 
 def test_cross_zero_cases():
-    zero = sp.vector.VectorZero()
+    zero = sp_vector.VectorZero()
     assert cross(N.i, zero) == zero
     assert cross(zero, N.j) == zero
 
@@ -193,7 +196,7 @@ def test_dot_dyadic_dyadic():
 
 
 def test_dot_zero_cases():
-    zero = sp.vector.VectorZero()
+    zero = sp_vector.VectorZero()
     assert dot(zero, N.i) == 0
     assert dot(N.i, zero) == 0
 
@@ -306,7 +309,10 @@ def test_doit_vector_expression():
         (N.k, N.i, N.j),
     ],
 )
-def test_eijk_with_cross_identity(perm):
+def test_eijk_with_cross_identity(
+    perm: tuple[sp_vector.BaseVector, sp_vector.BaseVector, sp_vector.BaseVector],
+):
     a, b, cvec = perm
-    val = dot(cross(a, b), cvec)
+    cross_vec = cast(sp_vector.Vector, cross(a, b))
+    val = dot(cross_vec, cvec)
     assert sp.simplify(val - 1) == 0

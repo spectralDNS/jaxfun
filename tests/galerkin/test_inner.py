@@ -1,6 +1,10 @@
+from typing import cast
+
+import jax
 import jax.numpy as jnp
 import pytest
 import sympy as sp
+from jax.experimental.sparse import BCOO
 
 from jaxfun.galerkin import Composite, TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev
@@ -10,29 +14,34 @@ from jaxfun.utils import ulp
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
-def test_inner(space: Legendre | Chebyshev) -> None:
+def test_inner(space: type[Legendre] | type[Chebyshev]) -> None:
     N = 11
     V = space(N)
     x = V.system.x
     u = TrialFunction(V)
     v = TestFunction(V)
     M = inner(v * u, sparse=True, sparse_tol=1000)
+    assert isinstance(M, BCOO)
     M0 = V.mass_matrix()
     assert jnp.allclose(M.data, M0.data)
     M = inner(x * v * u, sparse=True)
+    assert isinstance(M, BCOO)
     a0 = answer1[space.__name__]
     assert jnp.allclose(M.todense().diagonal(1), a0)
     assert jnp.allclose(M.todense().diagonal(-1), a0)
     M = inner(x * v * u + sp.diff(u, x) * v, sparse=True)
+    assert isinstance(M, BCOO)
 
     N = 11
     C = Composite(N, space, {"left": {"D": 0}, "right": {"D": 0}})
     u = TrialFunction(C)
     v = TestFunction(C)
     M = inner(x * v * u + sp.diff(u, x) * v, sparse=False)
+    assert hasattr(M, "diagonal")
+    M_arr = cast(jax.Array, M)
     a0 = answer2[space.__name__]
     for d in (-3, -1, 1, 3):
-        assert jnp.allclose(M.diagonal(d), a0[d], atol=1000 * ulp(1.0))
+        assert jnp.allclose(M_arr.diagonal(d), a0[d], atol=1000 * ulp(1.0))
 
 
 # Some data from shenfun
@@ -163,5 +172,4 @@ answer2 = {
 }
 
 if __name__ == "__main__":
-    test_inner(Chebyshev)
-    test_inner(Legendre)
+    pass

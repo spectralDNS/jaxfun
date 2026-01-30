@@ -46,7 +46,7 @@ def test_composite_and_mass_matrix():
     M = C.mass_matrix().todense()
     assert M.shape == (C.dim, C.dim)
     # Stencil consistency with scipy diag construction
-    scipyM = C.stencil_to_scipy_sparse().toarray()
+    scipyM = C.stencil_to_scipy_sparse().todense()
     assert scipyM.shape[1] == C.N
 
 

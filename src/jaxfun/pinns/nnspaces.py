@@ -1,7 +1,8 @@
-from collections.abc import Callable
+from collections.abc import Sequence
 from functools import partial
 
 import jax.numpy as jnp
+import sympy as sp
 from flax import nnx
 
 from jaxfun.basespace import BaseSpace
@@ -11,7 +12,8 @@ from jaxfun.coordinates import (
     CoordSys,
 )
 from jaxfun.galerkin import Chebyshev
-from jaxfun.typing import Array
+from jaxfun.galerkin.orthogonal import OrthogonalSpace
+from jaxfun.typing import Activation
 from jaxfun.utils.common import Domain
 
 
@@ -44,7 +46,7 @@ class NNSpace(BaseSpace):
         dims: int = 1,
         rank: int = 0,
         transient: bool = False,
-        system: CoordSys = None,
+        system: CoordSys | None = None,
         name: str = "NN",
     ) -> None:
         """Initialize a neural network function space."""
@@ -62,7 +64,7 @@ class NNSpace(BaseSpace):
         )
         BaseSpace.__init__(self, system, name)
 
-    def base_variables(self) -> tuple[BaseScalar | BaseTime, ...]:
+    def base_variables(self) -> tuple[BaseScalar | BaseTime, ...] | sp.Tuple:
         """Return base variables (add time if transient).
 
         Returns:
@@ -98,9 +100,9 @@ class MLPSpace(NNSpace):
         hidden_size: list[int] | int,
         dims: int = 1,
         rank: int = 0,
-        system: CoordSys = None,
+        system: CoordSys | None = None,
         transient: bool = False,
-        act_fun: Callable[[Array], Array] = nnx.tanh,
+        act_fun: Activation = nnx.tanh,
         weight_factorization: bool = False,
         *,
         name: str,
@@ -141,14 +143,14 @@ class PirateSpace(NNSpace):
 
     def __init__(
         self,
-        hidden_size: list[int] | int,
+        hidden_size: Sequence[int] | int,
         dims: int = 1,
         rank: int = 0,
-        system: CoordSys = None,
+        system: CoordSys | None = None,
         name: str = "PirateNet",
         transient: bool = False,
-        act_fun: Callable[[Array], Array] = nnx.tanh,
-        act_fun_hidden: Callable[[Array], Array] = nnx.tanh,
+        act_fun: Activation = nnx.tanh,
+        act_fun_hidden: Activation = nnx.tanh,
         # PirateNet specific parameters
         nonlinearity: float = 0.0,
         periodicity: dict | None = None,
@@ -202,11 +204,11 @@ class KANMLPSpace(NNSpace):
         hidden_size: int | list[int],
         dims: int = 1,
         rank: int = 0,
-        system: CoordSys = None,
+        system: CoordSys | None = None,
         name: str = "KANMLP",
         transient: bool = False,
-        act_fun: Callable[[Array], Array] = nnx.tanh,
-        basespace: BaseSpace = Chebyshev.Chebyshev,
+        act_fun: Activation = nnx.tanh,
+        basespace: type[OrthogonalSpace] = Chebyshev.Chebyshev,
         domains: list[tuple[float, float]] | None = None,
     ) -> None:
         """Initialize KANMLPSpace metadata."""
@@ -215,7 +217,9 @@ class KANMLPSpace(NNSpace):
         self.hidden_size = hidden_size
         self.act_fun = act_fun
         self.basespace = basespace
-        self.domains = domains
+        self.domains: list[Domain] | None = (
+            [Domain(l, u) for l, u in domains] if domains is not None else None
+        )
         if hidden_size == 1 and self.dims != 1:
             raise ValueError(
                 "hidden_size=1 only allowed for dims=1. Consider using a "
@@ -256,11 +260,11 @@ class sPIKANSpace(NNSpace):
         hidden_size: list[int] | int,
         dims: int = 1,
         rank: int = 0,
-        system: CoordSys = None,
+        system: CoordSys | None = None,
         name: str = "sPIKAN",
         transient: bool = False,
-        act_fun: Callable[[Array], Array] = nnx.tanh,
-        basespace: BaseSpace = Chebyshev.Chebyshev,
+        act_fun: Activation = nnx.tanh,
+        basespace: type[OrthogonalSpace] = Chebyshev.Chebyshev,
         domains: list[Domain] | None = None,
     ) -> None:
         """Initialize sPIKANSpace metadata."""
@@ -295,7 +299,7 @@ class UnionSpace(NNSpace):
 
     def __init__(self, *spaces: NNSpace, name: str = "UnionNN") -> None:
         """Initialize UnionSpace metadata."""
-        self.spaces = tuple(*spaces)
+        self.spaces = spaces
         NNSpace.__init__(
             self,
             dims=self.spaces[0].dims,

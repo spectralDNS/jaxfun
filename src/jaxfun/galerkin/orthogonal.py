@@ -14,7 +14,10 @@ Subclasses must implement:
     reference_domain
 """
 
-from functools import partial
+from __future__ import annotations
+
+from abc import abstractmethod
+from typing import TYPE_CHECKING, Self, overload
 
 import jax
 import jax.numpy as jnp
@@ -26,6 +29,9 @@ from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
 from jaxfun.typing import Array
 from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
+
+if TYPE_CHECKING:
+    from jaxfun.galerkin.composite import BCGeneric, BoundaryConditions, DirectSum
 
 
 class OrthogonalSpace(BaseSpace):
@@ -51,26 +57,34 @@ class OrthogonalSpace(BaseSpace):
         self,
         N: int,
         *,
-        domain: Domain,
-        system: CoordSys = None,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
         name: str = "OrthogonalSpace",
         fun_str: str = "psi",
+        **kw,
     ) -> None:
         self.N = N
         self._num_quad_points = N
+        if domain is None:
+            domain = self.reference_domain
         self._domain = Domain(*domain)
-        self.bcs = None
-        self.orthogonal = self
+        self.bcs: BoundaryConditions | None = None
+        self.orthogonal: Self = self
         self.stencil = {0: 1}
         self.S = sparse.BCOO(
             (jnp.ones(N), jnp.vstack((jnp.arange(N),) * 2).T), shape=(N, N)
         )
-        BaseSpace.__init__(self, system, name, fun_str)
+        super().__init__(system, name, fun_str)
 
-    @partial(jax.jit, static_argnums=(0, 1))
+    @abstractmethod
+    def norm_squared(self) -> Array:
+        """Return norms squared"""
+        pass
+
+    @abstractmethod
     def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return (points, weights) for orthogonality measure (abstract)."""
-        raise NotImplementedError
+        pass
 
     @property
     def num_quad_points(self) -> int:
@@ -78,7 +92,7 @@ class OrthogonalSpace(BaseSpace):
         return self._num_quad_points
 
     @jit_vmap(in_axes=(0, None))
-    def evaluate(self, X: float, c: Array) -> Array:
+    def evaluate(self, X: float | Array, c: Array) -> Array:
         """Evaluate truncated series sum_k c_k psi_k(X).
 
         Args:
@@ -90,7 +104,7 @@ class OrthogonalSpace(BaseSpace):
         """
         return self.eval_basis_functions(X)[: c.shape[0]] @ c
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def vandermonde(self, X: Array) -> Array:
         r"""Return pseudo-Vandermonde matrix V_{m,k}=psi_k(X_m).
 
@@ -102,34 +116,34 @@ class OrthogonalSpace(BaseSpace):
         """
         return self.evaluate_basis_derivative(X, 0)
 
-    @jit_vmap(in_axes=(0, None))
-    def eval_basis_function(self, X: float, i: int) -> Array:
+    @abstractmethod
+    def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single basis function psi_i at point X (abstract)."""
-        raise NotImplementedError
+        pass
 
-    @jit_vmap(in_axes=0)
-    def eval_basis_functions(self, X: float) -> Array:
+    @abstractmethod
+    def eval_basis_functions(self, X: float | Array) -> Array:
         """Evaluate all basis functions psi_0..psi_{N-1} at X (abstract)."""
-        raise NotImplementedError
+        pass
 
-    @partial(jax.jit, static_argnums=(0, 2))
+    @jax.jit(static_argnums=(0, 2))
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
         """Return k-th derivative Vandermonde (automatic Jacobian stack)."""
         return jacn(self.eval_basis_functions, k)(X)
 
     # backward is wrapped because padding may require non-jitable code
-    @partial(jax.jit, static_argnums=(0, 2, 3))
+    @jax.jit(static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Backward transform (coefficients -> samples) via evaluate."""
         return self._backward(c, kind, N)
 
-    @partial(jax.jit, static_argnums=(0, 2, 3))
+    @jax.jit(static_argnums=(0, 2, 3))
     def _backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Implementation of backward (allows subclass override)."""
         xj = self.mesh(kind=kind, N=N)
         return self.evaluate(self.map_reference_domain(xj), c)
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def mass_matrix(self) -> BCOO:
         """Return diagonal mass matrix (orthogonality) in sparse format."""
         return BCOO(
@@ -140,14 +154,14 @@ class OrthogonalSpace(BaseSpace):
             shape=(self.N, self.N),
         )
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
         """Forward projection (samples -> coefficients) using orthogonality."""
         A = self.norm_squared() / self.domain_factor
         L = self.scalar_product(u)
         return L / A
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
         """Return vector of inner products <u, psi_i> (weighted)."""
         xj, wj = self.quad_points_and_weights()
@@ -162,22 +176,22 @@ class OrthogonalSpace(BaseSpace):
             wj = wj * sg
         return (u * wj) @ jnp.conj(Pi)
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def apply_stencil_galerkin(self, b: Array) -> Array:
         """Apply (left,right) stencil in Galerkin case (identity here)."""
         return b
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def apply_stencils_petrovgalerkin(self, b: Array, P: BCOO) -> Array:
         """Apply trial stencil only (identity left) for Petrov–Galerkin."""
         return b @ P.T
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def apply_stencil_left(self, b: Array) -> Array:
         """Apply test-side stencil (identity in pure orthogonal space)."""
         return b
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def apply_stencil_right(self, a: Array) -> Array:
         """Apply trial-side stencil (identity in pure orthogonal space)."""
         return a
@@ -208,9 +222,10 @@ class OrthogonalSpace(BaseSpace):
         return self._domain
 
     @property
+    @abstractmethod
     def reference_domain(self) -> Domain:
         """Return canonical reference domain (implemented in subclass)."""
-        raise NotImplementedError
+        pass
 
     @property
     def domain_factor(self) -> int | float:
@@ -225,7 +240,11 @@ class OrthogonalSpace(BaseSpace):
         R = d - c
         return R / L if abs(L - R) > 1e-12 else 1
 
-    def map_expr_reference_domain(self, u: sp.Expr) -> sp.Expr:
+    @overload
+    def map_expr_reference_domain(self, u: sp.Expr) -> sp.Expr: ...
+    @overload
+    def map_expr_reference_domain(self, u: sp.Basic) -> sp.Basic: ...
+    def map_expr_reference_domain(self, u: sp.Expr | sp.Basic) -> sp.Expr | sp.Basic:
         """Return expression u(x) rewritten with reference coord X.
 
         Maps physical x into reference X so u can be evaluated in
@@ -240,7 +259,11 @@ class OrthogonalSpace(BaseSpace):
         x = self.system.base_scalars()[0]
         return u.xreplace({x: c + (x - a) * d})
 
-    def map_expr_true_domain(self, u: sp.Expr) -> sp.Expr:
+    @overload
+    def map_expr_true_domain(self, u: sp.Expr) -> sp.Expr: ...
+    @overload
+    def map_expr_true_domain(self, u: sp.Basic) -> sp.Basic: ...
+    def map_expr_true_domain(self, u: sp.Expr | sp.Basic) -> sp.Expr | sp.Basic:
         """Return expression u(X) rewritten with true coordinate x."""
         x = u.free_symbols
         if len(x) == 0:
@@ -251,6 +274,10 @@ class OrthogonalSpace(BaseSpace):
         x = self.system.base_scalars()[0]
         return u.xreplace({x: a + (x - c) / d})
 
+    @overload
+    def map_reference_domain(self, x: Array) -> Array: ...
+    @overload
+    def map_reference_domain(self, x: sp.Symbol) -> sp.Expr: ...
     def map_reference_domain(self, x: sp.Symbol | Array) -> sp.Expr | Array:
         """Map true domain point x to reference coordinate X."""
         X = x
@@ -263,6 +290,10 @@ class OrthogonalSpace(BaseSpace):
                 X = c + (x - a) * self.domain_factor
         return X
 
+    @overload
+    def map_true_domain(self, X: Array) -> Array: ...
+    @overload
+    def map_true_domain(self, X: sp.Symbol) -> sp.Expr: ...
     def map_true_domain(self, X: sp.Symbol | Array) -> sp.Expr | Array:
         """Map reference coordinate X to true domain point x."""
         x = X
@@ -275,7 +306,7 @@ class OrthogonalSpace(BaseSpace):
                 x = a + (X - c) / self.domain_factor
         return x
 
-    @partial(jax.jit, static_argnums=(0, 1, 2))
+    @jax.jit(static_argnums=(0, 1, 2))
     def mesh(self, kind: str = "quadrature", N: int = 0) -> Array:
         """Return sampling mesh in true domain.
 
@@ -284,7 +315,7 @@ class OrthogonalSpace(BaseSpace):
             N: Number of uniform points (0 -> num_quad_points).
         """
         if kind == "quadrature":
-            return self.map_true_domain(self.quad_points_and_weights(N)[0])  # type: ignore[return-value]
+            return self.map_true_domain(self.quad_points_and_weights(N)[0])
         assert kind == "uniform"
         a, b = self.domain
         M = N if N != 0 else self.num_quad_points
@@ -304,7 +335,7 @@ class OrthogonalSpace(BaseSpace):
         """Return number of spatial dimensions (always 1)."""
         return 1
 
-    def __add__(self, b: BaseSpace):
+    def __add__(self, b: BCGeneric) -> DirectSum:
         """Direct sum self ⊕ b (delegated to composite.DirectSum)."""
         from jaxfun.galerkin.composite import DirectSum
 

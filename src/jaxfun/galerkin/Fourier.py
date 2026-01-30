@@ -1,5 +1,3 @@
-from functools import partial
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -36,8 +34,8 @@ class Fourier(OrthogonalSpace):
     def __init__(
         self,
         N: int,
-        domain: Domain = None,
-        system: CoordSys = None,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
         name: str = "Fourier",
         fun_str: str = "E",
     ) -> None:
@@ -71,7 +69,7 @@ class Fourier(OrthogonalSpace):
         c0 = jnp.ones_like(X, dtype=complex) * c[0]
         return jax.lax.fori_loop(1, len(c), body_fun, c0)
 
-    @partial(jax.jit, static_argnums=(0, 1))
+    @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return equispaced quadrature points and uniform weights.
 
@@ -111,7 +109,7 @@ class Fourier(OrthogonalSpace):
         return jax.lax.exp(1j * self.wavenumbers() * X)
 
     # Cannot jax.jit in case of padding
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:  # type: ignore[override]
+    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Inverse (physical) transform with optional zero-padding.
 
         Pads coefficients to length n (> N) before calling _backward.
@@ -132,7 +130,7 @@ class Fourier(OrthogonalSpace):
             c = jnp.array(c0)
         return self._backward(c, kind, n)
 
-    @partial(jax.jit, static_argnums=(0, 2, 3))
+    @jax.jit(static_argnums=(0, 2, 3))
     def _backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Inverse FFT (possible truncation) to physical space.
 
@@ -150,7 +148,7 @@ class Fourier(OrthogonalSpace):
             return jnp.fft.ifft(c[k], norm="forward")
         return jnp.fft.ifft(c, norm="forward")
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def scalar_product(self, c: Array) -> Array:
         """Return inner products <c, E_k> via forward FFT.
 
@@ -162,7 +160,7 @@ class Fourier(OrthogonalSpace):
         """
         return jnp.fft.fft(c, norm="forward") * 2 * jnp.pi / self.domain_factor
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def forward(self, c: Array) -> Array:
         """Forward FFT (physical -> spectral coefficients)."""
         return jnp.fft.fft(c, norm="forward")

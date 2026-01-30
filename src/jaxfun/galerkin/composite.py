@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from functools import partial
+from collections.abc import Iterator
 
 import jax
 import jax.numpy as jnp
@@ -14,11 +14,12 @@ from scipy import sparse as scipy_sparse
 from sympy import Number
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.Chebyshev import Chebyshev
-from jaxfun.galerkin.Jacobi import Jacobi
-from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.utils.common import Domain, matmat, n
+
+from .Chebyshev import Chebyshev
+from .Jacobi import Jacobi
+from .Legendre import Legendre
+from .orthogonal import OrthogonalSpace
 
 direct_sum_symbol = "\u2295"
 
@@ -131,59 +132,61 @@ class Composite(OrthogonalSpace):
     def __init__(  # noqa: D401  (docstring above)
         self,
         N: int,
-        orthogonal: OrthogonalSpace,
-        bcs: BoundaryConditions,
-        domain: Domain = None,
+        orthogonal: type[Jacobi],
+        bcs: BoundaryConditions | dict,
+        domain: Domain | None = None,
         name: str = "Composite",
         fun_str: str = "phi",
-        system: CoordSys = None,
-        stencil: dict = None,
-        alpha: Number = 0,
-        beta: Number = 0,
+        system: CoordSys | None = None,
+        stencil: dict | None = None,
+        alpha: Number | float = 0,
+        beta: Number | float = 0,
         scaling: sp.Expr = sp.S.One,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
-        OrthogonalSpace.__init__(
-            self, N, domain=domain, system=system, name=name, fun_str=fun_str
-        )
-        self.orthogonal = orthogonal(
+        super().__init__(N, domain=domain, system=system, name=name, fun_str=fun_str)
+        self.orthogonal: Jacobi = orthogonal(
             N, domain=domain, alpha=alpha, beta=beta, system=system
         )
-        self.bcs = BoundaryConditions(bcs)
+        self.bcs: BoundaryConditions = BoundaryConditions(bcs)
         if stencil is None:
+            assert isinstance(self.orthogonal, Jacobi), (
+                "Automatic stencil derivation only supported for Jacobi-based "
+                "orthogonal bases. Provide custom stencil dict otherwise."
+            )
             stencil = get_stencil_matrix(self.bcs, self.orthogonal)
         self.scaling = scaling
         self.stencil = {(si[0]): si[1] / scaling for si in sorted(stencil.items())}
         self.S = BCOO.from_scipy_sparse(self.stencil_to_scipy_sparse())
 
-    @partial(jax.jit, static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int = 0) -> Array:
+    @jax.jit(static_argnums=(0, 1))
+    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return quadrature nodes/weights (delegated to underlying basis)."""
         return self.orthogonal.quad_points_and_weights(N)
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
         """Evaluate constrained expansion at X with composite coeffs c."""
         return self.orthogonal.evaluate(X, self.to_orthogonal(c))
 
-    @partial(jax.jit, static_argnums=(0, 2, 3))
+    @jax.jit(static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> float:
         """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
 
-    @partial(jax.jit, static_argnums=(0, 2))
+    @jax.jit(static_argnums=(0, 2))
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
         """Return k-th derivative Vandermonde (constrained)."""
         P: Array = self.orthogonal.evaluate_basis_derivative(X, k)
         return self.apply_stencil_right(P)
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def vandermonde(self, X: Array) -> Array:
         """Return (constrained) Vandermonde matrix at sample points X."""
         P: Array = self.orthogonal.evaluate_basis_derivative(X, 0)
         return self.apply_stencil_right(P)
 
-    @partial(jax.jit, static_argnums=(0, 2))
+    @jax.jit(static_argnums=(0, 2))
     def eval_basis_function(self, X: float, i: int) -> float:
         """Evaluate single constrained basis function φ_i at X."""
         row: Array = self.get_stencil_row(i)
@@ -192,7 +195,7 @@ class Composite(OrthogonalSpace):
         )
         return matmat(row, psi)
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def eval_basis_functions(self, X: float) -> Array:
         """Evaluate all constrained basis functions at X."""
         P: Array = self.orthogonal.eval_basis_functions(X)
@@ -227,32 +230,32 @@ class Composite(OrthogonalSpace):
         """Return reference domain of underlying orthogonal basis."""
         return self.orthogonal.reference_domain
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def to_orthogonal(self, a: Array) -> Array:
         """Map composite coefficients -> underlying orthogonal coefficients."""
         return a @ self.S
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def apply_stencil_galerkin(self, b: Array) -> Array:
         """Apply stencil on both sides (Galerkin mass-like transform)."""
         return self.S @ b @ self.S.T
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def apply_stencils_petrovgalerkin(self, b: Array, P: BCOO) -> Array:
         """Apply test (S) and trial (P) stencils (Petrov-Galerkin)."""
         return self.S @ b @ P.T
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def apply_stencil_left(self, b: Array) -> Array:
         """Left-multiply by stencil (test projection)."""
         return self.S @ b
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def apply_stencil_right(self, a: Array) -> Array:
         """Right-multiply by stencil transpose (trial projection)."""
         return a @ self.S.T
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def mass_matrix(self) -> BCOO:
         """Return constrained mass matrix in sparse BCOO format."""
         P: BCOO = self.orthogonal.mass_matrix()
@@ -261,14 +264,14 @@ class Composite(OrthogonalSpace):
         )  # sparse @ sparse -> dense (yet sparse format), so need to remove zeros
         return sparse.BCOO.fromdense(T, nse=2 * self.S.nse - self.S.shape[1])
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
         """Project physical samples u -> constrained coefficients."""
         A = self.mass_matrix().todense()
         L = self.scalar_product(u)
         return jnp.linalg.solve(A, L)
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
         """Return right-hand side inner product vector <u, φ_i>."""
         P: Array = self.orthogonal.scalar_product(u)
@@ -321,19 +324,19 @@ class BCGeneric(Composite):
     def __init__(  # noqa: D401
         self,
         N: int,
-        orthogonal: OrthogonalSpace,
+        orthogonal: type[Jacobi],
         bcs: dict,
-        domain: Domain = None,
+        domain: Domain | None = None,
         name: str = "BCGeneric",
         fun_str: str = "B",
-        system: CoordSys = None,
-        stencil: dict = None,
-        alpha: Number = 0,
-        beta: Number = 0,
+        system: CoordSys | None = None,
+        stencil: dict | None = None,
+        alpha: Number | float = 0,
+        beta: Number | float = 0,
         num_quad_points: int = 0,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
-        bcs = BoundaryConditions(bcs, domain=domain)
+        bcs: BoundaryConditions = BoundaryConditions(bcs, domain=domain)
         OrthogonalSpace.__init__(
             self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
@@ -366,7 +369,7 @@ class BCGeneric(Composite):
         """Return ordered boundary values vector."""
         return jnp.array(self.bcs.orderedvals())
 
-    @partial(jax.jit, static_argnums=(0, 1))
+    @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> Array:
         """Quadrature nodes/weights (override to enforce num_quad_points)."""
         N = self.num_quad_points if N == 0 else N
@@ -389,12 +392,12 @@ class DirectSum:
         num_dofs: Free DOFs (from Composite part).
     """
 
-    def __init__(self, a: Composite, b: BCGeneric) -> None:
+    def __init__(self, a: Composite | OrthogonalSpace, b: BCGeneric) -> None:
         assert isinstance(b, BCGeneric)
-        self.basespaces = [a, b]
+        self.basespaces: tuple[Composite, BCGeneric] = (a, b)
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
-        self.system = a.system
+        self.system: CoordSys = a.system
         self.N = a.N
         self._num_quad_points = a._num_quad_points
         self.map_reference_domain = a.map_reference_domain
@@ -407,6 +410,15 @@ class DirectSum:
     def __len__(self) -> int:
         """Return number of summands (always 2)."""
         return len(self.basespaces)
+
+    def __iter__(self) -> Iterator[Composite | BCGeneric]:
+        """Iterate over summands."""
+        return iter(self.basespaces)
+
+    @property
+    def orthogonal(self) -> OrthogonalSpace:
+        """Return underlying orthogonal basis (from homogeneous component)."""
+        return self.basespaces[0].orthogonal
 
     def mesh(self, kind: str = "quadrature", N: int = 0) -> Array:
         """Return mesh from homogeneous Composite summand."""
@@ -426,14 +438,14 @@ class DirectSum:
         """Return free degrees of freedom (Composite part)."""
         return self.basespaces[0].num_dofs
 
-    @partial(jax.jit, static_argnums=0)
+    @jax.jit(static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
         """Evaluate direct-sum function at X with composite coeffs c."""
         return self.basespaces[0].evaluate(X, c) + self.basespaces[1].evaluate(
             X, self.bnd_vals()
         )
 
-    @partial(jax.jit, static_argnums=(0, 2, 3))
+    @jax.jit(static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Backward transform (composite + boundary contribution)."""
         return self.basespaces[0].backward(c, kind, N) + self.basespaces[1].backward(
@@ -576,7 +588,6 @@ if __name__ == "__main__":
 
     from jaxfun.galerkin.arguments import TestFunction, TrialFunction
     from jaxfun.galerkin.Chebyshev import Chebyshev
-    from jaxfun.galerkin.composite import Composite
     from jaxfun.galerkin.inner import inner
     from jaxfun.galerkin.Legendre import Legendre
 
@@ -592,7 +603,7 @@ if __name__ == "__main__":
 
     D = C.stencil_to_scipy_sparse()
     vn = v.__array__()
-    gn = D @ vn @ D.T
+    gn = D @ vn @ D.T  # ty:ignore[unresolved-attribute]
 
     assert jnp.linalg.norm(gn - g) < 1e-7
     assert jnp.linalg.norm(gn - g1) < 1e-7

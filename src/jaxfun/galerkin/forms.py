@@ -18,15 +18,20 @@ Main entry points:
   split(form_expr)         -> decompose full weak form into grouped terms
 """
 
-from typing import NotRequired, Protocol, TypeGuard
+from typing import Protocol, TypeGuard
 
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
-from typing_extensions import TypedDict
 
 from jaxfun.coordinates import CoordSys, get_system as get_system
-from jaxfun.typing import FunctionSpaceType
+from jaxfun.typing import (
+    CoeffDict,
+    FunctionSpaceType,
+    InnerResultDict,
+    LinearCoeffDict,
+    ResultDict,
+)
 
 from .arguments import JAXArray, Jaxf, JAXFunction
 
@@ -63,7 +68,8 @@ def get_basisfunctions(
           - A set of Functions if multiple
           - None if none found
     """
-    test_found, trial_found = set(), set()
+    test_found: set[sp.Function] = set()
+    trial_found: set[sp.Function] = set()
     for p in sp.core.traversal.iterargs(sp.sympify(a)):
         if getattr(p, "argument", -1) == 1:
             trial_found.add(p)
@@ -96,21 +102,11 @@ def get_jaxarrays(
     Returns:
         Set with zero or more JAXArray objects.
     """
-    array_found = set()
+    array_found: set[JAXArray] = set()
     for p in sp.core.traversal.iterargs(sp.sympify(a)):
         if getattr(p, "argument", -1) == 3:
             array_found.add(p)
     return array_found
-
-
-class LinearCoeffDict(TypedDict, total=False):
-    scale: float
-    jaxfunction: NotRequired[Jaxf]
-
-
-class CoeffDict(TypedDict, total=False):
-    bilinear: complex
-    linear: LinearCoeffDict
 
 
 def split_coeff(c0: sp.Expr | float) -> CoeffDict:
@@ -215,16 +211,6 @@ def split_linear_coeff(c0: sp.Expr | float) -> Array:
     return scale
 
 
-class InnerResultDict(TypedDict, extra_items=sp.Expr):
-    coeff: sp.Expr | float
-    multivar: NotRequired[sp.Expr]
-
-
-class ResultDict(TypedDict):
-    linear: list[InnerResultDict]
-    bilinear: list[InnerResultDict]
-
-
 def split(forms: sp.Expr) -> ResultDict:
     """Split a full weak form expression into linear and bilinear parts.
 
@@ -256,7 +242,9 @@ def split(forms: sp.Expr) -> ResultDict:
     V = v.functionspace
 
     def _split(ms: sp.Expr) -> InnerResultDict:
-        d = sp.separatevars(ms, dict=True, symbols=V.system._base_scalars)
+        d: InnerResultDict | None = sp.separatevars(
+            ms, dict=True, symbols=V.system._base_scalars
+        )
         if d is None and isinstance(ms, sp.Mul):
             scale = []
             rest = []

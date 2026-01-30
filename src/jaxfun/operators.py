@@ -217,7 +217,7 @@ def cross(v1: Vector, v2: Vector) -> Vector | Cross:
 
 
 type Rank = Literal[0, 1, 2]
-type BuilderType = Add | VectorAdd | DyadicAdd
+type AdderType = Add | VectorAdd | DyadicAdd
 
 
 @overload
@@ -236,12 +236,12 @@ def _rank_of_dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> Rank:
 
 
 @overload
-def _builder_for(rank: Literal[0]) -> type[Add]: ...
+def _adder_for(rank: Literal[0]) -> type[Add]: ...
 @overload
-def _builder_for(rank: Literal[1]) -> type[VectorAdd]: ...
+def _adder_for(rank: Literal[1]) -> type[VectorAdd]: ...
 @overload
-def _builder_for(rank: Literal[2]) -> type[DyadicAdd]: ...
-def _builder_for(rank: Rank) -> type[BuilderType]:
+def _adder_for(rank: Literal[2]) -> type[DyadicAdd]: ...
+def _adder_for(rank: Rank) -> type[AdderType]:
     match rank:
         case 0:
             return Add
@@ -270,7 +270,7 @@ def _zero_for_dot(rank: Rank) -> BasisZero:
             return Dyadic.zero
 
 
-def fromiter[T: BuilderType](cls: type[T], args: Iterator[Expr], **assumptions) -> T:
+def fromiter[T: AdderType](cls: type[T], args: Iterator[Expr], **assumptions) -> T:
     return cls.fromiter(args, **assumptions)
 
 
@@ -309,15 +309,15 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> BasisDependent | Expr | Dot
         r**2*theta + r
     """
     rank = _rank_of_dot(t1, t2)
-    builder = _builder_for(rank)
+    adder = _adder_for(rank)
     rank_zero = _zero_for_dot(rank)
 
     if isinstance(t1, VectorAdd | DyadicAdd):
         args = cast_args(t1)
-        return builder.fromiter(dot(i, t2) for i in args)
+        return fromiter(adder, (dot(i, t2) for i in args))
     if isinstance(t2, VectorAdd | DyadicAdd):
         args = cast_args(t2)
-        return builder.fromiter(dot(t1, i) for i in args)
+        return fromiter(adder, (dot(t1, i) for i in args))
 
     if isinstance(t1, BaseVector | BaseDyadic) and isinstance(
         t2, BaseVector | BaseDyadic
@@ -365,13 +365,7 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> BasisDependent | Expr | Dot
         return g0 * t1.args[0] | t2.args[1]
 
     if isinstance(t1, BasisDependentZero) or isinstance(t2, BasisDependentZero):
-        match rank:
-            case 0:
-                return sp.S.Zero
-            case 1:
-                return Vector.zero
-            case 2:
-                return Dyadic.zero
+        return rank_zero
 
     if isinstance(t1, VectorMul | DyadicMul):
         v1, m1 = next(iter(t1.components.items()))
@@ -577,7 +571,7 @@ def gradient(
                         vj: Dyadic = f_x_g * v[j]
                     vi.append(vj)
             vi: DyadicAdd | VectorAdd = (
-                DyadicAdd(*vi) if field.is_Vector else VectorAdd(*vi)
+                DyadicAdd(*vi) if isinstance(field, Vector) else VectorAdd(*vi)
             )
 
         if doit:
@@ -714,7 +708,7 @@ class Grad(Gradient):
     _expr: Expr
     _transpose: bool
 
-    def __new__(cls, expr: Expr, transpose: bool = False) -> Self:
+    def __new__(cls: type[Self], expr: Expr, transpose: bool = False) -> Self:
         expr = sp.sympify(expr)
         obj: Self = Expr.__new__(cls, expr)
         obj._expr = expr
@@ -781,18 +775,18 @@ class Dot(sympy_Dot):
     _expr1: Expr
     _expr2: Expr
 
-    def __new__(cls, expr1, expr2) -> Self:
+    def __new__(cls: type[Self], expr1: Expr, expr2: Expr) -> Self:
         expr1 = sp.sympify(expr1)
         expr2 = sp.sympify(expr2)
-        obj = Expr.__new__(cls, expr1, expr2)
+        obj: Self = Expr.__new__(cls, expr1, expr2)
         obj._expr1 = expr1
         obj._expr2 = expr2
         return obj
 
-    def doit(self, **hints: Any) -> BasisDependent | Expr | Dot:
+    def doit(self, **hints) -> Expr:
         return dot(
-            cast(Vector | Dyadic, self._expr1.doit(**hints)),
-            cast(Vector | Dyadic, self._expr2.doit(**hints)),
+            cast(Vector, self._expr1.doit(**hints)),
+            cast(Vector, self._expr2.doit(**hints)),
         )
 
 
@@ -823,10 +817,10 @@ class Cross(Expr):
     _expr1: Expr
     _expr2: Expr
 
-    def __new__(cls, expr1, expr2) -> Self:
+    def __new__(cls: type[Self], expr1: Expr, expr2: Expr) -> Self:
         expr1 = sp.sympify(expr1)
         expr2 = sp.sympify(expr2)
-        obj = Expr.__new__(cls, expr1, expr2)
+        obj: Self = Expr.__new__(cls, expr1, expr2)
         obj._expr1 = expr1
         obj._expr2 = expr2
         return obj
@@ -863,10 +857,10 @@ class Outer(Expr):
     _expr1: Expr
     _expr2: Expr
 
-    def __new__(cls, expr1, expr2) -> Self:
+    def __new__(cls: type[Self], expr1: Expr, expr2: Expr) -> Self:
         expr1 = sp.sympify(expr1)
         expr2 = sp.sympify(expr2)
-        obj = Expr.__new__(cls, expr1, expr2)
+        obj: Self = Expr.__new__(cls, expr1, expr2)
         obj._expr1 = expr1
         obj._expr2 = expr2
         return obj
@@ -885,9 +879,9 @@ class Outer(Expr):
 class Source(Expr):
     _expr: Expr
 
-    def __new__(cls, expr) -> Self:
+    def __new__(cls: type[Self], expr: Expr) -> Self:
         expr = sp.sympify(expr)
-        obj = Expr.__new__(cls, expr)
+        obj: Self = Expr.__new__(cls, expr)
         obj._expr = expr
         return obj
 
@@ -898,8 +892,8 @@ class Source(Expr):
 class Constant(sp.Symbol):
     val: Expr | float
 
-    def __new__(cls, name: str, val: Expr | float, **assumptions) -> Self:
-        obj = super().__new__(cls, name, **assumptions)
+    def __new__(cls: type[Self], name: str, val: Expr | float, **assumptions) -> Self:
+        obj: Self = super().__new__(cls, name, **assumptions)
         obj.val = val
         return obj
 

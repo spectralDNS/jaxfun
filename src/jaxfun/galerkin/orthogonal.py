@@ -17,7 +17,7 @@ Subclasses must implement:
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, overload
+from typing import TYPE_CHECKING, Self, overload
 
 import jax
 import jax.numpy as jnp
@@ -69,7 +69,7 @@ class OrthogonalSpace(BaseSpace):
             domain = self.reference_domain
         self._domain = Domain(*domain)
         self.bcs: BoundaryConditions | None = None
-        self.orthogonal = self
+        self.orthogonal: Self = self
         self.stencil = {0: 1}
         self.S = sparse.BCOO(
             (jnp.ones(N), jnp.vstack((jnp.arange(N),) * 2).T), shape=(N, N)

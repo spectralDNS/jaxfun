@@ -1,5 +1,5 @@
 import importlib
-from typing import TypeGuard
+from typing import Literal, TypeGuard, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -88,7 +88,7 @@ def inner(
         # There is one tensor product matrix or just matrix (1D) for each a0
         # If the form contains a JAXFunction, then the matrix assembled will
         # be multiplied with the JAXFunction and a vector will be returned
-        mats = []
+        mats: list[tuple[Array, Array] | RecognizableArray] = []
         # Split coefficients into linear (JAXFunction) and bilinear (constant
         # coefficients) contributions.
         coeffs = split_coeff(a0["coeff"])
@@ -127,6 +127,7 @@ def inner(
             if isinstance(z, tuple):  # multivar
                 mats.append(z)
                 continue
+            z = cast(RecognizableArray, z)
             if z.size == 0:
                 continue
             if isinstance(uf, BCGeneric) and test_space.dims == 1:
@@ -148,6 +149,7 @@ def inner(
         elif isinstance(mats[0], tuple):
             # multivariable form, like sqrt(x+y)*u*v, that cannot be separated
             assert isinstance(test_space, TensorProductSpace)
+            mats: list[tuple[Array, Array]] = cast(list[tuple[Array, Array]], mats)
             Am = assemble_multivar(mats, a0["multivar"], test_space)
 
             if has_bcs:
@@ -180,6 +182,7 @@ def inner(
                     )
 
         else:  # regular separable multivariable form
+            mats: list[RecognizableArray] = cast(list[RecognizableArray], mats)
             if has_bcs:
                 # The else branch here is unreachable? Jaxf has no attribute .space
                 fun = (
@@ -270,7 +273,24 @@ def inner(
     )
 
 
-def tosparse_and_attach(z: Array, sparse_tol: int) -> BCOO:
+class Recognizable:
+    """Marker class for arrays that can be recognized externally."""
+
+    test_derivatives: int
+    trial_derivatives: int
+    test_name: str
+    trial_name: str
+
+
+class RecognizableArray(Recognizable, Array):
+    """Marker class for arrays that can be recognized externally."""
+
+
+class RecognizableBCOO(Recognizable, BCOO):
+    """Marker class for BCOO that can be recognized externally."""
+
+
+def tosparse_and_attach(z: RecognizableArray, sparse_tol: int) -> RecognizableBCOO:
     """Convert dense operator to BCOO and preserve metadata.
 
     Args:
@@ -280,11 +300,11 @@ def tosparse_and_attach(z: Array, sparse_tol: int) -> BCOO:
     Returns:
         BCOO sparse matrix with copied metadata attributes.
     """
-    a0 = tosparse(z, tol=sparse_tol)
-    a0.test_derivatives = z.test_derivatives  # ty:ignore[unresolved-attribute]
-    a0.trial_derivatives = z.trial_derivatives  # ty:ignore[unresolved-attribute]
-    a0.test_name = z.test_name  # ty:ignore[unresolved-attribute]
-    a0.trial_name = z.trial_name  # ty:ignore[unresolved-attribute]
+    a0 = cast(RecognizableBCOO, tosparse(z, tol=sparse_tol))
+    a0.test_derivatives = z.test_derivatives
+    a0.trial_derivatives = z.trial_derivatives
+    a0.test_name = z.test_name
+    a0.trial_name = z.trial_name
     return a0
 
 
@@ -321,7 +341,7 @@ def process_results(
 
     if len(aresults) > 0 and dims > 1 and sparse:
         for a0 in aresults:
-            a0.mats: list[BCOO] = [
+            a0.mats: list[RecognizableBCOO] = [
                 tosparse_and_attach(
                     a0.mats[i],  # ty:ignore[possibly-missing-attribute]
                     sparse_tol,
@@ -342,13 +362,29 @@ def process_results(
     return aresults, bresults
 
 
+@overload
+def inner_bilinear(
+    ai: sp.Expr,
+    v: OrthogonalSpace,
+    u: OrthogonalSpace,
+    sc: float | complex,
+    multivar: Literal[False],
+) -> RecognizableArray: ...
+@overload
+def inner_bilinear(
+    ai: sp.Expr,
+    v: OrthogonalSpace,
+    u: OrthogonalSpace,
+    sc: float | complex,
+    multivar: Literal[True],
+) -> tuple[Array, Array]: ...
 def inner_bilinear(
     ai: sp.Expr,
     v: OrthogonalSpace,
     u: OrthogonalSpace,
     sc: float | complex,
     multivar: bool,
-) -> Array | tuple[Array, Array]:
+) -> RecognizableArray | tuple[Array, Array]:
     """Assemble single bilinear form contribution term.
 
     Detects derivative orders on test/trial factors, applies optional
@@ -365,8 +401,8 @@ def inner_bilinear(
     Returns:
         Dense matrix, or (Pi, Pj) tuple for multivar separation.
     """
-    vo: OrthogonalSpace = v.orthogonal
-    uo: OrthogonalSpace = u.orthogonal
+    vo = v.orthogonal
+    uo = u.orthogonal
     xj, wj = vo.quad_points_and_weights()
     df = float(vo.domain_factor)
     i, j = 0, 0
@@ -403,19 +439,19 @@ def inner_bilinear(
             s = scale * df ** (i + j - 1)
             if s.item() != 1:
                 z.data = z.data * s
-            z = z.todense()
+            z = cast(Array, z.todense())
 
     if z is None:
         w = wj * df ** (i + j - 1) * scale
-        Pi = vo.evaluate_basis_derivative(xj, k=i)
-        Pj = uo.evaluate_basis_derivative(xj, k=j)
-        if multivar:
-            return (
-                v.apply_stencil_right(w[:, None] * Pi),
-                u.apply_stencil_right(jnp.conj(Pj)),
-            )
+        Pi = cast(Array, vo.evaluate_basis_derivative(xj, k=i))
+        Pj = cast(Array, uo.evaluate_basis_derivative(xj, k=j))
 
-        z = matmat(Pi.T * w[None, :], jnp.conj(Pj))
+        if multivar:
+            multi = v.apply_stencil_right(w[:, None] * Pi)
+            multj = u.apply_stencil_right(jnp.conj(Pj))
+            return multi, multj
+
+        z = cast(Array, matmat(Pi.T * w[None, :], jnp.conj(Pj)))
 
     if u == v and isinstance(u, Composite):
         z = v.apply_stencil_galerkin(z)
@@ -426,6 +462,7 @@ def inner_bilinear(
     elif isinstance(u, Composite):
         z = u.apply_stencil_right(z)
 
+    z = cast(RecognizableArray, z)
     # Attach some attributes to the matrix such that it can be easily recognized
     z.test_derivatives = i
     z.trial_derivatives = j
@@ -516,15 +553,15 @@ def assemble_multivar(
     P0, P1 = mats[0]
     P2, P3 = mats[1]
     i, k = P0.shape[1], P1.shape[1]
-    j, l = P2.shape[1], P3.shape[1]  # noqa: E741
+    j, l = P2.shape[1], P3.shape[1]
     if contains_sympy_symbols(scale):
         s = test_space.system.base_scalars()
         xj = test_space.mesh()
         scale = lambdify(s, scale, modules="jax")(*xj)
     else:
-        scale = jnp.ones((P0.shape[0], P1.shape[0])) * scale
+        scale = cast(Array, jnp.ones((P0.shape[0], P1.shape[0])) * scale)
 
-    def fun(p0, p1, p2, p3):
+    def fun(p0: Array, p1: Array, p2: Array, p3: Array) -> Array:
         ph0 = p0[:, None] * p1
         ph1 = p2[:, None] * p3
         return ph0.T @ scale @ ph1

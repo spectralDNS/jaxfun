@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import wraps
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, overload
 
 import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
-from jax.experimental import sparse
 from jax.experimental.sparse import BCOO
 from scipy import sparse as scipy_sparse
 from scipy.special import sph_harm
@@ -106,6 +105,14 @@ def jacn(fun: Callable[[Array], Array], k: int = 1) -> Callable[[Array], Array]:
     return jax.vmap(fun, in_axes=0, out_axes=0)
 
 
+@overload
+def matmat(a: Array, b: Array) -> Array: ...
+@overload
+def matmat(a: BCOO, b: BCOO) -> BCOO: ...
+@overload
+def matmat(a: Array, b: BCOO) -> Array: ...  # unchecked
+@overload
+def matmat(a: BCOO, b: Array) -> Array: ...  # unchecked
 @jax.jit
 def matmat(a: Array | BCOO, b: Array | BCOO) -> Array | BCOO:
     return a @ b
@@ -117,14 +124,14 @@ def eliminate_near_zeros(a: Array, tol: int = 100) -> Array:
     return jnp.where(jnp.abs(a) < atol, jnp.zeros(a.shape), a)
 
 
-def fromdense(a: Array, tol: int = 100) -> sparse.BCOO:
+def fromdense(a: Array, tol: int = 100) -> BCOO:
     a0: Array = eliminate_near_zeros(a, tol=tol)
-    return sparse.BCOO.fromdense(a0)
+    return BCOO.fromdense(a0)
 
 
-def tosparse(a: Array, tol: int = 100) -> sparse.BCOO:
+def tosparse(a: Array, tol: int = 100) -> BCOO:
     a0: Array = eliminate_near_zeros(a, tol=tol)
-    return sparse.BCOO.from_scipy_sparse(scipy_sparse.csr_matrix(a0))
+    return BCOO.from_scipy_sparse(scipy_sparse.csr_matrix(a0))
 
 
 class ArrayFn(Protocol):

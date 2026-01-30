@@ -187,6 +187,18 @@ class CartesianProductMesh(BaseMesh):
         Returns:
             Boolean array of shape (N[0]*N[1]*...,) with True for boundary points.
         """
+        if (
+            kind == "random"
+            and len(self.submeshes) == 2
+            and isinstance(self.submeshes[0], Line)
+        ):
+            s0, s1 = self.submeshes
+            smesh = RectangleShapely(
+                left=s0.left, right=s0.right, bottom=s1.left, top=s1.right
+            )
+            smesh.boundary_factor = N[1] / N[0]
+            return smesh.boundary_mask(N[0], kind="random")
+
         if isinstance(kind, str):
             kind = [kind] * len(self.submeshes)
         bnd_marks = []
@@ -207,9 +219,26 @@ class CartesianProductMesh(BaseMesh):
             kind: List of the kind of sampling used for submeshes. If a single
                 string is provided, it is applied to all submeshes.
 
+                If kind='random' and the mesh is 2D with first submesh a Line,
+                random points are sampled within the rectangular domain. In this
+                case, N should be a 2-tuple with total number of points and
+                number of boundary points.
+
         Returns:
             Array of shape (N[0]*N[1]*..., dims) with coordinates.
         """
+        if (
+            kind == "random"
+            and len(self.submeshes) == 2
+            and isinstance(self.submeshes[0], Line)
+        ):
+            s0, s1 = self.submeshes
+            smesh = RectangleShapely(
+                left=s0.left, right=s0.right, bottom=s1.left, top=s1.right
+            )
+            smesh.boundary_factor = N[1] / N[0]
+            return smesh.get_all_points(N[0], kind="random")
+
         if isinstance(kind, str):
             kind = [kind] * len(self.submeshes)
         assert len(N) == len(self.submeshes)
@@ -803,6 +832,55 @@ class ShapelyMesh(BaseMesh):
         plt.show()
 
 
+@dataclass(kw_only=True)
+class RectangleShapely(ShapelyMesh):
+    """Rectangle as a Shapely polygon.
+
+    Attributes:
+        left: Left x-bound.
+        right: Right x-bound.
+        bottom: Lower y-bound.
+        top: Upper y-bound.
+    """
+
+    left: float = field(init=True, default=0.0)
+    right: float = field(init=True, default=1.0)
+    bottom: float = field(init=True, default=0.0)
+    top: float = field(init=True, default=1.0)
+
+    def make_polygon(self) -> Polygon:  # type: ignore
+        return Polygon(
+            [
+                (self.left, self.bottom),
+                (self.right, self.bottom),
+                (self.right, self.top),
+                (self.left, self.top),
+                (self.left, self.bottom),
+            ]
+        )
+
+    def get_points_on_domain(  # type: ignore[override]
+        self,
+        N: int,
+        kind: SampleMethod = "random",  # type: ignore
+    ) -> Array:
+        specific_points = np.array(
+            [
+                [self.left, self.bottom],
+                [self.right, self.bottom],
+                [self.right, self.top],
+                [self.left, self.top],
+            ],
+            dtype=float,
+        )
+
+        pts = super().get_points_on_domain(
+            N, kind=kind, specific_points=specific_points
+        )
+
+        return pts
+
+
 @dataclass
 class Rectangle(CartesianProductMesh):
     """Affine-mapped rectangle [left, right] x [bottom, top].
@@ -880,19 +958,23 @@ class Rectangle(CartesianProductMesh):
         """
         if kind == "random":
             Ni, Nx = N
-            x = np.array(jax.random.uniform(self.key, (Ni, 2)))
-            x[:, 0] = self.left + x[:, 0] * (self.right - self.left)
-            x[:, 1] = self.bottom + x[:, 1] * (self.top - self.bottom)
-            Nx = Nx // 4
-            x[: (Nx - 1), 0] = self.left
-            x[(Nx - 1) : 2 * (Nx - 1), 0] = self.right
-            x[2 * (Nx - 1) : 3 * (Nx - 1), 1] = self.bottom
-            x[3 * (Nx - 1) : 4 * (Nx - 1), 1] = self.top
-            x[4 * (Nx - 1)] = [self.left, self.bottom]
-            x[4 * (Nx - 1) + 1] = [self.right, self.bottom]
-            x[4 * (Nx - 1) + 2] = [self.right, self.top]
-            x[4 * (Nx - 1) + 3] = [self.left, self.top]
-            return jnp.array(x)
+            smesh = self.to_shapely()
+            smesh.boundary_factor = Nx / Ni
+            return smesh.get_all_points(Ni, kind="random")
+
+            # x = np.array(jax.random.uniform(self.key, (Ni, 2)))
+            # x[:, 0] = self.left + x[:, 0] * (self.right - self.left)
+            # x[:, 1] = self.bottom + x[:, 1] * (self.top - self.bottom)
+            # Nx = Nx // 4
+            # x[: (Nx - 1), 0] = self.left
+            # x[(Nx - 1) : 2 * (Nx - 1), 0] = self.right
+            # x[2 * (Nx - 1) : 3 * (Nx - 1), 1] = self.bottom
+            # x[3 * (Nx - 1) : 4 * (Nx - 1), 1] = self.top
+            # x[4 * (Nx - 1)] = [self.left, self.bottom]
+            # x[4 * (Nx - 1) + 1] = [self.right, self.bottom]
+            # x[4 * (Nx - 1) + 2] = [self.right, self.top]
+            # x[4 * (Nx - 1) + 3] = [self.left, self.top]
+            # return jnp.array(x)
         if isinstance(kind, str):
             kind = [kind, kind]
         return super().get_all_points(*N, kind=kind)
@@ -924,41 +1006,9 @@ class Rectangle(CartesianProductMesh):
 
     def to_shapely(self) -> ShapelyMesh:
         """Return ShapelyMesh for the rectangle."""
-
-        class RectangleShapely(ShapelyMesh):
-            def make_polygon(cls) -> Polygon:  # type: ignore
-                return Polygon(
-                    [
-                        (self.left, self.bottom),
-                        (self.right, self.bottom),
-                        (self.right, self.top),
-                        (self.left, self.top),
-                        (self.left, self.bottom),
-                    ]
-                )
-
-            def get_points_on_domain(  # type: ignore[override]
-                cls,
-                N: int,
-                kind: SampleMethod = "random",  # type: ignore
-            ) -> Array:
-                specific_points = np.array(
-                    [
-                        [self.left, self.bottom],
-                        [self.right, self.bottom],
-                        [self.right, self.top],
-                        [self.left, self.top],
-                    ],
-                    dtype=float,
-                )
-
-                pts = super().get_points_on_domain(
-                    N, kind=kind, specific_points=specific_points
-                )
-
-                return pts
-
-        return RectangleShapely()
+        return RectangleShapely(
+            left=self.left, right=self.right, bottom=self.bottom, top=self.top
+        )
 
 
 @dataclass

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 import itertools
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
 from typing import TypeGuard
 
@@ -791,12 +791,12 @@ class TPMatrix:  # noqa: B903
 
     def __init__(
         self,
-        mats: list[Array],
+        mats: Sequence[Array],
         scale: complex,
         test_space: TensorProductSpace,
         trial_space: TensorProductSpace,
     ) -> None:
-        self.mats: list[Array] = mats
+        self.mats = list(mats)
         self.scale = scale
         self.test_space = test_space
         self.trial_space = trial_space

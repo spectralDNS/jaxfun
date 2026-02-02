@@ -67,9 +67,9 @@ def _split_mul_args_wrt_coordsys(expr: Expr) -> list[Expr]:
     return list(d.values())
 
 
-def express[T: Expr](expr: T, system: CoordSys) -> T:
+def express(expr: Any, system: CoordSys) -> Expr:
     system_set: set[CoordSys] = set()
-    expr: T = sp.sympify(expr)  # ty:ignore[invalid-assignment]
+    expr: Expr = sp.sympify(expr)
     # Substitute all the coordinate variables
     for x in expr.atoms(BaseScalar):
         if x.system != system:
@@ -80,7 +80,7 @@ def express[T: Expr](expr: T, system: CoordSys) -> T:
         scalars = cast_bs(system.base_scalars())
         subs_dict.update({k: v for k, v in zip(wrong_scalars, scalars, strict=False)})
 
-    return expr.subs(subs_dict)  # ty:ignore[no-matching-overload]
+    return expr.subs(subs_dict)
 
 
 def outer(v1: Vector, v2: Vector) -> Dyadic:

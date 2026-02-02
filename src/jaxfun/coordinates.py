@@ -971,7 +971,7 @@ class CoordSys(Basic):
             hi[i] = sp.sqrt(self.refine(self.simplify(s)))
             hi[i] = self.refine(hi[i])
 
-        hi = np.array(express(hi, self))  # ty: ignore[invalid-argument-type]
+        hi = np.array(express(hi, self))
         self._hi = hi
         return hi
 

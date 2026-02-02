@@ -247,12 +247,12 @@ type BasisZero = BasisDependentZero | sp.core.numbers.Zero
 
 
 @overload
-def _zero_for_dot(rank: Literal[0]) -> sp.core.numbers.Zero: ...
+def _zero_for_rank(rank: Literal[0]) -> sp.core.numbers.Zero: ...
 @overload
-def _zero_for_dot(rank: Literal[1]) -> VectorZero: ...
+def _zero_for_rank(rank: Literal[1]) -> VectorZero: ...
 @overload
-def _zero_for_dot(rank: Literal[2]) -> DyadicZero: ...
-def _zero_for_dot(rank: Rank) -> BasisZero:
+def _zero_for_rank(rank: Literal[2]) -> DyadicZero: ...
+def _zero_for_rank(rank: Rank) -> BasisZero:
     match rank:
         case 0:
             return sp.S.Zero
@@ -302,7 +302,7 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> BasisDependent | Expr | Dot
     """
     rank = _rank_of_dot(t1, t2)
     adder = _adder_for(rank)
-    rank_zero = _zero_for_dot(rank)
+    rank_zero = _zero_for_rank(rank)
 
     if isinstance(t1, VectorAdd | DyadicAdd):
         args = cast_args(t1)

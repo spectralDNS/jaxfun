@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from abc import abstractmethod
 from collections.abc import Callable
 from functools import partial
 from numbers import Number
@@ -710,6 +711,9 @@ class Loss:
         targets = tuple(eq.target for eq in self.residuals)
         return tuple(self.xs.values()), targets
 
+    @abstractmethod
+    def update_time(self, module: nnx.Module, march: Array) -> None: ...
+
     @property
     def local_mesh(self) -> jax.sharding.Mesh | None:
         if jax.local_device_count() == 1:
@@ -1125,7 +1129,7 @@ def _lookup_or_eval(
     if Js is None:
         Js = {}
     module = mod.data[mod.mod_index[str(mod_id)]] if isinstance(mod, Comp) else mod
-    assert mod_id == hash(module)
+    assert mod_id == hash(module), (mod_id, hash(module), module)
     var = tuple((slice(None), global_index)) + tuple(int(s._id[0]) for s in variables)
     key: tuple[int, int, int] = (x_id, mod_id, k)
     if key not in Js:

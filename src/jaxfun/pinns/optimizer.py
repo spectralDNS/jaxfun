@@ -16,6 +16,7 @@ from optax._src import base as optax_base
 
 from jaxfun.pinns import FlaxFunction
 from jaxfun.pinns.distributed import process_allmean
+from jaxfun.pinns.module import BaseModule
 
 from .loss import Loss, TimeMarchingLoss
 from .mesh import TimeMarchingMesh
@@ -642,7 +643,7 @@ class TimeMarchingTrainer(Trainer):
         super().__init__(loss_fn)
 
     def update_time(
-        self, module: nnx.Module, save_state: bool = True, extrapolate: bool = False
+        self, module: BaseModule, save_state: bool = True, extrapolate: bool = False
     ) -> None:
         """Update the mesh, loss function and module for the next time segment.
 
@@ -684,7 +685,7 @@ class TimeMarchingTrainer(Trainer):
         from jaxfun.pinns.loss import evaluate
 
         x0 = self.mesh.get_points_at_time(*N, t=t)
-        if isinstance(u, nnx.Module | FlaxFunction):
+        if isinstance(u, BaseModule | FlaxFunction):
             u0 = u(x0)
         elif isinstance(u, sp.Expr):
             u0 = evaluate(u, x0)

@@ -41,7 +41,7 @@ indices = "ijklmn"
 
 
 def get_BasisFunction(
-    name,
+    name: str,
     *,
     global_index: int,
     local_index: int,
@@ -355,10 +355,9 @@ class TrialFunction(ManySpaceFunction):
 
 
 class ScalarFunction(BaseFunction):
-    """Physical-domain scalar field placeholder u(x) with mapping support.
+    """Physical-domain scalar field placeholder u(x, y, ..) with mapping support.
 
-    Calling .doit() returns the computational-domain representation
-    U(X) by replacing Cartesian symbols with base scalars.
+    Calling .doit() returns the computational-domain representation U(X, Y, ..)
     """
 
     system: CoordSys
@@ -385,7 +384,7 @@ class ScalarFunction(BaseFunction):
 
 
 class VectorFunction(BaseFunction):
-    """Physical-domain vector field placeholder v(x).
+    """Physical-domain vector field placeholder v(x, y, ..).
 
     The .doit() method builds a VectorAdd of component scalar Functions
     times basis vectors in the computational domain.

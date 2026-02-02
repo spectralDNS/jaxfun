@@ -17,8 +17,8 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-  "flax>=0.12.2",
-  "jax>=0.7.1",
+  "flax>=0.12",
+  "jax>=0.8.1",
   "matplotlib>=3.9.3",
   "optax>=0.2.6",
   "pre-commit>=4.3",

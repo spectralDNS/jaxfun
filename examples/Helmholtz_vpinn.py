@@ -31,7 +31,7 @@ x = V.system.x
 ue = (1 - x**2) * sp.cos(2 * sp.pi * x)
 
 N = 1000
-mesh = Line(domain.lower, domain.upper, key=nnx.Rngs(1001)())
+mesh = Line(float(domain.lower), float(domain.upper), key=nnx.Rngs(1001)())
 
 xj = mesh.get_points(N, domain="inside", kind="legendre")
 wj = mesh.get_weights(N, domain="inside", kind="legendre")

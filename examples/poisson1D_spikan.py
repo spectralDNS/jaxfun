@@ -25,7 +25,7 @@ x = V.system.x
 ue = 5 + sp.summation(sp.sin(i * x), (i, 1, 3))
 
 N = w.dim
-mesh = Line(domain.lower, domain.upper)
+mesh = Line(float(domain.lower), float(domain.upper))
 xi = mesh.get_points(N, domain="inside", kind="random")
 xb = mesh.get_points(N, domain="boundary")
 

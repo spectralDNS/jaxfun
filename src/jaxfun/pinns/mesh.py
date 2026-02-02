@@ -24,7 +24,7 @@ Return 1 when uniform/random (each point equal) or arrays for quadrature-based k
 import itertools
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from typing import Literal
 
 import jax
@@ -34,12 +34,13 @@ from flax import nnx
 from jax.typing import ArrayLike
 from shapely import LineString, Polygon
 
-from jaxfun.typing import Array, DomainType, FloatLike, SampleMethod
+from jaxfun.typing import Array, DomainType, SampleMethod, cast
 from jaxfun.utils import leggauss
 
 type SampleMethodLike = SampleMethod | str
 type KindType = SampleMethodLike | Sequence[SampleMethodLike] | None
 type NPointsType = int | tuple[int, ...]
+type ParameterMesh = MultiParameterMesh | SingleParameterMesh
 
 
 def _coerce_sample_method(kind: SampleMethodLike) -> SampleMethod:
@@ -61,8 +62,97 @@ class BaseMesh:
     `isinstance(x, BaseMesh)` checks remain valid.
     """
 
+    @property
+    @abstractmethod
+    def dim(self) -> int:
+        """Return spatial dimension of the mesh."""
+        ...
 
-class MeshWithDomain(BaseMesh, ABC):
+
+class SingleParameterMesh(BaseMesh, ABC):
+    """Base class for meshes with total number of points N and scalar sampling kind."""
+
+    def get_points(
+        self,
+        N: int,
+        domain: DomainType = "all",
+        kind: SampleMethodLike = SampleMethod.UNIFORM,
+    ) -> Array:
+        """Return sampled points.
+
+        Args:
+            N: Number of total points in mesh. Identical to length of returned
+                array in case domain is 'all'.
+            domain: 'inside' | 'boundary' | 'all'
+            kind: Sampling kind.
+        """
+        if domain == "inside":
+            return self.get_points_inside_domain(N, kind=kind)
+        if domain == "boundary":
+            return self.get_points_on_domain(N, kind=kind)
+        if domain == "all":
+            return self.get_all_points(N, kind=kind)
+        raise ValueError("domain must be 'inside', 'boundary' or 'all'")
+
+    def get_weights(
+        self,
+        N: int,
+        domain: DomainType = "inside",
+        kind: SampleMethodLike | None = None,
+    ) -> Array | Literal[1]:
+        """Return sampled weights.
+
+        Args:
+            N: Total number of weights in mesh. Identical to length of returned
+                array in case domain is 'all'.
+            domain: 'inside' | 'boundary' | 'all'
+            kind: Sampling kind.
+        """
+        if domain == "inside":
+            return self.get_weights_inside_domain(N, kind=kind)
+        if domain == "boundary":
+            return self.get_weights_on_domain(N, kind=kind)
+        if domain == "all":
+            return self.get_all_weights(N, kind=kind)
+        raise ValueError("domain must be 'inside', 'boundary' or 'all'")
+
+    @abstractmethod
+    def get_points_inside_domain(
+        self, N: int, kind: SampleMethodLike = SampleMethod.UNIFORM
+    ) -> Array: ...
+
+    @abstractmethod
+    def get_points_on_domain(
+        self, N: int, kind: SampleMethodLike = SampleMethod.UNIFORM
+    ) -> Array: ...
+
+    @abstractmethod
+    def get_all_points(
+        self, N: int, kind: SampleMethodLike = SampleMethod.UNIFORM
+    ) -> Array: ...
+
+    @abstractmethod
+    def get_weights_inside_domain(
+        self, N: int, kind: SampleMethodLike | None = None
+    ) -> Array | Literal[1]: ...
+
+    @abstractmethod
+    def get_weights_on_domain(
+        self, N: int, kind: SampleMethodLike | None = None
+    ) -> Array | Literal[1]: ...
+
+    @abstractmethod
+    def get_all_weights(
+        self, N: int, kind: SampleMethodLike | None = None
+    ) -> Array | Literal[1]: ...
+
+    @abstractmethod
+    def boundary_mask(
+        self, N: int, kind: SampleMethodLike = SampleMethod.UNIFORM
+    ) -> Array: ...
+
+
+class MultiParameterMesh(BaseMesh, ABC):
     """Base class for meshes with cartesian-product style signatures."""
 
     def get_points(
@@ -74,25 +164,19 @@ class MeshWithDomain(BaseMesh, ABC):
         """Return sampled points.
 
         Args:
-            N: Total number of points in mesh. Identical to length of returned
-                array in case domain is 'all'.
-
-                For CartesianProductMesh, N will represent all arguments needed
-                for all submeshes. For example, a 2D Rectangle mesh, which is
-                the Cartesian product of two lines, will expect two integer
-                arguments.
+            N: The tuple N will represent all arguments needed for all submeshes.
+                For example, a 2D Rectangle mesh, which is the Cartesian product
+                of two lines, will expect two integer arguments.
 
                 For a Rectangle/UnitSquare mesh, it is also possible to draw
                 random points within the domain, and not use a Cartesian product
                 of line meshes. This case is enabled when kind='random', and
                 the 2-tuple N then represents the total number of points and
                 the number of boundary points to sample.
-
-                For ShapelyMesh, N is a single integer representing the total
-                number of points to sample throughout domain.
             domain: 'inside' | 'boundary' | 'all'
             kind: Sampling kind(s). For CartesianProductMesh, this should be a
-                list of kinds for each submesh.
+                list of kinds for each submesh. A single kind string can also
+                be provided, which is applied to all submeshes.
         """
         if domain == "inside":
             return self.get_points_inside_domain(*N, kind=kind)
@@ -111,17 +195,12 @@ class MeshWithDomain(BaseMesh, ABC):
         """Return sampled weights.
 
         Args:
-            N: Total number of weights in mesh. Identical to length of returned
-                array in case domain is 'all'.
-                For CartesianProductMesh, N will represent all arguments needed
-                for all submeshes. For example, a 2D Rectangle mesh, which is
-                the Cartesian product of two lines, will expect two integer
-                arguments.
-                For ShapelyMesh, N is a single integer representing the total
-                number of weights throughout domain.
+            N: The tuple N represent all arguments needed for all submeshes.
+                For example, a 2D Rectangle mesh, which is the Cartesian product
+                of two lines, will expect two integer arguments.
             domain: 'inside' | 'boundary' | 'all'
-            kind: Sampling kind(s). For CartesianProductMesh, this should be a
-                list of kinds for each submesh.
+            kind: Sampling kind(s). This should be a list of kinds for each submesh.
+                If a single kind string is provided, it is applied to all submeshes.
 
         Returns:
             Array of weights.
@@ -136,179 +215,41 @@ class MeshWithDomain(BaseMesh, ABC):
 
     @abstractmethod
     def get_points_inside_domain(
-        self, *N: NPointsType, kind: KindType = "uniform"
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array: ...
 
     @abstractmethod
     def get_points_on_domain(
-        self, *N: NPointsType, kind: KindType = "uniform"
-    ) -> Array: ...
-
-    @abstractmethod
-    def get_all_points(self, *N: NPointsType, kind: KindType = "uniform") -> Array: ...
-
-    @abstractmethod
-    def get_weights_inside_domain(
-        self, *N: NPointsType, kind: KindType = "uniform"
-    ) -> Array | Literal[1]: ...
-
-    @abstractmethod
-    def get_weights_on_domain(
-        self, *N: NPointsType, kind: KindType = "uniform"
-    ) -> Array | Literal[1]: ...
-
-    @abstractmethod
-    def get_all_weights(
-        self, *N: NPointsType, kind: KindType = "uniform"
-    ) -> Array | Literal[1]: ...
-
-    @abstractmethod
-    def boundary_mask(self, *N: NPointsType, kind: KindType = "uniform") -> Array: ...
-
-
-class OneDimMesh(BaseMesh, ABC):
-    """Base class for 1D meshes with scalar N and scalar sampling kind."""
-
-    def get_points(
-        self,
-        N: int,
-        domain: DomainType = "all",
-        kind: SampleMethodLike = SampleMethod.UNIFORM,
-    ) -> Array:
-        if domain == "inside":
-            return self.get_points_inside_domain(N, kind=kind)
-        if domain == "boundary":
-            return self.get_points_on_domain(N, kind=kind)
-        if domain == "all":
-            return self.get_all_points(N, kind=kind)
-        raise ValueError("domain must be 'inside', 'boundary' or 'all'")
-
-    def get_weights(
-        self,
-        N: int,
-        domain: DomainType = "inside",
-        kind: SampleMethodLike | None = None,
-    ) -> Array | Literal[1]:
-        if domain == "inside":
-            return self.get_weights_inside_domain(N, kind=kind)
-        if domain == "boundary":
-            return self.get_weights_on_domain(N, kind=kind)
-        if domain == "all":
-            return self.get_all_weights(N, kind=kind)
-        raise ValueError("domain must be 'inside', 'boundary' or 'all'")
-
-    @abstractmethod
-    def get_points_inside_domain(
-        self, N: int, kind: SampleMethodLike = SampleMethod.UNIFORM
-    ) -> Array: ...
-
-    @abstractmethod
-    def get_points_on_domain(
-        self, N: int, kind: SampleMethodLike = SampleMethod.UNIFORM
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array: ...
 
     @abstractmethod
     def get_all_points(
-        self, N: int, kind: SampleMethodLike = SampleMethod.UNIFORM
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array: ...
 
     @abstractmethod
     def get_weights_inside_domain(
-        self, N: int, kind: SampleMethodLike | None = None
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array | Literal[1]: ...
 
     @abstractmethod
     def get_weights_on_domain(
-        self, N: int, kind: SampleMethodLike | None = None
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array | Literal[1]: ...
 
     @abstractmethod
     def get_all_weights(
-        self, N: int, kind: SampleMethodLike | None = None
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array | Literal[1]: ...
 
     @abstractmethod
     def boundary_mask(
-        self, N: int, kind: SampleMethodLike = SampleMethod.UNIFORM
-    ) -> Array: ...
-
-    @property
-    def dim(self) -> int:
-        """Return spatial dimension of the mesh."""
-        raise NotImplementedError
-
-
-class PolygonMesh(BaseMesh, ABC):
-    """Base class for polygonal 2D meshes sampled by total point count."""
-
-    def get_points(
-        self,
-        N: int,
-        domain: DomainType = "all",
-        kind: SampleMethodLike = SampleMethod.RANDOM,
-    ) -> Array:
-        if domain == "inside":
-            return self.get_points_inside_domain(N, kind=kind)
-        if domain == "boundary":
-            return self.get_points_on_domain(N, kind=kind)
-        if domain == "all":
-            return self.get_all_points(N, kind=kind)
-        raise ValueError("domain must be 'inside', 'boundary' or 'all'")
-
-    def get_weights(
-        self,
-        N: int,
-        domain: DomainType = "inside",
-        kind: SampleMethodLike | None = None,
-    ) -> Array | Literal[1]:
-        if domain == "inside":
-            return self.get_weights_inside_domain(N, kind=kind)
-        if domain == "boundary":
-            return self.get_weights_on_domain(N, kind=kind)
-        if domain == "all":
-            return self.get_all_weights(N, kind=kind)
-        raise ValueError("domain must be 'inside', 'boundary' or 'all'")
-
-    @abstractmethod
-    def get_points_inside_domain(
-        self, N: int, kind: SampleMethodLike = SampleMethod.RANDOM
-    ) -> Array: ...
-
-    @abstractmethod
-    def get_points_on_domain(
-        self,
-        N: int,
-        kind: SampleMethodLike = SampleMethod.RANDOM,
-        specific_points: Array | np.ndarray | None = None,
-    ) -> Array: ...
-
-    @abstractmethod
-    def get_all_points(
-        self, N: int, kind: SampleMethodLike = SampleMethod.RANDOM
-    ) -> Array: ...
-
-    @abstractmethod
-    def get_weights_inside_domain(
-        self, N: int, kind: SampleMethodLike | None = None
-    ) -> Array | Literal[1]: ...
-
-    @abstractmethod
-    def get_weights_on_domain(
-        self, N: int, kind: SampleMethodLike | None = None
-    ) -> Array | Literal[1]: ...
-
-    @abstractmethod
-    def get_all_weights(
-        self, N: int, kind: SampleMethodLike | None = None
-    ) -> Array | Literal[1]: ...
-
-    @abstractmethod
-    def boundary_mask(
-        self, N: int, kind: SampleMethodLike = SampleMethod.RANDOM
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array: ...
 
 
-class CartesianProductMesh(MeshWithDomain):
+class CartesianProductMesh(MultiParameterMesh):
     """Cartesian product mesh."""
 
     def __init__(self, *m0: BaseMesh) -> None:
@@ -325,11 +266,13 @@ class CartesianProductMesh(MeshWithDomain):
         """Return spatial dimension of the mesh."""
         return sum(m.dim for m in self.submeshes)
 
-    def boundary_mask(self, *N: NPointsType, kind: KindType = "uniform") -> Array:
+    def boundary_mask(
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
+    ) -> Array:
         """Return boolean mask for boundary points.
 
         Args:
-            N: Number of total points for each submesh.
+            N: Number of points for each submesh.
             kind: List of the kind of sampling used for submeshes. If a single
                 string is provided, it is applied to all submeshes.
 
@@ -337,17 +280,18 @@ class CartesianProductMesh(MeshWithDomain):
             Boolean array of shape (N[0]*N[1]*...,) with True for boundary points.
         """
         if (
-            kind == "random"
+            kind == SampleMethod.RANDOM
             and len(self.submeshes) == 2
             and isinstance(self.submeshes[0], Line)
         ):
             assert len(N) == 2
-            s0, s1 = self.submeshes
+            s0, s1 = cast(tuple[Line, Line], self.submeshes)
+            N0, N1 = cast(tuple[int, int], N)
             smesh = RectangleShapely(
                 left=s0.left, right=s0.right, bottom=s1.left, top=s1.right
             )
-            smesh.boundary_factor = N[1] / N[0]
-            return smesh.boundary_mask(N[0], kind="random")
+            smesh.boundary_factor = N1 / N0
+            return smesh.boundary_mask(N0, kind=SampleMethod.RANDOM)
 
         kind_list = _normalize_kind(kind, len(self.submeshes))
         bnd_marks = []
@@ -358,7 +302,9 @@ class CartesianProductMesh(MeshWithDomain):
 
         return jnp.any(mask, axis=1)
 
-    def get_all_points(self, *N: NPointsType, kind: KindType = "uniform") -> Array:
+    def get_all_points(
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
+    ) -> Array:
         """Return all points including boundaries.
 
         Args:
@@ -375,16 +321,17 @@ class CartesianProductMesh(MeshWithDomain):
             Array of shape (N[0]*N[1]*..., dims) with coordinates.
         """
         if (
-            kind == "random"
+            kind == SampleMethod.RANDOM
             and len(self.submeshes) == 2
             and isinstance(self.submeshes[0], Line)
         ):
-            s0, s1 = self.submeshes
+            s0, s1 = cast(tuple[Line, Line], self.submeshes)
+            N0, N1 = cast(tuple[int, int], N)
             smesh = RectangleShapely(
                 left=s0.left, right=s0.right, bottom=s1.left, top=s1.right
             )
-            smesh.boundary_factor = N[1] / N[0]
-            return smesh.get_all_points(N[0], kind="random")
+            smesh.boundary_factor = N1 / N0
+            return smesh.get_all_points(N0, kind=SampleMethod.RANDOM)
 
         kind_list = _normalize_kind(kind, len(self.submeshes))
         assert len(N) == len(self.submeshes)
@@ -409,7 +356,7 @@ class CartesianProductMesh(MeshWithDomain):
         raise NotImplementedError
 
     def get_points_inside_domain(
-        self, *N: NPointsType, kind: KindType = "uniform"
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array:
         """Return interior points (exclude perimeter).
 
@@ -426,7 +373,7 @@ class CartesianProductMesh(MeshWithDomain):
         return x[mask == False]  # noqa: E712
 
     def get_points_on_domain(
-        self, *N: NPointsType, kind: KindType = "uniform"
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array:
         """Return boundary points.
 
@@ -442,12 +389,12 @@ class CartesianProductMesh(MeshWithDomain):
         return x[mask]
 
     def get_all_weights(
-        self, *N: NPointsType, kind: KindType = "uniform"
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array | Literal[1]:
         """Return weights for all points including boundaries.
 
         Args:
-            N: Total number of points for each submesh.
+            N: Total number of weights for each submesh.
             kind: List of the kind of sampling used for submeshes. If a single
                 string is provided, it is applied to all submeshes.
 
@@ -479,12 +426,12 @@ class CartesianProductMesh(MeshWithDomain):
         raise NotImplementedError
 
     def get_weights_inside_domain(
-        self, *N: NPointsType, kind: KindType = "uniform"
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array | Literal[1]:
         """Return interior weights (exclude perimeter).
 
         Args:
-            N: Total number of points for each submesh.
+            N: Total number of weights for each submesh.
             kind: List of the kind of sampling used for submeshes. If a single
                 string is provided, it is applied to all submeshes.
 
@@ -498,7 +445,7 @@ class CartesianProductMesh(MeshWithDomain):
         return x[mask == False]  # noqa: E712
 
     def get_weights_on_domain(
-        self, *N: NPointsType, kind: KindType = "uniform"
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array | Literal[1]:
         """Return boundary weights.
 
@@ -539,7 +486,7 @@ class TimeMarchingMesh(CartesianProductMesh):
         assert isinstance(m0[-1], Line), "Last submesh must be a Line (time axis)"
         self.deltat: float = float(m0[-1].right - m0[-1].left)
         self.timestep: int = 0
-        self._spatial_mesh: CartesianProductMesh | BaseMesh = None
+        self._spatial_mesh: ParameterMesh = None
         super().__init__(*m0)
 
     @property
@@ -549,15 +496,15 @@ class TimeMarchingMesh(CartesianProductMesh):
     def update_time(self):
         """Shift time axis forward by deltat."""
         self.timestep += 1
-        time_mesh = self.submeshes[-1]
+        time_mesh = cast(Line, self.submeshes[-1])
         time_mesh.left += self.deltat
         time_mesh.right += self.deltat
 
     def get_points(
         self,
-        *N: int | tuple[int],
+        *N: NPointsType,
         domain: DomainType = "all",
-        kind: SampleMethod | list[SampleMethod] = "uniform",
+        kind: KindType = "uniform",
     ) -> Array:
         """Return sampled points.
 
@@ -576,35 +523,37 @@ class TimeMarchingMesh(CartesianProductMesh):
             return xi[xi[:, -1] >= self.submeshes[-1].right - 1e-7]
         return super().get_points(*N, domain=domain, kind=kind)
 
-    def get_spatial_mesh(self) -> CartesianProductMesh | BaseMesh:
+    def get_spatial_mesh(self) -> ParameterMesh:
         """Return spatial mesh (excluding time axis)."""
         if self._spatial_mesh is None:
             if len(self.submeshes) == 2:
-                self._spatial_mesh = self.submeshes[0]
+                self._spatial_mesh = cast(ParameterMesh, self.submeshes[0])
             else:
                 self._spatial_mesh = CartesianProductMesh(*self.submeshes[:-1])
         return self._spatial_mesh
 
     def get_points_at_time(
-        self, *N: int | tuple[int], t: float | int = 0, kind: SampleMethod = "uniform"
+        self, *N: NPointsType, t: float = 0, kind: KindType = SampleMethod.UNIFORM
     ) -> Array:
         mesh = self.get_spatial_mesh()
-        x = mesh.get_points(*N, domain="all", kind=kind)
+        if isinstance(mesh, MultiParameterMesh):
+            x = mesh.get_points(*N, domain="all", kind=kind)
+        else:
+            x = mesh.get_points(
+                cast(int, N[0]), domain="all", kind=cast(SampleMethodLike, kind)
+            )
         return jnp.hstack((x, jnp.full((x.shape[0], 1), float(t))))
 
 
 @dataclass
-class Line(OneDimMesh):
-    _left: InitVar[FloatLike]
-    _right: InitVar[FloatLike]
+class Line(SingleParameterMesh):
     key: ArrayLike = field(kw_only=True, default_factory=nnx.rnglib.Rngs(101))
+    left: float
+    right: float
 
-    left: float = field(init=False)
-    right: float = field(init=False)
-
-    def __post_init__(self, _left: FloatLike, _right: FloatLike) -> None:
-        self.left = float(_left)
-        self.right = float(_right)
+    def __post_init__(self) -> None:
+        self.left = float(self.left)
+        self.right = float(self.right)
         if self.right <= self.left:
             raise ValueError(
                 f"right ({self.right}) must be greater than left ({self.left})"
@@ -761,12 +710,12 @@ class Line(OneDimMesh):
 
 @dataclass
 class UnitLine(Line):
-    _left: InitVar[FloatLike] = 0.0
-    _right: InitVar[FloatLike] = 1.0
+    left: float = field(init=False, default=0.0)
+    right: float = field(init=False, default=1.0)
 
 
 @dataclass
-class ShapelyMesh(PolygonMesh):
+class ShapelyMesh(SingleParameterMesh, ABC):
     """Polygonal domain using Shapely for sampling.
 
     - Interior: rejection sampling from the bounding box using a prepared polygon
@@ -791,8 +740,8 @@ class ShapelyMesh(PolygonMesh):
         """Return spatial dimension of the mesh."""
         return 2
 
-    def make_polygon(self) -> Polygon:
-        raise NotImplementedError
+    @abstractmethod
+    def make_polygon(self) -> Polygon: ...
 
     def boundary_mask(
         self, N: int, kind: SampleMethodLike = SampleMethod.RANDOM
@@ -986,7 +935,7 @@ class RectangleShapely(ShapelyMesh):
     bottom: float = field(init=True, default=0.0)
     top: float = field(init=True, default=1.0)
 
-    def make_polygon(self) -> Polygon:  # type: ignore
+    def make_polygon(self) -> Polygon:
         return Polygon(
             [
                 (self.left, self.bottom),
@@ -997,20 +946,22 @@ class RectangleShapely(ShapelyMesh):
             ]
         )
 
-    def get_points_on_domain(  # type: ignore[override]
+    def get_points_on_domain(
         self,
         N: int,
-        kind: SampleMethod = "random",  # type: ignore
+        kind: SampleMethodLike = SampleMethod.RANDOM,
+        specific_points: Array | np.ndarray | None = None,
     ) -> Array:
-        specific_points = np.array(
-            [
-                [self.left, self.bottom],
-                [self.right, self.bottom],
-                [self.right, self.top],
-                [self.left, self.top],
-            ],
-            dtype=float,
-        )
+        if specific_points is None:
+            specific_points = np.array(
+                [
+                    [self.left, self.bottom],
+                    [self.right, self.bottom],
+                    [self.right, self.top],
+                    [self.left, self.top],
+                ],
+                dtype=float,
+            )
 
         pts = super().get_points_on_domain(
             N, kind=kind, specific_points=specific_points
@@ -1032,10 +983,10 @@ class Rectangle(CartesianProductMesh):
     """
 
     key: ArrayLike = field(kw_only=True, default_factory=nnx.rnglib.Rngs(101))
-    left: float | int
-    right: float | int
-    bottom: float | int
-    top: float | int
+    left: float
+    right: float
+    bottom: float
+    top: float
 
     def __post_init__(self) -> None:
         self.left = float(self.left)
@@ -1055,7 +1006,9 @@ class Rectangle(CartesianProductMesh):
             Line(self.bottom, self.top, key=self.key),
         )
 
-    def boundary_mask(self, *N: NPointsType, kind: KindType = "uniform") -> Array:
+    def boundary_mask(
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
+    ) -> Array:
         x = self.get_all_points(*N, kind=kind)
         return (
             (abs(x[:, 0] - self.left) < 1e-8)
@@ -1064,7 +1017,9 @@ class Rectangle(CartesianProductMesh):
             | (abs(x[:, 1] - self.top) < 1e-8)
         )
 
-    def get_all_points(self, *N: NPointsType, kind: KindType = "uniform") -> Array:
+    def get_all_points(
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
+    ) -> Array:
         """Return all points including bounaries
 
         Args:
@@ -1094,7 +1049,7 @@ class Rectangle(CartesianProductMesh):
             isinstance(kind, str | SampleMethod)
             and _coerce_sample_method(kind) == SampleMethod.RANDOM
         ):
-            Ni, Nx = N
+            Ni, Nx = cast(tuple[int, int], N)
             smesh = self.to_shapely()
             smesh.boundary_factor = Nx / Ni
             return smesh.get_all_points(Ni, kind=SampleMethod.RANDOM)
@@ -1103,7 +1058,7 @@ class Rectangle(CartesianProductMesh):
         return super().get_all_points(*N, kind=kind_list)
 
     def get_all_weights(
-        self, *N: NPointsType, kind: KindType = "uniform"
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array | Literal[1]:
         """Return all weights including bounaries
 
@@ -1177,12 +1132,14 @@ class AnnulusPolar(Rectangle):
         self.radius_outer = radius_outer
         Rectangle.__init__(self, radius_inner, radius_outer, 0, 2 * jnp.pi)
 
-    def get_all_points(self, *N: NPointsType, kind: KindType = "uniform") -> Array:
+    def get_all_points(
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
+    ) -> Array:
         x = Rectangle.get_all_points(self, *N, kind=kind)
         return x[(abs(x[:, 1] - 2 * jnp.pi) > 1e-8)]
 
     def get_points_inside_domain(
-        self, *N: NPointsType, kind: KindType = "uniform"
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array:
         x = AnnulusPolar.get_all_points(self, *N, kind=kind)
         return x[
@@ -1191,7 +1148,7 @@ class AnnulusPolar(Rectangle):
         ]
 
     def get_points_on_domain(
-        self, *N: NPointsType, kind: KindType = "uniform"
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array:
         x = AnnulusPolar.get_all_points(self, *N, kind=kind)
         return x[
@@ -1220,18 +1177,20 @@ class Annulus(AnnulusPolar):
         y = r * jnp.sin(theta)
         return jnp.column_stack((x, y))
 
-    def get_all_points(self, *N: NPointsType, kind: KindType = "uniform") -> Array:
+    def get_all_points(
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
+    ) -> Array:
         xc = AnnulusPolar.get_all_points(self, *N, kind=kind)
         return self.convert_to_cartesian(xc)
 
     def get_points_inside_domain(
-        self, *N: NPointsType, kind: KindType = "uniform"
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array:
         xc = AnnulusPolar.get_points_inside_domain(self, *N, kind=kind)
         return self.convert_to_cartesian(xc)
 
     def get_points_on_domain(
-        self, *N: NPointsType, kind: KindType = "uniform"
+        self, *N: NPointsType, kind: KindType = SampleMethod.UNIFORM
     ) -> Array:
         xc = AnnulusPolar.get_points_on_domain(self, *N, kind=kind)
         return self.convert_to_cartesian(xc)
@@ -1286,15 +1245,16 @@ class Square_with_hole(ShapelyMesh):
         kind: SampleMethodLike = SampleMethod.RANDOM,
         specific_points: Array | np.ndarray | None = None,
     ) -> Array:
-        specific_points = np.array(
-            [
-                [self.left, self.bottom],
-                [self.right, self.bottom],
-                [self.right, self.top],
-                [self.left, self.top],
-            ],
-            dtype=float,
-        )
+        if specific_points is None:
+            specific_points = np.array(
+                [
+                    [self.left, self.bottom],
+                    [self.right, self.bottom],
+                    [self.right, self.top],
+                    [self.left, self.top],
+                ],
+                dtype=float,
+            )
         pts = super().get_points_on_domain(
             N, kind=kind, specific_points=specific_points
         )
@@ -1370,14 +1330,15 @@ class Triangle(ShapelyMesh):
         kind: SampleMethodLike = SampleMethod.RANDOM,
         specific_points: Array | np.ndarray | None = None,
     ) -> Array:
-        specific_points = np.array(
-            [
-                [0.0, 0.0],
-                [1.0, 0.0],
-                [0.0, 1.0],
-            ],
-            dtype=float,
-        )
+        if specific_points is None:
+            specific_points = np.array(
+                [
+                    [0.0, 0.0],
+                    [1.0, 0.0],
+                    [0.0, 1.0],
+                ],
+                dtype=float,
+            )
         pts = super().get_points_on_domain(
             N, kind=kind, specific_points=specific_points
         )

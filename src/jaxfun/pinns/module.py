@@ -63,7 +63,6 @@ class BaseModule(nnx.Module):
         return nnx.graphdef(self) == nnx.graphdef(other) and self.name == other.name
 
     def update_time(self, deltat: float) -> None:
-        """Update internal time-dependent parameters by deltat"""
         pass
 
     @property
@@ -207,7 +206,7 @@ class KANLayer(nnx.Module):
         *,
         hidden: bool = False,
         basespace: type[OrthogonalSpace] = Chebyshev.Chebyshev,
-        domains: list[Domain] | None = None,
+        domains: list[Domain | tuple[float, float]] | None = None,
         system: CoordSys | None = None,
         dtype: Dtype | None = None,
         param_dtype: Dtype = jnp.float32,
@@ -265,6 +264,11 @@ class KANLayer(nnx.Module):
         )
 
     def update_time(self, deltat: float) -> None:
+        """Update time-dependent domain for input layer.
+
+        Args:
+            deltat: Time increment to apply.
+        """
         if not self.hidden:
             d = self.basespaces[-1]._domain
             self.basespaces[-1]._domain = Domain(
@@ -872,6 +876,9 @@ def get_flax_module(
         return sPIKANModule(V, **params)  # ty:ignore[unknown-argument, invalid-argument-type]
     elif isinstance(V, UnionSpace):
         return UnionModule(V, **params)
+    assert isinstance(
+        V, OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+    )
     return SpectralModule(V, **params)
 
 
@@ -933,26 +940,6 @@ class FlaxFunction(Function):
         obj.argument = 2
         obj.rngs = rngs
         return obj
-
-    def __getitem__(self, i: int):
-        """Return component function for a vector-valued space."""
-        # How are we indexing functionspaces?
-        return FlaxFunction(
-            self.functionspace[i],  # ty:ignore[not-subscriptable]
-            name=self.name[i],
-            module=self.module,
-            rngs=self.rngs,
-        )
-
-    def get_subflaxfunction(self, i: int):
-        """Return sub-function for selected components of a vector-valued space."""
-        # How are we indexing here? How are they iterable?
-        return FlaxFunction(
-            self.functionspace[i],  # ty:ignore[not-subscriptable]
-            name=self.name,
-            module=self.module[i],  # ty:ignore[not-subscriptable]
-            rngs=self.rngs,
-        )
 
     @property
     def rank(self):

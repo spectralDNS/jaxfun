@@ -30,8 +30,6 @@ from sympy.vector import VectorZero
 from sympy.vector.dyadic import Dyadic, DyadicAdd
 from sympy.vector.vector import Vector, VectorAdd
 
-from jaxfun.typing import cast_bd, cast_bv
-
 
 def _is_vector_or_dyadic(obj: Basic) -> TypeGuard[Vector | Dyadic]:
     return isinstance(obj, Vector | Dyadic)
@@ -783,6 +781,7 @@ class CoordSys(Basic):
 
     def from_cartesian(self, v) -> Vector | Dyadic:
         from jaxfun.operators import express
+        from jaxfun.typing import cast_bd, cast_bv
 
         if self.is_cartesian:
             return v
@@ -885,6 +884,8 @@ class CoordSys(Basic):
         Raises:
             ValueError: If j is None when requesting a Dyadic component.
         """
+        from jaxfun.typing import cast_bv
+
         b = cast_bv(self.base_vectors())
         if v.is_Vector:
             return v & b[k]

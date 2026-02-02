@@ -15,7 +15,7 @@ class BaseSpace:
     Args:
         system: Coordinate system associated with the space. If None, a
             1D Cartesian system is created automatically.
-        name: Human‑readable name of the space (used in repr / debugging).
+        name: Human-readable name of the space (used in repr / debugging).
         fun_str: Base string used when generating symbolic function names.
 
     Attributes:

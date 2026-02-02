@@ -75,13 +75,16 @@ def test_fourier_embs_odd_embed_dim_raises():
 
 def test_embedding_only_periodic_matches_period_embs():
     rngs = nnx.Rngs(0)
-    periodicity = dict(period=(2.0,), axis=(0,), trainable=(False,))
+    period: tuple[float, ...] = (2.0,)
+    axis: tuple[int, ...] = (0,)
+    trainable: tuple[bool, ...] = (False,)
+    periodicity = dict(period=period, axis=axis, trainable=trainable)
     emb = Embedding(periodicity=periodicity, fourier_emb=None, rngs=rngs)
 
     x = jnp.array([0.5, 1.0])
     out = emb(x)
 
-    pe = PeriodEmbs(**periodicity)
+    pe = PeriodEmbs(period=period, axis=axis, trainable=trainable)
     expected = pe(x)
     assert out.shape == expected.shape == (3,)
     assert jnp.allclose(out, expected, atol=1e-7)
@@ -89,13 +92,18 @@ def test_embedding_only_periodic_matches_period_embs():
 
 def test_embedding_only_fourier_matches_fourier_embs_shape():
     rngs = nnx.Rngs(0)
-    fe_conf = dict(embed_scale=1.0, embed_dim=6, in_dim=2)
+    embed_scale: float = 1.0
+    embed_dim: int = 6
+    in_dim: int = 2
+    fe_conf = dict(embed_scale=embed_scale, embed_dim=embed_dim, in_dim=in_dim)
     emb = Embedding(periodicity=None, fourier_emb=fe_conf, rngs=rngs)
 
     x = jnp.array([0.3, -0.7])
     out = emb(x)
 
-    fe = FourierEmbs(rngs=rngs, **fe_conf)
+    fe = FourierEmbs(
+        rngs=rngs, embed_scale=embed_scale, embed_dim=embed_dim, in_dim=in_dim
+    )
     out_fe = fe(x)
 
     assert out.shape == (6,)

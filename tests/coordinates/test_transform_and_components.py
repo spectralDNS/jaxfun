@@ -1,4 +1,8 @@
+from typing import cast
+
 import sympy as sp
+from sympy.vector.basisdependent import BasisDependent
+from sympy.vector.vector import Vector
 
 from jaxfun import divergence, gradient
 from jaxfun.coordinates import get_CoordSys
@@ -47,9 +51,12 @@ def test_contravariant_and_covariant_component_access():
 def test_gradient_and_divergence_in_system():
     s = C.r * C.theta
     g = gradient(s)
+    assert isinstance(g, BasisDependent)
+    assert getattr(g, "is_Vector", False)
+    gv = cast(Vector, g)
     d = divergence(g)
     # Gradient known components
-    assert any(sp.simplify(val - C.theta) == 0 for k, val in g.components.items())
-    assert any(val.has(C.r) for k, val in g.components.items())
+    assert any(sp.simplify(val - C.theta) == 0 for k, val in gv.components.items())
+    assert any(val.has(C.r) for k, val in gv.components.items())
     assert d - C.theta / C.r == 0
     assert isinstance(d, sp.Expr)

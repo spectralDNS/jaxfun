@@ -23,10 +23,10 @@ import pytest
         "helmholtz2D",
     ],
 )
-def test_demos(demo) -> None:
+def test_demos(demo: str) -> None:
     with contextlib.suppress(SystemExit):
         runpy.run_path(f"examples/{demo}.py", run_name="__main__")
 
 
 if __name__ == "__main__":
-    test_demos()
+    test_demos("poisson1D")

@@ -1,3 +1,5 @@
+from typing import no_type_check
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -627,7 +629,8 @@ def test_residual_vpinn_target_dict():
     assert len(residual.target_dict) > 0
 
 
-if __name__ == "__main__":
+@no_type_check
+def main():
     test_get_flaxfunction_args_with_flaxfunction(flax_func.__wrapped__())
     test_get_flaxfunction_args_with_simple_expr(base_scalars.__wrapped__())
     test_get_flaxfunctions_single(flax_func.__wrapped__())
@@ -687,3 +690,7 @@ if __name__ == "__main__":
     test_residual_vpinn_with_target_expr()
     test_residual_vpinn_target_dict()
     print("All tests passed.")
+
+
+if __name__ == "__main__":
+    main()

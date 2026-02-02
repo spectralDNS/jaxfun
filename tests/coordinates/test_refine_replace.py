@@ -1,4 +1,7 @@
+from typing import cast
+
 import sympy as sp
+from sympy.vector.vector import Vector
 
 from jaxfun.coordinates import get_CoordSys
 
@@ -22,5 +25,7 @@ def test_refine_and_replace():
 def test_simplify_vector_and_dyadic():
     v = C.r * C.b_r + (C.r * sp.sin(theta)) * C.b_theta
     simp = C.simplify(v)
+    assert getattr(simp, "is_Vector", False)
+    simp_v = cast(Vector, simp)
     # Should not alter structure, but ensure mapping back to base scalars
-    assert all(hasattr(k, "_system") for k in simp.components)
+    assert all(hasattr(k, "_system") for k in simp_v.components)

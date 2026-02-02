@@ -2,7 +2,6 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from jaxfun import BaseSpace
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.utils import ulp
@@ -25,13 +24,15 @@ def xn(x: jnp.ndarray) -> np.ndarray:
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
-def test_vandermonde(space: BaseSpace, x: jnp.ndarray, xn: np.ndarray, N: int) -> None:
-    space = space(N)
+def test_vandermonde(
+    space: type[Legendre] | type[Chebyshev], x: jnp.ndarray, xn: np.ndarray, N: int
+) -> None:
+    V = space(N)
     np_res = {
         "Legendre": np.polynomial.legendre.legvander(xn, N - 1),
         "Chebyshev": np.polynomial.chebyshev.chebvander(xn, N - 1),
-    }[space.__class__.__name__]
-    jax_res = space.vandermonde(x)
+    }[space.__name__]
+    jax_res = V.vandermonde(x)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < ulp(10.0)
 
@@ -39,22 +40,26 @@ def test_vandermonde(space: BaseSpace, x: jnp.ndarray, xn: np.ndarray, N: int) -
 @pytest.mark.parametrize("k", (0, 1, 2, 3))
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
 def test_evaluate_basis_derivative(
-    space: BaseSpace, x: jnp.ndarray, xn: np.ndarray, N: int, k: int
+    space: type[Legendre] | type[Chebyshev],
+    x: jnp.ndarray,
+    xn: np.ndarray,
+    N: int,
+    k: int,
 ) -> None:
-    space = space(N)
+    V = space(N)
     np_res = {
         "Legendre": np.polynomial.legendre.legvander(xn, N - 1),
         "Chebyshev": np.polynomial.chebyshev.chebvander(xn, N - 1),
-    }[space.__class__.__name__]
+    }[space.__name__]
     der = {
         "Legendre": np.polynomial.legendre.legder,
         "Chebyshev": np.polynomial.chebyshev.chebder,
-    }[space.__class__.__name__]
+    }[space.__name__]
     P = np_res.shape[-1]
     if k > 0:
         D = np.zeros((P, P))
         D[:-k] = der(np.eye(P, P), k)
         np_res = np.dot(np_res, D)
-    jax_res = space.evaluate_basis_derivative(x, k=k)
+    jax_res = V.evaluate_basis_derivative(x, k=k)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < ulp(10 ** (k + 2))

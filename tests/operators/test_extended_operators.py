@@ -1,4 +1,5 @@
 import sympy as sp
+import sympy.vector as sp_vector
 
 from jaxfun.coordinates import BaseDyadic, CartCoordSys, get_CoordSys
 from jaxfun.operators import (
@@ -54,16 +55,16 @@ def test_dot_various_combinations():
     # Dyadic·Dyadic
     dy2 = BaseDyadic(C.b_theta, C.b_r)
     res3 = dot(dy, dy2)
-    assert res3.is_Dyadic
+    assert getattr(res3, "is_Dyadic", False)
     # Zero cases
-    zero = sp.vector.VectorZero()
+    zero = sp_vector.VectorZero()
     assert dot(zero, C.b_r) == 0 and dot(C.b_r, zero) == 0
 
 
 def test_gradient_vector_transpose_and_T_toggle():
     v = C.r * C.b_r + C.theta * C.b_theta
     g = gradient(v, transpose=True)
-    assert g.is_Dyadic
+    assert getattr(g, "is_Dyadic", False)
     g2 = Grad(v, transpose=True)
     assert g2.T._transpose is False
 
@@ -73,14 +74,14 @@ def test_gradient_product_single_system_after_express():
     scalar_c = express(scalar_cart, C)  # express scalar in cylindrical system
     expr = (C.r * C.b_r) + scalar_c * C.b_r
     g = gradient(expr)
-    assert g.is_Vector or g.is_Dyadic
+    assert getattr(g, "is_Vector", False) or getattr(g, "is_Dyadic", False)
 
 
 def test_divergence_cross_returns_Div_unevaluated():
     cr = Cross(C.b_r, C.b_theta)
     d = divergence(cr, doit=False)
     assert isinstance(d, Div)
-    assert d.doit().is_scalar
+    assert getattr(d.doit(), "is_scalar", False)
 
 
 def test_curl_scalar_multiple_vector_mul_branch():
@@ -134,7 +135,7 @@ def test_global_doit_vector_and_dyadic_add():
 
 
 def test_cross_zero_and_self():
-    z = sp.vector.VectorZero()
+    z = sp_vector.VectorZero()
     assert cross(z, C.b_r) == z
     assert cross(C.b_r, C.b_r) == z
 
@@ -146,10 +147,10 @@ def test_outer_transpose_property():
 
 def test_dot_dyadic_zero_cases():
     # Construct DyadicZero via zero vector inclusion
-    dz = sp.vector.DyadicZero()
+    dz = sp_vector.DyadicZero()
     d0 = N.i | N.j
-    assert dot(dz, N.i) == sp.vector.VectorZero()
-    assert dot(N.i, dz) == sp.vector.VectorZero()
+    assert dot(dz, N.i) == sp_vector.VectorZero()
+    assert dot(N.i, dz) == sp_vector.VectorZero()
     assert dot(dz, d0) == dz
     assert dot(d0, dz) == dz
     assert dot(dz, dz) == dz
@@ -157,7 +158,7 @@ def test_dot_dyadic_zero_cases():
 
 def test_dot_vector_zero_cases():
     # Construct DyadicZero via zero vector inclusion
-    vz = sp.vector.VectorZero()
+    vz = sp_vector.VectorZero()
     d0 = N.i | N.j
     assert dot(vz, N.i) == sp.S.Zero
     assert dot(N.i, vz) == sp.S.Zero

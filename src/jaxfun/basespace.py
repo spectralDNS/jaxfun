@@ -30,10 +30,10 @@ class BaseSpace:
 
     def __init__(
         self,
-        system: CoordSys = None,
+        system: CoordSys | None = None,
         name: str = "BaseSpace",
         fun_str: str = "phi",
     ) -> None:
         self.name = name
         self.fun_str = fun_str
-        self.system = CartCoordSys("N", (x,)) if system is None else system
+        self.system: CoordSys = CartCoordSys("N", (x,)) if system is None else system

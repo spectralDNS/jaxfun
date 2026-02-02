@@ -1,5 +1,4 @@
 from collections.abc import Callable
-from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -43,12 +42,12 @@ class Jacobi(OrthogonalSpace):
     def __init__(
         self,
         N: int,
-        domain: Domain = None,
-        system: CoordSys = None,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
         name: str = "Jacobi",
         fun_str: str = "J",
-        alpha: Number = 0,
-        beta: Number = 0,
+        alpha: Number | float = 0,
+        beta: Number | float = 0,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
         OrthogonalSpace.__init__(
@@ -98,7 +97,7 @@ class Jacobi(OrthogonalSpace):
         _, c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (n, c0, c1))
         return c0 + c1 * ((a + 1) + (a + b + 2) * (X - 1) / 2)
 
-    @partial(jax.jit, static_argnums=(0, 1))
+    @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
         """Return Gauss–Jacobi quadrature nodes/weights.
 
@@ -219,7 +218,7 @@ class Jacobi(OrthogonalSpace):
             lambda i: self.gn(i) * gam(i) * sp.binomial(i + alpha, i - k),
         )
 
-    def psi(self, n: int, k: int) -> Expr:
+    def psi(self, n: Symbol | int, k: int) -> Expr:
         r"""Return derivative normalization ψ^{(k,α,β)}_n.
 
         Relates k-th derivative to shifted-parameter Jacobi poly:
@@ -236,7 +235,7 @@ class Jacobi(OrthogonalSpace):
         return sp.rf(n + self.alpha + self.beta + 1, k) / 2**k
 
     @staticmethod
-    def gamma(alpha: Number, beta: Number, n: int) -> Expr:
+    def gamma(alpha: Number | float, beta: Number | float, n: int) -> Expr:
         r"""Return h_n (norm squared) for P_n^{(α,β)} under weight ω^{(α,β)}.
 
         h_n = (P_n^{(α,β)}, P_n^{(α,β)})_{ω^{(α,β)}}.
@@ -257,7 +256,7 @@ class Jacobi(OrthogonalSpace):
         )
         return sp.simplify(f.subs([(alf, alpha), (bet, beta)]))
 
-    def h(self, n: Number, k: int) -> Expr:
+    def h(self, n: Symbol | int, k: int) -> Expr:
         r"""Return h_n^{(k)} norm for k-th derivative of scaled polynomials.
 
         Using Q_n = g_n P_n^{(α,β)}:

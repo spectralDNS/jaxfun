@@ -1,5 +1,6 @@
-from collections.abc import Callable
-from typing import Any, Self, cast
+from abc import abstractmethod
+from collections.abc import Callable, Sequence
+from typing import Any, NotRequired, Self, TypedDict, cast
 
 import jax
 import jax.numpy as jnp
@@ -9,26 +10,35 @@ from flax.nnx.nn import dtypes
 from flax.typing import (
     DotGeneralT,
     Dtype,
-    Initializer,
     PrecisionLike,
 )
 from jax import Array, lax
+from jax.flatten_util import ravel_pytree
+from jax.nn.initializers import Initializer
 from sympy import Function
 from sympy.core.function import AppliedUndef
 from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
-from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseTime, CoordSys
 from jaxfun.galerkin import Chebyshev
+from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.galerkin.tensorproductspace import (
     TensorProductSpace,
     VectorTensorProductSpace,
 )
+from jaxfun.typing import Activation
 from jaxfun.utils.common import Domain, lambdify
 
 from .embeddings import Embedding
-from .nnspaces import KANMLPSpace, MLPSpace, PirateSpace, UnionSpace, sPIKANSpace
+from .nnspaces import (
+    KANMLPSpace,
+    MLPSpace,
+    NNSpace,
+    PirateSpace,
+    UnionSpace,
+    sPIKANSpace,
+)
 
 default_kernel_init = nnx.initializers.glorot_normal()
 default_bias_init = nnx.initializers.zeros_init()
@@ -37,6 +47,8 @@ default_rngs = nnx.Rngs(11)
 
 class BaseModule(nnx.Module):
     """Base class for PINN modules."""
+
+    name: str
 
     def __hash__(self) -> int:
         # Use static hash for module (does not reflect a change of state)
@@ -53,6 +65,13 @@ class BaseModule(nnx.Module):
     def update_time(self, deltat: float) -> None:
         """Update internal time-dependent parameters by deltat"""
         pass
+
+    @property
+    @abstractmethod
+    def dim(self) -> int: ...
+
+    @abstractmethod
+    def __call__(self, x: Array) -> Array: ...
 
 
 class RWFLinear(nnx.Module):
@@ -187,9 +206,9 @@ class KANLayer(nnx.Module):
         spectral_size: int,
         *,
         hidden: bool = False,
-        basespace: BaseSpace = Chebyshev.Chebyshev,
+        basespace: type[OrthogonalSpace] = Chebyshev.Chebyshev,
         domains: list[Domain] | None = None,
-        system: CoordSys = None,
+        system: CoordSys | None = None,
         dtype: Dtype | None = None,
         param_dtype: Dtype = jnp.float32,
         precision: PrecisionLike = None,
@@ -229,7 +248,9 @@ class KANLayer(nnx.Module):
             subsystems += [None]
 
         domains = (
-            domains if domains is not None else [(-1, 1) for _ in range(in_features)]
+            domains
+            if domains is not None
+            else [Domain(-1, 1) for _ in range(in_features)]
         )
 
         self.basespaces = (
@@ -289,8 +310,9 @@ class KANLayer(nnx.Module):
                     precision=self.precision,
                 )
                 for i in range(len(T))
-            ]
-        )  # type: ignore[return-value]
+            ],
+            start=jnp.asarray(0, dtype=inputs.dtype),
+        )
 
 
 class MLP(BaseModule):
@@ -298,7 +320,7 @@ class MLP(BaseModule):
 
     def __init__(
         self,
-        V: BaseSpace,
+        V: MLPSpace,
         *,
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,
@@ -364,7 +386,7 @@ class MLP(BaseModule):
     def dim(self) -> int:
         """Return flattened parameter count."""
         st = nnx.state(self)
-        return jax.flatten_util.ravel_pytree(st)[0].shape[0]
+        return ravel_pytree(st)[0].shape[0]
 
     def __call__(self, x: Array) -> Array:
         """Forward pass.
@@ -410,7 +432,7 @@ class PIModifiedBottleneck(nnx.Module):
         hidden_dim: int,
         output_dim: int,
         nonlinearity: float,
-        act_fun: Callable[[Array], Array] = nnx.tanh,
+        act_fun: Activation = nnx.tanh,
         *,
         rngs: nnx.Rngs,
         name: str = "PIModifiedBottleneck",
@@ -474,16 +496,16 @@ class PirateNet(BaseModule):
         self,
         V: PirateSpace,
         *,
-        kernel_init: Initializer = nnx.nn.linear.default_kernel_init,
-        bias_init: Initializer = nnx.nn.linear.default_bias_init,
+        kernel_init: Initializer = default_kernel_init,
+        bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs,
         name: str = "PirateNet",
     ) -> None:
-        hidden_size = (
-            V.hidden_size
-            if isinstance(V.hidden_size, list | tuple)
-            else [V.hidden_size]
-        )
+        hidden_size: list[int]
+        if isinstance(V.hidden_size, int):
+            hidden_size = [V.hidden_size]
+        else:
+            hidden_size = list(cast(Sequence[int], V.hidden_size))
         # TODO: Need a smarter way to handle the input size at each step
         self.embedder = Embedding(
             periodicity=V.periodicity, fourier_emb=V.fourier_emb, rngs=rngs
@@ -545,7 +567,7 @@ class PirateNet(BaseModule):
     def dim(self) -> int:
         """Return flattened parameter count."""
         st = nnx.split(self, nnx.Param)[1]
-        return jax.flatten_util.ravel_pytree(st)[0].shape[0]
+        return ravel_pytree(st)[0].shape[0]
 
     def __call__(self, x: Array) -> Array:
         """Forward pass.
@@ -571,7 +593,7 @@ class SpectralModule(BaseModule):
 
     def __init__(
         self,
-        basespace: BaseSpace,
+        basespace: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace,
         *,
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,  # kept for uniform API
@@ -586,7 +608,7 @@ class SpectralModule(BaseModule):
             bias_init: Ignored (present for consistency).
             rngs: RNG container.
         """
-        if basespace.dims == 1:
+        if isinstance(basespace, OrthogonalSpace):
             w = kernel_init(rngs(), (1, basespace.num_dofs))
             # Spectral modes should decay - apply logscaled weighting
             x = jnp.logspace(0, -6, basespace.num_dofs)
@@ -625,7 +647,7 @@ class SpectralModule(BaseModule):
         Returns:
             Values (N,) if d=1 else (N, rank+1).
         """
-        if self.dims == 1:
+        if isinstance(self.space, OrthogonalSpace):
             X = self.space.map_reference_domain(x)
             return self.space.evaluate(X, self.kernel.value[0])
 
@@ -702,7 +724,7 @@ class KANMLPModule(BaseModule):
     def dim(self) -> int:
         """Return flattened parameter count."""
         st = nnx.split(self, nnx.Param)[1]
-        return jax.flatten_util.ravel_pytree(st)[0].shape[0]
+        return ravel_pytree(st)[0].shape[0]
 
     def update_time(self, deltat: float) -> None:
         self.layer_in.update_time(deltat)
@@ -799,7 +821,7 @@ class sPIKANModule(BaseModule):
     def dim(self) -> int:
         """Return flattened parameter count."""
         st = nnx.state(self)
-        return jax.flatten_util.ravel_pytree(st)[0].shape[0]
+        return ravel_pytree(st)[0].shape[0]
 
     def update_time(self, deltat: float) -> None:
         self.layer_in.update_time(deltat)
@@ -819,6 +841,13 @@ class sPIKANModule(BaseModule):
         return self.layer_out(x)
 
 
+class ModuleKwargs(TypedDict):
+    kernel_init: Initializer
+    bias_init: NotRequired[Initializer]
+    rngs: nnx.Rngs
+    name: NotRequired[str]
+
+
 def get_flax_module(
     V,
     *,
@@ -826,22 +855,24 @@ def get_flax_module(
     bias_init: Initializer = default_bias_init,
     rngs: nnx.Rngs,
     name: str | None = None,
-) -> nnx.Module:
+) -> BaseModule:
     """Instantiate appropriate nnx module given a function space."""
-    params = dict(kernel_init=kernel_init, rngs=rngs)
+
+    params: ModuleKwargs = dict(kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)
     if name is not None:
         params["name"] = name
     if isinstance(V, MLPSpace):
-        return MLP(V, bias_init=bias_init, **params)
+        return MLP(V, **params)
     elif isinstance(V, PirateSpace):
-        return PirateNet(V, bias_init=bias_init, **params)
+        return PirateNet(V, **params)
     elif isinstance(V, KANMLPSpace):
-        return KANMLPModule(V, bias_init=bias_init, **params)
+        return KANMLPModule(V, **params)
     elif isinstance(V, sPIKANSpace):
-        return sPIKANModule(V, **params)
+        params.pop("bias_init")  # sPIKANModule does not use bias_init
+        return sPIKANModule(V, **params)  # ty:ignore[unknown-argument, invalid-argument-type]
     elif isinstance(V, UnionSpace):
-        return UnionModule(V, bias_init=bias_init, **params)
-    return SpectralModule(V, bias_init=bias_init, **params)
+        return UnionModule(V, **params)
+    return SpectralModule(V, **params)
 
 
 class FlaxFunction(Function):
@@ -863,13 +894,23 @@ class FlaxFunction(Function):
         rngs: RNG container used for module initialization.
     """
 
+    functionspace: (
+        NNSpace | OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+    )
+    t: BaseTime
+    module: BaseModule
+    name: str
+    fun_str: str
+    argument: int
+    rngs: nnx.Rngs
+
     def __new__(
         cls: type[Self],
-        V: BaseSpace,
+        V: NNSpace | OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace,
         name: str,
         *,
-        module: nnx.Module = None,
-        fun_str: str = None,
+        module: BaseModule | None = None,
+        fun_str: str | None = None,
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,
         rngs: nnx.Rngs = default_rngs,
@@ -895,16 +936,21 @@ class FlaxFunction(Function):
 
     def __getitem__(self, i: int):
         """Return component function for a vector-valued space."""
+        # How are we indexing functionspaces?
         return FlaxFunction(
-            self.functionspace[i], name=self.name[i], module=self.module, rngs=self.rngs
+            self.functionspace[i],  # ty:ignore[not-subscriptable]
+            name=self.name[i],
+            module=self.module,
+            rngs=self.rngs,
         )
 
     def get_subflaxfunction(self, i: int):
         """Return sub-function for selected components of a vector-valued space."""
+        # How are we indexing here? How are they iterable?
         return FlaxFunction(
-            self.functionspace[i],
+            self.functionspace[i],  # ty:ignore[not-subscriptable]
             name=self.name,
-            module=self.module[i],
+            module=self.module[i],  # ty:ignore[not-subscriptable]
             rngs=self.rngs,
         )
 
@@ -918,13 +964,18 @@ class FlaxFunction(Function):
         """Return flattened parameter count of underlying module."""
         return self.module.dim
 
-    def get_args(self, Cartesian=True):
+    def get_args(self, Cartesian=True) -> tuple[sp.Symbol, ...] | sp.Tuple:
         """Return symbolic arguments (Cartesian or base scalars + time)."""
         if Cartesian:
             return self.args[:-1]
         V = self.functionspace
         s = V.system.base_scalars()
-        return s + (self.t,) if V.is_transient else s
+        res = s + (self.t,) if V.is_transient else s
+        if V.is_transient:
+            res: tuple[sp.Symbol] = s + (self.t,)
+        else:
+            res: sp.Tuple = s
+        return res
 
     def doit(self, **hints: Any) -> sp.Expr | AppliedUndef:
         """Return an evaluated SymPy expression (vector or scalar).
@@ -956,7 +1007,7 @@ class FlaxFunction(Function):
                     rank_parent=V.rank,
                     module=self.module,
                     argument=2,
-                )(*args)
+                )(*args)  # ty:ignore[call-non-callable]
                 * b[i]
                 for i in range(V.dims)
             )
@@ -973,6 +1024,7 @@ class FlaxFunction(Function):
         """
         system = self.functionspace.system
         rv = system.position_vector(False)
+        assert isinstance(rv, sp.Tuple)
         s = system.base_scalars()
         mesh = []
         for r in rv:
@@ -987,7 +1039,7 @@ class FlaxFunction(Function):
                 "(",
                 ", ".join([i.name for i in self.args[:-1]]),
                 "; ",
-                self.args[-1].name,
+                self.args[-1].name,  # ty:ignore[unresolved-attribute]
                 ")",
             )
         )
@@ -1000,7 +1052,7 @@ class FlaxFunction(Function):
                 "(",
                 ", ".join([i.name for i in self.args[:-1]]),
                 "; ",
-                self.args[-1].name,
+                self.args[-1].name,  # ty:ignore[unresolved-attribute]
                 ")",
             )
         )
@@ -1011,7 +1063,7 @@ class FlaxFunction(Function):
     def _sympystr(self, printer: Any) -> str:
         return self.__str__()
 
-    def __call__(self, x):
+    def __call__(self, x: Array) -> Array:
         """Evaluate underlying module; flatten scalar output if rank 0."""
         y = self.module(x)
         if self.rank == 0:
@@ -1080,14 +1132,15 @@ class UnionModule(BaseModule):  # pragma: no cover
             modules: One or more nnx.Module instances.
             V: UnionSpace instance.
         """
-        params = dict(
-            kernel_init=kernel_init,
-            bias_init=bias_init,
-            rngs=rngs,
-        )
         self.modules = nnx.List(
             [
-                get_flax_module(v, name=f"{v.name}", **params)
+                get_flax_module(
+                    v,
+                    kernel_init=kernel_init,
+                    bias_init=bias_init,
+                    rngs=rngs,
+                    name=f"{v.name}",
+                )
                 for i, v in enumerate(V.spaces)
             ]
         )
@@ -1107,6 +1160,7 @@ class UnionModule(BaseModule):  # pragma: no cover
             Concatenated outputs (N, sum(out_sizes)).
         """
         if at_interfaces:
+            assert isinstance(x, Array)
             z0 = [self.modules[0](x[0])]
             for i in range(1, len(self.modules) - 1):
                 z0.append(self.modules[i](x[1 + 2 * (i - 1) : 1 + 2 * i]))

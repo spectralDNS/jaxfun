@@ -684,6 +684,7 @@ class DiscreteTimeTrainer(Trainer):
         """
         self.timestep: int = 0
         self.states = {}
+        self.accumulatedlosses = []
         super().__init__(loss_fn)
 
     def step(
@@ -708,3 +709,12 @@ class DiscreteTimeTrainer(Trainer):
             )
             nnx.update(module, new_params)
         self.timestep += 1
+        self.accumulatedlosses.append(self.losses)
+
+    def evaluate_at_step(
+        self, u: nnx.Module | FlaxFunction, x: Array, step: int
+    ) -> Array:
+        module = u.module if isinstance(u, FlaxFunction) else u
+        gd = nnx.graphdef(module)
+        fun = nnx.merge(gd, self.states[step])
+        return fun(x)

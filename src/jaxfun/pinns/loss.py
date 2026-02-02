@@ -476,7 +476,10 @@ class ResidualVPINN(Residual):
     def _compute_test_function(self, x: Array) -> dict[int, Array]:
         # The test functions should be evaluated once per derivative count
         # FIXME: only implemented for 1D currently
-        TD = {k: self.V.evaluate_basis_derivative(x[:, 0], k) for k in self.target_dict}
+        TD = {
+            k: self.V.evaluate_basis_derivative(self.V.map_reference_domain(x[:, 0]), k)
+            for k in self.target_dict
+        }
         return TD
 
     def _compute_target(self, x: Array, weights: Array | None = None) -> Array:

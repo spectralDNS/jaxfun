@@ -17,12 +17,11 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-  "flax>=0.12",
-  "jax>=0.7.1",
-  "matplotlib>=3.9.3",
+  "flax>=0.12.3",
+  "jax>=0.9",
+  "matplotlib>=3.10.8",
   "optax>=0.2.6",
-  "pre-commit>=4.3",
-  "sympy>=1.13.3",
+  "sympy>=1.14",
 ]
 
 [tool.pytest.ini_options]
@@ -65,19 +64,19 @@ rules = { "possibly-missing-attribute" = "ignore" }
 
 [dependency-groups]
 dev = [
-  "ipython>=8.37.0",
-  "pytest>=8.4.1",
-  "pyvista>=0.46.2",
-  "ruff>=0.12.10",
+  "ipython>=9.10.0",
+  "pytest>=9.0.2",
+  "pyvista>=0.46.5",
+  "ruff>=0.14.14",
   "soap-jax",
   "mpi4py>=4.1.1",
-  "ipykernel>=6.30.1",
-  "pytest-cov>=6.2.1",
-  "plotly>=6.3.0",
+  "ipykernel>=7.1.0",
+  "pytest-cov>=7.0.0",
+  "plotly>=6.5.2",
   "marimo[recommended]>=0.15.2",
   "pre-commit>=4.3.0",
-  "shapely>=2.1.0",
-  "ty>=0.0.13",
+  "shapely>=2.1.2",
+  "ty>=0.0.14",
 ]
 
 [tool.uv.sources]

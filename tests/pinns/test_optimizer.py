@@ -3,6 +3,8 @@ import contextlib
 import jax.numpy as jnp
 import pytest
 from flax import nnx
+from flax.nnx import Param
+from jax import Array
 
 from jaxfun.pinns import FlaxFunction, Loss, MLPSpace, optimizer as opt_mod
 
@@ -10,7 +12,7 @@ from jaxfun.pinns import FlaxFunction, Loss, MLPSpace, optimizer as opt_mod
 class DummyModule(nnx.Module):
     def __init__(self):
         # single scalar parameter
-        self.w = nnx.Param(jnp.array(0.0))
+        self.w: Param[Array] = nnx.Param(jnp.array(0.0))
 
 
 def test_adam_no_decay_name_and_module():
@@ -73,7 +75,7 @@ def test_train_returns_callable():
     # simple differentiable loss: (w - 2)^2
     def loss_fn(model: nnx.Module):
         assert isinstance(model, DummyModule)
-        return (model.w - 2.0) ** 2
+        return (model.w[...] - 2.0) ** 2
 
     step = opt_mod.train(loss_fn)
     assert callable(step)

@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
+from flax.nnx import Param
 from flax.nnx.nn import dtypes
 from flax.typing import (
     DotGeneralT,
@@ -114,14 +115,16 @@ class RWFLinear(nnx.Module):
         scaling_key = rngs.params()
         # Use RWF params from https://arxiv.org/pdf/2507.08972
         scaling_init = nnx.initializers.normal(0.1)
-        g = 1.0 + scaling_init(scaling_key, (out_features,), param_dtype)
-        self.g = nnx.Param(jnp.exp(g))
-        self.kernel = nnx.Param(w / g)
+        g: Array = 1.0 + scaling_init(scaling_key, (out_features,), param_dtype)
+        self.g: Param[Array] = nnx.Param(jnp.exp(g))
+        self.kernel: Param[Array] = nnx.Param(w / g)
 
         self.bias: nnx.Param[jax.Array] | None
         if use_bias:
             bias_key = rngs.params()
-            self.bias = nnx.Param(bias_init(bias_key, (out_features,), param_dtype))
+            self.bias: Param[Array] = nnx.Param(
+                bias_init(bias_key, (out_features,), param_dtype)
+            )
         else:
             self.bias = None
 
@@ -146,9 +149,9 @@ class RWFLinear(nnx.Module):
         Returns:
             Output tensor (..., out_features).
         """
-        kernel = self.kernel.value
-        bias = self.bias.value if self.bias is not None else None
-        g = self.g.value
+        kernel = self.kernel[...]
+        bias = self.bias[...] if self.bias is not None else None
+        g = self.g[...]
 
         inputs, kernel, bias, g = self.promote_dtype(
             (inputs, kernel, bias, g), dtype=self.dtype
@@ -231,7 +234,7 @@ class KANLayer(nnx.Module):
             kernel_key, (in_features, spectral_size, out_features), param_dtype
         )
         y = jnp.logspace(0, -min(6, spectral_size), spectral_size)[None, :, None]
-        self.kernel = nnx.Param(w * y)
+        self.kernel: Param[Array] = nnx.Param(w * y)
 
         # Select subsystem(s) for per-dimension mapping (input layer only).
         subsystems = (
@@ -269,12 +272,12 @@ class KANLayer(nnx.Module):
         Returns:
             Output tensor (..., out_features).
         """
-        kernel = self.kernel.value
+        kernel = self.kernel[...]
         inputs, kernel = self.promote_dtype((inputs, kernel), dtype=self.dtype)
 
         if not self.hidden:
             # Expand each input dimension independently.
-            T = [
+            T: list[Array] = [
                 self.basespaces[j].eval_basis_functions(
                     self.basespaces[j].map_reference_domain(inputs[..., j])
                 )
@@ -282,7 +285,7 @@ class KANLayer(nnx.Module):
             ]
         else:
             # Hidden layer, all with the same domain [-1, 1]: reuse one basis.
-            T = [
+            T: list[Array] = [
                 self.basespaces[0].eval_basis_functions(inputs[..., j])
                 for j in range(self.in_features)
             ]
@@ -419,7 +422,8 @@ class PIModifiedBottleneck(nnx.Module):
         rngs: nnx.Rngs,
         name: str = "PIModifiedBottleneck",
     ) -> None:
-        self.alpha = nnx.Param(jnp.array(nonlinearity).reshape((1,)))
+        self.alpha: Param[float] = nnx.Param(nonlinearity)
+        # self.alpha = nnx.Param(jnp.array(nonlinearity).reshape((1,)))
 
         self.layer1 = RWFLinear(
             in_dim, hidden_dim, rngs=rngs, dtype=float, param_dtype=float
@@ -431,7 +435,7 @@ class PIModifiedBottleneck(nnx.Module):
             hidden_dim, output_dim, rngs=rngs, dtype=float, param_dtype=float
         )
 
-        self.act_fun = act_fun
+        self.act_fun: Activation = act_fun
         self.name = name
 
     def __call__(self, x: Array, u: Array, v: Array) -> Array:
@@ -446,6 +450,7 @@ class PIModifiedBottleneck(nnx.Module):
             Mixed output tensor (N, output_dim).
         """
         identity = x
+        alpha = self.alpha.get_value()
 
         x = self.act_fun(self.layer1(x))
         x = x * u + (1 - x) * v
@@ -454,7 +459,7 @@ class PIModifiedBottleneck(nnx.Module):
         x = x * u + (1 - x) * v
 
         x = self.act_fun(self.layer3(x))
-        x = self.alpha * x + (1 - self.alpha) * identity
+        x = alpha * x + (1 - alpha) * identity
 
         return x
 
@@ -590,6 +595,7 @@ class SpectralModule(BaseModule):
             bias_init: Ignored (present for consistency).
             rngs: RNG container.
         """
+        self.kernel: Param[Array]
         if isinstance(basespace, OrthogonalSpace):
             w = kernel_init(rngs(), (1, basespace.num_dofs))
             # Spectral modes should decay - apply logscaled weighting
@@ -629,11 +635,12 @@ class SpectralModule(BaseModule):
         Returns:
             Values (N,) if d=1 else (N, rank+1).
         """
+        kernel = self.kernel[...]
         if isinstance(self.space, OrthogonalSpace):
             X = self.space.map_reference_domain(x)
-            return self.space.evaluate(X, self.kernel.value[0])
+            return self.space.evaluate(X, kernel[0])
 
-        z = self.space.evaluate(x, self.kernel.value, True)
+        z = self.space.evaluate(x, kernel, True)
         if self.space.rank == 0:
             return jnp.expand_dims(z, -1)
         return z

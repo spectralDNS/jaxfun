@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 from flax import nnx
+from flax.nnx import Initializer, Param
 from jax import Array
 
 
@@ -93,10 +94,10 @@ class FourierEmbs(nnx.Module):
         if embed_dim % 2 != 0:
             raise ValueError("embed_dim must be even (cos & sin halves).")
 
-        init = nnx.initializers.normal(embed_scale)
-        k = init(rngs(), (in_dim, embed_dim // 2), float)
+        init: Initializer = nnx.initializers.normal(embed_scale)
+        k: Array = init(rngs(), (in_dim, embed_dim // 2), float)
         self.embed_dim = embed_dim
-        self.kernel = nnx.Param(k)
+        self.kernel: Param[Array] = nnx.Param(k)
 
     def __call__(self, x: Array) -> Array:
         """Apply random Fourier feature mapping.
@@ -109,7 +110,8 @@ class FourierEmbs(nnx.Module):
             Array of shape (..., embed_dim) containing concatenated cos/sin
             embeddings.
         """
-        proj = x @ self.kernel
+        kernel = self.kernel[...]
+        proj = x @ kernel
         return jnp.concatenate([jnp.cos(proj), jnp.sin(proj)], axis=-1)
 
 

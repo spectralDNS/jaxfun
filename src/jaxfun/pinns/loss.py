@@ -1,18 +1,26 @@
+from __future__ import annotations
+
 from collections.abc import Callable
 from functools import partial
 from numbers import Number
+from typing import TYPE_CHECKING, Protocol
 
 import jax
 import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
+from jax.flatten_util import ravel_pytree
 from jax.sharding import NamedSharding, PartitionSpec as P
 
 from jaxfun.coordinates import BaseScalar, get_system
+from jaxfun.galerkin import TestFunction
 from jaxfun.typing import Array, Loss_Tuple
 from jaxfun.utils import lambdify
 
-from .module import Comp, Function
+from .module import Comp
+
+if TYPE_CHECKING:
+    from jaxfun.pinns import FlaxFunction
 
 
 # Differs from jaxfun.utils.common.jacn in the last if else
@@ -34,7 +42,7 @@ def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
     return jax.vmap(fun, in_axes=0, out_axes=0) if k > 0 else fun  # type: ignore[return-value]
 
 
-def get_flaxfunction_args(a: sp.Expr) -> tuple[sp.Symbol | BaseScalar, ...] | None:
+def get_flaxfunction_args(a: sp.Basic) -> tuple[sp.Symbol | BaseScalar, ...] | None:
     for p in sp.core.traversal.iterargs(a):
         if getattr(p, "argument", -1) == 2:
             return p.args
@@ -42,8 +50,8 @@ def get_flaxfunction_args(a: sp.Expr) -> tuple[sp.Symbol | BaseScalar, ...] | No
 
 
 def get_flaxfunctions(
-    a: sp.Expr,
-) -> set[Function]:
+    a: sp.Basic,
+) -> set[FlaxFunction]:
     flax_found = set()
     for p in sp.core.traversal.iterargs(a):
         if getattr(p, "argument", -1) == 2:
@@ -52,8 +60,8 @@ def get_flaxfunctions(
 
 
 def get_testfunction(
-    a: sp.Expr,
-) -> Function | None:
+    a: sp.Basic,
+) -> TestFunction | None:
     for p in sp.core.traversal.iterargs(a):
         if getattr(p, "argument", -1) == 0:
             return p
@@ -106,7 +114,7 @@ def expand(forms: sp.Expr) -> tuple[sp.Expr, list[sp.Expr]]:
 
 
 def _process_input_arrays(
-    arrays: tuple[Array | Number | None, ...], x: Array
+    arrays: tuple[Array | float | None, ...], x: Array
 ) -> tuple[Array, ...]:
     _newarrays = []
     for array in arrays:
@@ -160,8 +168,8 @@ class Residual:
         self,
         f: sp.Expr,
         x: Array,
-        target: Number | Array = 0,
-        weights: Number | Array | None = None,
+        target: float | Array = 0,
+        weights: float | Array | None = None,
     ) -> None:
         r"""Residual of a single equation evaluated at collocation points
 
@@ -192,7 +200,7 @@ class Residual:
             if len(weights.shape) > 0 and weights.shape[0] == x.shape[0]:
                 weights = jax.device_put(weights, x.sharding)
             else:
-                weights = jax.device_put(weights, NamedSharding(x.sharding.mesh, P()))
+                weights = jax.device_put(weights, NamedSharding(x.sharding.mesh, P()))  # ty:ignore[unresolved-attribute]
 
         self.x, self.weights = x, weights
 
@@ -221,10 +229,10 @@ class Residual:
     def __call__(
         self,
         x: Array,
-        target: Array,
-        module: nnx.Module,
-        Js: dict[tuple[int, int, int], Array] = None,
-        x_id: int = None,
+        target: Array | float | int,
+        module: nnx.Module | None,
+        Js: dict[tuple[int, int, int], Array] | None = None,
+        x_id: int | None = None,
     ) -> Array:
         return sum([eq(x, module, Js=Js, x_id=x_id) for eq in self.eqs]) - target
 
@@ -246,7 +254,7 @@ class Residual:
             if len(t0.shape) > 0 and t0.shape[0] == x.shape[0]:
                 t0 = jax.device_put(t0, x.sharding)
             else:
-                t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))
+                t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))  # ty:ignore[unresolved-attribute]
         return t0
 
     def loss(
@@ -254,8 +262,8 @@ class Residual:
         x: Array,
         target: Array,
         module: nnx.Module,
-        Js: dict[tuple[int, int, int], Array] = None,
-        x_id: int = None,
+        Js: dict[tuple[int, int, int], Array] | None = None,
+        x_id: int | None = None,
     ) -> Array:
         r = self(x, target, module, Js=Js, x_id=x_id)
         return (self.weights * r**2).sum()
@@ -273,7 +281,7 @@ class Residual:
                 if isinstance(module, Comp)
                 else module
             )
-            Js[key] = jacn(mod, key[2])(x)
+            Js[key] = jacn(mod, key[2])(x)  # ty:ignore[invalid-argument-type]
         return Js
 
     def eval_compute_grad(
@@ -357,8 +365,8 @@ class ResidualVPINN(Residual):
         self,
         f: sp.Expr,
         x: Array,
-        target: Number | Array = 0,
-        weights: Number | Array | None = None,
+        target: float | Array = 0,
+        weights: float | Array | None = None,
     ) -> None:
         r"""Residual of a single equation using VPINN.
 
@@ -456,18 +464,18 @@ class ResidualVPINN(Residual):
             if len(weights.shape) > 0 and weights.shape[0] == x.shape[0]:
                 weights = jax.device_put(weights, x.sharding)
             else:
-                weights = jax.device_put(weights, NamedSharding(x.sharding.mesh, P()))
+                weights = jax.device_put(weights, NamedSharding(x.sharding.mesh, P()))  # ty:ignore[unresolved-attribute]
 
         # Compute both the test functions (all derivatives needed)
         # and the target stored in target_dict.
         self.TD = self._compute_test_function(x)
         self.target = self._compute_target(x, weights)
-        self.x, self.weights = x, weights  # type: ignore[assignment]
+        self.x, self.weights = x, weights
 
     def _compute_test_function(self, x: Array) -> dict[int, Array]:
         # The test functions should be evaluated once per derivative count
         # FIXME: only implemented for 1D currently
-        TD = {k: self.V.evaluate_basis_derivative(x[:, 0], k) for k in self.target_dict}
+        TD = {k: self.V.evaluate_basis_derivative(x[:, 0], k) for k in self.target_dict}  # ty:ignore[possibly-missing-attribute]
         return TD
 
     def _compute_target(self, x: Array, weights: Array | None = None) -> Array:
@@ -490,17 +498,18 @@ class ResidualVPINN(Residual):
             if len(t0.shape) > 0 and t0.shape[0] == x.shape[0]:
                 t0 = jax.device_put(t0, x.sharding)
             else:
-                t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))
+                t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))  # ty:ignore[unresolved-attribute]
         return t0 * weights[:, None]
 
     def loss(
         self,
         x: Array,
-        target: Array,
-        module: nnx.Module,
-        Js: dict[tuple[int, int, int], Array] = None,
-        x_id: int = None,
+        target: Array | float | int,
+        module: nnx.Module | None,
+        Js: dict[tuple[int, int, int], Array] | None = None,
+        x_id: int | None = None,
     ) -> Array:
+        target = jnp.atleast_1d(jnp.array(target))
         # rk = self(x, target, module, Js=Js, x_id=x_id)
         # return (rk.sum(axis=0)**2).mean() # slower
         return (
@@ -522,11 +531,12 @@ class ResidualVPINN(Residual):
     def __call__(
         self,
         x: Array,
-        target: Array,
-        module: nnx.Module,
-        Js: dict[tuple[int, int, int], Array] = None,
-        x_id: int = None,
+        target: Array | float | int,
+        module: nnx.Module | None,
+        Js: dict[tuple[int, int, int], Array] | None = None,
+        x_id: int | None = None,
     ) -> Array:
+        target = jnp.atleast_1d(jnp.array(target))
         # Return N x K array of residuals for all points N and test functions K
         return jnp.array(
             sum(
@@ -745,14 +755,14 @@ class Loss:
         res = jax.jacfwd(self._compute_residual_arrays, argnums=0)(module, xs, targets)
         JTJ = []
         for i, r in enumerate(res):
-            jf = jax.flatten_util.ravel_pytree(r)[0]
+            jf = ravel_pytree(r)[0]
             N = xs[self.x_ids[i]].shape[0]
             J = jf.reshape((N, -1))
             w = gw[i] * self.residuals[i].weights
             if len(w.shape) == 0:
                 w = jnp.array([w])
             JTJ.append(((J * w[:, None]).T @ J) / N)
-        return 2 * sum(JTJ)  # type: ignore[return-value]
+        return 2 * sum(JTJ)
 
     @partial(nnx.jit, static_argnums=0)
     def value_and_grad_and_JTJ(
@@ -773,12 +783,12 @@ class Loss:
         """
         res = self._compute_residual_arrays(module, xs, targets)
         dres = jax.jacfwd(self._compute_residual_arrays, argnums=0)(module, xs, targets)
-        unravel = jax.flatten_util.ravel_pytree(nnx.state(module))[1]
+        unravel = ravel_pytree(nnx.state(module))[1]
         JTJ = []
         grads = []
         loss = 0
         for i, (r, dr) in enumerate(zip(res, dres, strict=True)):
-            jf = jax.flatten_util.ravel_pytree(dr)[0]
+            jf = ravel_pytree(dr)[0]
             N = xs[self.x_ids[i]].shape[0]
             J = jf.reshape((N, -1))
             w = gw[i] * self.residuals[i].weights
@@ -787,7 +797,7 @@ class Loss:
             JTJ.append(((J * w[:, None]).T @ J) / N)
             rw = r * w
             grads.append(
-                jax.flatten_util.ravel_pytree(
+                ravel_pytree(
                     jax.tree.map(
                         lambda g, rw=rw: jax.lax.dot_general(
                             rw, g, (((0,), (0,)), ((), ()))
@@ -869,9 +879,7 @@ class Loss:
             Array: The norm of the gradient of the loss for equation i
         """
         return jnp.linalg.norm(
-            jax.flatten_util.ravel_pytree(
-                nnx.grad(self.loss_i)(module, xs, targets, i)
-            )[0]
+            ravel_pytree(nnx.grad(self.loss_i)(module, xs, targets, i))[0]
         )
 
     def norm_grad_loss(
@@ -952,7 +960,7 @@ class Loss:
                 if isinstance(module, Comp)
                 else module
             )
-            Js[key] = jacn(mod, k)(xs[x_id])
+            Js[key] = jacn(mod, k)(xs[x_id])  # ty:ignore[invalid-argument-type]
         return Js
 
     def loss_with_gw(
@@ -1003,12 +1011,20 @@ class Loss:
                     zip(self.residuals, targets, self.x_ids, strict=True)
                 )
             ]
-        )  # type: ignore[return-value]
+        )
 
 
-def get_fn(
-    f: sp.Expr, s: tuple[BaseScalar, ...]
-) -> Callable[[Array, nnx.Module, dict[tuple[int, int, int], Array], int], Array]:
+class ResidualFn(Protocol):
+    def __call__(
+        self,
+        x: Array,
+        mod: nnx.Module | None = None,
+        Js: dict[tuple[int, int, int], Array] | None = None,
+        x_id: int | None = None,
+    ) -> Array: ...
+
+
+def get_fn(f: sp.Expr, s: tuple[BaseScalar | sp.Symbol, ...] | None) -> ResidualFn:
     """Return Sympy Expr as function evaluated by points and gradients
 
     Args:
@@ -1025,15 +1041,15 @@ def get_fn(
         # Coefficient independent of basis function
         if len(f.free_symbols) > 0:
             fun = lambdify(s, f)
-            return lambda x, mod, Js=None, x_id=None, fun=fun: fun(*x.T)
+            return lambda x, mod=None, Js=None, x_id=None, fun=fun: fun(*x.T)
         else:
             arr = jnp.array(float(f) if f.is_real else complex(f))
-            return lambda x, mod, Js=None, x_id=None, arr=arr: arr
+            return lambda x, mod=None, Js=None, x_id=None, arr=arr: arr
 
     if isinstance(f, sp.Mul):
         # Multiplication of terms that either contain the basis function or not
-        f_flax = []
-        f_const = []
+        f_flax: list[sp.Expr] = []
+        f_const: list[sp.Expr] = []
         for fx in f.args:
             v0 = get_flaxfunctions(fx)
             # Collect terms that do not (f_const) and contain (f_flax) the flaxfunction
@@ -1042,31 +1058,41 @@ def get_fn(
                 continue
             f_flax.append(fx)
 
-        f_const = sp.Mul(*f_const)
+        f_const: sp.Expr = sp.Mul(*f_const)
         fun = get_fn(f_const, s)
-        return lambda x, mod, Js=None, x_id=None, s=s, f=f_flax: fun(
-            x, mod, Js=Js, x_id=x_id
-        ) * jnp.prod(
-            jnp.array([get_fn(fi, s)(x, mod, Js=Js, x_id=x_id) for fi in f]), axis=0
-        )
+
+        def res_fun(
+            x: Array,
+            mod: nnx.Module | None = None,
+            Js: dict[tuple[int, int, int], Array] | None = None,
+            x_id: int | None = None,
+        ) -> Array:
+            return fun(x, mod, Js, x_id) * jnp.prod(
+                jnp.array([get_fn(fi, s)(x, mod, Js, x_id) for fi in f_flax]), axis=0
+            )
+
+        return res_fun
 
     elif isinstance(f, sp.Pow):
-        return (
-            lambda x,
-            mod,
-            Js=None,
-            x_id=None,
-            s=s,
-            f=f.args[0],
-            p=int(f.args[1]): get_fn(f, s)(x, mod, Js=Js, x_id=x_id) ** p
-        )
+        f0: sp.Expr = f.args[0]
+        p0: int = int(f.args[1])
+
+        def res_fun(
+            x: Array,
+            mod: nnx.Module | None = None,
+            Js: dict[tuple[int, int, int], Array] | None = None,
+            x_id: int | None = None,
+        ) -> Array:
+            return get_fn(f0, s)(x, mod, Js, x_id) ** p0
+
+        return res_fun
 
     assert len(v) == 1
     v = v.pop()
     return partial(
         _lookup_or_eval,
         mod_id=hash(v.module),
-        global_index=v.global_index,
+        global_index=v.global_index,  # ty:ignore[unresolved-attribute]
         k=int(getattr(f, "derivative_count", "0")),
         variables=getattr(f, "variables", ()),
     )
@@ -1075,7 +1101,7 @@ def get_fn(
 def _lookup_or_eval(
     x: Array,
     mod: nnx.Module,
-    Js: dict[tuple[int, int, int], Array] = None,
+    Js: dict[tuple[int, int, int], Array] | None = None,
     x_id: int = 0,
     mod_id: int = 0,
     global_index: int = 0,
@@ -1087,13 +1113,11 @@ def _lookup_or_eval(
         Js = {}
     module = mod.data[mod.mod_index[str(mod_id)]] if isinstance(mod, Comp) else mod
     assert mod_id == hash(module)
-    var: tuple[int] = tuple((slice(None), global_index)) + tuple(
-        int(s._id[0]) for s in variables
-    )
+    var = tuple((slice(None), global_index)) + tuple(int(s._id[0]) for s in variables)
     key: tuple[int, int, int] = (x_id, mod_id, k)
     if key not in Js:
         # Compute gradient
-        z = jacn(module, k)(x)
+        z = jacn(module, k)(x)  # ty:ignore[invalid-argument-type]
         return z[var]
     # look up gradient
     return Js[key][var]

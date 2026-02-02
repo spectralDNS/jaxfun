@@ -52,6 +52,17 @@ exclude_also = [
   "@(abc\\.)?abstractmethod",
 ]
 
+[tool.ty.src]
+exclude = [ "sandbox", "examples/notebooks", "**/*.ipynb" ]
+
+[[tool.ty.overrides]]
+include = [ "examples/DrivenCavity_lstsq.py" ]
+rules = { "invalid-assignment" = "ignore" }
+
+[[tool.ty.overrides]]
+include = [ "examples/sphere_helmholtz.py" ]
+rules = { "possibly-missing-attribute" = "ignore" }
+
 [dependency-groups]
 dev = [
   "ipython>=8.37.0",
@@ -66,6 +77,7 @@ dev = [
   "marimo[recommended]>=0.15.2",
   "pre-commit>=4.3.0",
   "shapely>=2.1.0",
+  "ty>=0.0.13",
 ]
 
 [tool.uv.sources]

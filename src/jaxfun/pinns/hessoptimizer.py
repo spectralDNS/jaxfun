@@ -1,4 +1,5 @@
 import jax
+from jax.flatten_util import ravel_pytree
 from optax import OptState, Params, Updates
 from optax._src import base, combine, linesearch as _linesearch, transform
 from optax.tree_utils import tree_vdot
@@ -12,7 +13,9 @@ def hess(
     use_GN: bool = False,
     cg_max_iter: int = 100,
     cg_tol: float = 1e-5,
-    linesearch: base.GradientTransformationExtraArgs | None = default_linesearch,
+    linesearch: base.GradientTransformationExtraArgs
+    | base.GradientTransformation
+    | None = default_linesearch,
 ) -> base.GradientTransformationExtraArgs:
     r"""Hessian optimizer.
 
@@ -41,7 +44,7 @@ def hess(
     else:
         base_scaling = transform.scale_by_learning_rate(learning_rate)
     if linesearch is None:
-        linesearch = base.identity()
+        linesearch: base.GradientTransformation = base.identity()
     return combine.chain(
         scale_by_hessian(
             use_lstsq=use_lstsq, use_GN=use_GN, cg_max_iter=cg_max_iter, cg_tol=cg_tol
@@ -73,13 +76,13 @@ def scale_by_hessian(
         hvp = lambda v: jax.jvp(jax.grad(extra_args["value_fn"]), (params,), (v,))[1]  # noqa: E731, F821
 
         if use_lstsq:
-            flat_weights, unravel = jax.flatten_util.ravel_pytree(params)
-            flat_updates = jax.flatten_util.ravel_pytree(updates)[0]
+            flat_weights, unravel = ravel_pytree(params)
+            flat_updates = ravel_pytree(updates)[0]
             if use_GN:
                 H = extra_args["GN_loss_fn"](params)
             else:
                 ht = jax.hessian(extra_args["value_fn"])(params)
-                hf = jax.flatten_util.ravel_pytree(ht)[0]
+                hf = ravel_pytree(ht)[0]
                 H = hf.reshape((flat_weights.shape[0], flat_weights.shape[0]))
 
             hess_grads = jax.numpy.linalg.lstsq(H, flat_updates)[0]

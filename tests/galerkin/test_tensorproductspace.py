@@ -1,3 +1,5 @@
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -11,8 +13,9 @@ from jaxfun.galerkin import (
     TestFunction,
     TrialFunction,
 )
+from jaxfun.galerkin.composite import DirectSum
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_kron
+from jaxfun.galerkin.tensorproductspace import TPMatrix, tpmats_to_scipy_kron
 from jaxfun.utils.common import ulp
 
 
@@ -24,7 +27,10 @@ def test_tensorproduct_forward_backward_padding_fourier():
     u = TrialFunction(T)
     v = TestFunction(T)
     M, b = inner(v * (u - sp.sin(x) * sp.sin(y)))
+    assert isinstance(M, list)
     # Solve
+    M = cast(list[TPMatrix], M)
+    b = cast(jax.Array, b)
     uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(T.num_dofs)
     # Backward on padded grid
     up = T.backward(uh, N=(12, 8))
@@ -45,13 +51,16 @@ def test_tensorproduct_directsum_tps_forward_backward():
     v = TestFunction(T)
     A, b = inner(sp.diff(u, x) * sp.diff(v, x) + sp.diff(u, y) * sp.diff(v, y))
     # Ensure we got list of TPMatrix objects
-    for tp in A:
-        _ = tp.mat  # access kron
+    assert isinstance(A, list)
+    A_tp = cast(list[TPMatrix], A)
+    for tp in A_tp:
+        _ = tp.mat
     # Add rhs from non-zero bc lifting by calling backward on zero coeffs.
     # Need homogeneous tensor space to get coefficient shape.
     # Build shape from homogeneous part (first component of direct sum)
     # and second plain Legendre space
-    hom0 = C[0]  # homogeneous composite
+    assert isinstance(C, DirectSum)
+    hom0 = C[0]
     uh = jnp.zeros((hom0.dim, L.dim))
     _ = T.backward(uh)
 
@@ -63,7 +72,8 @@ def test_tp_matrix_and_preconditioner():
     v = TestFunction(T)
     u = TrialFunction(T)
     A = inner(v * u)
-    tp = A[0]
+    assert isinstance(A, list)
+    tp = cast(list[TPMatrix], A)[0]
     X = jax.random.normal(jax.random.PRNGKey(0), shape=T.num_dofs)
     Y = tp(X)
     # Check manual matmul versus kron
@@ -95,7 +105,7 @@ def test_process_results_linear_only():
     v = TestFunction(C)
     x = C.system.x
     b = inner(sp.sin(x) * v)
-    assert b.shape[0] == C.N
+    assert cast(jax.Array, b).shape[0] == C.N
 
 
 def test_inner_returns_matrix_and_vector_with_bcs():
@@ -104,8 +114,10 @@ def test_inner_returns_matrix_and_vector_with_bcs():
     V = FunctionSpace(6, Legendre.Legendre, bcs=bcs)
     v = TestFunction(V)
     u = TrialFunction(V)
-    x = V[0].system.x if hasattr(V, "basespaces") else V.system.x
+    x = V[0].system.x if isinstance(V, DirectSum) else V.system.x
     A, b = inner(v * u + x * v * u)
+    A = cast(jax.Array, A)
+    b = cast(jax.Array, b)
     # A is dense matrix, b vector
     assert A.shape[0] == A.shape[1]
     assert b.shape[0] == A.shape[0]

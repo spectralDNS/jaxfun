@@ -181,7 +181,7 @@ def inner(
                         )
                     )
 
-        elif len(mats) == 2:  # regular separable multivariable form
+        elif len(mats) > 1:  # regular separable multivariable form
             mats: list[RecognizableArray] = cast(list[RecognizableArray], mats)
 
             if has_bcs:

@@ -12,13 +12,26 @@ from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     from jaxfun.coordinates import BaseDyadic, BaseScalar, BaseVector
-    from jaxfun.galerkin import TensorProductSpace, VectorTensorProductSpace
+    from jaxfun.galerkin import (
+        DirectSum,
+        DirectSumTPS,
+        TensorProductSpace,
+        VectorTensorProductSpace,
+    )
     from jaxfun.galerkin.arguments import Jaxf
     from jaxfun.galerkin.orthogonal import OrthogonalSpace
 
 
 type FloatLike = float | sp.Number
-type FunctionSpaceType = OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+type FunctionSpaceType = (
+    OrthogonalSpace
+    | TensorProductSpace
+    | VectorTensorProductSpace
+    | DirectSum
+    | DirectSumTPS
+)
+type TrialSpaceType = FunctionSpaceType
+type TestSpaceType = OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
 
 
 class SympyExpr(Protocol):

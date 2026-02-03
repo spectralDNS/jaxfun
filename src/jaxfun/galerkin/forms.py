@@ -31,9 +31,18 @@ from jaxfun.typing import (
     InnerResultDict,
     LinearCoeffDict,
     ResultDict,
+    TestSpaceType,
 )
 
-from .arguments import JAXArray, Jaxf, JAXFunction
+from .arguments import JAXArray, Jaxf, JAXFunction, TestFunction, TrialFunction
+
+
+class _HasTestSpace(Protocol):
+    functionspace: TestSpaceType
+
+
+def _has_testspace(obj: object) -> TypeGuard[_HasTestSpace]:
+    return hasattr(obj, "functionspace")
 
 
 class _HasFunctionSpace(Protocol):
@@ -47,8 +56,8 @@ def _has_functionspace(obj: object) -> TypeGuard[_HasFunctionSpace]:
 def get_basisfunctions(
     a: sp.Expr,
 ) -> tuple[
-    set[sp.Function] | sp.Function | None,
-    set[sp.Function] | sp.Function | None,
+    set[TestFunction] | TestFunction | None,
+    set[TrialFunction] | TrialFunction | None,
 ]:
     """Return test / trial basis Function objects present in expression.
 
@@ -68,8 +77,8 @@ def get_basisfunctions(
           - A set of Functions if multiple
           - None if none found
     """
-    test_found: set[sp.Function] = set()
-    trial_found: set[sp.Function] = set()
+    test_found: set[TestFunction] = set()
+    trial_found: set[TrialFunction] = set()
     for p in sp.core.traversal.iterargs(sp.sympify(a)):
         if getattr(p, "argument", -1) == 1:
             trial_found.add(p)

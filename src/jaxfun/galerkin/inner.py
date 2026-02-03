@@ -7,13 +7,14 @@ import sympy as sp
 from jax import Array
 from jax.experimental.sparse import BCOO
 
-from jaxfun.typing import FunctionSpaceType
+from jaxfun.typing import TrialSpaceType
 from jaxfun.utils.common import lambdify, matmat, tosparse
 
 from .arguments import TestFunction, TrialFunction
 from .composite import BCGeneric, Composite, DirectSum
 from .forms import (
     _has_functionspace,
+    _has_testspace,
     get_basisfunctions,
     get_jaxarrays,
     split,
@@ -69,7 +70,7 @@ def inner(
     """  # noqa: E501
     V, U = get_basisfunctions(expr)
     assert V is not None, "No TestFunction found in expression"
-    assert _has_functionspace(V), "TestFunction has no associated function space"
+    assert _has_testspace(V), "TestFunction has no associated function space"
     test_space = V.functionspace
     measure = test_space.system.sg
     allforms = split(expr * measure)
@@ -94,7 +95,7 @@ def inner(
         coeffs = split_coeff(a0["coeff"])
         sc = coeffs.get("bilinear", 1)
 
-        trial_space: FunctionSpaceType | None = getattr(U, "functionspace", None)
+        trial_space: TrialSpaceType | None = getattr(U, "functionspace", None)
         trial: list[OrthogonalSpace] = []
         has_bcs = False
 
@@ -107,9 +108,7 @@ def inner(
             assert v is not None and u is not None, (
                 "Both test and trial functions required in bilinear form"
             )
-            assert _has_functionspace(v), (
-                "TestFunction has no associated function space"
-            )
+            assert _has_testspace(v), "TestFunction has no associated function space"
             assert _has_functionspace(u), (
                 "TrialFunction has no associated function space"
             )
@@ -143,6 +142,7 @@ def inner(
 
         if len(mats) == 0:
             pass
+
         elif test_space.dims == 1 and "bilinear" in coeffs:
             aresults.append(mats[0])
 
@@ -181,15 +181,17 @@ def inner(
                         )
                     )
 
-        else:  # regular separable multivariable form
+        elif len(mats) == 2:  # regular separable multivariable form
             mats: list[RecognizableArray] = cast(list[RecognizableArray], mats)
+
             if has_bcs:
-                # The else branch here is unreachable? Jaxf has no attribute .space
-                fun = (
-                    trial_space.bndvals[tuple(trial)]
-                    if trial_space
-                    else coeffs["linear"]["jaxfunction"].space.bndvals[tuple(trial)]  # ty:ignore[unresolved-attribute]
-                )
+                if trial_space is not None:
+                    assert isinstance(trial_space, TensorProductSpace)
+                    fun = trial_space.bndvals[tuple(trial)]
+                else:
+                    jfs = coeffs["linear"]["jaxfunction"].functionspace
+                    assert isinstance(jfs, DirectSumTPS)
+                    fun = jfs.bndvals[tuple(trial)]
                 bresults.append(-(mats[0] @ fun @ mats[1].T))
             else:
                 if "linear" in coeffs:

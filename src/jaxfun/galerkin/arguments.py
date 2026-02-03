@@ -25,10 +25,12 @@ from sympy.vector import VectorAdd
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseScalar, CoordSys, latex_symbols
+from jaxfun.typing import FunctionSpaceType, TestSpaceType, TrialSpaceType
 
 from .composite import DirectSum
 from .orthogonal import OrthogonalSpace
 from .tensorproductspace import (
+    DirectSumTPS,
     TensorProductSpace,
     VectorTensorProductSpace,
 )
@@ -147,9 +149,7 @@ def get_BasisFunction(
     return b
 
 
-def _get_computational_function(
-    arg: str, V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
-) -> Expr | AppliedUndef:
+def _get_computational_function(arg: str, V: TestSpaceType) -> Expr | AppliedUndef:
     """Return symbolic test or trial function in computational coordinates.
 
     Dispatches on space type and builds a product (scalar) or VectorAdd
@@ -240,7 +240,7 @@ class BaseFunction(Function):
 
 
 class ManySpaceFunction(BaseFunction):
-    functionspace: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+    functionspace: FunctionSpaceType
     own_name: str
 
     @property
@@ -272,10 +272,11 @@ class TestFunction(ManySpaceFunction):
 
     __test__ = False  # prevent pytest from considering this a test.
     argument: int
+    functionspace: TestSpaceType
 
     def __new__(
         cls,
-        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
+        V: FunctionSpaceType,
         name: str | None = None,
     ) -> Self:
         coors = V.system
@@ -285,7 +286,7 @@ class TestFunction(ManySpaceFunction):
         obj.argument = 0
         if isinstance(V, DirectSum):
             obj.functionspace = V[0].get_homogeneous()
-        elif isinstance(V, TensorProductSpace):
+        elif isinstance(V, TensorProductSpace | DirectSumTPS):
             f = []
             vname = V.name
             for space in V.basespaces:
@@ -295,6 +296,19 @@ class TestFunction(ManySpaceFunction):
                 else:
                     f.append(space)
             obj.functionspace = TensorProductSpace(f, name=vname, system=V.system)
+        elif isinstance(V, VectorTensorProductSpace):
+            f = []
+            vname = V.name
+            for space in V:
+                g = []
+                for s in space:
+                    if isinstance(s, DirectSum):
+                        g.append(s[0].get_homogeneous())
+                        vname += "0"
+                    else:
+                        g.append(s)
+                f.append(TensorProductSpace(g, name=vname, system=V.system))
+            obj.functionspace = VectorTensorProductSpace(tuple(f), name=V.name)
         else:
             obj.functionspace = V
         obj.name = name if name is not None else "TestFunction"
@@ -313,13 +327,11 @@ class TrialFunction(ManySpaceFunction):
     """
 
     argument: int
-    functionspace: (
-        OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum
-    )
+    functionspace: TrialSpaceType
 
     def __new__(
         cls,
-        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
+        V: FunctionSpaceType,
         name: str | None = None,
     ) -> Self:
         coors = V.system
@@ -424,15 +436,13 @@ class JAXArray(BaseFunction):
     """
 
     array: Array
-    functionspace: (
-        OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum
-    )
+    functionspace: FunctionSpaceType
     argument: int
 
     def __new__(
         cls,
         array: Array,
-        V: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace | DirectSum,
+        V: FunctionSpaceType,
         name: str | None = None,
     ) -> Self:
         obj: Self = Function.__new__(cls, sp.Dummy())
@@ -459,19 +469,56 @@ class JAXArray(BaseFunction):
 
 
 class Jaxf(BaseFunction):
-    """Symbolic wrapper for a JAX array interpreted in backward transform.
+    """Symbolic twin of the JAXFunction in computational space.
 
-    Used when converting coefficient arrays back to physical space via
-    functionspace.backward().
+    A JAXFunction represents a complete function in a given function space,
+    backed by a JAX array of coefficients. That is, in 1D it represents the
+    function u(x) defined by
+    .. math::
+
+        u(x) = \sum_i c_i \phi_i(x)
+
+    where the coefficients :math:`c_i` are stored in the JAXFunction array, and
+    :math:`\phi_i(x)` are the basis functions of the function space.
+    The higher dimensional cases (tensor product spaces, vector-valued spaces)
+    are handled similarly with different definitions of the basis functions.
+
+    When assembling weak forms, the JAXFunction is expanded into a TrialFunction
+    multiplied by the Jaxf symbolic coefficient array. The Jaxf object holds the
+    reference to the coefficient array and function space, allowing for assembly
+    of the system matrices and vectors.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from jaxfun.galerkin import Chebyshev, inner
+        >>> from jaxfun.galerkin.arguments import Jaxf, JAXFunction, TestFunction, \
+            TrialFunction
+        >>> V = Chebyshev.Chebyshev(4, name="V")
+        >>> uf = JAXFunction(jnp.ones(V.dim), V)
+        >>> v = TestFunction(V, name="v")
+        >>> b = inner(v * uf)
+        >>> assert jnp.all(b == jnp.array([3.1415927, 1.5707964, 1.5707964, 1.5707964]))
+        >>> u = TrialFunction(V, name="u")
+        >>> a = inner(u * v)
+        >>> assert jnp.all(b == a @ uf.array)
+        >>> uf.doit().__str__() == 'Jaxf(V)*T_j(x)'
+        >>> assert isinstance(uf.doit().args[0], Jaxf)
+
+    Args:
+        array: JAX array of coefficients.
+        V: Function space instance.
+        name: Optional name for the Jaxf object.
+
     """
 
     array: Array
-    functionspace: OrthogonalSpace | TensorProductSpace | DirectSum
+    functionspace: FunctionSpaceType
+    name: str
 
     def __new__(
         cls,
         array: Array,
-        V: OrthogonalSpace | TensorProductSpace | DirectSum,
+        V: FunctionSpaceType,
         name: str | None = None,
     ) -> Self:
         obj: Self = Function.__new__(cls, sp.Dummy())
@@ -481,6 +528,7 @@ class Jaxf(BaseFunction):
         return obj
 
     def backward(self):
+        assert not isinstance(self.functionspace, VectorTensorProductSpace)
         return self.functionspace.backward(self.array)
 
     def doit(self, **hints: dict) -> Function:
@@ -494,22 +542,50 @@ class Jaxf(BaseFunction):
 
 
 class JAXFunction(ManySpaceFunction):
-    """Symbolic + numeric hybrid representing coefficients in a space.
+    r"""A Galerkin function.
 
-    Represents a function on a given space with a JAX array of expansion coefficients.
+    A JAXFunction represents a complete function in a given function space,
+    backed by a JAX array of coefficients. That is, in 1D it represents the
+    function u(x) defined by
 
-    Behaves like a symbolic trial expansion; .doit() returns the algebraic
-    product of coefficients (Jaxf) and test basis (TrialFunction).
+    .. math::
+
+        u(x) = \sum_i c_i \phi_i(x)
+
+    where the coefficients :math:`c_i` are stored in the JAXFunction array, and
+    :math:`\phi_i(x)` are the basis functions of the function space.
+
+    The higher dimensional cases (tensor product spaces, vector-valued spaces)
+    are handled similarly with different definitions of the basis functions.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from jaxfun.galerkin import Chebyshev, inner
+        >>> from jaxfun.galerkin.arguments import Jaxf, JAXFunction, TestFunction, \
+            TrialFunction
+        >>> V = Chebyshev.Chebyshev(4, name="V")
+        >>> uf = JAXFunction(jnp.ones(V.dim), V)
+        >>> v = TestFunction(V, name="v")
+        >>> b = inner(v * uf)
+        >>> assert jnp.all(b == jnp.array([3.1415927, 1.5707964, 1.5707964, 1.5707964]))
+        >>> u = TrialFunction(V, name="u")
+        >>> a = inner(u * v)
+        >>> assert jnp.all(b == a @ uf.array)
+
+    Args:
+        array: JAX array of coefficients.
+        V: Function space instance.
+        name: Optional name for the JAXFunction object.
     """
 
     array: Array
     argument: int
-    functionspace: OrthogonalSpace | TensorProductSpace | DirectSum
+    functionspace: FunctionSpaceType
 
     def __new__(
         cls,
         array: Array,
-        V: OrthogonalSpace | TensorProductSpace | DirectSum,
+        V: FunctionSpaceType,
         name: str | None = None,
     ) -> Self:
         coors: CoordSys = V.system
@@ -529,7 +605,7 @@ class JAXFunction(ManySpaceFunction):
 
     def doit(self, **hints: Any) -> Expr:
         fs = self.functionspace
-        return Jaxf(self.array, fs, self.name) * TrialFunction(fs).doit()
+        return Jaxf(self.array, fs, "Jaxf") * TrialFunction(fs).doit()
 
     @jax.jit(static_argnums=0)
     def __matmul__(self, a: Array) -> Array:

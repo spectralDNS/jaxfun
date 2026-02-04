@@ -98,6 +98,8 @@ def express(expr: Any, system: CoordSys) -> Expr:
 def outer(v1: VectorLike, v2: VectorLike) -> DyadicLike:
     """Return the (tensor) outer product of two vectors.
 
+    For unevaluated outer product, use Outer.
+
     Args:
         v1: Left Vector operand.
         v2: Right Vector operand.
@@ -150,10 +152,7 @@ def cross(v1: VectorLike, v2: VectorLike) -> VectorLike:
     product (square root of determinant of the Jacobian of the coordinate
     transformation). Summation implied by repeating indices.
 
-    Handles:
-      * Linear (Add) combinations
-      * Scalar multiples (VectorMul)
-      * Base vectors in Cartesian or curvilinear coordinates
+    For unevaluated cross product, use Cross.
 
     Args:
         v1: First Vector.
@@ -285,6 +284,8 @@ def dot(t1: TensorLike, t2: TensorLike) -> TensorLike | Expr:
     Supports Vector·Vector, Vector·Dyadic, Dyadic·Vector and Dyadic·Dyadic,
     recursively distributing over sums and scalar multiples.
 
+    For unevaluated dot product, use Dot.
+
     Args:
         t1: First tensor (Vector or Dyadic).
         t2: Second tensor (Vector or Dyadic).
@@ -386,15 +387,10 @@ def divergence(v: TensorLike) -> VectorLike | Expr:
     For vectors the result equals ∇·v and for dyadics the result equals ∇·v^T.
     The dyadic result is transformed to a covariant basis before returning.
 
-    Handles:
-      * Linear (Add) combinations
-      * Scalar multiples (Mul)
-      * Cross, Curl, Gradient expressions
-      * Base vectors in Cartesian or curvilinear coordinates
+    For unevaluated divergence, use Div.
+
     Args:
         v: Vector or Dyadic expression.
-        doit: If True, evaluates derivatives; if False returns unevaluated Derivative
-        nodes.
 
     Returns:
         Scalar (for Vector input) or Vector (for Dyadic input).
@@ -454,10 +450,7 @@ def gradient(field: Expr | VectorLike, transpose: bool = False) -> TensorLike:
     For vector v: returns (∇ ⊗ v)^T = (∂v/∂q^j) ⊗ b^j (or its transpose).
         The tensors are expressed in the covariant basis before returning.
 
-    Handles:
-      * Linear (Add) combinations
-      * Scalar multiples (Mul)
-      * Base vectors in Cartesian or curvilinear coordinates
+    For unevaluated gradient, use Grad.
 
     Args:
         field: Scalar (Expr) or Vector expression.
@@ -522,6 +515,8 @@ def curl(v: VectorLike) -> VectorLike:
     where {b^j} are the contravariant basis vectors, q^j the coordinates,
     ε^{ijk} the Levi-Civita symbol, and √g the scale factor product
     (square root of determinant of the Jacobian of the coordinate transformation).
+
+    For unevaluated curl, use Curl.
 
     Args:
         v: Vector expression (must lie in a 3D system).
@@ -838,7 +833,7 @@ def diff_covariant_vector(self, *args, **kwargs) -> BasisDependent:
     """Covariant derivative of a vector (component-wise) wrt provided variables.
 
     Args:
-        *args: Differentiation variables (BaseScalars).
+        *args: Differentiation variables (BaseScalars, ints).
         **kwargs: Passed to sympy.diff.
 
     Returns:
@@ -970,7 +965,7 @@ def covariant_diff(self, *args, **kwargs) -> BasisDependent:
 # from jaxfun.operators import Grad
 # N = CartCoordSys("N", (x, y, z))
 # f = N.x*N.y
-# h = 4*Grad(f)
+# h = 4*Grad(f) # This is correctly of type Mul
 # h.doit().is_Vector
 # # -> True
 

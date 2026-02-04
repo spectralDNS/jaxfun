@@ -708,8 +708,8 @@ class CoordSys(Basic):
     @overload
     def position_vector(self, as_Vector: Literal[False] = False) -> Tuple: ...
     @overload
-    def position_vector(self, as_Vector: Literal[True]) -> Vector: ...
-    def position_vector(self, as_Vector: bool = False) -> Tuple | Vector:
+    def position_vector(self, as_Vector: Literal[True]) -> VectorLike: ...
+    def position_vector(self, as_Vector: bool = False) -> Tuple | VectorLike:
         r_out = self.refine_replace(self.rv)
         assert isinstance(r_out, Tuple)
         r = r_out
@@ -817,10 +817,10 @@ class CoordSys(Basic):
 
         return v.xreplace(cart_map)
 
-    # @overload
-    # def from_cartesian(self, v: BaseVector) -> BaseVector: ...
-    # @overload
-    # def from_cartesian(self, v: BaseDyadic) -> BaseDyadic: ...
+    @overload
+    def from_cartesian(self, v: VectorLike) -> VectorLike: ...
+    @overload
+    def from_cartesian(self, v: DyadicLike) -> DyadicLike: ...
     def from_cartesian(self, v: TensorLike) -> TensorLike:
         from jaxfun.operators import express
         from jaxfun.typing import cast_bd, cast_bv
@@ -829,16 +829,16 @@ class CoordSys(Basic):
             return v
 
         v = v.doit()
-        bt = cast(tuple[Vector, ...], self.get_contravariant_basis(True))
+        bt = cast(tuple[VectorLike, ...], self.get_contravariant_basis(True))
         bv = cast_bv(self.base_vectors())
-        if isinstance(v, Vector):
-            terms: list[Vector] = []
+        if _is_vectorlike(v):
+            terms: list[VectorLike] = []
             for i in range(len(bv)):
                 terms.append(self.simplify(v & bt[i]) * bv[i])
             expr = VectorAdd(*terms)
         else:
             bd = cast_bd(self.base_dyadics())
-            terms: list[Dyadic] = []
+            terms: list[DyadicLike] = []
             for i in range(len(bt)):
                 for j in range(len(bt)):
                     terms.append(self.simplify(bt[i] & v & bt[j]) * bd[i * len(bv) + j])
@@ -1159,9 +1159,7 @@ class CoordSys(Basic):
         return ct
 
     @overload
-    def simplify(self, expr: DyadicLike) -> DyadicLike: ...
-    @overload
-    def simplify(self, expr: VectorLike) -> VectorLike: ...
+    def simplify(self, expr: TensorLike) -> TensorLike: ...
     @overload
     def simplify(self, expr: sp.Expr) -> sp.Expr: ...
     def simplify(self, expr: TensorLike | sp.Expr) -> TensorLike | sp.Expr:  # ty:ignore[invalid-method-override]

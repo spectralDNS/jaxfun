@@ -239,7 +239,24 @@ class BaseFunction(Function):
         pass
 
 
-class ManySpaceFunction(BaseFunction):
+class ExpansionFunction(BaseFunction):
+    """Base class for test/trial functions that represent expansions in a given
+    function space.
+
+    For example, a TestFunction T(x; V) represents the expansion of the test
+    function in the basis of the function space
+    V = :math:`\text{span}\{\phi_i\}_{i=0}^N`.
+
+    .. math::
+        T(x; V) = \sum_i T_i \phi_i(x)
+
+    For the tensor product space W = V \otimes U, the expansion is given by
+
+    .. math::
+        T(x, y; W) = \sum_{i,j} T_{i,j} \phi_i(x) \phi_j(y)
+
+    """
+
     functionspace: FunctionSpaceType
     own_name: str
 
@@ -263,7 +280,7 @@ class ManySpaceFunction(BaseFunction):
 # Need a unique Symbol in order to create a new TestFunction/TrialFunction for a new
 # space. Without it all TestFunctions/TrialFunctions created with the same Cartesian
 # coordinates will be the same object.
-class TestFunction(ManySpaceFunction):
+class TestFunction(ExpansionFunction):
     """Symbolic test function T(x; V) for weak form assembly.
 
     Holds a reference to its functionspace and lazily expands (via doit)
@@ -319,7 +336,7 @@ class TestFunction(ManySpaceFunction):
         return _get_computational_function("test", self.functionspace)
 
 
-class TrialFunction(ManySpaceFunction):
+class TrialFunction(ExpansionFunction):
     """Symbolic trial function U(x; V) for weak form assembly.
 
     Direct sums expand to sum of component spaces. Tensor product spaces
@@ -541,8 +558,8 @@ class Jaxf(BaseFunction):
         return f"{latex_symbols[self.name]}({self.functionspace.name})"
 
 
-class JAXFunction(ManySpaceFunction):
-    r"""A Galerkin function.
+class JAXFunction(ExpansionFunction):
+    r"""A Galerkin function with explicit expansion coefficients.
 
     A JAXFunction represents a complete function in a given function space,
     backed by a JAX array of coefficients. That is, in 1D it represents the

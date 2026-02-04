@@ -7,7 +7,16 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, Protocol, cast, ove
 import sympy as sp
 from jax import Array as Array
 from jax.typing import ArrayLike as ArrayLike
-from sympy.vector import Dyadic, DyadicAdd, Vector, VectorAdd
+from sympy.vector import (
+    Dyadic,
+    DyadicAdd,
+    DyadicMul,
+    DyadicZero,
+    Vector,
+    VectorAdd,
+    VectorMul,
+    VectorZero,
+)
 from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
@@ -32,6 +41,10 @@ type FunctionSpaceType = (
 )
 type TrialSpaceType = FunctionSpaceType
 type TestSpaceType = OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+
+type VectorLike = BaseVector | Vector | VectorAdd | VectorMul | VectorZero
+type DyadicLike = BaseDyadic | Dyadic | DyadicAdd | DyadicMul | DyadicZero
+type TensorLike = VectorLike | DyadicLike
 
 
 class SympyExpr(Protocol):
@@ -58,14 +71,16 @@ type DomainType = Literal["inside", "boundary", "intersection", "all"]
 
 
 @overload
-def cast_args(t: VectorAdd) -> tuple[Vector, ...]: ...
+def cast_args(t: VectorAdd) -> tuple[VectorLike, ...]: ...
 @overload
-def cast_args(t: DyadicAdd) -> tuple[Dyadic, ...]: ...
-def cast_args(t: VectorAdd | DyadicAdd) -> tuple[Vector, ...] | tuple[Dyadic, ...]:
-    if isinstance(t, VectorAdd):
-        return cast(tuple[Vector, ...], t.args)
+def cast_args(t: DyadicAdd) -> tuple[DyadicLike, ...]: ...
+def cast_args(t: TensorLike) -> tuple[TensorLike, ...]:
+    from jaxfun.coordinates import _is_vectorlike
+
+    if _is_vectorlike(t):
+        return cast(tuple[VectorLike, ...], t.args)
     else:
-        return cast(tuple[Dyadic, ...], t.args)
+        return cast(tuple[DyadicLike, ...], t.args)
 
 
 def cast_bv(t: sp.Tuple[BaseVector]) -> tuple[BaseVector, ...]:

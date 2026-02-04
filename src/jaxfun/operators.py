@@ -13,7 +13,6 @@ from __future__ import annotations
 import collections
 from collections.abc import Iterator
 from itertools import product
-from types import UnionType
 from typing import Any, Literal, Self, cast, overload
 
 import numpy as np
@@ -22,8 +21,7 @@ from sympy import Expr
 from sympy.core import preorder_traversal
 from sympy.core.add import Add
 from sympy.core.basic import Basic
-from sympy.core.function import Derivative, diff as df
-from sympy.core.mul import Mul
+from sympy.core.function import Derivative as sympy_Derivative, diff as df
 from sympy.printing.latex import LatexPrinter
 from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import Dot as sympy_Dot, VectorAdd, VectorMul, VectorZero
@@ -32,9 +30,23 @@ from sympy.vector.dyadic import Dyadic, DyadicAdd, DyadicMul, DyadicZero
 from sympy.vector.operators import Curl as sympy_Curl, Divergence, Gradient
 from sympy.vector.vector import Vector
 
-from jaxfun.typing import cast_args, cast_bs, cast_bv
+from jaxfun.typing import (
+    DyadicLike,
+    TensorLike,
+    VectorLike,
+    cast_args,
+    cast_bs,
+)
 
-from .coordinates import BaseDyadic, BaseScalar, BaseVector, CoordSys
+from .coordinates import (
+    BaseDyadic,
+    BaseScalar,
+    BaseVector,
+    CoordSys,
+    _is_dyadiclike,
+    _is_tensorlike,
+    _is_vectorlike,
+)
 
 
 def eijk(i: int, j: int, k: int) -> int:
@@ -83,7 +95,7 @@ def express(expr: Any, system: CoordSys) -> Expr:
     return expr.subs(subs_dict)
 
 
-def outer(v1: Vector, v2: Vector) -> Dyadic:
+def outer(v1: VectorLike, v2: VectorLike) -> DyadicLike:
     """Return the (tensor) outer product of two vectors.
 
     Args:
@@ -128,11 +140,7 @@ def outer(v1: Vector, v2: Vector) -> Dyadic:
     return DyadicAdd(*args)
 
 
-@overload
-def cross(v1: BaseVector, v2: BaseVector) -> Vector: ...
-@overload
-def cross(v1: Vector, v2: Vector) -> Vector | Cross: ...
-def cross(v1: Vector, v2: Vector) -> Vector | Cross:
+def cross(v1: VectorLike, v2: VectorLike) -> VectorLike:
     """Return the cross product of two vectors.
 
         v1 x v2 = ε_{ijk} √g v1^i v2^j b^k
@@ -168,44 +176,41 @@ def cross(v1: Vector, v2: Vector) -> Vector | Cross:
         >>> cross(C.b_r, C.b_theta)
         r*C.b_z
     """
+    if isinstance(v1, VectorZero) or isinstance(v2, VectorZero):
+        return Vector.zero
     if isinstance(v1, VectorAdd):
         return VectorAdd.fromiter(cross(i, v2) for i in cast_args(v1))
     if isinstance(v2, VectorAdd):
         return VectorAdd.fromiter(cross(v1, i) for i in cast_args(v2))
-    if isinstance(v1, BaseVector) and isinstance(v2, BaseVector):
-        if v1._sys == v2._sys:
-            n1 = v1.args[0]
-            n2 = v2.args[0]
-            if n1 == n2:
-                return Vector.zero
-
-            assert len(v1._sys.base_scalars()) == 3, (
-                "Can only compute cross product in 3D"
-            )
-
-            n3: int = ({0, 1, 2}.difference({n1, n2})).pop()
-            if v1._sys.is_cartesian:
-                sgn = 1 if ((n1 + 1) % 3 == n2) else -1
-                return sgn * v1._sys.base_vectors()[n3]
-
-            gt = v1._sys.get_contravariant_metric_tensor()
-            sg = v1._sys.sg
-            ei = eijk(n1, n2, n3)
-            b = v1._sys.base_vectors()
-            return sg * ei * gt[n3] @ b
-
-        return cross(v1._sys.to_cartesian(v1), v2._sys.to_cartesian(v2))
-
-    if isinstance(v1, VectorZero) or isinstance(v2, VectorZero):
-        return Vector.zero
     if isinstance(v1, VectorMul):
         v1_inner, m1 = next(iter(v1.components.items()))
         return m1 * cross(v1_inner, v2)
     if isinstance(v2, VectorMul):
         v2_inner, m2 = next(iter(v2.components.items()))
         return m2 * cross(v1, v2_inner)
+    assert isinstance(v1, BaseVector) and isinstance(v2, BaseVector), (
+        "cross product vectors not recognized. Consider using Cross."
+    )
+    if v1._sys == v2._sys:
+        n1 = v1.args[0]
+        n2 = v2.args[0]
+        if n1 == n2:
+            return Vector.zero
 
-    return Cross(v1, v2)
+        assert len(v1._sys.base_scalars()) == 3, "Can only compute cross product in 3D"
+
+        n3: int = ({0, 1, 2}.difference({n1, n2})).pop()
+        if v1._sys.is_cartesian:
+            sgn = 1 if ((n1 + 1) % 3 == n2) else -1
+            return sgn * v1._sys.base_vectors()[n3]
+
+        gt = v1._sys.get_contravariant_metric_tensor()
+        sg = v1._sys.sg
+        ei = eijk(n1, n2, n3)
+        b = v1._sys.base_vectors()
+        return sg * ei * gt[n3] @ b
+
+    return cross(v1._sys.to_cartesian(v1), v2._sys.to_cartesian(v2))
 
 
 type Rank = Literal[0, 1, 2]
@@ -213,18 +218,18 @@ type AdderType = Add | VectorAdd | DyadicAdd
 
 
 @overload
-def _rank_of_dot(t1: Vector, t2: Vector) -> Literal[0]: ...
+def _rank_of_dot(t1: VectorLike, t2: VectorLike) -> Literal[0]: ...
 @overload
-def _rank_of_dot(t1: Vector, t2: Dyadic) -> Literal[1]: ...
+def _rank_of_dot(t1: VectorLike, t2: DyadicLike) -> Literal[1]: ...
 @overload
-def _rank_of_dot(t1: Dyadic, t2: Vector) -> Literal[1]: ...
+def _rank_of_dot(t1: DyadicLike, t2: VectorLike) -> Literal[1]: ...
 @overload
-def _rank_of_dot(t1: Dyadic, t2: Dyadic) -> Literal[2]: ...
-def _rank_of_dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> Rank:
-    if isinstance(t1, Vector):
-        return 0 if isinstance(t2, Vector) else 1
+def _rank_of_dot(t1: DyadicLike, t2: DyadicLike) -> Literal[2]: ...
+def _rank_of_dot(t1: VectorLike | DyadicLike, t2: VectorLike | DyadicLike) -> Rank:
+    if _is_vectorlike(t1):
+        return 0 if _is_vectorlike(t2) else 1
     else:
-        return 1 if isinstance(t2, Vector) else 2
+        return 1 if _is_vectorlike(t2) else 2
 
 
 @overload
@@ -267,14 +272,14 @@ def fromiter[T: AdderType](cls: type[T], args: Iterator[Expr], **assumptions) ->
 
 
 @overload
-def dot(t1: Vector, t2: Vector) -> Expr: ...
+def dot(t1: VectorLike, t2: VectorLike) -> Expr: ...
 @overload
-def dot(t1: Vector, t2: Dyadic) -> Vector: ...
+def dot(t1: VectorLike, t2: DyadicLike) -> VectorLike: ...
 @overload
-def dot(t1: Dyadic, t2: Vector) -> Vector: ...
+def dot(t1: DyadicLike, t2: VectorLike) -> VectorLike: ...
 @overload
-def dot(t1: Dyadic, t2: Dyadic) -> Dyadic: ...
-def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> BasisDependent | Expr | Dot:
+def dot(t1: DyadicLike, t2: DyadicLike) -> DyadicLike: ...
+def dot(t1: TensorLike, t2: TensorLike) -> TensorLike | Expr:
     """Return the (possibly contracted) inner product of two tensors.
 
     Supports Vector·Vector, Vector·Dyadic, Dyadic·Vector and Dyadic·Dyadic,
@@ -304,12 +309,23 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> BasisDependent | Expr | Dot
     adder = _adder_for(rank)
     rank_zero = _zero_for_rank(rank)
 
+    if not _is_tensorlike(t1) or not _is_tensorlike(t2):
+        raise TypeError(
+            "dot operator only defined for Vector or Dyadic types. Consider using Dot."
+        )
+
+    if isinstance(t1, BasisDependentZero) or isinstance(t2, BasisDependentZero):
+        return rank_zero
     if isinstance(t1, VectorAdd | DyadicAdd):
-        args = cast_args(t1)
-        return fromiter(adder, (dot(i, t2) for i in args))
+        return fromiter(adder, (dot(i, t2) for i in cast_args(t1)))
     if isinstance(t2, VectorAdd | DyadicAdd):
-        args = cast_args(t2)
-        return fromiter(adder, (dot(t1, i) for i in args))
+        return fromiter(adder, (dot(t1, i) for i in cast_args(t2)))
+    if isinstance(t1, VectorMul | DyadicMul):
+        v1, m1 = next(iter(t1.components.items()))
+        return m1 * dot(v1, t2)
+    if isinstance(t2, VectorMul | DyadicMul):
+        v2, m2 = next(iter(t2.components.items()))
+        return m2 * dot(t1, v2)
 
     if isinstance(t1, BaseVector | BaseDyadic) and isinstance(
         t2, BaseVector | BaseDyadic
@@ -347,36 +363,21 @@ def dot(t1: Vector | Dyadic, t2: Vector | Dyadic) -> BasisDependent | Expr | Dot
             return rank_zero
         return g0 * t2.args[1]
 
-    if isinstance(t1, BaseDyadic) and isinstance(t2, BaseDyadic):
-        if same_and_cartesian:
-            return t1.args[0] | t2.args[1] if t1.args[1] == t2.args[0] else rank_zero
-        g = sys1.get_covariant_metric_tensor()
-        g0 = g[t1.args[1]._id[0], t2.args[0]._id[0]]
-        if g0 == 0:
-            return rank_zero
-        return g0 * t1.args[0] | t2.args[1]
-
-    if isinstance(t1, BasisDependentZero) or isinstance(t2, BasisDependentZero):
+    assert isinstance(t1, BaseDyadic) and isinstance(t2, BaseDyadic)
+    if same_and_cartesian:
+        return t1.args[0] | t2.args[1] if t1.args[1] == t2.args[0] else rank_zero
+    g = sys1.get_covariant_metric_tensor()
+    g0 = g[t1.args[1]._id[0], t2.args[0]._id[0]]
+    if g0 == 0:
         return rank_zero
-
-    if isinstance(t1, VectorMul | DyadicMul):
-        v1, m1 = next(iter(t1.components.items()))
-        return m1 * dot(v1, t2)
-    if isinstance(t2, VectorMul | DyadicMul):
-        v2, m2 = next(iter(t2.components.items()))
-        return m2 * dot(t1, v2)
-
-    return Dot(t1, t2)
-
-
-type DivType = Vector | BaseVector | Dyadic | BaseDyadic | Cross | Curl | Grad
+    return g0 * t1.args[0] | t2.args[1]
 
 
 @overload
-def divergence(v: DivType, doit: Literal[False]) -> Div: ...
+def divergence(v: DyadicLike) -> VectorLike: ...
 @overload
-def divergence(v: DivType, doit: Literal[True] = True) -> Vector | Expr: ...
-def divergence(v: DivType, doit: bool = True) -> Vector | Expr | Basic | Div:
+def divergence(v: VectorLike) -> Expr: ...
+def divergence(v: TensorLike) -> VectorLike | Expr:
     """Return divergence of a Vector or Dyadic field
 
         div(v) = ∂v/∂q^j·b^j
@@ -410,101 +411,43 @@ def divergence(v: DivType, doit: bool = True) -> Vector | Expr | Basic | Div:
         >>> divergence(v)
         3
     """
+    rank = 0 if _is_vectorlike(v) else 1
+    if not _is_tensorlike(v):
+        raise TypeError("divergence only defined for tensors. Consider using Div.")
+    if isinstance(v, BasisDependentZero) or v == sp.S.Zero:
+        return _zero_for_rank(rank)
     coord_sys = _get_coord_systems(v)
     if len(coord_sys) == 0:
         if v.is_Vector:
             return sp.S.Zero
         return Vector.zero
     elif len(coord_sys) == 1:
-        if isinstance(v, Cross | Curl | Grad):
-            return Div(v)
         # v should be a vector/dyadic with Cartesian or covariant basis vectors
-        # Note: In the formulas below we could also simply use the definition
-        # bt = coord_sys.get_contravariant_basis(True)
-        # res = sp.Add.fromiter(Dot(v.diff(x[i]), bt[i]).doit() for i in range(len(x)))
-        # However, it is much faster to use precomputed metrics and Christoffel symbols
         coord_sys = cast(CoordSys, next(iter(coord_sys)))
         x = coord_sys.base_scalars()
-        comp = coord_sys.get_contravariant_component
-        sg = coord_sys.sg
-        if isinstance(v, Vector):
-            res = sp.S.Zero
-            for i in range(len(x)):
-                res += Derivative(express(comp(v, i) * sg, coord_sys), x[i]) / sg
-        else:
-            bv = coord_sys.base_vectors()
-            ct = coord_sys.get_christoffel_second()
-            res = []
-            for i in range(len(x)):
-                r0 = sp.S.Zero
-                for j in range(len(x)):
-                    r0 += comp(v, i, j).diff(x[j])
-                    for k in range(len(x)):
-                        r0 += ct[i, k, j] * comp(v, k, j) + ct[j, k, j] * comp(v, i, k)
-                res.append(r0 * bv[i])
-            res = VectorAdd(*res)
+        bt = coord_sys.get_contravariant_basis_vector
+        res = Add.fromiter(Dot(Derivative(v, x[i]), bt(i)) for i in range(len(x)))
+        return express(res.doit(), coord_sys)
 
-        if doit:
-            return express(res.doit(), coord_sys)
-        return res
-
-    elif len(coord_sys) == 2:
-        # For example a vector expressed using Cartesian basis vectors and
-        # Curvilinear BaseScalars. Like CoordSys.position_vector(True)
-        coord_sys_arr = np.array(list(coord_sys))
-        mask = np.array(
-            [not si.is_cartesian for si in coord_sys],
-            dtype=bool,
-        )
-        not_cart = np.nonzero(mask)[0]
-        assert len(not_cart) == 1
-        not_cart_sys = cast(CoordSys, coord_sys_arr[not_cart[0]])
-        return divergence(not_cart_sys.from_cartesian(v), doit=doit)
-    else:
-        if isinstance(v, DyadicAdd):
-            return VectorAdd.fromiter(divergence(i, doit=doit) for i in cast_args(v))
-        elif isinstance(v, Add):
-            return Add.fromiter(divergence(cast(Vector, i), doit=doit) for i in v.args)
-        elif isinstance(v, Mul):
-            PossType: UnionType = Vector | Dyadic | Cross | Grad
-            vector = cast(PossType, [i for i in v.args if isinstance(i, PossType)][0])
-            scalar = cast(
-                Expr, Mul.fromiter(i for i in v.args if not isinstance(i, PossType))
-            )
-            if not isinstance(vector, Vector):
-                vector = cast(Dyadic, vector)
-                res = VectorAdd(
-                    dot(vector, gradient(scalar)),
-                    scalar * divergence(vector, doit=doit),
-                )
-            else:
-                res = Dot(vector, gradient(scalar)) + scalar * divergence(
-                    vector, doit=doit
-                )
-            if doit:
-                return res.doit()
-            return res
-        elif isinstance(v, Cross | Curl | Grad):
-            return Div(v)
-        else:
-            raise Div(v)  # type: ignore[invalid-raise]
+    assert len(coord_sys) == 2
+    # For example a vector expressed using Cartesian basis vectors and
+    # Curvilinear BaseScalars. Like CoordSys.position_vector(True)
+    coord_sys_arr = np.array(list(coord_sys))
+    mask = np.array(
+        [not si.is_cartesian for si in coord_sys],
+        dtype=bool,
+    )
+    not_cart = np.nonzero(mask)[0]
+    assert len(not_cart) == 1
+    not_cart_sys = cast(CoordSys, coord_sys_arr[not_cart[0]])
+    return divergence(not_cart_sys.from_cartesian(v))
 
 
 @overload
-def gradient(
-    field: Expr | Vector, doit: Literal[False], transpose: bool = False
-) -> Grad: ...
+def gradient(field: VectorLike, transpose: bool = False) -> DyadicLike: ...
 @overload
-def gradient(
-    field: Vector, doit: Literal[True] = True, transpose: bool = False
-) -> Dyadic: ...
-@overload
-def gradient(
-    field: Expr, doit: Literal[True] = True, transpose: bool = False
-) -> Vector: ...
-def gradient(
-    field: Expr | Vector, doit: bool = True, transpose: bool = False
-) -> BasisDependent | Grad:
+def gradient(field: Expr, transpose: bool = False) -> VectorLike: ...
+def gradient(field: Expr | VectorLike, transpose: bool = False) -> TensorLike:
     """Return gradient of a scalar or (optionally transposed) gradient of a vector.
 
     For scalar f: returns ∇f = ∂f/∂q^j b^j.
@@ -518,7 +461,6 @@ def gradient(
 
     Args:
         field: Scalar (Expr) or Vector expression.
-        doit: If True, evaluate derivatives immediately.
         transpose: If True and field is a Vector, return grad(v)^T = ∇ ⊗ v.
 
     Returns:
@@ -537,59 +479,42 @@ def gradient(
         theta*P.b_r + 1/r*P.b_theta
     """
     coord_sys = _get_coord_systems(field)
+    rank = 2 if _is_vectorlike(field) else 1
 
+    if isinstance(field, BasisDependentZero) or field == sp.S.Zero:
+        return _zero_for_rank(rank)
     if len(coord_sys) == 0:
-        return Vector.zero
-    elif len(coord_sys) == 1:
+        return _zero_for_rank(rank)
+    if len(coord_sys) == 1:
         coord_sys = cast(CoordSys, next(iter(coord_sys)))
-        v = cast_bv(coord_sys.base_vectors())
         x = cast_bs(coord_sys.base_scalars())
-
-        if coord_sys.is_cartesian and not isinstance(field, Vector):
-            h = coord_sys.hi
-            vi: BaseVector | VectorZero = sum(
-                (v[i] * field.diff(x[i]) / h[i] for i in range(len(h))),
-                start=Vector.zero,
+        b = tuple(coord_sys.get_contravariant_basis_vector(i) for i in range(len(x)))
+        if _is_vectorlike(field):
+            dv = Add.fromiter(
+                Outer(b[i], Derivative(field, x[i]))
+                if transpose
+                else Outer(Derivative(field, x[i]), b[i])
+                for i in range(len(x))
             )
         else:
-            gt = coord_sys.get_contravariant_metric_tensor()
-            vi = []
-            for i in range(gt.shape[0]):
-                for j in range(gt.shape[1]):
-                    f_x_g: Expr = field.diff(x[i]) * gt[i, j]
-                    if field.is_Vector:
-                        vj: Vector = v[j] | f_x_g if transpose else f_x_g | v[j]
-                    else:
-                        vj: Dyadic = f_x_g * v[j]
-                    vi.append(vj)
-            vi: DyadicAdd | VectorAdd = (
-                DyadicAdd(*vi) if isinstance(field, Vector) else VectorAdd(*vi)
-            )
+            dv = Add.fromiter(Derivative(field, x[i]) * b[i] for i in range(len(x)))
 
-        if doit:
-            return vi.doit()
-        return vi
+        return dv.doit()
 
-    elif len(coord_sys) == 2:
-        # For example a vector expressed using Cartesian basis vectors and
-        # Curvilinear BaseScalars. Like CoordSys.position_vector(True)
-        coord_sys_arr = np.array(list(coord_sys))
+    assert len(coord_sys) == 2
+    # For example a vector expressed using Cartesian basis vectors and
+    # Curvilinear BaseScalars. Like CoordSys.position_vector(True)
+    coord_sys_arr = np.array(list(coord_sys))
 
-        mask = np.array([not si.is_cartesian for si in coord_sys], dtype=bool)
-        not_cart = np.nonzero(mask)[0]
-        assert len(not_cart) == 1
-        not_cart_sys = cast(CoordSys, coord_sys_arr[not_cart[0]])
-        return gradient(not_cart_sys.from_cartesian(field), doit, transpose)
-
-    if isinstance(field, Add):
-        return VectorAdd.fromiter(gradient(i, doit, transpose) for i in field.args)
-    if isinstance(field, Mul):
-        s = _split_mul_args_wrt_coordsys(field)
-        return VectorAdd.fromiter(field / i * gradient(i, doit, transpose) for i in s)
-    return Grad(field, transpose=transpose)
+    mask = np.array([not si.is_cartesian for si in coord_sys], dtype=bool)
+    not_cart = np.nonzero(mask)[0]
+    assert len(not_cart) == 1
+    assert _is_vectorlike(field)
+    not_cart_sys = cast(CoordSys, coord_sys_arr[not_cart[0]])
+    return gradient(not_cart_sys.from_cartesian(field), transpose)
 
 
-def curl(v: Vector, doit: bool = True) -> Vector | Curl:
+def curl(v: VectorLike) -> VectorLike:
     """Return curl of a 3D vector field.
 
         curl(v) = ∇×v = b^j×(∂v/∂q^j) = ε^{ijk} ∂v_k/∂q^j b_i / √g
@@ -625,61 +550,27 @@ def curl(v: Vector, doit: bool = True) -> Vector | Curl:
     coord_sys = _get_coord_systems(v)
 
     if len(coord_sys) == 0:
-        return VectorZero()
-    elif len(coord_sys) == 1:
+        return Vector.zero
+    if isinstance(v, BasisDependentZero):
+        return Vector.zero
+    if len(coord_sys) == 1:
         coord_sys = cast(CoordSys, next(iter(coord_sys)))
-        bv = cast_bv(coord_sys.base_vectors())
         x = cast_bs(coord_sys.base_scalars())
-        sg = coord_sys.sg
-        comp = coord_sys.get_covariant_component
-        assert len(x) == 3
-        v0 = Derivative(comp(v, 2), x[1]) - Derivative(comp(v, 1), x[2])
-        v1 = Derivative(comp(v, 0), x[2]) - Derivative(comp(v, 2), x[0])
-        v2 = Derivative(comp(v, 1), x[0]) - Derivative(comp(v, 0), x[1])
-        outvec = (v0 * bv[0] + v1 * bv[1] + v2 * bv[2]) / sg
-        if doit:
-            return outvec.doit()
-        return outvec
+        b = tuple(coord_sys.get_contravariant_basis_vector(i) for i in range(len(x)))
+        outvec = Add.fromiter(Cross(b[i], v.diff(x[i])) for i in range(len(x)))
+        return outvec.doit()
 
-    elif len(coord_sys) == 2:
-        # For example a vector expressed using Cartesian basis vectors and
-        # Curvilinear BaseScalars. Like CoordSys.position_vector(True)
-        coord_sys_arr = np.array(list(coord_sys))
-        mask = np.array(
-            [not si.is_cartesian for si in coord_sys],
-            dtype=bool,
-        )
-        not_cart = np.nonzero(mask)[0]
-        assert len(not_cart) == 1
-        return curl(
-            cast(Vector, cast(CoordSys, coord_sys_arr[not_cart[0]]).from_cartesian(v)),
-            doit=doit,
-        )
-
-    if isinstance(v, Add | VectorAdd):
-        from sympy.vector import express
-
-        try:
-            cs = cast(CoordSys, next(iter(coord_sys)))
-            args = [express(i, cs, variables=True) for i in v.args]
-        except ValueError:
-            args = v.args
-
-        args = cast(tuple[Vector, ...], args)
-        return VectorAdd.fromiter(curl(i, doit=doit) for i in args)
-
-    elif isinstance(v, Mul | VectorMul):
-        VCG: UnionType = Vector | Cross | Grad
-        vector = cast(Vector, [i for i in v.args if isinstance(i, VCG)][0])
-        scalar = cast(Expr, Mul.fromiter(i for i in v.args if not isinstance(i, VCG)))
-        res = Cross(gradient(scalar), vector).doit() + scalar * curl(vector, doit=doit)
-        if doit:
-            return res.doit()
-        return res
-    elif isinstance(v, Cross | Curl | Grad):
-        return Curl(v)
-    else:
-        raise Curl(v)  # type: ignore[invalid-raise]
+    assert len(coord_sys) == 2
+    # For example a vector expressed using Cartesian basis vectors and
+    # Curvilinear BaseScalars. Like CoordSys.position_vector(True)
+    coord_sys_arr = np.array(list(coord_sys))
+    mask = np.array(
+        [not si.is_cartesian for si in coord_sys],
+        dtype=bool,
+    )
+    not_cart = np.nonzero(mask)[0]
+    assert len(not_cart) == 1
+    return curl(coord_sys_arr[not_cart[0]].from_cartesian(v))
 
 
 class Grad(Gradient):
@@ -708,7 +599,7 @@ class Grad(Gradient):
         return obj
 
     def doit(self, **hints: Any) -> Vector | Dyadic:
-        return gradient(self._expr.doit(**hints), doit=True, transpose=self._transpose)
+        return gradient(self._expr.doit(**hints), transpose=self._transpose)
 
     def __hash__(self) -> int:
         return Gradient.__hash__(self) + int(self._transpose)
@@ -738,13 +629,24 @@ class Grad(Gradient):
         )
 
 
+class Derivative(sympy_Derivative):
+    """Unevaluated Derivative wrapper delegating to custom diff for tensors."""
+
+    expr: TensorLike | Expr
+
+    def doit(self, **hints: Any) -> TensorLike | Expr:
+        if _is_tensorlike(self.expr):
+            return covariant_diff(self.expr.doit(**hints), *self.variables)
+        return df(self.expr.doit(**hints), *self.variables)
+
+
 class Div(Divergence):
     """Unevaluated divergence wrapper using custom curvilinear implementation."""
 
-    _expr: Expr
+    _expr: TensorLike | Expr
 
-    def doit(self, **hints: Any) -> Vector | Expr | Basic | Div:
-        return divergence(self._expr.doit(**hints), doit=True)
+    def doit(self, **hints: Any) -> VectorLike | Expr:
+        return divergence(self._expr.doit(**hints))
 
 
 class Curl(sympy_Curl):
@@ -752,8 +654,8 @@ class Curl(sympy_Curl):
 
     _expr: Expr
 
-    def doit(self, **hints: Any) -> Vector | Curl:
-        return curl(self._expr.doit(**hints), doit=True)
+    def doit(self, **hints: Any) -> VectorLike:
+        return curl(self._expr.doit(**hints))
 
 
 class Dot(sympy_Dot):
@@ -764,10 +666,12 @@ class Dot(sympy_Dot):
         expr2: Right tensor.
     """
 
-    _expr1: Expr
-    _expr2: Expr
+    _expr1: TensorLike | Expr
+    _expr2: TensorLike | Expr
 
-    def __new__(cls: type[Self], expr1: Expr, expr2: Expr) -> Self:
+    def __new__(
+        cls: type[Self], expr1: TensorLike | Expr, expr2: TensorLike | Expr
+    ) -> Self:
         expr1 = sp.sympify(expr1)
         expr2 = sp.sympify(expr2)
         obj: Self = Expr.__new__(cls, expr1, expr2)
@@ -775,10 +679,10 @@ class Dot(sympy_Dot):
         obj._expr2 = expr2
         return obj
 
-    def doit(self, **hints) -> Expr:
+    def doit(self, **hints) -> TensorLike | Expr:
         return dot(
-            cast(Vector, self._expr1.doit(**hints)),
-            cast(Vector, self._expr2.doit(**hints)),
+            self._expr1.doit(**hints),
+            self._expr2.doit(**hints),
         )
 
 
@@ -806,10 +710,12 @@ class Cross(Expr):
         (-y + z)*N.i + (x - z)*N.j + (-x + y)*N.k
     """
 
-    _expr1: Expr
-    _expr2: Expr
+    _expr1: VectorLike | Expr
+    _expr2: VectorLike | Expr
 
-    def __new__(cls: type[Self], expr1: Expr, expr2: Expr) -> Self:
+    def __new__(
+        cls: type[Self], expr1: VectorLike | Expr, expr2: VectorLike | Expr
+    ) -> Self:
         expr1 = sp.sympify(expr1)
         expr2 = sp.sympify(expr2)
         obj: Self = Expr.__new__(cls, expr1, expr2)
@@ -817,10 +723,10 @@ class Cross(Expr):
         obj._expr2 = expr2
         return obj
 
-    def doit(self, **hints: Any) -> Vector | Cross:
+    def doit(self, **hints: Any) -> VectorLike:
         return cross(
-            cast(Vector, self._expr1.doit(**hints)),
-            cast(Vector, self._expr2.doit(**hints)),
+            self._expr1.doit(**hints),
+            self._expr2.doit(**hints),
         )
 
 
@@ -846,10 +752,12 @@ class Outer(Expr):
         (N.i⊗N.j)
     """
 
-    _expr1: Expr
-    _expr2: Expr
+    _expr1: VectorLike | Expr
+    _expr2: VectorLike | Expr
 
-    def __new__(cls: type[Self], expr1: Expr, expr2: Expr) -> Self:
+    def __new__(
+        cls: type[Self], expr1: VectorLike | Expr, expr2: VectorLike | Expr
+    ) -> Self:
         expr1 = sp.sympify(expr1)
         expr2 = sp.sympify(expr2)
         obj: Self = Expr.__new__(cls, expr1, expr2)
@@ -864,7 +772,7 @@ class Outer(Expr):
     def transpose(self) -> Outer:
         return self.T
 
-    def doit(self, **hints) -> Dyadic | Outer:
+    def doit(self, **hints) -> DyadicLike:
         return outer(self._expr1.doit(), self._expr2.doit())
 
 
@@ -901,7 +809,7 @@ class Identity(Expr):
         return sum(self.sys.base_dyadics()[:: self.sys.dims + 1], DyadicZero())
 
 
-def diff(self, *args, **kwargs) -> BasisDependent:
+def covariant_diff_cartesian(self, *args, **kwargs) -> BasisDependent:
     """Differentiate a tensor (vector/dyadic) (component-wise) wrt provided variables.
 
     Converts to Cartesian to avoid differentiating basis vectors, applies
@@ -920,14 +828,131 @@ def diff(self, *args, **kwargs) -> BasisDependent:
     for x in args:
         if isinstance(x, BasisDependent):
             raise TypeError("Invalid arg for differentiation")
-    # Move to Cartesian because the basis vectors are then constant and
-    # non-differentiable. Alternatively use Christoffel symbols, but this gets messy
-    # for more than one args.
     v0 = self._sys.to_cartesian(self)
     diff_components = [df(v, *args, **kwargs) * k for k, v in v0.components.items()]
     f = self._add_func(*diff_components)
     return self._sys.from_cartesian(f)
 
+
+def diff_covariant_vector(self, *args, **kwargs) -> BasisDependent:
+    """Covariant derivative of a vector (component-wise) wrt provided variables.
+
+    Args:
+        *args: Differentiation variables (BaseScalars).
+        **kwargs: Passed to sympy.diff.
+
+    Returns:
+        Vector with differentiated components.
+
+    Raises:
+        TypeError: If any differentiation target is itself a basis-dependent object.
+    """
+
+    if isinstance(self, BasisDependentZero):
+        return self
+
+    if len(args) > 1:  # (x, 2), (x, y), (x, 2, y, 2), etc
+        res = self
+        for arg in args:
+            if isinstance(arg, BaseScalar):
+                der_arg = arg
+            if isinstance(arg, int):  # repeat arg-1 times
+                for _ in range(1, arg):
+                    res = diff_covariant_vector(res, der_arg, **kwargs)
+            else:
+                res = diff_covariant_vector(res, der_arg, **kwargs)
+        return res
+    ct = self._sys.get_christoffel_second()
+    b2i = self._sys._covariant_basis_map_inv
+    x2i = self._sys._map_base_scalar_to_index
+    arg = args[0]
+    j = x2i[arg]
+    res = _zero_for_rank(1)
+    for bi, vi in self.components.items():
+        i = b2i[bi]
+        di = df(vi, arg, **kwargs)
+        for bk, vk in self.components.items():
+            k = b2i[bk]
+            di += ct[i, k, j] * vk
+        res += di * bi
+    return res
+
+
+def diff_covariant_dyadic(self, *args, **kwargs) -> BasisDependent:
+    """Covariant derivative of a dyadic (component-wise) wrt provided variables.
+
+    Args:
+        *args: Differentiation variables (BaseScalars, ints).
+        **kwargs: Passed to sympy.diff.
+
+    Returns:
+        Vector with differentiated components.
+
+    Raises:
+        TypeError: If any differentiation target is itself a basis-dependent object.
+    """
+    if isinstance(self, BasisDependentZero):
+        return self
+
+    if len(args) > 1:  # (x, 2), (x, y), (x, 2, y, 2), etc
+        res = self
+        for arg in args:
+            if isinstance(arg, BaseScalar):
+                der_arg = arg
+            if isinstance(arg, int):  # repeat arg-1 times
+                for _ in range(1, arg):
+                    res = diff_covariant_dyadic(res, der_arg, **kwargs)
+            else:
+                res = diff_covariant_dyadic(res, der_arg, **kwargs)
+        return res
+    ct = self._sys.get_christoffel_second()
+    bb2ij = self._sys._covariant_basis_dyadic_map_inv
+    x2i = self._sys._map_base_scalar_to_index
+    arg = args[0]
+    k = x2i[arg]
+    res = _zero_for_rank(2)
+    for bij, aij in self.components.items():
+        i, j = bb2ij[bij]
+        di = df(aij, arg, **kwargs)
+        for bml, aml in self.components.items():
+            m, l = bb2ij[bml]
+            if l == j:
+                di += ct[i, m, k] * aml
+            if m == i:
+                di += ct[j, l, k] * aml
+        res += di * bij
+    return res
+
+
+def covariant_diff(self, *args, **kwargs) -> BasisDependent:
+    """Covariant derivative of a tensor (vector/dyadic) wrt provided variables.
+
+    Uses Christoffel symbols to differentiate basis vectors correctly.
+
+    Args:
+        *args: Differentiation variables / (variable, order) pairs.
+        **kwargs: Passed to sympy.diff.
+
+    Returns:
+        Tensor with differentiated components.
+
+    Raises:
+        TypeError: If any differentiation target is itself a basis-dependent object.
+    """
+    for x in args:
+        if isinstance(x, BasisDependent):
+            raise TypeError("Invalid arg for differentiation")
+
+    if _is_vectorlike(self):
+        return diff_covariant_vector(self, *args, **kwargs)
+    elif _is_dyadiclike(self):
+        return diff_covariant_dyadic(self, *args, **kwargs)
+    else:
+        raise TypeError("covariant_diff only defined for Vector or Dyadic types.")
+
+
+# Note: covariant_diff and covariant_diff_cartesian should give
+# the same result.
 
 # Regular doit() is problematic for vectors and dyadics when these are
 # used unevaluated. For example
@@ -993,5 +1018,5 @@ sp.vector.Dot = Dot  # ty:ignore[possibly-missing-attribute]
 sp.vector.Curl = Curl  # ty:ignore[possibly-missing-attribute]
 sp.vector.Gradient = Grad  # ty:ignore[possibly-missing-attribute]
 sp.vector.Divergence = Div  # ty:ignore[possibly-missing-attribute]
-sp.vector.basisdependent.BasisDependent.diff = diff  # ty:ignore[possibly-missing-attribute]
+sp.vector.basisdependent.BasisDependent.diff = covariant_diff  # ty:ignore[possibly-missing-attribute]
 sp.vector.Dyadic.is_Dyadic = True  # ty:ignore[possibly-missing-attribute]

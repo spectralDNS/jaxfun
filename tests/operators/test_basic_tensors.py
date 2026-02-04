@@ -23,6 +23,7 @@ from jaxfun.operators import (
     outer,
     sign,
 )
+from jaxfun.typing import VectorLike
 
 x, y, z = sp.symbols("x y z", real=True)
 N = CartCoordSys("N", (x, y, z))
@@ -247,10 +248,10 @@ def test_divergence_vector():
     dv0 = divergence(v)
     # Use definition of divergence of vector to compute with alternative method
     dv1 = sp.Add.fromiter(
-        Dot(v.diff(psi[i]), C.get_contravariant_basis_vector(i)).doit()
+        Dot(v.diff(psi[i]), C.get_contravariant_basis_vector(i))
         for i in range(len(psi))
     )
-    assert dv0 == dv1
+    assert dv0 == dv1.doit()
 
 
 def test_curl_doc_example():
@@ -263,7 +264,7 @@ def test_curl_doc_example():
 def test_divergence_of_gradient_unevaluated():
     s = C.r * C.theta
     g = Grad(s)
-    d = divergence(g, doit=False)
+    d = Div(g)
     assert isinstance(d, Div)
     assert d.doit() == divergence(gradient(s))
 
@@ -313,6 +314,6 @@ def test_eijk_with_cross_identity(
     perm: tuple[sp_vector.BaseVector, sp_vector.BaseVector, sp_vector.BaseVector],
 ):
     a, b, cvec = perm
-    cross_vec = cast(sp_vector.Vector, cross(a, b))
-    val = dot(cross_vec, cvec)
+    cross_vec = cross(cast(VectorLike, a), cast(VectorLike, b))
+    val = dot(cross_vec, cast(VectorLike, cvec))
     assert sp.simplify(val - 1) == 0

@@ -1,7 +1,7 @@
 import sympy as sp
 import sympy.vector as sp_vector
 
-from jaxfun.coordinates import BaseDyadic, CartCoordSys, get_CoordSys
+from jaxfun.coordinates import BaseDyadic, CartCoordSys, CoordSys, get_CoordSys
 from jaxfun.operators import (
     Cross,
     Curl,
@@ -25,6 +25,25 @@ r, theta, zz = sp.symbols("r theta zz", real=True, positive=True)
 C = get_CoordSys(
     "C", sp.Lambda((r, theta, zz), (r * sp.cos(theta), r * sp.sin(theta), zz))
 )
+
+
+def test_dyadic_preserves_custom_type():
+    R = CoordSys(
+        "R",
+        sp.Lambda((sp.Symbol("x"), sp.Symbol("y")), (sp.Symbol("x"), sp.Symbol("y"))),
+    )
+    dy = R.i | R.j
+    assert hasattr(dy, "_sys") and dy._sys is R
+
+
+def test_sympy_baseclasses_are_patched():
+    import sympy.vector as spv
+
+    from jaxfun.coordinates import BaseDyadic, BaseScalar, BaseVector
+
+    assert spv.BaseVector is BaseVector
+    assert spv.BaseDyadic is BaseDyadic
+    assert spv.BaseScalar is BaseScalar
 
 
 def test_outer_with_add_and_scalar_factor():
@@ -79,9 +98,10 @@ def test_gradient_product_single_system_after_express():
 
 def test_divergence_cross_returns_Div_unevaluated():
     cr = Cross(C.b_r, C.b_theta)
-    d = divergence(cr, doit=False)
+    d = Div(cr)
     assert isinstance(d, Div)
     assert getattr(d.doit(), "is_scalar", False)
+    assert d.doit() == divergence(cross(C.b_r, C.b_theta))
 
 
 def test_curl_scalar_multiple_vector_mul_branch():

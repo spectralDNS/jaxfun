@@ -14,7 +14,7 @@ from collections import UserDict
 from collections.abc import Callable, Iterable, Sequence
 from itertools import product
 from types import MethodType
-from typing import Any, Literal, Self, TypeGuard, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, Self, TypeGuard, cast, overload
 
 import numpy as np
 import sympy as sp
@@ -26,13 +26,40 @@ from sympy.core.symbol import Str
 from sympy.core.sympify import _sympify
 from sympy.printing.precedence import PRECEDENCE
 from sympy.printing.pretty.stringpict import prettyForm
-from sympy.vector import VectorZero
-from sympy.vector.dyadic import Dyadic, DyadicAdd
-from sympy.vector.vector import Vector, VectorAdd
+from sympy.vector.dyadic import Dyadic, DyadicAdd, DyadicMul, DyadicZero
+from sympy.vector.vector import Vector, VectorAdd, VectorMul, VectorZero
+
+from jaxfun.typing import DyadicLike, TensorLike, VectorLike
 
 
-def _is_vector_or_dyadic(obj: Basic) -> TypeGuard[Vector | Dyadic]:
-    return isinstance(obj, Vector | Dyadic)
+def _is_tensorlike(obj: Basic) -> TypeGuard[TensorLike]:
+    return isinstance(
+        obj,
+        BaseVector
+        | Vector
+        | VectorAdd
+        | VectorMul
+        | VectorZero
+        | BaseDyadic
+        | Dyadic
+        | DyadicAdd
+        | DyadicMul
+        | DyadicZero,
+    )
+
+
+def _is_vectorlike(obj: Basic) -> TypeGuard[VectorLike]:
+    return isinstance(
+        obj,
+        BaseVector | Vector | VectorAdd | VectorMul | VectorZero,
+    )
+
+
+def _is_dyadiclike(obj: Basic) -> TypeGuard[DyadicLike]:
+    return isinstance(
+        obj,
+        BaseDyadic | Dyadic | DyadicAdd | DyadicMul | DyadicZero,
+    )
 
 
 def _is_expr(obj: Basic) -> TypeGuard[Expr]:
@@ -344,8 +371,8 @@ class BaseDyadic(Dyadic, AtomicExpr):
         b_i ⊗ b_j
 
     Args:
-        vector1: First base vector (or zero vector).
-        vector2: Second base vector (or zero vector).
+        vector1: First base vector.
+        vector2: Second base vector.
 
     Raises:
         TypeError: If either operand is not a base vector (or zero).
@@ -358,9 +385,6 @@ class BaseDyadic(Dyadic, AtomicExpr):
         # Verify arguments
         if not isinstance(vector1, BaseVector) or not isinstance(vector2, BaseVector):
             raise TypeError("BaseDyadic cannot be composed of non-base vectors")
-        # Handle special case of zero vector
-        elif isinstance(vector1, VectorZero) or isinstance(vector2, VectorZero):
-            raise TypeError("BaseDyadic cannot be composed of zero vectors")
         # Initialize instance
         obj = super().__new__(cls, vector1, vector2)
         obj._base_instance = obj
@@ -460,26 +484,30 @@ class CoordSys(Basic):
     _sqrt_det_g: dict[bool, Expr | None]
     _covariant_basis_map: dict[int, BaseVector]
     _covariant_basis_dyadic_map: dict[tuple[int, int], BaseDyadic]
+    _covariant_basis_map_inv: dict[BaseVector, int]
+    _covariant_basis_dyadic_map_inv: dict[BaseDyadic, tuple[int, int]]
+    _map_base_scalar_to_index: dict[BaseScalar, int]
 
     # NOTE: Many coordinate and basis attributes are set dynamically during
     # construction (e.g. CartCoordSys adds x/y/z, get_CoordSys adds r/theta/zz and
     # corresponding basis vectors). We annotate common ones here for static type
     # checkers without changing runtime behavior.
-    t: BaseScalar
-    x: BaseScalar
-    y: BaseScalar
-    z: BaseScalar
-    r: BaseScalar
-    theta: BaseScalar
-    zz: BaseScalar
+    if TYPE_CHECKING:
+        t: BaseScalar
+        x: BaseScalar
+        y: BaseScalar
+        z: BaseScalar
+        r: BaseScalar
+        theta: BaseScalar
+        zz: BaseScalar
 
-    i: BaseVector
-    j: BaseVector
-    k: BaseVector
-    b_r: BaseVector
-    b_theta: BaseVector
-    b_z: BaseVector
-    b_zz: BaseVector
+        i: BaseVector
+        j: BaseVector
+        k: BaseVector
+        b_r: BaseVector
+        b_theta: BaseVector
+        b_z: BaseVector
+        b_zz: BaseVector
 
     def __new__(
         cls,
@@ -575,6 +603,7 @@ class CoordSys(Basic):
         obj._map_symbol_to_base_scalar = {
             k: v for k, v in zip(obj._psi, base_scalars, strict=False)
         }
+        obj._map_base_scalar_to_index = {k: i for i, k in enumerate(base_scalars)}
 
         position_vector = position_vector.xreplace(obj._map_symbol_to_base_scalar)
         assert isinstance(position_vector, Tuple)
@@ -616,9 +645,15 @@ class CoordSys(Basic):
                 range(len(obj._base_vectors)), obj._base_vectors, strict=False
             )
         }
+        obj._covariant_basis_map_inv = {
+            v: k for k, v in obj._covariant_basis_map.items()
+        }
         obj._covariant_basis_dyadic_map = {
             (i // len(obj._base_vectors), i % len(obj._base_vectors)): v
             for i, v in enumerate(obj._base_dyadics)
+        }
+        obj._covariant_basis_dyadic_map_inv = {
+            v: k for k, v in obj._covariant_basis_dyadic_map.items()
         }
 
         for i in range(len(base_scalars)):
@@ -680,7 +715,7 @@ class CoordSys(Basic):
         r = r_out
         base_vectors = self.get_cartesian_basis_vectors()
         if as_Vector:
-            out: Vector = np.array(r) @ base_vectors
+            out: VectorLike = np.array(r) @ base_vectors
             return out
         return r
 
@@ -754,12 +789,15 @@ class CoordSys(Basic):
         return self._is_cartesian
 
     @overload
-    def to_cartesian(self, v: BaseVector) -> Vector: ...
+    def to_cartesian(self, v: VectorLike) -> VectorLike: ...
     @overload
-    def to_cartesian(self, v: BaseDyadic) -> Dyadic: ...
-    def to_cartesian(self, v: BaseVector | BaseDyadic) -> Vector | Dyadic:
+    def to_cartesian(self, v: DyadicLike) -> DyadicLike: ...
+    def to_cartesian(self, v: TensorLike) -> TensorLike:
         # v either Cartesian or a vector/dyadic with covariant basis vectors
-        if v._sys.is_cartesian:
+        if isinstance(v, VectorZero | DyadicZero):
+            return v
+
+        if v._sys.is_cartesian:  # type: ignore[attr-defined]
             return v
 
         cart_map = {
@@ -779,7 +817,11 @@ class CoordSys(Basic):
 
         return v.xreplace(cart_map)
 
-    def from_cartesian(self, v) -> Vector | Dyadic:
+    # @overload
+    # def from_cartesian(self, v: BaseVector) -> BaseVector: ...
+    # @overload
+    # def from_cartesian(self, v: BaseDyadic) -> BaseDyadic: ...
+    def from_cartesian(self, v: TensorLike) -> TensorLike:
         from jaxfun.operators import express
         from jaxfun.typing import cast_bd, cast_bv
 
@@ -802,7 +844,7 @@ class CoordSys(Basic):
                     terms.append(self.simplify(bt[i] & v & bt[j]) * bd[i * len(bv) + j])
             expr = DyadicAdd(*terms)
         out = express(expr, self)
-        if _is_vector_or_dyadic(out):
+        if _is_tensorlike(out):
             return out
         raise TypeError("from_cartesian produced a non-tensor expression")
 
@@ -812,15 +854,9 @@ class CoordSys(Basic):
     def expr_psi_to_base_scalar[T: sp.Basic](self, v: T) -> T:
         return sp.sympify(v).xreplace(self._map_symbol_to_base_scalar)
 
-    @overload
     def get_contravariant_component(
-        self, v: Vector, k: int, j: None = None
-    ) -> BaseVector: ...
-    @overload
-    def get_contravariant_component(self, v: Dyadic, k: int, j: int) -> BaseDyadic: ...
-    def get_contravariant_component(
-        self, v: Vector | Dyadic, k: int, j: int | None = None
-    ) -> BaseVector | BaseDyadic:
+        self, v: TensorLike, k: int, j: int | None = None
+    ) -> Expr:
         """Return a contravariant component of a vector or dyadic.
 
         For a vector expressed in this coordinate system using the covariant
@@ -847,22 +883,20 @@ class CoordSys(Basic):
         """
         # We use covariant basis vectors, so the vector v already contains the
         # contravariant components.
-        if v.is_Vector:
-            res: BaseVector = v.components.get(self._covariant_basis_map[k], sp.S.Zero)
+        if isinstance(v, VectorZero | DyadicZero):
+            return sp.S.Zero
+        if _is_vectorlike(v):
+            vk = self._covariant_basis_map[k]
+            res: Expr = v.components.get(vk, sp.S.Zero)
             return res
         if j is None:
             raise ValueError("Second index j must be provided for Dyadic components.")
-        res: BaseDyadic = v.components.get(
-            self._covariant_basis_dyadic_map[k, j], sp.S.Zero
-        )
+        vkj = self._covariant_basis_dyadic_map[k, j]
+        res: Expr = v.components.get(vkj, sp.S.Zero)
         return res
 
-    @overload
-    def get_covariant_component(self, v: Vector, k: int, j: None = None) -> Expr: ...
-    @overload
-    def get_covariant_component(self, v: Dyadic, k: int, j: int) -> Expr: ...
     def get_covariant_component(
-        self, v: Vector | Dyadic, k: int, j: int | None = None
+        self, v: TensorLike, k: int, j: int | None = None
     ) -> Expr:
         """Return a covariant component of a vector or dyadic.
 
@@ -887,7 +921,7 @@ class CoordSys(Basic):
         from jaxfun.typing import cast_bv
 
         b = cast_bv(self.base_vectors())
-        if v.is_Vector:
+        if _is_vectorlike(v):
             return v & b[k]
         if j is None:
             raise ValueError("Second index j must be provided for Dyadic components.")
@@ -1009,7 +1043,7 @@ class CoordSys(Basic):
             return b @ np.array(self.get_cartesian_basis_vectors())[: b.shape[1]]
         return b
 
-    def get_contravariant_basis_vector(self, i: int) -> Vector | BaseVector:
+    def get_contravariant_basis_vector(self, i: int) -> VectorLike:
         """Returns contravariant basis vector i.
 
             b^i = grad(q^i) = g^ij b_j
@@ -1125,14 +1159,12 @@ class CoordSys(Basic):
         return ct
 
     @overload
-    def simplify(self, expr: VectorAdd) -> VectorAdd: ...
+    def simplify(self, expr: DyadicLike) -> DyadicLike: ...
     @overload
-    def simplify(self, expr: DyadicAdd) -> DyadicAdd: ...
+    def simplify(self, expr: VectorLike) -> VectorLike: ...
     @overload
     def simplify(self, expr: sp.Expr) -> sp.Expr: ...
-    def simplify(
-        self, expr: VectorAdd | DyadicAdd | sp.Expr
-    ) -> VectorAdd | DyadicAdd | sp.Expr:  # ty:ignore[invalid-method-override]
+    def simplify(self, expr: TensorLike | sp.Expr) -> TensorLike | sp.Expr:  # ty:ignore[invalid-method-override]
         """Simplifies an expression in this coordinate system context.
 
         Applies:

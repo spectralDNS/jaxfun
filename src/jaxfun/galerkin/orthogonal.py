@@ -63,8 +63,8 @@ class OrthogonalSpace(BaseSpace):
         fun_str: str = "psi",
         **kw,
     ) -> None:
-        self.N = N
-        self._num_quad_points = N
+        self.N: int = N
+        self._num_quad_points: int = N
         if domain is None:
             domain = self.reference_domain
         self._domain = Domain(*domain)

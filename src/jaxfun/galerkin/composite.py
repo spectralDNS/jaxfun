@@ -398,7 +398,7 @@ class DirectSum:
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
         self.system: CoordSys = a.system
-        self.N = a.N
+        self.N: int = a.N
         self._num_quad_points = a._num_quad_points
         self.map_reference_domain = a.map_reference_domain
         self.map_true_domain = a.map_true_domain

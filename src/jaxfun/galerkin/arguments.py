@@ -77,22 +77,13 @@ def get_BasisFunction(
 
     def __str__(cls) -> str:
         index = indices[cls.local_index + cls.offset]
+        lhs = f"{cls.name}_{index}"
+        rhs = f"({cls.args[0].name})"
         if cls.rank == 0:
-            return "".join((cls.name, "_", index, "(", cls.args[0].name, ")"))
+            return lhs + rhs
         elif cls.rank == 1:
-            return "".join(
-                (
-                    cls.name,
-                    "_",
-                    index,
-                    "^{(",
-                    str(cls.global_index),
-                    ")}",
-                    "(",
-                    cls.args[0].name,
-                    ")",
-                )
-            )
+            sup = "^{(" + str(cls.global_index) + ")}"
+            return lhs + sup + rhs
         raise NotImplementedError("Rank > 1 basis functions not supported.")
 
     def _pretty(cls, printer: Any = None) -> prettyForm:
@@ -103,31 +94,13 @@ def get_BasisFunction(
 
     def _latex(cls, printer: Any = None, exp: float | None = None) -> str:
         index = indices[cls.local_index + cls.offset]
+        lhs = f"{latex_symbols[cls.name]}_{index}"
+        rhs = f"({latex_symbols[cls.args[0].name]})"
         if cls.rank == 0:
-            s = "".join(
-                (
-                    latex_symbols[cls.name],
-                    "_",
-                    str(index),
-                    "(",
-                    latex_symbols[cls.args[0].name],
-                    ")",
-                )
-            )
+            s = lhs + rhs
         elif cls.rank == 1:
-            s = "".join(
-                (
-                    latex_symbols[cls.name],
-                    "_",
-                    str(index),
-                    "^{(",
-                    str(cls.global_index),
-                    ")}",
-                    "(",
-                    latex_symbols[cls.args[0].name],
-                    ")",
-                )
-            )
+            sup = "^{(" + str(cls.global_index) + ")}"
+            s = lhs + sup + rhs
         else:
             raise NotImplementedError("Rank > 1 basis functions not supported.")
         return s if exp is None else f"\\left({s}\\right)^{{{exp}}}"
@@ -531,7 +504,7 @@ class Jaxf(BaseFunction):
         assert not isinstance(self.functionspace, VectorTensorProductSpace)
         return self.functionspace.backward(self.array)
 
-    def doit(self, **hints: dict) -> Function:
+    def doit(self, **hints: dict) -> Self:
         return self
 
     def __str__(self) -> str:

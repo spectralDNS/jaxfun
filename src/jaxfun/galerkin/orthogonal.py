@@ -228,7 +228,7 @@ class OrthogonalSpace(BaseSpace):
         pass
 
     @property
-    def domain_factor(self) -> int | float:
+    def domain_factor(self) -> float | sp.Expr:
         """Return scaling factor mapping true -> reference length.
 
         Value = (reference_length / true_length). If lengths are equal

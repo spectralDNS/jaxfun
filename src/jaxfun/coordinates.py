@@ -324,7 +324,7 @@ class BaseVector(Vector, AtomicExpr):
             raise ValueError("index must be 0, 1 or 2")
         name = system._vector_names[index]
         # Initialize an object
-        obj: Self = super().__new__(cls, sp.S(index), system)
+        obj: Self = super().__new__(cls, sp.sympify(index), system)
         # Assign important attributes
         obj._base_instance = obj
         obj._components = {obj: sp.S.One}

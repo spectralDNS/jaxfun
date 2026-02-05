@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - marimo-notebooks
   workflow_dispatch:
 
 permissions:

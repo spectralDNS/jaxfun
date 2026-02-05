@@ -168,7 +168,7 @@ def _(mo):
 
 @app.cell
 def _(residual):
-    print(residual)
+    residual
     return
 
 
@@ -223,7 +223,7 @@ def _(mo):
 @app.cell
 def _(Loss, residual, v, xb, xj):
     loss_fn = Loss((residual, xj), (v, xb))
-    print(loss_fn.residuals)
+    loss_fn.residuals
     return (loss_fn,)
 
 
@@ -237,7 +237,7 @@ def _(mo):
 
 @app.cell
 def _(loss_fn):
-    print(loss_fn.residuals[0].eqs)
+    loss_fn.residuals[0].eqs
     return
 
 

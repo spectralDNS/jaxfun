@@ -138,8 +138,8 @@ def _(mo):
 
 
 @app.cell
-def _(R1):
-    print(R1)
+def _(R1, display):
+    display(R1)
     return
 
 

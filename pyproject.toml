@@ -22,7 +22,7 @@ dependencies = [
   "matplotlib>=3.9.3",
   "optax>=0.2.6",
   "pre-commit>=4.3",
-  "sympy>=1.13.3",
+  "sympy>=1.14",
 ]
 
 [tool.pytest.ini_options]
@@ -77,7 +77,7 @@ dev = [
   "marimo[recommended]>=0.15.2",
   "pre-commit>=4.3.0",
   "shapely>=2.1.0",
-  "ty>=0.0.14",
+  "ty>=0.0.15",
   "urllib3>=2.6.3",
 ]
 

@@ -442,9 +442,7 @@ def _(Div, Grad, Legendre, alpha, jnp, lambdify, ue, x, xj):
     uj = D.evaluate(xj, uh)
     uej_1 = lambdify(x, ue)(xj)
     error = jnp.linalg.norm(uj - uej_1) / jnp.sqrt(len(xj))
-    print(
-        error
-    )  # v * (Div(Grad(u)) + alpha * u) - v * (Div(Grad(ue)) + alpha * ue), # Galerkin  # LSQ
+    print(error)
     return uej_1, uj
 
 

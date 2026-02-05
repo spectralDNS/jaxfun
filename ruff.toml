@@ -52,6 +52,10 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 [lint.isort]
 combine-as-imports = true
 
+[lint.per-file-ignores]
+"examples/notebooks/DrivenCavity_lstsq.py" = ["E501", "I001", "E402"]
+"examples/notebooks/Helmholtz_lstsq.py" = ["E501"]
+
 [format]
 # Like Black, use double quotes for strings.
 quote-style = "double"

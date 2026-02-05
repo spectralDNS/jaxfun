@@ -30,6 +30,7 @@ from sympy.vector.dyadic import Dyadic, DyadicAdd, DyadicMul, DyadicZero
 from sympy.vector.vector import Vector, VectorAdd, VectorMul, VectorZero
 
 from jaxfun.typing import DyadicLike, TensorLike, VectorLike
+from jaxfun.utils import reverse_dict
 
 
 def _is_tensorlike(obj: Basic) -> TypeGuard[TensorLike]:
@@ -106,8 +107,8 @@ def CartCoordSys(
     return CoordSys(str(name), sp.Lambda(s, s))
 
 
-class defaultdict(UserDict):
-    def __missing__(self, key) -> str:
+class defaultdict(UserDict[str, str]):
+    def __missing__(self, key: str) -> str:
         return key
 
 
@@ -323,7 +324,7 @@ class BaseVector(Vector, AtomicExpr):
             raise ValueError("index must be 0, 1 or 2")
         name = system._vector_names[index]
         # Initialize an object
-        obj = super().__new__(cls, sp.S(index), system)
+        obj: Self = super().__new__(cls, sp.S(index), system)
         # Assign important attributes
         obj._base_instance = obj
         obj._components = {obj: sp.S.One}
@@ -353,7 +354,7 @@ class BaseVector(Vector, AtomicExpr):
 
     def _sympyrepr(self, printer: Any) -> str:
         index, system = self._id
-        return printer._print(system) + "." + system._vector_names[index]
+        return f"{printer._print(system)}.{system._vector_names[index]}"
 
     @property
     def free_symbols(self) -> set[Basic]:
@@ -382,29 +383,19 @@ class BaseDyadic(Dyadic, AtomicExpr):
     args: tuple[BaseVector, BaseVector]
 
     def __new__(cls, vector1: BaseVector, vector2: BaseVector) -> Self:
+        v1, v2 = vector1, vector2
         # Verify arguments
-        if not isinstance(vector1, BaseVector) or not isinstance(vector2, BaseVector):
+        if not isinstance(v1, BaseVector) or not isinstance(v2, BaseVector):
             raise TypeError("BaseDyadic cannot be composed of non-base vectors")
         # Initialize instance
-        obj = super().__new__(cls, vector1, vector2)
+        obj: Self = super().__new__(cls, v1, v2)
         obj._base_instance = obj
         obj._measure_number = 1
         obj._components = {obj: sp.S.One}
-        obj._sys = vector1._sys
-        obj._pretty_form = (
-            "("
-            + vector1._pretty_form
-            + tensor_product_symbol
-            + vector2._pretty_form
-            + ")"
-        )
-        obj._latex_form = (
-            r"\left("
-            + vector1._latex_form
-            + tensor_product_symbol
-            + vector2._latex_form
-            + r"\right)"
-        )
+        obj._sys = v1._sys
+        tp_symb = tensor_product_symbol
+        obj._pretty_form = f"({v1._pretty_form}{tp_symb}{v2._pretty_form})"
+        obj._latex_form = rf"\left({v1._latex_form}{tp_symb}{v2._latex_form}\right)"
 
         return obj
 
@@ -418,7 +409,7 @@ class BaseDyadic(Dyadic, AtomicExpr):
         arg1 = printer._print(self.args[1])
         return f"BaseDyadic({arg0}, {arg1})"
 
-    def to_cartesian(self):
+    def to_cartesian(self) -> Dyadic:
         cart_arg0 = self._sys.to_cartesian(self.args[0])
         cart_arg1 = self._sys.to_cartesian(self.args[1])
         return cart_arg0 | cart_arg1
@@ -512,13 +503,13 @@ class CoordSys(Basic):
     def __new__(
         cls,
         name: str,
-        transformation: Lambda | None = None,
+        transformation: Lambda,
         vector_names: list[str] | None = None,
         parent: CoordSys | None = None,
         assumptions: AssumptionKeys | bool = True,
         replace: Sequence[tuple[Any, Any]] = (),
         measure: Callable[..., Any] = sp.count_ops,
-    ) -> Self:
+    ):
         """Creates and initializes a coordinate system.
 
         Args:
@@ -539,18 +530,16 @@ class CoordSys(Basic):
         Raises:
             TypeError: If name is not a string.
         """
-
         name = str(name)
-
-        if not isinstance(name, str):
-            raise TypeError("name should be a string")
 
         if transformation is None:
             raise TypeError("transformation must be provided")
+
         psi, position_vector = transformation.args
         assert isinstance(psi, Tuple)
         assert isinstance(position_vector, Tuple)
-        variable_names = [i.name for i in psi]
+
+        variable_names: list[str] = [i.name for i in psi]
         is_cartesian = False
         if len(position_vector) == len(psi):  # noqa: SIM102
             if np.all(np.array(position_vector) == np.array(psi)):
@@ -561,7 +550,7 @@ class CoordSys(Basic):
             else:
                 vector_names = [f"b_{s}" for s in variable_names]
 
-        obj: Self = super().__new__(cls, Str(name), transformation)
+        obj = cast("CoordSys", super().__new__(cls, Str(name), transformation))
         obj._name = name
 
         vector_names = list(vector_names)
@@ -577,8 +566,9 @@ class CoordSys(Basic):
         obj._vector_names = tuple(vector_names)
 
         # Create covariant basis vectors in case of curvilinear
+        n_vecs = len(psi)
         v: list[BaseVector] = []
-        for i in range(len(psi)):
+        for i in range(n_vecs):
             v.append(BaseVector(i, obj, pretty_vects[i], latex_vects[i]))
 
         obj._base_vectors = Tuple(*v)
@@ -590,25 +580,25 @@ class CoordSys(Basic):
         obj._variable_names = tuple(variable_names)
 
         base_scalars: list[BaseScalar] = []
-        for i in range(len(psi)):
+        for i in range(n_vecs):
             base_scalars.append(BaseScalar(i, obj, pretty_scalars[i], latex_scalars[i]))
         obj._psi = psi
+        psi = cast(tuple[Symbol, ...], psi)
         obj._cartesian_xyz = (
             Tuple(*base_scalars) if parent is None else parent._cartesian_xyz
         )
 
-        obj._map_base_scalar_to_symbol = {
-            k: v for k, v in zip(base_scalars, obj._psi, strict=False)
-        }
-        obj._map_symbol_to_base_scalar = {
-            k: v for k, v in zip(obj._psi, base_scalars, strict=False)
-        }
-        obj._map_base_scalar_to_index = {k: i for i, k in enumerate(base_scalars)}
+        bs_to_symb: dict[BaseScalar, Symbol] = {k: v for k, v in zip(base_scalars, psi)}
+        obj._map_base_scalar_to_symbol = bs_to_symb
+        obj._map_symbol_to_base_scalar = reverse_dict(bs_to_symb)
+
+        bs_to_idx: dict[BaseScalar, int] = {k: i for i, k in enumerate(base_scalars)}
+        obj._map_base_scalar_to_index = bs_to_idx
 
         position_vector = position_vector.xreplace(obj._map_symbol_to_base_scalar)
         assert isinstance(position_vector, Tuple)
-        obj._map_xyz_to_base_scalar = {
-            k: v for k, v in zip(obj._cartesian_xyz, position_vector, strict=False)
+        obj._map_xyz_to_base_scalar: dict[BaseScalar, BaseScalar] = {
+            k: v for k, v in zip(obj._cartesian_xyz, position_vector)
         }
 
         # Add doit to Cartesian coordinates, such that x, y, z are evaluated in
@@ -639,22 +629,13 @@ class CoordSys(Basic):
         obj._ct = None
         obj._det_g = {True: None, False: None}
         obj._sqrt_det_g = {True: None, False: None}
-        obj._covariant_basis_map = {
-            k: v
-            for k, v in zip(
-                range(len(obj._base_vectors)), obj._base_vectors, strict=False
-            )
+        obj._covariant_basis_map = {k: v for k, v in enumerate(obj._base_vectors)}
+        obj._covariant_basis_map_inv = reverse_dict(obj._covariant_basis_map)
+        cov_dyad: dict[tuple[int, int], BaseDyadic] = {
+            (i // n_vecs, i % n_vecs): v for i, v in enumerate(obj._base_dyadics)
         }
-        obj._covariant_basis_map_inv = {
-            v: k for k, v in obj._covariant_basis_map.items()
-        }
-        obj._covariant_basis_dyadic_map = {
-            (i // len(obj._base_vectors), i % len(obj._base_vectors)): v
-            for i, v in enumerate(obj._base_dyadics)
-        }
-        obj._covariant_basis_dyadic_map_inv = {
-            v: k for k, v in obj._covariant_basis_dyadic_map.items()
-        }
+        obj._covariant_basis_dyadic_map = cov_dyad
+        obj._covariant_basis_dyadic_map_inv = reverse_dict(cov_dyad)
 
         for i in range(len(base_scalars)):
             setattr(obj, variable_names[i], base_scalars[i])
@@ -789,22 +770,21 @@ class CoordSys(Basic):
         return self._is_cartesian
 
     @overload
-    def to_cartesian(self, v: VectorLike) -> VectorLike: ...
+    def to_cartesian(self, v: BaseVector) -> Vector: ...
     @overload
-    def to_cartesian(self, v: DyadicLike) -> DyadicLike: ...
-    def to_cartesian(self, v: TensorLike) -> TensorLike:
+    def to_cartesian(self, v: BaseDyadic) -> Dyadic: ...
+    @overload
+    def to_cartesian[T: TensorLike](self, v: T) -> T: ...
+    def to_cartesian(self, v: BaseVector | BaseDyadic) -> TensorLike:
         # v either Cartesian or a vector/dyadic with covariant basis vectors
         if isinstance(v, VectorZero | DyadicZero):
             return v
 
-        if v._sys.is_cartesian:  # type: ignore[attr-defined]
+        if v._sys.is_cartesian:
             return v
 
         cart_map = {
-            k: v
-            for k, v in zip(
-                self.base_vectors(), self.get_covariant_basis(True), strict=False
-            )
+            k: v for k, v in zip(self.base_vectors(), self.get_covariant_basis(True))
         }
 
         if not v.is_Vector:

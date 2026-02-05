@@ -160,3 +160,7 @@ def lambdify(
         cse=cse,
         docstring_limit=doctring_limit,
     )
+
+
+def reverse_dict[K, V](d: dict[K, V]) -> dict[V, K]:
+    return {v: k for k, v in d.items()}

@@ -6,6 +6,7 @@ from .common import (
     jacn as jacn,
     lambdify as lambdify,
     matmat as matmat,
+    reverse_dict as reverse_dict,
     tosparse as tosparse,
     ulp as ulp,
 )

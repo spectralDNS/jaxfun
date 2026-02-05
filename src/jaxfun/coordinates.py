@@ -360,7 +360,7 @@ class BaseVector(Vector, AtomicExpr):
     def free_symbols(self) -> set[Basic]:
         return {self}
 
-    def to_cartesian(self) -> Vector | Dyadic:
+    def to_cartesian(self) -> Vector:
         return self._system.to_cartesian(self)
 
 

@@ -428,7 +428,7 @@ def _(jnp, plt, uvp, xx, yy):
 
 
 @app.cell
-def _():
+def _(hide_code=True):
     import marimo as mo
 
     return (mo,)

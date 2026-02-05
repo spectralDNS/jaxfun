@@ -235,7 +235,7 @@ class Jacobi(OrthogonalSpace):
         return sp.rf(n + self.alpha + self.beta + 1, k) * sp.Rational(1, 2**k)
 
     @staticmethod
-    def gamma(alpha: Number | float, beta: Number | float, n: int) -> Expr:
+    def gamma(alpha: Expr | float, beta: Expr | float, n: int) -> Expr:
         r"""Return h_n (norm squared) for P_n^{(α,β)} under weight ω^{(α,β)}.
 
         h_n = (P_n^{(α,β)}, P_n^{(α,β)})_{ω^{(α,β)}}.

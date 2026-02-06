@@ -23,3 +23,5 @@ jobs:
         run: |
           uv run pre-commit install
           uv run pre-commit run --all-files --show-diff-on-failure
+      - name: Marimo lint
+        run: uv run marimo check examples/notebooks/

@@ -39,18 +39,20 @@ from .arguments import JAXArray, Jaxf, JAXFunction, TestFunction, TrialFunction
 
 class _HasTestSpace(Protocol):
     functionspace: TestSpaceType
+    global_index: int
 
 
 def _has_testspace(obj: object) -> TypeGuard[_HasTestSpace]:
-    return hasattr(obj, "functionspace")
+    return hasattr(obj, "functionspace") and hasattr(obj, "global_index")
 
 
 class _HasFunctionSpace(Protocol):
     functionspace: FunctionSpaceType
+    global_index: int
 
 
 def _has_functionspace(obj: object) -> TypeGuard[_HasFunctionSpace]:
-    return hasattr(obj, "functionspace")
+    return hasattr(obj, "functionspace") and hasattr(obj, "global_index")
 
 
 def get_basisfunctions(

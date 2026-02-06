@@ -81,7 +81,7 @@ def _(mo):
     mo.md(r"""
     Notice the `MLPSpace` class, which represents a functionspace for a regular multilayer perceptron. The space will make use of a subclass of the [flax](https://flax.readthedocs.io/en/latest) [nnx.Module](https://flax.readthedocs.io/en/latest/api_reference/flax.nnx/module.html#module-flax.nnx).
 
-    We create this space holds information about the input, output and hidden layers in the neural network. Here we create an MLP for a one-dimensional problem (one input variable) and 16 neurons for a single hidden layer.
+    This space holds information about the input, output and hidden layers in the neural network. Here we create an MLP for a one-dimensional problem (one input variable) and 16 neurons for a single hidden layer.
     """)
     return
 

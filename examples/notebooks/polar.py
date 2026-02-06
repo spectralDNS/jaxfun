@@ -164,6 +164,14 @@ def _(P):
 
 
 @app.cell
+def _(mo):
+    mo.md(r"""
+    ## Test operators on vectors
+    """)
+    return
+
+
+@app.cell
 def _(P):
     from jaxfun.galerkin import VectorTensorProductSpace
 
@@ -188,6 +196,42 @@ def _(TestFunction, V):
 @app.cell
 def _(v):
     v.doit()
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    Gradient of vector:
+    """)
+    return
+
+
+@app.cell
+def _(Grad, u):
+    Grad(u)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    Note that the gradient of a vector $\boldsymbol{u}$ is written as $\nabla \boldsymbol{u}$ since $\nabla$ is interpreted as an operator and not a vector. If $\nabla$ had instead been interpreted as a vector, then the gradient of $\boldsymbol{u}$ would be written as $(\nabla \boldsymbol{u})^T$.
+    """)
+    return
+
+
+@app.cell
+def _(Grad, u):
+    Grad(u).doit()
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    Dot product:
+    """)
     return
 
 
@@ -330,6 +374,16 @@ def _(C, Cross, Curl, Div, Dot, Grad, display, p, sp, u):
         R3 = Cross(Curl(u), u) + sp.S.Half * Grad(Dot(u, u)) - Div(Grad(u)) + Grad(p)
         display(R3)
         display(R3.doit())
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    Note that the divergence of a dyadic $A$ is defined as $\text{div}(A) = \nabla \cdot A$, since we choose to interpret $\nabla$ as an operator and not a vector. This operator acts over the last axis of $A$. Some authors define $\nabla$ as a vector and in that case the definition of the divergence is $\nabla \cdot A^T$. This is perfectly fine, just a difference in notation. With index notation in Cartesian coordinates the divergence may also be written as $\frac{\partial A_{ij}}{\partial x_j}$ or $\frac{\partial A_{ij}}{\partial x_j} \boldsymbol{i}_i$, where $\{\boldsymbol{i}_j\}_{j=1}^3$ are the 3 Cartesian unit vectors.
+
+    Hence we write Div(Grad(u)) as $\nabla \cdot \nabla \boldsymbol{u}$.
+    """)
     return
 
 

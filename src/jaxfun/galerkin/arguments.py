@@ -13,7 +13,7 @@ Key constructs:
 import itertools
 from abc import abstractmethod
 from functools import partial
-from typing import Any, Self
+from typing import Any, Self, cast
 
 import jax
 import sympy as sp
@@ -24,7 +24,7 @@ from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
 from jaxfun.basespace import BaseSpace
-from jaxfun.coordinates import BaseScalar, CoordSys, latex_symbols
+from jaxfun.coordinates import BaseScalar, CoordSys, Vector, latex_symbols
 from jaxfun.typing import FunctionSpaceType, TestSpaceType, TrialSpaceType
 
 from .composite import DirectSum
@@ -240,7 +240,7 @@ class BaseFunction(Function):
 
 
 class ExpansionFunction(BaseFunction):
-    """Base class for test/trial functions that represent expansions in a given
+    r"""Base class for test/trial functions that represent expansions in a given
     function space.
 
     For example, a TestFunction T(x; V) represents the expansion of the test
@@ -486,7 +486,7 @@ class JAXArray(BaseFunction):
 
 
 class Jaxf(BaseFunction):
-    """Symbolic twin of the JAXFunction in computational space.
+    r"""Symbolic twin of the JAXFunction in computational space.
 
     A JAXFunction represents a complete function in a given function space,
     backed by a JAX array of coefficients. That is, in 1D it represents the
@@ -622,7 +622,28 @@ class JAXFunction(ExpansionFunction):
 
     def doit(self, **hints: Any) -> Expr:
         fs = self.functionspace
-        return Jaxf(self.array, fs, "Jaxf") * TrialFunction(fs).doit()
+        trial = TrialFunction(fs).doit()
+        offset = 1 if isinstance(fs, OrthogonalSpace | DirectSum) else fs.dims
+        local_indices = slice(offset, 2 * offset)
+        global_index = 0
+        hat = f"\\hat{{{self.name}}}"
+        rank = getattr(fs, "rank", 0)
+        if rank == 0:
+            name = "".join((hat, "_{", indices[local_indices], "}"))
+            return Jaxf(self.array, fs, name=name) * trial
+        assert rank == 1
+        assert isinstance(fs, VectorTensorProductSpace)
+
+        s = []
+        for k, v in cast(Vector, trial).components.items():
+            global_index = k._id[0]
+            name = "".join(
+                (hat, "_{", indices[local_indices], "}^{(", str(global_index), ")}")
+            )
+            s.append(
+                Jaxf(self.array[global_index], fs[global_index], name=name) * k * v
+            )
+        return trial.func(*s)
 
     @jax.jit(static_argnums=0)
     def __matmul__(self, a: Array) -> Array:

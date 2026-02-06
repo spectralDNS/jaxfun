@@ -27,6 +27,7 @@ from .tensorproductspace import (
     TensorMatrix,
     TensorProductSpace,
     TPMatrix,
+    VectorTensorProductSpace,
 )
 
 
@@ -116,12 +117,13 @@ def inner(
             uf = u.functionspace
             assert isinstance(vf, OrthogonalSpace)
             assert isinstance(uf, OrthogonalSpace)
+            global_indices = v.global_index, u.global_index
 
             trial.append(uf)
             if isinstance(uf, BCGeneric):
                 has_bcs = True
 
-            z = inner_bilinear(ai, vf, uf, sc, "multivar" in a0)
+            z = inner_bilinear(ai, vf, uf, sc, global_indices, "multivar" in a0)
 
             if isinstance(z, tuple):  # multivar
                 mats.append(z)
@@ -202,8 +204,12 @@ def inner(
                     )
 
                 if "bilinear" in coeffs:
-                    assert isinstance(test_space, TensorProductSpace)
-                    assert isinstance(trial_space, TensorProductSpace)
+                    assert isinstance(
+                        test_space, TensorProductSpace | VectorTensorProductSpace
+                    )
+                    assert isinstance(
+                        trial_space, TensorProductSpace | VectorTensorProductSpace
+                    )
                     aresults.append(
                         TPMatrix(
                             mats,
@@ -212,6 +218,7 @@ def inner(
                             trial_space.tpspaces[tuple(trial)]
                             if isinstance(trial_space, DirectSumTPS)
                             else trial_space,
+                            global_indices=mats[0].global_indices,
                         )
                     )
 
@@ -282,6 +289,7 @@ class Recognizable:
     trial_derivatives: int
     test_name: str
     trial_name: str
+    global_indices: tuple[int, int]
 
 
 class RecognizableArray(Recognizable, Array):
@@ -370,6 +378,7 @@ def inner_bilinear(
     v: OrthogonalSpace,
     u: OrthogonalSpace,
     sc: float | complex,
+    global_indices: tuple[int, int],
     multivar: Literal[False],
 ) -> RecognizableArray: ...
 @overload
@@ -378,6 +387,7 @@ def inner_bilinear(
     v: OrthogonalSpace,
     u: OrthogonalSpace,
     sc: float | complex,
+    global_indices: tuple[int, int],
     multivar: Literal[True],
 ) -> tuple[Array, Array]: ...
 def inner_bilinear(
@@ -385,6 +395,7 @@ def inner_bilinear(
     v: OrthogonalSpace,
     u: OrthogonalSpace,
     sc: float | complex,
+    global_indices: tuple[int, int],
     multivar: bool,
 ) -> RecognizableArray | tuple[Array, Array]:
     """Assemble single bilinear form contribution term.
@@ -398,6 +409,7 @@ def inner_bilinear(
         v: Test function space (Orthogonal or Composite).
         u: Trial function space.
         sc: Scalar bilinear coefficient (after linear split).
+        global_indices: Tuple of global indices for test and trial functions.
         multivar: True if coefficient not separable (handled upstream).
 
     Returns:
@@ -470,6 +482,7 @@ def inner_bilinear(
     z.trial_derivatives = j
     z.test_name = v.name
     z.trial_name = u.name
+    z.global_indices = global_indices
     return z
 
 

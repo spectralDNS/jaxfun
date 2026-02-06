@@ -209,7 +209,7 @@ class Chebyshev(Jacobi):
         Returns:
             SymPy expression 1 / P_n^{(alpha,beta)}(1).
         """
-        return sp.S(1) / sp.jacobi(n, self.alpha, self.beta, 1)
+        return sp.S.One / sp.jacobi(n, self.alpha, self.beta, 1)
 
     def sympy_basis_function(self, i: int, X: Symbol) -> Expr:
         """Return symbolic Chebyshev polynomial T_i(X).

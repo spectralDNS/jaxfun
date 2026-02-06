@@ -54,7 +54,7 @@ class TensorProductSpace:
 
     def __init__(
         self,
-        basespaces: list[OrthogonalSpace],
+        basespaces: Sequence[OrthogonalSpace],
         system: CoordSys | None = None,
         name: str = "TPS",
     ) -> None:
@@ -65,7 +65,7 @@ class TensorProductSpace:
             if system is None
             else system
         )
-        self.basespaces: list[OrthogonalSpace] = basespaces
+        self.basespaces: list[OrthogonalSpace] = list(basespaces)
         self.name = name
         self.system: CoordSys = system
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
@@ -627,7 +627,9 @@ class DirectSumTPS(TensorProductSpace):
                     bcall[-1].append(bcs)
             self.bndvals[bcspaces] = jnp.array([z.orderedvals() for z in bcall[0]])
 
-        self.tpspaces = self.split(basespaces)
+        self.tpspaces: dict[tuple[OrthogonalSpace, ...], TensorProductSpace] = (
+            self.split(basespaces)
+        )
 
         # Precompute lifting coefficients
         for tensorspace in self.tpspaces:
@@ -673,7 +675,7 @@ class DirectSumTPS(TensorProductSpace):
                 f.append([space])
         tensorspaces = itertools.product(*f)
         return {
-            s: TensorProductSpace(s, name=self.name + f"{i}", system=self.system)
+            s: TensorProductSpace(s, self.system, f"{self.name}{i}")
             for i, s in enumerate(tensorspaces)
         }
 
@@ -695,12 +697,9 @@ class DirectSumTPS(TensorProductSpace):
         self, c: Array, kind: str = "quadrature", N: tuple[int, ...] | None = None
     ) -> Array:
         """Evaluate total (homogeneous + lifting) backward transform."""
-        a = []
+        a: list[Array] = []
         for f, v in self.tpspaces.items():
-            if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
-                a.append(v.backward(self.bndvals[f], kind=kind, N=N))
-            else:
-                a.append(v.backward(c, kind=kind, N=N))
+            a.append(v.backward(self.coeff(c, f, v), kind=kind, N=N))
         return jnp.sum(jnp.array(a), axis=0)
 
     def forward(self, c: Array) -> Array:
@@ -722,25 +721,29 @@ class DirectSumTPS(TensorProductSpace):
 
     def evaluate(self, x: Array, c: Array, use_einsum: bool = False) -> Array:
         """Evaluate direct sum tensor product expansion at scattered points."""
-        a = []
+        a: list[Array] = []
         for f, v in self.tpspaces.items():
-            if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
-                a.append(v.evaluate(x, self.bndvals[f], use_einsum))
-            else:
-                a.append(v.evaluate(x, c, use_einsum))
+            a.append(v.evaluate(x, self.coeff(c, f, v), use_einsum))
         return jnp.sum(jnp.array(a), axis=0)
 
     def evaluate_mesh(
         self, x: list[Array], c: Array, use_einsum: bool = False
     ) -> Array:
         """Evaluate expansion on tensor mesh (summing lifting parts)."""
-        a = []
+        a: list[Array] = []
         for f, v in self.tpspaces.items():
-            if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
-                a.append(v.evaluate_mesh(x, self.bndvals[f], use_einsum))
-            else:
-                a.append(v.evaluate_mesh(x, c, use_einsum))
+            a.append(v.evaluate_mesh(x, self.coeff(c, f, v), use_einsum))
         return jnp.sum(jnp.array(a), axis=0)
+
+    def coeff(
+        self,
+        c: Array,
+        f: tuple[OrthogonalSpace, ...],
+        v: TensorProductSpace,
+    ) -> Array:
+        if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
+            return self.bndvals[f]
+        return c
 
 
 class TPMatrices:

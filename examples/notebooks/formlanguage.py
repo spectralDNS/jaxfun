@@ -125,7 +125,7 @@ def _(JAXFunction, N, W, display, jnp):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import marimo as mo
 

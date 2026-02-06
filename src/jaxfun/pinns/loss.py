@@ -781,7 +781,7 @@ class Loss:
             JTJ.append(((J * w[:, None]).T @ J) / N)
         return 2 * sum(JTJ)
 
-    @partial(nnx.jit, static_argnums=0)
+    @nnx.jit(static_argnums=0)
     def value_and_grad_and_JTJ(
         self, module: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
     ) -> tuple[Array, Array, Array]:
@@ -935,7 +935,7 @@ class Loss:
         norms = self.norm_grad_loss(module, xs, targets)
         return jnp.sum(norms) / jnp.where(norms < 1e-16, 1e-16, norms)
 
-    @partial(nnx.jit, static_argnums=0)
+    @nnx.jit(static_argnums=0)
     def update_global_weights(
         self,
         module: nnx.Module,

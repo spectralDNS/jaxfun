@@ -160,3 +160,21 @@ def lambdify(
         cse=cse,
         docstring_limit=doctring_limit,
     )
+
+
+def reverse_dict[K, V](d: dict[K, V]) -> dict[V, K]:
+    """Reverse a dictionary.
+
+    Args:
+        d: The dictionary to reverse.
+
+    Raises:
+        ValueError: If the values in the dictionary are not unique.
+
+    Returns:
+        The dictionary with key-value pairs reversed.
+    """
+    rev_dict = {v: k for k, v in d.items()}
+    if len(rev_dict) != len(d):
+        raise ValueError("Cannot reverse dict with non-unique values.")
+    return rev_dict

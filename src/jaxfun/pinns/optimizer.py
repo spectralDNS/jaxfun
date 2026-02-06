@@ -491,8 +491,8 @@ class Trainer:
         assert isinstance(loss_fn, Loss), "Trainer requires an Loss loss function"
         self.loss_fn = loss_fn
         self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)
-        if jax.local_device_count() > 1:
-            self.global_weights = jax.device_put(
+        if jax.local_device_count() > 1 and loss_fn.local_mesh is not None:
+            self.global_weights: Array = jax.device_put(
                 self.global_weights,
                 NamedSharding(loss_fn.local_mesh, P()),
             )
@@ -500,7 +500,7 @@ class Trainer:
 
     def reset_global_weights(self) -> None:
         self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)
-        if jax.local_device_count() > 1:
+        if jax.local_device_count() > 1 and self.loss_fn.local_mesh is not None:
             self.global_weights = jax.device_put(
                 self.global_weights,
                 NamedSharding(self.loss_fn.local_mesh, P()),
@@ -604,7 +604,7 @@ class Trainer:
 
             loss_old = loss
             if update_global_weights > 0 and epoch % update_global_weights == 0:
-                self.global_weights = self.loss_fn.update_global_weights(
+                self.global_weights: Array = self.loss_fn.update_global_weights(
                     module, self.global_weights, alpha, xs, targets
                 )
                 if print_global_weights and rank == 0:

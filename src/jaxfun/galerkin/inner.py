@@ -14,6 +14,7 @@ from .arguments import TestFunction, TrialFunction
 from .composite import BCGeneric, Composite, DirectSum
 from .forms import (
     _has_functionspace,
+    _has_globalindex,
     _has_testspace,
     get_basisfunctions,
     get_jaxarrays,
@@ -115,8 +116,11 @@ def inner(
             )
             vf = v.functionspace
             uf = u.functionspace
+
             assert isinstance(vf, OrthogonalSpace)
             assert isinstance(uf, OrthogonalSpace)
+            assert _has_globalindex(v)
+            assert _has_globalindex(u)
             global_indices = v.global_index, u.global_index
 
             trial.append(uf)

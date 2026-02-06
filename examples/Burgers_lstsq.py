@@ -1,4 +1,7 @@
 # ruff: noqa: E402
+import os
+import sys
+
 import jax
 
 jax.config.update("jax_enable_x64", True)
@@ -45,6 +48,9 @@ trainer = Trainer(loss_fn)
 
 trainer.train(adam(u), 1000, abs_limit_change=0)
 trainer.train(lbfgs(u), 1000, print_final_loss=True)
+
+if "PYTEST" in os.environ:
+    sys.exit(1)
 
 xj = jnp.linspace(left, right, 50)
 tj = jnp.linspace(t0, tmax, 50)

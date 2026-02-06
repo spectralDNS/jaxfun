@@ -53,6 +53,14 @@ def _has_functionspace(obj: object) -> TypeGuard[_HasFunctionSpace]:
     return hasattr(obj, "functionspace")
 
 
+class _HasGlobalIndex(Protocol):
+    global_index: int
+
+
+def _has_globalindex(obj: object) -> TypeGuard[_HasGlobalIndex]:
+    return hasattr(obj, "global_index")
+
+
 def get_basisfunctions(
     a: sp.Expr,
 ) -> tuple[

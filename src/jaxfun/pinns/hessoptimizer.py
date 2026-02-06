@@ -1,8 +1,12 @@
+from typing import cast
+
 import jax
 from jax.flatten_util import ravel_pytree
 from optax import OptState, Params, Updates
 from optax._src import base, combine, linesearch as _linesearch, transform
 from optax.tree_utils import tree_vdot
+
+from jaxfun.typing import Array
 
 default_linesearch = _linesearch.scale_by_zoom_linesearch(max_linesearch_steps=15)
 
@@ -73,7 +77,8 @@ def scale_by_hessian(
     def update_fn(
         updates: Updates, state: OptState, params: Params | None = None, **extra_args
     ) -> tuple[Updates, OptState]:
-        hvp = lambda v: jax.jvp(jax.grad(extra_args["value_fn"]), (params,), (v,))[1]  # noqa: E731, F821
+        def hvp(v: Array) -> Array:
+            return jax.jvp(jax.grad(extra_args["value_fn"]), (params,), (v,))[1]  # noqa: F821
 
         if use_lstsq:
             flat_weights, unravel = ravel_pytree(params)
@@ -94,7 +99,7 @@ def scale_by_hessian(
             )[0]
 
         # Check if Hessian leads to a descent direction. If not, then use updates
-        descent = tree_vdot(hess_grads, updates)
+        descent = cast(Array, tree_vdot(hess_grads, updates))
         # g2 = tree_vdot(updates, updates)
 
         updates = jax.lax.cond(

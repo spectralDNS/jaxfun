@@ -345,7 +345,7 @@ def GaussNewton(
     opt = NamedOptimizer(
         u.module if isinstance(u, FlaxFunction) else u,
         opt,
-        name=f"Hessian(lstsq={use_lstsq})",
+        name=f"Hessian(lstsq={use_lstsq}, use_GN={use_GN})",
     )
     return opt
 
@@ -403,7 +403,7 @@ def train(
 
         gd = nnx.graphdef(module)
         loss, gradients = nnx.value_and_grad(value_fn)(module)
-        value_fn_state = lambda state: value_fn(nnx.merge(gd, state))
+        value_fn_state = lambda state, GN_loss_fn=None: value_fn(nnx.merge(gd, state))
         GN_loss_fn = lambda state: JTJ(nnx.merge(gd, state))
 
         optimizer.update(
@@ -439,7 +439,7 @@ def train(
             return loss_with_gw(m, gw, xs, targets)
 
         gd = nnx.graphdef(module)
-        value_fn_state = lambda state: value_fn(nnx.merge(gd, state))
+        value_fn_state = lambda state, GN_loss_fn=None: value_fn(nnx.merge(gd, state))
         GN_loss_fn = lambda state: JTJ_with_gw(nnx.merge(gd, state), gw, xs, targets)
         optimizer.update(
             module,

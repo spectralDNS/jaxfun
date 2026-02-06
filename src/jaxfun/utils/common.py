@@ -10,7 +10,7 @@ import sympy as sp
 from jax import Array
 from jax.experimental.sparse import BCOO
 from scipy import sparse as scipy_sparse
-from scipy.special import sph_harm
+from scipy.special import sph_harm_y
 from sympy import Expr, Symbol
 
 from jaxfun.typing import FloatLike
@@ -18,7 +18,7 @@ from jaxfun.typing import FloatLike
 if TYPE_CHECKING:
     from jaxfun.coordinates import BaseScalar
 
-Ynm = lambda n, m, x, y: sph_harm(m, n, y, x)
+Ynm = lambda n, m, x, y: sph_harm_y(n, m, x, y)
 n = Symbol("n", positive=True, integer=True)
 
 

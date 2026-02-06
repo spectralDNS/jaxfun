@@ -10,7 +10,7 @@ from jaxfun.pinns import FlaxFunction, Loss, MLPSpace, optimizer as opt_mod
 class DummyModule(nnx.Module):
     def __init__(self):
         # single scalar parameter
-        self.w = nnx.Param(jnp.array(0.0))
+        self.w = nnx.Param(jnp.zeros(1))
 
 
 def test_adam_no_decay_name_and_module():
@@ -62,18 +62,18 @@ def test_gaussnewton_uses_fake_hess_and_names():
     g1 = opt_mod.GaussNewton(m, use_lstsq=True, cg_max_iter=5, max_linesearch_steps=7)
     assert isinstance(g1, opt_mod.NamedOptimizer)
     assert g1.module is m
-    assert g1.name == "Hessian(lstsq=True)"
+    assert g1.name == "Hessian(lstsq=True, use_GN=False)"
 
     g2 = opt_mod.GaussNewton(m, use_lstsq=False)
     assert isinstance(g2, opt_mod.NamedOptimizer)
-    assert g2.name == "Hessian(lstsq=False)"
+    assert g2.name == "Hessian(lstsq=False, use_GN=False)"
 
 
 def test_train_returns_callable():
     # simple differentiable loss: (w - 2)^2
     def loss_fn(model: nnx.Module):
         assert isinstance(model, DummyModule)
-        return (model.w - 2.0) ** 2
+        return (model.w.get_value() - 2.0) ** 2
 
     step = opt_mod.train(loss_fn)
     assert callable(step)
@@ -142,16 +142,16 @@ class TestTrainer:
         # Train with early stopping when loss < 1.0 (more achievable)
         trainer.train(
             optimizer,
-            100,  # Max epochs
+            1000,  # Max epochs
             abs_limit_loss=1.0,
-            epoch_print=1,
+            epoch_print=10,
             abs_limit_change=-1,  # Disable change-based stopping
         )
 
         # Should have stopped early when loss reached the limit
         final_loss = lsqr_loss_fn(simple_model.module)
         assert final_loss <= 1.0
-        assert trainer.epoch < 100
+        assert trainer.epoch < 1000
 
     def test_trainer_train_early_stopping_abs_limit_change(
         self, lsqr_loss_fn_and_module

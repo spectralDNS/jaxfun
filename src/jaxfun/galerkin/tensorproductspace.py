@@ -796,13 +796,15 @@ class TPMatrix:  # noqa: B903
         self,
         mats: Sequence[Array],
         scale: complex,
-        test_space: TensorProductSpace,
-        trial_space: TensorProductSpace,
+        test_space: TensorProductSpace | VectorTensorProductSpace,
+        trial_space: TensorProductSpace | VectorTensorProductSpace,
+        global_indices: tuple[int, int] = (0, 0),
     ) -> None:
         self.mats = list(mats)
         self.scale = scale
         self.test_space = test_space
         self.trial_space = trial_space
+        self.global_indices = global_indices
         self.M = precond(
             (1.0 / self.mats[0].diagonal())[:, None]
             * (1.0 / self.mats[1].diagonal())[None, :]

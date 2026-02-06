@@ -1231,7 +1231,7 @@ class Square_with_hole(ShapelyMesh):
             (self.right, self.top),
             (self.left, self.top),
         ]
-        hole = Point(self.cx, self.cy).buffer(self.r, resolution=self.hole_resolution)
+        hole = Point(self.cx, self.cy).buffer(self.r, quad_segs=self.hole_resolution)
         poly = Polygon(outer, holes=[list(hole.exterior.coords)[:-1]])
         if not poly.is_valid or poly.area <= 0.0:
             raise ValueError(
@@ -1291,10 +1291,10 @@ class Circle_with_hole(ShapelyMesh):
         from shapely.geometry import Point
 
         outer = Point(self.Cx, self.Cy).buffer(
-            self.R, resolution=self.outer_hole_resolution
+            self.R, quad_segs=self.outer_hole_resolution
         )
         hole = Point(self.cx, self.cy).buffer(
-            self.r, resolution=self.inner_hole_resolution
+            self.r, quad_segs=self.inner_hole_resolution
         )
         poly = outer.difference(hole)
         if not poly.is_valid or poly.area <= 0.0:

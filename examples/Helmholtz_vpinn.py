@@ -53,7 +53,7 @@ print(f"Time Adam {time.time() - t0:.1f}s")
 opt_lbfgs = lbfgs(w, memory_size=100, max_linesearch_steps=10)
 
 t0 = time.time()
-trainer.train(opt_lbfgs, 5000, epoch_print=1000, update_global_weights=1000)
+trainer.train(opt_lbfgs, 5000, epoch_print=1000, abs_limit_loss=1e-8)
 
 print(f"Time LBFGS {time.time() - t0:.1f}s")
 

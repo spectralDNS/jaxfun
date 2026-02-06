@@ -5,14 +5,9 @@ app = marimo.App(width="medium")
 
 
 @app.cell
-def _():
-    return
-
-
-@app.cell
 def _(mo):
     mo.md(r"""
-    # The form language in Jaxfun
+    # The form language in Jaxfun (WIP)
 
     Jaxfun consists of a rich form-language that is used to formulate problems. This language is built on top of Sympy's Function and Vector classes. The fundamental idea is that you choose a functionspace and then you create functions on that space. For the global Galerkin method, this means that you work with functions like
 

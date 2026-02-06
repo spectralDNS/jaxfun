@@ -53,8 +53,8 @@ class Jacobi(OrthogonalSpace):
         OrthogonalSpace.__init__(
             self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
-        self.alpha = alpha
-        self.beta = beta
+        self.alpha: sp.Number | float = alpha
+        self.beta: sp.Number | float = beta
 
     @jit_vmap(in_axes=(0, None))
     def evaluate2(self, X: float, c: Array) -> Array:
@@ -205,18 +205,18 @@ class Jacobi(OrthogonalSpace):
         """
         alpha, beta = self.alpha, self.beta
 
-        def gam(i: int) -> Expr | int:
+        def gam(i: int | sp.Symbol) -> Expr | int:
             if k > 0:
-                return sp.rf(i + alpha + beta + 1, k) * sp.Rational(1, 2**k)
+                return self.psi(i, k)
             return 1
 
-        return (
-            lambda i: self.gn(i)
-            * (-1) ** (k + i)
-            * gam(i)
-            * sp.binomial(i + beta, i - k),
-            lambda i: self.gn(i) * gam(i) * sp.binomial(i + alpha, i - k),
-        )
+        def left_fn(i: int | sp.Symbol) -> Expr:
+            return self.gn(i) * (-1) ** (k + i) * gam(i) * sp.binomial(i + beta, i - k)
+
+        def right_fn(i: int | sp.Symbol) -> Expr:
+            return self.gn(i) * gam(i) * sp.binomial(i + alpha, i - k)
+
+        return left_fn, right_fn
 
     def psi(self, n: Symbol | int, k: int) -> Expr:
         r"""Return derivative normalization ψ^{(k,α,β)}_n.
@@ -232,10 +232,10 @@ class Jacobi(OrthogonalSpace):
         Returns:
             SymPy expression ψ^{(k,α,β)}_n.
         """
-        return sp.rf(n + self.alpha + self.beta + 1, k) / 2**k
+        return sp.rf(n + self.alpha + self.beta + 1, k) * sp.Rational(1, 2**k)
 
     @staticmethod
-    def gamma(alpha: Number | float, beta: Number | float, n: int) -> Expr:
+    def gamma(alpha: Expr | float, beta: Expr | float, n: int) -> Expr:
         r"""Return h_n (norm squared) for P_n^{(α,β)} under weight ω^{(α,β)}.
 
         h_n = (P_n^{(α,β)}, P_n^{(α,β)})_{ω^{(α,β)}}.

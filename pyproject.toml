@@ -22,12 +22,13 @@ dependencies = [
   "matplotlib>=3.9.3",
   "optax>=0.2.6",
   "pre-commit>=4.3",
+  "pytest-xdist[psutil]>=3.8",
   "sympy>=1.14",
 ]
 
 [tool.pytest.ini_options]
 markers = [ "slow: marks tests as slow (select with '-m slow')" ]
-addopts = "-m \"not slow\""
+addopts = [ "-m", "not slow", "-n", "logical" ]
 
 [tool.coverage.run]
 branch = true

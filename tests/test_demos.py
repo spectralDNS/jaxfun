@@ -1,27 +1,17 @@
 import contextlib
 import runpy
+from pathlib import Path
 
 import pytest
+
+root = Path(__file__).parent.parent
+files = [f.stem for f in root.glob("examples/*.py") if f.is_file()]
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
     "demo",
-    [
-        "poisson1D",
-        "poisson1D_curv",
-        "poisson1D_spikan",
-        "poisson2D",
-        "poisson2D_curv",
-        "poisson3D",
-        "poisson1D_periodic",
-        "poisson2D_periodic",
-        "poisson2D_parametric",
-        "poisson2D_lstsq",
-        "biharmonic2D",
-        "helmholtz1D",
-        "helmholtz2D",
-    ],
+    files,
 )
 def test_demos(demo: str) -> None:
     with contextlib.suppress(SystemExit):

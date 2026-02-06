@@ -118,7 +118,7 @@ def _(mo):
 
 @app.cell
 def _(M, mesh):
-    xa = mesh.get_points(M, domain="all", kind="legendre")  # noqa: F841
+    xa = mesh.get_points(M, domain="all", kind="legendre")
     xi = mesh.get_points(M, domain="inside", kind="legendre")
     xb = mesh.get_points(M, domain="boundary", kind="legendre")
     wi = mesh.get_weights(M, domain="inside", kind="legendre")

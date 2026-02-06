@@ -100,7 +100,7 @@ jobs:
 
           # Copy existing HTML files to html_output (excluding index.html)
           if [ -d "." ]; then
-            find . -maxdepth 1 -name "*.html" ! -name "index.html" -exec cp {} html_output/ \;
+            find . -maxdepth 1 -name "*.html" ! -name "index.html" -exec cp -n {} html_output/ \;
           fi
 
           # Switch back to main branch

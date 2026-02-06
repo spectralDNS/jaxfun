@@ -111,7 +111,7 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Here `mesh` is a one-dimensional spatial domain defined from 0 to π. We can use this domain to create grid points for out computations
+    Here `mesh` is a one-dimensional spatial domain defined from 0 to π. We can use this domain to create grid points for our computations
     """)
     return
 

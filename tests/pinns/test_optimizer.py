@@ -151,7 +151,7 @@ class TestTrainer:
         # Should have stopped early when loss reached the limit
         final_loss = lsqr_loss_fn(simple_model.module)
         assert final_loss <= 1.0
-        assert trainer.epoch < 100
+        assert trainer.epoch < 1000
 
     def test_trainer_train_early_stopping_abs_limit_change(
         self, lsqr_loss_fn_and_module

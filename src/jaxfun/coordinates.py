@@ -526,9 +526,6 @@ class CoordSys(Basic):
 
         Returns:
             The constructed coordinate system instance.
-
-        Raises:
-            TypeError: If name is not a string.
         """
         name = str(name)
 
@@ -770,16 +767,15 @@ class CoordSys(Basic):
         return self._is_cartesian
 
     @overload
-    def to_cartesian(self, v: BaseVector) -> Vector: ...
+    def to_cartesian(self, v: VectorLike) -> VectorLike: ...
     @overload
-    def to_cartesian(self, v: BaseDyadic) -> Dyadic: ...
-    @overload
-    def to_cartesian[T: TensorLike](self, v: T) -> T: ...
-    def to_cartesian(self, v: BaseVector | BaseDyadic) -> TensorLike:
+    def to_cartesian(self, v: DyadicLike) -> DyadicLike: ...
+    def to_cartesian(self, v: TensorLike) -> TensorLike:
         # v either Cartesian or a vector/dyadic with covariant basis vectors
         if isinstance(v, VectorZero | DyadicZero):
             return v
 
+        assert hasattr(v, "_sys") and isinstance(v._sys, CoordSys)
         if v._sys.is_cartesian:
             return v
 
@@ -797,10 +793,10 @@ class CoordSys(Basic):
 
         return v.xreplace(cart_map)
 
-    # @overload
-    # def from_cartesian(self, v: BaseVector) -> BaseVector: ...
-    # @overload
-    # def from_cartesian(self, v: BaseDyadic) -> BaseDyadic: ...
+    @overload
+    def from_cartesian(self, v: VectorLike) -> VectorLike: ...
+    @overload
+    def from_cartesian(self, v: DyadicLike) -> DyadicLike: ...
     def from_cartesian(self, v: TensorLike) -> TensorLike:
         from jaxfun.operators import express
         from jaxfun.typing import cast_bd, cast_bv

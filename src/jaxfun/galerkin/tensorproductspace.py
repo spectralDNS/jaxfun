@@ -54,7 +54,7 @@ class TensorProductSpace:
 
     def __init__(
         self,
-        basespaces: list[OrthogonalSpace],
+        basespaces: Sequence[OrthogonalSpace],
         system: CoordSys | None = None,
         name: str = "TPS",
     ) -> None:
@@ -65,7 +65,7 @@ class TensorProductSpace:
             if system is None
             else system
         )
-        self.basespaces: list[OrthogonalSpace] = basespaces
+        self.basespaces: list[OrthogonalSpace] = list(basespaces)
         self.name = name
         self.system: CoordSys = system
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])

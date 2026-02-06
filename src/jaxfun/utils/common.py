@@ -10,7 +10,11 @@ import sympy as sp
 from jax import Array
 from jax.experimental.sparse import BCOO
 from scipy import sparse as scipy_sparse
-from scipy.special import sph_harm
+
+try:
+    from scipy.special import sph_harm  # ty:ignore[unresolved-import]
+except ImportError:
+    from scipy.special import sph_harm_y as sph_harm
 from sympy import Expr, Symbol
 
 from jaxfun.typing import FloatLike

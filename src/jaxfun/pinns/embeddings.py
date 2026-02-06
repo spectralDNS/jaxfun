@@ -96,7 +96,7 @@ class FourierEmbs(nnx.Module):
         init = nnx.initializers.normal(embed_scale)
         k = init(rngs(), (in_dim, embed_dim // 2), float)
         self.embed_dim = embed_dim
-        self.kernel = nnx.Param(k)
+        self.kernel: Array = nnx.data(k)
 
     def __call__(self, x: Array) -> Array:
         """Apply random Fourier feature mapping.

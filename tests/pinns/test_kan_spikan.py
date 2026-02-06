@@ -23,7 +23,7 @@ def test_kanlayer_forward_shape_and_params():
     y = layer(x_arr)
     assert y.shape == (3, 3)
     assert hasattr(layer, "kernel")
-    assert layer.kernel.value.shape[-1] == 3
+    assert layer.kernel[...].shape[-1] == 3
 
 
 def test_kanmlpspace_basic_attributes():

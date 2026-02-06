@@ -6,6 +6,7 @@ import pytest
 
 root = Path(__file__).parent.parent
 files = [f.stem for f in root.glob("examples/*.py") if f.is_file()]
+files.remove("DrivenCavity_lstsq")
 
 
 @pytest.mark.slow

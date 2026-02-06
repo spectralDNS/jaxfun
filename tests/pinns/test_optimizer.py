@@ -10,7 +10,7 @@ from jaxfun.pinns import FlaxFunction, Loss, MLPSpace, optimizer as opt_mod
 class DummyModule(nnx.Module):
     def __init__(self):
         # single scalar parameter
-        self.w = nnx.Param(0.0)
+        self.w = nnx.Param(jnp.zeros(1))
 
 
 def test_adam_no_decay_name_and_module():
@@ -62,11 +62,11 @@ def test_gaussnewton_uses_fake_hess_and_names():
     g1 = opt_mod.GaussNewton(m, use_lstsq=True, cg_max_iter=5, max_linesearch_steps=7)
     assert isinstance(g1, opt_mod.NamedOptimizer)
     assert g1.module is m
-    assert g1.name == "Hessian(lstsq=True)"
+    assert g1.name == "Hessian(lstsq=True, use_GN=False)"
 
     g2 = opt_mod.GaussNewton(m, use_lstsq=False)
     assert isinstance(g2, opt_mod.NamedOptimizer)
-    assert g2.name == "Hessian(lstsq=False)"
+    assert g2.name == "Hessian(lstsq=False, use_GN=False)"
 
 
 def test_train_returns_callable():

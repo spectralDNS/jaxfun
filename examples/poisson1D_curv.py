@@ -58,7 +58,7 @@ uj = D.evaluate(xj, u_hat)
 uq = lambdify(t, ue)(xj)
 error = np.linalg.norm(uj - uq)
 if "PYTEST" in os.environ:
-    assert error < 1000 * ulp(1)
+    assert error < 1000 * ulp(1), error
     sys.exit(1)
 
 print(f"poisson1D_curv l2 error = {error:2.6e}")

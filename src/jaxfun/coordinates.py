@@ -37,12 +37,10 @@ def _is_tensorlike(obj: Basic) -> TypeGuard[TensorLike]:
     return isinstance(
         obj,
         BaseVector
-        | Vector
         | VectorAdd
         | VectorMul
         | VectorZero
         | BaseDyadic
-        | Dyadic
         | DyadicAdd
         | DyadicMul
         | DyadicZero,
@@ -52,14 +50,14 @@ def _is_tensorlike(obj: Basic) -> TypeGuard[TensorLike]:
 def _is_vectorlike(obj: Basic) -> TypeGuard[VectorLike]:
     return isinstance(
         obj,
-        BaseVector | Vector | VectorAdd | VectorMul | VectorZero,
+        BaseVector | VectorAdd | VectorMul | VectorZero,
     )
 
 
 def _is_dyadiclike(obj: Basic) -> TypeGuard[DyadicLike]:
     return isinstance(
         obj,
-        BaseDyadic | Dyadic | DyadicAdd | DyadicMul | DyadicZero,
+        BaseDyadic | DyadicAdd | DyadicMul | DyadicZero,
     )
 
 

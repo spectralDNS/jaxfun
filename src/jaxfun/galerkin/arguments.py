@@ -213,8 +213,8 @@ class BaseFunction(Function):
 
 
 class ExpansionFunction(BaseFunction):
-    r"""Base class for test/trial functions that represent expansions in a given
-    function space.
+    r"""Base class for functions that represent expansions in a given function
+    space.
 
     For example, a TestFunction T(x; V) represents the expansion of the test
     function in the basis of the function space

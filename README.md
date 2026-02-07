@@ -85,7 +85,7 @@ trainer.train(adam(u), 5000)
 trainer.train(lbfgs(u), 5000)
 ```
 
-See the [`examples`](examples/) directory for more patterns.
+See the [`examples`](examples/) directory and preliminary [notebooks](https://spectraldns.github.io/jaxfun/) for more patterns.
 
 ## Development
 

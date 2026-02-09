@@ -433,11 +433,16 @@ class CoordSys(Basic):
         _base_scalars: Tuple of BaseScalar objects (psi / computational coordinates).
         _base_vectors: Tuple of BaseVector objects (covariant basis).
         _base_dyadics: Tuple of BaseDyadic objects.
+        _covariant_basis_map: Mapping from coordinate index to base vector
+        _covariant_basis_dyadic_map: Mapping from coordinate indices to base dyadic.
+        _covariant_basis_map_inv: Inverse of _covariant_basis_map.
+        _covariant_basis_dyadic_map_inv: Inverse of _covariant_basis_dyadic_map.
         _position_vector: Position vector expressed in parent Cartesian coordinates.
         _is_cartesian: True if transformation is identity.
         _parent: Parent coordinate system (Cartesian root) or None.
         _psi: Tuple of underlying symbolic parameters.
         _map_base_scalar_to_symbol: Mapping BaseScalar -> underlying Symbol.
+        _map_base_scalar_to_index: Mapping BaseScalar -> coordinate index.
         _map_symbol_to_base_scalar: Inverse of the above.
         _measure: Complexity metric used during simplification.
     """
@@ -632,12 +637,12 @@ class CoordSys(Basic):
         obj._covariant_basis_dyadic_map = cov_dyad
         obj._covariant_basis_dyadic_map_inv = reverse_dict(cov_dyad)
 
+        for k in obj._cartesian_xyz:
+            setattr(obj, k.name, k)
+
         for i in range(len(base_scalars)):
             setattr(obj, variable_names[i], base_scalars[i])
             setattr(obj, vector_names[i], v[i])
-
-        for k in obj._cartesian_xyz:
-            setattr(obj, k.name, k)
 
         # Assign params
         obj._parent = parent
@@ -801,6 +806,9 @@ class CoordSys(Basic):
 
         if self.is_cartesian:
             return v
+
+        assert hasattr(v, "_sys") and isinstance(v._sys, CoordSys)
+        assert v._sys.is_cartesian
 
         v = v.doit()
         bt = cast(tuple[VectorLike, ...], self.get_contravariant_basis(True))

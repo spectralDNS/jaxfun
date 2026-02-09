@@ -23,6 +23,7 @@ from typing import Protocol, TypeGuard
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
+from sympy.core.function import AppliedUndef
 
 from jaxfun.coordinates import CoordSys, get_system as get_system
 from jaxfun.typing import (
@@ -64,8 +65,8 @@ def _has_globalindex(obj: object) -> TypeGuard[_HasGlobalIndex]:
 def get_basisfunctions(
     a: sp.Expr,
 ) -> tuple[
-    set[TestFunction] | TestFunction | None,
-    set[TrialFunction] | TrialFunction | None,
+    set[TestFunction | AppliedUndef] | TestFunction | AppliedUndef | None,
+    set[TrialFunction | AppliedUndef] | TrialFunction | AppliedUndef | None,
 ]:
     """Return test / trial basis Function objects present in expression.
 
@@ -85,13 +86,14 @@ def get_basisfunctions(
           - A set of Functions if multiple
           - None if none found
     """
-    test_found: set[TestFunction] = set()
-    trial_found: set[TrialFunction] = set()
+    test_found: set[TestFunction | AppliedUndef] = set()
+    trial_found: set[TrialFunction | AppliedUndef] = set()
     for p in sp.core.traversal.iterargs(sp.sympify(a)):
-        if getattr(p, "argument", -1) == 1:
-            trial_found.add(p)
-        if getattr(p, "argument", -1) == 0:
-            test_found.add(p)
+        if isinstance(p, TestFunction | TrialFunction | AppliedUndef):
+            if getattr(p, "argument", -1) == 1:
+                trial_found.add(p)
+            if getattr(p, "argument", -1) == 0:
+                test_found.add(p)
 
     match (len(test_found), len(trial_found)):
         case (1, 1):
@@ -119,11 +121,7 @@ def get_jaxarrays(
     Returns:
         Set with zero or more JAXArray objects.
     """
-    array_found: set[JAXArray] = set()
-    for p in sp.core.traversal.iterargs(sp.sympify(a)):
-        if getattr(p, "argument", -1) == 3:
-            array_found.add(p)
-    return array_found
+    return sp.sympify(a).atoms(JAXArray)
 
 
 def split_coeff(c0: sp.Expr | float) -> CoeffDict:

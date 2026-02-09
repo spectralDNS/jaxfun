@@ -4,7 +4,7 @@ import pytest
 import sympy as sp
 import sympy.vector as sp_vector
 
-from jaxfun.coordinates import BaseDyadic, CartCoordSys, get_CoordSys
+from jaxfun.coordinates import BaseDyadic, get_CoordSys
 from jaxfun.operators import (
     Constant,
     Cross,
@@ -25,9 +25,9 @@ from jaxfun.operators import (
 )
 from jaxfun.typing import VectorLike
 
-x, y, z = sp.symbols("x y z", real=True)
-N = CartCoordSys("N", (x, y, z))
-r, theta, zz = sp.symbols("r theta z", real=True, positive=True)
+x, y, z = sp.symbols("x,y,z", real=True)
+N = get_CoordSys("N", sp.Lambda((x, y, z), (x, y, z)))
+r, theta, zz = sp.symbols("r,theta,zz", real=True, positive=True)
 C = get_CoordSys(
     "C", sp.Lambda((r, theta, zz), (r * sp.cos(theta), r * sp.sin(theta), zz))
 )
@@ -117,7 +117,7 @@ def test_cross_cylindrical():
     res = cross(C.b_r, C.b_theta)
     comp = components(res)
     # Component should be C.r (the first base scalar of coordinate system C)
-    assert C.b_z in comp and comp[C.b_z] == C.r
+    assert C.b_zz in comp and comp[C.b_zz] == C.r
 
 
 @pytest.mark.parametrize(
@@ -225,7 +225,7 @@ def test_gradient_vector_cartesian_transpose():
 def test_divergence_doc_example():
     v = C.r * C.b_r + C.theta * C.b_theta
     assert sp.simplify(divergence(v) - 3) == 0
-    assert sp.simplify(divergence(v + C.z * C.b_z) - 4) == 0
+    assert sp.simplify(divergence(v + C.z * C.b_zz) - 4) == 0
 
 
 def test_divergence_dyadic():
@@ -258,7 +258,7 @@ def test_curl_doc_example():
     v = C.b_r + C.b_theta
     res = curl(v)
     comp = components(res)
-    assert C.b_z in comp and sp.simplify(comp[C.b_z] - 2) == 0
+    assert C.b_zz in comp and sp.simplify(comp[C.b_zz] - 2) == 0
 
 
 def test_divergence_of_gradient_unevaluated():

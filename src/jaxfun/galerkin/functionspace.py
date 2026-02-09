@@ -39,18 +39,16 @@ from .orthogonal import OrthogonalSpace
 
 
 @overload
-def FunctionSpace(
+def FunctionSpace[T: OrthogonalSpace](
     N: int,
-    space: type[OrthogonalSpace],
+    space: type[T],
     bcs: None = None,
     domain: Domain | tuple[FloatLike, FloatLike] | None = None,
     system: CoordSys | None = None,
     name: str = "fun",
     fun_str: str = "psi",
     **kw,
-) -> OrthogonalSpace: ...
-
-
+) -> T: ...
 @overload
 def FunctionSpace(
     N: int,
@@ -62,8 +60,6 @@ def FunctionSpace(
     fun_str: str = "psi",
     **kw,
 ) -> DirectSum | Composite: ...
-
-
 def FunctionSpace(
     N: int,
     space: type[OrthogonalSpace],

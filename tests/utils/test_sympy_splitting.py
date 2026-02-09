@@ -1,5 +1,6 @@
 import sympy as sp
 
+from jaxfun.coordinates import CartCoordSys
 from jaxfun.operators import Constant
 from jaxfun.utils import split_linear_nonlinear_terms, split_time_derivative_terms
 
@@ -56,3 +57,26 @@ def test_cahn_hilliard():
     rhs_linear, rhs_nonlinear = split_linear_nonlinear_terms(rhs, u)
     assert sp.simplify(rhs_linear - exp_rhs_lin) == 0
     assert sp.simplify(rhs_nonlinear - exp_rhs_nonlin) == 0
+
+
+def test_split_time_derivative_terms_accepts_basetime() -> None:
+    x = sp.Symbol("x")
+    sys = CartCoordSys("N", (x,))
+    t = sys.base_time()
+    u = sp.Function("u")(x, t)  # ty:ignore[call-non-callable]
+
+    expr = u.diff(t) - u.diff(x, 2)
+    lhs, rhs = split_time_derivative_terms(expr, t)
+    assert sp.simplify(lhs - u.diff(t)) == 0
+    assert sp.simplify(rhs + u.diff(x, 2)) == 0
+
+
+def test_split_linear_nonlinear_forcing_and_nonpolynomial() -> None:
+    x, t = sp.symbols("x t")
+    u = sp.Function("u")(x, t)  # ty:ignore[call-non-callable]
+
+    expr = 3 + 2 * u.diff(x) + sp.sin(u)
+    lin, nonlin = split_linear_nonlinear_terms(expr, u)
+
+    assert sp.simplify(lin - (3 + 2 * u.diff(x))) == 0
+    assert sp.simplify(nonlin - sp.sin(u)) == 0

@@ -323,15 +323,18 @@ class TrialFunction(ExpansionFunction):
         cls,
         V: FunctionSpaceType,
         name: str | None = None,
+        transient: bool = False,
     ) -> Self:
         coors = V.system
+        time_arg = [coors.base_time()] if transient else []
         obj: Self = Function.__new__(
-            cls, *(list(coors._cartesian_xyz) + [sp.Symbol(V.name)])
+            cls, *(list(coors._cartesian_xyz) + time_arg + [sp.Symbol(V.name)])
         )
         obj.functionspace = V
         obj.name = name if name is not None else "TrialFunction"
         obj.own_name = "TrialFunction"
         obj.argument = 1
+        obj.transient = transient
         return obj
 
     def doit(self, **hints: dict) -> Expr | AppliedUndef:

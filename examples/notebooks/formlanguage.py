@@ -168,7 +168,7 @@ def _(h, v):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Note the repeated $j$ index, which implies summation. There is only one free index, $i$, and a such `inner(h*v)` returns a vector.
+    Note the repeated $j$ index, which implies summation (Einstein summation convention). There is only one free index, $i$, and a such `inner(h*v)` returns a vector.
     """)
     return
 

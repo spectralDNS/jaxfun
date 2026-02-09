@@ -150,8 +150,8 @@ class PirateSpace(NNSpace):
         system: CoordSys | None = None,
         name: str = "PirateNet",
         transient: bool = False,
-        act_fun: Activation = nnx.tanh,
-        act_fun_hidden: Activation = nnx.tanh,
+        act_fun: Activation = nnx.swish,
+        act_fun_hidden: Activation = nnx.swish,
         act_fun_final: Activation = lambda x: x,
         # PirateNet specific parameters
         nonlinearity: float = 0.0,

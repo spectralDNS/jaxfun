@@ -54,7 +54,9 @@ class PeriodEmbs(nnx.Module):
               - Cos/Sin pairs for embedded axes (doubling those dims)
         """
         y = []
-        for i, xi in enumerate(x):
+        for i in range(x.shape[-1]):
+            # for i, xi in enumerate(x):
+            xi = x[..., i : i + 1]  # Keep axis for broadcasting
             if i in self.axis:
                 idx = self.axis.index(i)
                 p = self._periods[f"period_{idx}"]
@@ -66,7 +68,8 @@ class PeriodEmbs(nnx.Module):
 
             y += vals
 
-        return jnp.hstack(y)
+        out = jnp.concatenate(y, axis=-1)
+        return out
 
 
 class FourierEmbs(nnx.Module):

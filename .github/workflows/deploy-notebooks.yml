@@ -21,180 +21,175 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0  # Fetch all history to compare with previous commit
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # Fetch all history to compare with previous commit
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v4
-      with:
-        enable-cache: true
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
+      - name: Install dependencies
+        run: uv sync
 
-    - name: Install dependencies
-      run: uv sync
+      - name: Create output directory
+        run: mkdir -p html_output
 
-    - name: Create output directory
-      run: mkdir -p html_output
-
-    - name: Get changed notebook files
-      id: changed-files
-      run: |
-        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-          # For manual runs, convert all notebooks
-          echo "Manual workflow dispatch - converting all notebooks"
-          changed_notebooks=$(find examples/notebooks -name "*.py" -type f)
-        else
-          # Get the list of changed .py files in the notebooks directory
-          changed_notebooks=$(git diff --name-only HEAD^ HEAD | grep '^examples/notebooks/.*\.py$' || true)
-        fi
-
-        if [ -z "$changed_notebooks" ]; then
-          echo "No notebook files changed"
-          echo "has_changes=false" >> $GITHUB_OUTPUT
-        else
-          echo "Changed notebooks:"
-          echo "$changed_notebooks"
-          echo "has_changes=true" >> $GITHUB_OUTPUT
-          # Save the list to a file for the next step
-          echo "$changed_notebooks" > /tmp/changed_notebooks.txt
-        fi
-
-    - name: Convert modified marimo notebooks to HTML
-      if: steps.changed-files.outputs.has_changes == 'true'
-      run: |
-        echo "Converting modified marimo notebooks to HTML..."
-        while IFS= read -r notebook; do
-          if [ -f "$notebook" ]; then
-            filename=$(basename "$notebook" .py)
-            echo "Converting $notebook to html_output/${filename}.html"
-            uv run marimo export html "$notebook" -o "html_output/${filename}.html"
-          fi
-        done < /tmp/changed_notebooks.txt
-
-    - name: Check if any HTML files exist
-      id: check-html
-      run: |
-        if [ -n "$(find html_output -name '*.html' -type f 2>/dev/null)" ]; then
-          echo "html_exists=true" >> $GITHUB_OUTPUT
-        else
-          echo "html_exists=false" >> $GITHUB_OUTPUT
-        fi
-
-    - name: Checkout gh-pages branch to preserve existing files
-      if: steps.check-html.outputs.html_exists == 'true'
-      run: |
-        # Fetch the gh-pages branch if it exists
-        if git ls-remote --heads origin gh-pages | grep -q gh-pages; then
-          echo "gh-pages branch exists, fetching existing HTML files..."
-          git fetch origin gh-pages
-          git checkout gh-pages
-
-          # Recreate output directory after checkout
-          mkdir -p html_output
-
-          # Copy existing HTML files to html_output (excluding index.html)
-          if [ -d "." ]; then
-            find . -maxdepth 1 -name "*.html" ! -name "index.html" -exec cp -n {} html_output/ \;
+      - name: Get changed notebook files
+        id: changed-files
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            # For manual runs, convert all notebooks
+            echo "Manual workflow dispatch - converting all notebooks"
+            changed_notebooks=$(find examples/notebooks -name "*.py" -type f)
+          else
+            # Get the list of changed .py files in the notebooks directory
+            changed_notebooks=$(git diff --name-only HEAD^ HEAD | grep '^examples/notebooks/.*\.py$' || true)
           fi
 
-          # Switch back to main branch
-          git checkout -
-        else
-          echo "gh-pages branch does not exist yet"
-        fi
-
-    - name: Create index.html
-      if: steps.check-html.outputs.html_exists == 'true'
-      run: |
-        cat > html_output/index.html << 'INDEXEOF'
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Marimo Notebooks</title>
-            <style>
-                body {
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-                    max-width: 800px;
-                    margin: 0 auto;
-                    padding: 40px 20px;
-                    line-height: 1.6;
-                    color: #333;
-                }
-                h1 {
-                    color: #2c3e50;
-                    border-bottom: 3px solid #3498db;
-                    padding-bottom: 10px;
-                }
-                .notebook-list {
-                    list-style: none;
-                    padding: 0;
-                }
-                .notebook-item {
-                    margin: 20px 0;
-                    padding: 20px;
-                    background: #f8f9fa;
-                    border-radius: 8px;
-                    transition: transform 0.2s, box-shadow 0.2s;
-                }
-                .notebook-item:hover {
-                    transform: translateY(-2px);
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-                }
-                .notebook-link {
-                    color: #3498db;
-                    text-decoration: none;
-                    font-size: 1.2em;
-                    font-weight: 500;
-                }
-                .notebook-link:hover {
-                    color: #2980b9;
-                    text-decoration: underline;
-                }
-                footer {
-                    margin-top: 60px;
-                    padding-top: 20px;
-                    border-top: 1px solid #ddd;
-                    text-align: center;
-                    color: #777;
-                }
-            </style>
-        </head>
-        <body>
-            <h1>📓 Marimo Notebooks</h1>
-            <p>Below you'll find interactive marimo notebooks exported as HTML.</p>
-            <ul class="notebook-list">
-        INDEXEOF
-
-        for html in html_output/*.html; do
-          if [ -f "$html" ] && [ "$html" != "html_output/index.html" ]; then
-            filename=$(basename "$html")
-            name=$(basename "$html" .html)
-            echo "        <li class=\"notebook-item\"><a href=\"$filename\" class=\"notebook-link\">$name</a></li>" >> html_output/index.html
+          if [ -z "$changed_notebooks" ]; then
+            echo "No notebook files changed"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "Changed notebooks:"
+            echo "$changed_notebooks"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            # Save the list to a file for the next step
+            echo "$changed_notebooks" > /tmp/changed_notebooks.txt
           fi
-        done
 
-        cat >> html_output/index.html << 'INDEXEOF'
-            </ul>
-            <footer>
-                <p>Generated with <a href="https://marimo.io" target="_blank">marimo</a></p>
-            </footer>
-        </body>
-        </html>
-        INDEXEOF
+      - name: Convert modified marimo notebooks to HTML
+        if: steps.changed-files.outputs.has_changes == 'true'
+        run: |
+          echo "Converting modified marimo notebooks to HTML..."
+          while IFS= read -r notebook; do
+            if [ -f "$notebook" ]; then
+              filename=$(basename "$notebook" .py)
+              echo "Converting $notebook to html_output/${filename}.html"
+              uv run marimo export html "$notebook" -o "html_output/${filename}.html"
+            fi
+          done < /tmp/changed_notebooks.txt
 
-    - name: Deploy to GitHub Pages
-      if: steps.check-html.outputs.html_exists == 'true'
-      uses: peaceiris/actions-gh-pages@v4
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./html_output
-        publish_branch: gh-pages
-        force_orphan: false  # Changed to false to preserve existing files
+      - name: Check if any HTML files exist
+        id: check-html
+        run: |
+          if [ -n "$(find html_output -name '*.html' -type f 2>/dev/null)" ]; then
+            echo "html_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "html_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout gh-pages branch to preserve existing files
+        if: steps.check-html.outputs.html_exists == 'true'
+        run: |
+          # Fetch the gh-pages branch if it exists
+          if git ls-remote --heads origin gh-pages | grep -q gh-pages; then
+            echo "gh-pages branch exists, fetching existing HTML files..."
+            git fetch origin gh-pages
+            git checkout gh-pages
+
+            # Recreate output directory after checkout
+            mkdir -p html_output
+
+            # Copy existing HTML files to html_output (excluding index.html)
+            if [ -d "." ]; then
+              find . -maxdepth 1 -name "*.html" ! -name "index.html" -exec cp -n {} html_output/ \;
+            fi
+
+            # Switch back to main branch
+            git checkout -
+          else
+            echo "gh-pages branch does not exist yet"
+          fi
+
+      - name: Create index.html
+        if: steps.check-html.outputs.html_exists == 'true'
+        run: |
+          cat > html_output/index.html << 'INDEXEOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Marimo Notebooks</title>
+              <style>
+                  body {
+                      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+                      max-width: 800px;
+                      margin: 0 auto;
+                      padding: 40px 20px;
+                      line-height: 1.6;
+                      color: #333;
+                  }
+                  h1 {
+                      color: #2c3e50;
+                      border-bottom: 3px solid #3498db;
+                      padding-bottom: 10px;
+                  }
+                  .notebook-list {
+                      list-style: none;
+                      padding: 0;
+                  }
+                  .notebook-item {
+                      margin: 20px 0;
+                      padding: 20px;
+                      background: #f8f9fa;
+                      border-radius: 8px;
+                      transition: transform 0.2s, box-shadow 0.2s;
+                  }
+                  .notebook-item:hover {
+                      transform: translateY(-2px);
+                      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                  }
+                  .notebook-link {
+                      color: #3498db;
+                      text-decoration: none;
+                      font-size: 1.2em;
+                      font-weight: 500;
+                  }
+                  .notebook-link:hover {
+                      color: #2980b9;
+                      text-decoration: underline;
+                  }
+                  footer {
+                      margin-top: 60px;
+                      padding-top: 20px;
+                      border-top: 1px solid #ddd;
+                      text-align: center;
+                      color: #777;
+                  }
+              </style>
+          </head>
+          <body>
+              <h1>📓 Marimo Notebooks</h1>
+              <p>Below you'll find interactive marimo notebooks exported as HTML.</p>
+              <ul class="notebook-list">
+          INDEXEOF
+
+          for html in html_output/*.html; do
+            if [ -f "$html" ] && [ "$html" != "html_output/index.html" ]; then
+              filename=$(basename "$html")
+              name=$(basename "$html" .html)
+              echo "        <li class=\"notebook-item\"><a href=\"$filename\" class=\"notebook-link\">$name</a></li>" >> html_output/index.html
+            fi
+          done
+
+          cat >> html_output/index.html << 'INDEXEOF'
+              </ul>
+              <footer>
+                  <p>Generated with <a href="https://marimo.io" target="_blank">marimo</a></p>
+              </footer>
+          </body>
+          </html>
+          INDEXEOF
+
+      - name: Deploy to GitHub Pages
+        if: steps.check-html.outputs.html_exists == 'true'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./html_output
+          publish_branch: gh-pages
+          force_orphan: false # Changed to false to preserve existing files

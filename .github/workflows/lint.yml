@@ -10,18 +10,25 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@v6
+
+      - name: Install uv (with caching)
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
       - name: Install dependencies
         run: uv sync
+
       - name: Ruff lint
         run: |
-          uv run ruff check .
-          uv run ruff format --check .
+          uv run ruff check
+          uv run ruff format --check
+
       - name: Pre-commit (selected hooks)
         run: |
           uv run pre-commit install
           uv run pre-commit run --all-files --show-diff-on-failure
+
       - name: Marimo lint
         run: uv run marimo check examples/notebooks/

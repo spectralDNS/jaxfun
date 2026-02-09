@@ -1,24 +1,33 @@
 name: Test jaxfun
 
 on:
-  push:
-    branches: ["**"]
   pull_request:
-    branches: ["main"]
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  test:
     name: python
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
+      - name: Install uv (with caching)
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync deps once
+        run: uv sync --frozen --all-groups
 
       - name: Run fast tests (default, excludes slow)
         run: |
@@ -27,5 +36,5 @@ jobs:
 
       - name: Run slow demo tests
         run: |
-          uv run pytest -m slow tests/test_demos.py
-          uv run pytest --float64 -m slow tests/test_demos.py
+          uv run pytest -m slow
+          uv run pytest --float64 -m slow

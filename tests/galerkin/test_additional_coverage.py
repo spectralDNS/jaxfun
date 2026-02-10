@@ -122,11 +122,11 @@ def test_orthogonal_mappings_and_domain_factor():
     assert jnp.allclose(Xtrue, pts)
 
 
-def test_fourier_backward_truncation():
+def test_fourier_backward_padding():
     F = Fourier.Fourier(8)
     coeffs = jax.random.normal(jax.random.PRNGKey(2), shape=(F.N,))
-    u4 = F.backward(coeffs, N=4)  # truncation path
-    assert u4.shape[0] == 4
+    u4 = F.backward(coeffs, N=12)  # padding path
+    assert u4.shape[0] == 12
 
 
 def test_chebyshev_matrices_branches():

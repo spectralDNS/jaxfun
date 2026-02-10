@@ -1,7 +1,7 @@
 import sympy as sp
 
 from jaxfun.coordinates import CartCoordSys
-from jaxfun.operators import Constant
+from jaxfun.operators import Constant, Div, Grad
 from jaxfun.utils import split_linear_nonlinear_terms, split_time_derivative_terms
 
 
@@ -79,4 +79,26 @@ def test_split_linear_nonlinear_forcing_and_nonpolynomial() -> None:
     lin, nonlin = split_linear_nonlinear_terms(expr, u)
 
     assert sp.simplify(lin - (3 + 2 * u.diff(x))) == 0
+    assert sp.simplify(nonlin - sp.sin(u)) == 0
+
+
+def test_split_linear_nonlinear_div_grad_is_linear() -> None:
+    x = sp.Symbol("x")
+    u = sp.Function("u")(x)  # ty:ignore[call-non-callable]
+
+    expr = 2 * Div(Grad(u)) + u * u.diff(x)
+    lin, nonlin = split_linear_nonlinear_terms(expr, u)
+
+    assert sp.simplify(lin - 2 * Div(Grad(u))) == 0
+    assert sp.simplify(nonlin - u * u.diff(x)) == 0
+
+
+def test_split_linear_nonlinear_sin_is_nonlinear() -> None:
+    x = sp.Symbol("x")
+    u = sp.Function("u")(x)  # ty:ignore[call-non-callable]
+
+    expr = sp.sin(u) + u.diff(x)
+    lin, nonlin = split_linear_nonlinear_terms(expr, u)
+
+    assert sp.simplify(lin - u.diff(x)) == 0
     assert sp.simplify(nonlin - sp.sin(u)) == 0

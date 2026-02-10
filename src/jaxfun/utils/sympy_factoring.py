@@ -1,6 +1,32 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import sympy as sp
+
+if TYPE_CHECKING:
+    from jaxfun.galerkin import TrialFunction
+
+
+def get_time_independent(u: TrialFunction) -> TrialFunction:
+    if not u.transient:
+        return u
+    V = u.functionspace
+    name = u.name
+    return u.func(V, name, transient=False)
+
+
+def drop_time_argument(expr: sp.Expr, t: sp.Symbol) -> sp.Expr:
+    from jaxfun.galerkin.arguments import TrialFunction
+
+    expr = sp.sympify(expr)
+
+    repl = {}
+    for fapp in expr.atoms(TrialFunction):
+        if t in fapp.args:
+            repl[fapp] = get_time_independent(fapp)
+
+    return expr.xreplace(repl)
 
 
 def split_time_derivative_terms(
@@ -29,7 +55,7 @@ def split_time_derivative_terms(
         >>> u = sp.Function("u")(x, t)
         >>> expr = u.diff(t) - u.diff(x, 2)
         >>> split_time_derivative_terms(expr, t)
-        (Derivative(u(x, t), t), -Derivative(u(x, t), (x, 2)))
+        (Derivative(u(x, t), t), -Derivative(u(x), (x, 2)))
 
     Notes:
         If you represent a PDE residual as ``expr = LHS - RHS``, you can build
@@ -46,11 +72,14 @@ def split_time_derivative_terms(
         )
         (time_terms if has_time_derivative else other_terms).append(term)
 
-    return sp.Add(*time_terms), sp.Add(*other_terms)
+    lhs = sp.Add(*time_terms)
+    rhs = drop_time_argument(sp.Add(*other_terms), time_symbol)
+
+    return lhs, rhs
 
 
 def split_linear_nonlinear_terms(
-    expr: sp.Expr, dependent: sp.Expr
+    expr: sp.Expr, dependent: TrialFunction | sp.Function
 ) -> tuple[sp.Expr, sp.Expr]:
     """Split an expression into linear and nonlinear parts in ``dependent``.
 
@@ -78,8 +107,12 @@ def split_linear_nonlinear_terms(
         >>> u = sp.Function("u")(x, t)
         >>> expr = 2 * u.diff(x) + u * u.diff(x)
         >>> split_linear_nonlinear_terms(expr, u)
-        (2*Derivative(u(x, t), x), u(x, t)*Derivative(u(x, t), x))
+        (2*Derivative(u(x), x), u(x, t)*Derivative(u(x), x))
     """
+    from jaxfun.galerkin.arguments import TrialFunction
+
+    if isinstance(dependent, TrialFunction):
+        dependent = get_time_independent(dependent)
     expr = sp.expand(expr)
 
     generators = sorted(

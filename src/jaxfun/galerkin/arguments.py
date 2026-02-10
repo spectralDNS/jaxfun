@@ -318,6 +318,7 @@ class TrialFunction(ExpansionFunction):
 
     argument: int
     functionspace: TrialSpaceType
+    transient: bool
 
     def __new__(
         cls,
@@ -336,6 +337,12 @@ class TrialFunction(ExpansionFunction):
         obj.argument = 1
         obj.transient = transient
         return obj
+
+    @property
+    def c_names(self) -> list[str]:
+        coors = self.functionspace.system
+        args = list(coors._cartesian_xyz) + ([coors.base_time()] * self.transient)
+        return ", ".join([i.name for i in args])
 
     def doit(self, **hints: dict) -> Expr | AppliedUndef:
         fspace = self.functionspace

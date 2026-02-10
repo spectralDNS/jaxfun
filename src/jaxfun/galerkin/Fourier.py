@@ -109,17 +109,19 @@ class Fourier(OrthogonalSpace):
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
-        """Inverse FFT (possible truncation) to physical space.
+        """Inverse FFT (possible padding) to physical space.
 
         Args:
-            c: Coefficient array (possibly padded).
+            c: Coefficient array.
             kind: Integration strategy (unused placeholder).
-            N: Transform length (0 -> self.N).
+            N: Transform length. If N > len(c), pads coefficients with zeros in the
+                middle (high wavenumbers).
 
         Returns:
             Inverse FFT samples (complex), norm="forward".
         """
         n: int = self.N if N == 0 else N
+        assert n >= len(c), "Backward transform only supports padding, not truncation"
         if n > len(c):
             c = jnp.hstack(
                 (
@@ -152,8 +154,9 @@ class Fourier(OrthogonalSpace):
                 the output is truncated.
         """
         n: int = self.N if N == 0 else N
+        assert n <= len(c), "Forward transform only supports truncation, not padding"
         out = jnp.fft.fft(c, norm="forward")
-        if len(c) > n:  # truncation
+        if len(c) > n:
             return out[self.wavenumbers(n)]
         return out
 

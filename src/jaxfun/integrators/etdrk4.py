@@ -18,11 +18,5 @@ class ETDRK4(BaseIntegrator):
 
     name = "ETDRK4"
 
-    def _prepare(self) -> None:
-        raise NotImplementedError("ETDRK4 assembly not implemented yet")
-
-    def initial_state(self) -> Any:
-        raise NotImplementedError("ETDRK4 state initialization not implemented yet")
-
     def step(self, state: Any, t: float, dt: float) -> Any:
         raise NotImplementedError("ETDRK4 stepping not implemented yet")

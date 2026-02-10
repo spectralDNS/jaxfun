@@ -1,26 +1,38 @@
 from __future__ import annotations
 
-from typing import Any
+import jax
+import jax.numpy as jnp
+
+from jaxfun.typing import Array
 
 from .base import BaseIntegrator
 
 
 class BackwardEuler(BaseIntegrator):
-    """Backward Euler integrator (skeleton).
+    """Backward Euler integrator for first-order semi-discrete PDE systems.
 
-    This will typically require solving a linear (or nonlinear) system each step.
-    Currently only the symbolic preprocessing is implemented.
+    The weak form is assumed to define a first-order in time system of the form
+    (after spatial Galerkin discretization):
+
+        M * du/dt = L * u + b
+
+    where `M` is the mass matrix (from the time-derivative term), and `L` / `b`
+    come from the linear RHS terms.
+
+    The Backward Euler update is:
+
+        (M - dt*L) * u_{n+1} = M*u_n + dt*b
     """
 
     name = "BackwardEuler"
 
-    def _prepare(self) -> None:
-        raise NotImplementedError("BackwardEuler assembly not implemented yet")
+    @jax.jit(static_argnums=0)
+    def step(self, state: Array, t: float, dt: float) -> Array:
+        M, L, b = self._dense_linear_operators()
 
-    def initial_state(self) -> Any:
-        raise NotImplementedError(
-            "BackwardEuler state initialization not implemented yet"
-        )
+        rhs = M @ state
+        if b is not None:
+            rhs = rhs + dt * b
 
-    def step(self, state: Any, t: float, dt: float) -> Any:
-        raise NotImplementedError("BackwardEuler stepping not implemented yet")
+        A = M - dt * L
+        return jnp.linalg.solve(A, rhs)

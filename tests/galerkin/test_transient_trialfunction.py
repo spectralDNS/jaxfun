@@ -32,7 +32,7 @@ def test_trialfunction_splitting_kdv() -> None:
     t = F.system.base_time()
     (x,) = F.system.base_scalars()
 
-    u = TrialFunction(F, name="u", transient=True)
+    u = TrialFunction(F, name="u", transient=False)
     v = TestFunction(F, name="v")
 
     eta = Constant("eta", 1.0)
@@ -42,16 +42,19 @@ def test_trialfunction_splitting_kdv() -> None:
     eq = v * kdv
     lhs, rhs = split_time_derivative_terms(eq, t)
 
-    exp_lhs = v * u.diff(t)
-    exp_rhs = drop_time_argument(v * eta * u * u.diff(x) + v * mu**2 * u.diff(x, 3), t)
-    assert sp.simplify(lhs - exp_lhs) == 0
-    assert sp.simplify(rhs - exp_rhs) == 0
+    assert any(a == t for a in lhs.atoms())
+    assert not any(a == t for a in rhs.atoms())
+
+    u_ind = TrialFunction(F, name="u", transient=False)
+    exp_rhs = v * eta * u_ind * u_ind.diff(x) + v * mu**2 * u_ind.diff(x, 3)
+    assert lhs - v * u.diff(t) == 0
+    assert rhs - exp_rhs == 0
 
     linear_rhs, nonlinear_rhs = split_linear_nonlinear_terms(rhs, u)
     exp_linear_rhs = drop_time_argument(v * mu**2 * u.diff(x, 3), t)
     exp_nonlinear_rhs = drop_time_argument(v * eta * u * u.diff(x), t)
-    assert sp.simplify(linear_rhs - exp_linear_rhs) == 0
-    assert sp.simplify(nonlinear_rhs - exp_nonlinear_rhs) == 0
+    assert linear_rhs - exp_linear_rhs == 0
+    assert nonlinear_rhs - exp_nonlinear_rhs == 0
 
 
 def test_trialfunction_splitting_zk() -> None:
@@ -75,16 +78,16 @@ def test_trialfunction_splitting_zk() -> None:
     assert any(a == t for a in lhs.atoms())
     assert not any(a == t for a in rhs.atoms())
 
-    assert sp.simplify(lhs - v * u_t) == 0
+    assert lhs - v * u_t == 0
     exp_rhs = drop_time_argument(v * nonlinear_u + v_laplace_u, t)
-    assert sp.simplify(rhs - exp_rhs) == 0
+    assert rhs - exp_rhs == 0
 
     linear_rhs, nonlinear_rhs = split_linear_nonlinear_terms(rhs, u)
     exp_linear_rhs = drop_time_argument(v_laplace_u, t)
     exp_nonlinear_rhs = drop_time_argument(v * nonlinear_u, t)
 
-    assert sp.simplify(linear_rhs - exp_linear_rhs) == 0
-    assert sp.simplify(nonlinear_rhs - exp_nonlinear_rhs) == 0
+    assert linear_rhs - exp_linear_rhs == 0
+    assert nonlinear_rhs - exp_nonlinear_rhs == 0
 
 
 if __name__ == "__main__":

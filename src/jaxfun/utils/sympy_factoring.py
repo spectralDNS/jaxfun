@@ -69,66 +69,75 @@ def split_linear_nonlinear_terms(
         dependent = get_time_independent(dependent)
     expr = sp.expand(expr)
 
-    def is_linear_in_dependent(node: sp.Basic) -> bool:
-        node = sp.sympify(node)
-
-        if not node.has(dependent):
-            return True
-        if node == dependent:
-            return True
-
-        if isinstance(node, sp.Add):
-            return all(is_linear_in_dependent(arg) for arg in node.args)
-
-        if isinstance(node, sp.Mul):
-            dependent_args = [arg for arg in node.args if arg.has(dependent)]
-            if not dependent_args:
-                return True
-            if len(dependent_args) > 1:
-                return False
-            return is_linear_in_dependent(dependent_args[0])
-
-        if isinstance(node, sp.Pow):
-            base, exp = node.as_base_exp()
-            if not base.has(dependent):
-                return True
-            if exp.is_number:
-                if exp == 1:
-                    return is_linear_in_dependent(base)
-                if exp == 0:
-                    return True
-            return False
-
-        if isinstance(node, sp.Derivative):
-            return is_linear_in_dependent(node.expr)
-
-        if len(node.args) == 1 and node.func.__name__ in _LINEAR_UNARY:
-            return is_linear_in_dependent(node.args[0])
-
-        if len(node.args) == 2 and node.func.__name__ in _LINEAR_BINARY:
-            a0, a1 = node.args
-            has0 = a0.has(dependent)
-            has1 = a1.has(dependent)
-            if has0 and has1:
-                return False
-            if has0:
-                return is_linear_in_dependent(a0)
-            if has1:
-                return is_linear_in_dependent(a1)
-            return True
-
-        if isinstance(node, sp.Function):
-            return False
-
-        return False
-
     linear_terms: list[sp.Expr] = []
     nonlinear_terms: list[sp.Expr] = []
 
     for term in sp.Add.make_args(expr):
-        if is_linear_in_dependent(term):
+        if is_linear_in_dependent(term, dependent):
             linear_terms.append(term)
         else:
             nonlinear_terms.append(term)
 
     return sp.Add(*linear_terms), sp.Add(*nonlinear_terms)
+
+
+def is_linear_add(node: sp.Add, dependent: TrialFunction | sp.Function) -> bool:
+    return all(is_linear_in_dependent(arg, dependent) for arg in node.args)
+
+
+def is_linear_mul(node: sp.Mul, dependent: TrialFunction | sp.Function) -> bool:
+    dependent_factors = [a for a in node.args if a.has(dependent)]
+    if len(dependent_factors) == 1:
+        return is_linear_in_dependent(dependent_factors[0], dependent)
+    return not len(dependent_factors) > 1
+
+
+def is_linear_pow(node: sp.Pow, dependent: TrialFunction | sp.Function) -> bool:
+    base, exp = node.as_base_exp()
+    if not base.has(dependent):
+        return True
+    if exp.is_number:
+        if exp == 1:
+            return is_linear_in_dependent(base, dependent)
+        if exp == 0:
+            return True
+    return False
+
+
+def is_linear_in_dependent(
+    node: sp.Basic, dependent: TrialFunction | sp.Function
+) -> bool:
+    node = sp.sympify(node)
+
+    if not node.has(dependent) or node == dependent:
+        return True
+
+    match node:
+        case sp.Add():
+            return is_linear_add(node, dependent)
+        case sp.Mul():
+            return is_linear_mul(node, dependent)
+        case sp.Pow():
+            return is_linear_pow(node, dependent)
+        case sp.Derivative():
+            return is_linear_in_dependent(node.expr, dependent)
+        case _:
+            pass
+
+    if len(node.args) == 1 and node.func.__name__ in _LINEAR_UNARY:
+        return is_linear_in_dependent(node.args[0], dependent)
+    if len(node.args) == 2 and node.func.__name__ in _LINEAR_BINARY:
+        a0, a1 = node.args
+        has0 = a0.has(dependent)
+        has1 = a1.has(dependent)
+        if has0 and has1:
+            return False
+        if has0:
+            return is_linear_in_dependent(a0, dependent)
+        if has1:
+            return is_linear_in_dependent(a1, dependent)
+        return True
+
+    if isinstance(node, sp.Function):  # Preserve check for later impl.
+        return False
+    return False

@@ -104,7 +104,7 @@ class RWFLinear(nnx.Module):
         use_bias: bool = True,
         dtype: Dtype | None = None,
         param_dtype: Dtype = jnp.float32,
-        precision: PrecisionLike = None,
+        precision: PrecisionLike = jax.lax.Precision.HIGHEST,
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,
         dot_general: DotGeneralT = lax.dot_general,
@@ -438,12 +438,12 @@ class PIModifiedBottleneck(nnx.Module):
         hidden_dim: int,
         output_dim: int,
         nonlinearity: float,
-        act_fun: Activation = nnx.tanh,
+        act_fun: Activation = nnx.swish,
         *,
         rngs: nnx.Rngs,
         name: str = "PIModifiedBottleneck",
     ) -> None:
-        self.alpha: nnx.Param[float] = nnx.Param(nonlinearity)
+        self.alpha: nnx.Param[Array] = nnx.Param(jnp.array(nonlinearity))
         # self.alpha = nnx.Param(jnp.array(nonlinearity).reshape((1,)))
 
         self.layer1 = RWFLinear(
@@ -471,7 +471,7 @@ class PIModifiedBottleneck(nnx.Module):
             Mixed output tensor (N, output_dim).
         """
         identity = x
-        alpha = self.alpha.get_value()
+        alpha = self.alpha[...]
 
         x = self.act_fun(self.layer1(x))
         x = x * u + (1 - x) * v

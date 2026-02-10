@@ -32,7 +32,7 @@ def test_trialfunction_splitting_kdv() -> None:
     t = F.system.base_time()
     (x,) = F.system.base_scalars()
 
-    u = TrialFunction(F, name="u", transient=False)
+    u = TrialFunction(F, name="u", transient=True)
     v = TestFunction(F, name="v")
 
     eta = Constant("eta", 1.0)

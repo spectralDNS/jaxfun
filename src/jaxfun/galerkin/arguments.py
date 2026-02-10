@@ -234,7 +234,7 @@ class ExpansionFunction(BaseFunction):
     own_name: str
 
     @property
-    def c_names(self) -> list[str]:
+    def c_names(self) -> str:
         return ", ".join([i.name for i in self.functionspace.system._cartesian_xyz])
 
     def __str__(self) -> str:
@@ -339,10 +339,9 @@ class TrialFunction(ExpansionFunction):
         return obj
 
     @property
-    def c_names(self) -> list[str]:
-        coors = self.functionspace.system
-        args = list(coors._cartesian_xyz) + ([coors.base_time()] * self.transient)
-        return ", ".join([i.name for i in args])
+    def c_names(self) -> str:
+        t = self.functionspace.system.base_time().name
+        return super().c_names + f", {t}" * self.transient
 
     def doit(self, **hints: dict) -> Expr | AppliedUndef:
         fspace = self.functionspace

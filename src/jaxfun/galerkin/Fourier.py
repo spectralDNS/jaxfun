@@ -1,6 +1,5 @@
 import jax
 import jax.numpy as jnp
-import numpy as np
 import sympy as sp
 from jax import Array
 from jax.experimental import sparse
@@ -108,30 +107,8 @@ class Fourier(OrthogonalSpace):
         """
         return jax.lax.exp(1j * self.wavenumbers() * X)
 
-    # Cannot jax.jit in case of padding
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
-        """Inverse (physical) transform with optional zero-padding.
-
-        Pads coefficients to length n (> N) before calling _backward.
-
-        Args:
-            c: Coefficient array (length <= n).
-            kind: Integration strategy (unused, kept uniform with API).
-            N: Target number of modes for transform length (0 -> self.N).
-
-        Returns:
-            Physical space samples (complex values).
-        """
-        n: int = self.N if N == 0 else N
-        if n > self.N:
-            c0 = np.zeros(n, dtype=c.dtype)
-            k = self.wavenumbers()
-            c0[k] = c
-            c = jnp.array(c0)
-        return self._backward(c, kind, n)
-
     @jax.jit(static_argnums=(0, 2, 3))
-    def _backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Inverse FFT (possible truncation) to physical space.
 
         Args:
@@ -143,9 +120,14 @@ class Fourier(OrthogonalSpace):
             Inverse FFT samples (complex), norm="forward".
         """
         n: int = self.N if N == 0 else N
-        if n < len(c):  # truncation
-            k = self.wavenumbers(n)
-            return jnp.fft.ifft(c[k], norm="forward")
+        if n > len(c):
+            c = jnp.hstack(
+                (
+                    c[: len(c) // 2],
+                    jnp.zeros(n - len(c), dtype=c.dtype),
+                    c[len(c) // 2 :],
+                )
+            )
         return jnp.fft.ifft(c, norm="forward")
 
     @jax.jit(static_argnums=0)
@@ -160,10 +142,20 @@ class Fourier(OrthogonalSpace):
         """
         return jnp.fft.fft(c, norm="forward") * 2 * jnp.pi / self.domain_factor
 
-    @jax.jit(static_argnums=0)
-    def forward(self, c: Array) -> Array:
-        """Forward FFT (physical -> spectral coefficients)."""
-        return jnp.fft.fft(c, norm="forward")
+    @jax.jit(static_argnums=(0, 2))
+    def forward(self, c: Array, N: int = 0) -> Array:
+        """Forward FFT (physical -> spectral coefficients).
+
+        Args:
+            c: Physical array.
+            N: Target number of modes for transform length If N < len(c) then
+                the output is truncated.
+        """
+        n: int = self.N if N == 0 else N
+        out = jnp.fft.fft(c, norm="forward")
+        if len(c) > n:  # truncation
+            return out[self.wavenumbers(n)]
+        return out
 
     @property
     def reference_domain(self) -> Domain:

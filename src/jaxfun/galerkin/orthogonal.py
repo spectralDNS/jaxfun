@@ -131,14 +131,8 @@ class OrthogonalSpace(BaseSpace):
         """Return k-th derivative Vandermonde (automatic Jacobian stack)."""
         return jacn(self.eval_basis_functions, k)(X)
 
-    # backward is wrapped because padding may require non-jitable code
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
-        """Backward transform (coefficients -> samples) via evaluate."""
-        return self._backward(c, kind, N)
-
-    @jax.jit(static_argnums=(0, 2, 3))
-    def _backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Implementation of backward (allows subclass override)."""
         xj = self.mesh(kind=kind, N=N)
         return self.evaluate(self.map_reference_domain(xj), c)

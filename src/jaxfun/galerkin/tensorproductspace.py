@@ -17,7 +17,6 @@ from jaxfun.coordinates import CoordSys
 from jaxfun.utils.common import eliminate_near_zeros, jit_vmap, lambdify
 
 from .composite import BCGeneric, BoundaryConditions, Composite, DirectSum
-from .Fourier import Fourier
 from .orthogonal import OrthogonalSpace
 
 tensor_product_symbol = "\u2297"
@@ -283,60 +282,26 @@ class TensorProductSpace:
             paddedspaces, system=self.system, name=self.name + "p"
         )
 
-    def backward(
-        self, c: Array, kind: str = "quadrature", N: tuple[int, ...] | None = None
-    ) -> Array:
-        """Transform coefficients -> samples (optional padding).
-
-        Fourier axes require special padding handling (FFT index order).
-        """
-        dim: int = len(self)
-        has_fft = jnp.any(
-            jnp.array(
-                [isinstance(space.orthogonal, Fourier) for space in self.basespaces]
-            )
-        )
-        if (
-            N is not None
-            and has_fft
-            and jnp.any(
-                jnp.array(
-                    [n > space.N for n, space in zip(N, self.basespaces, strict=False)]
-                )
-            ).item()
-        ):
-            shape = list(c.shape)
-            for ax, space in enumerate(self.basespaces):
-                if isinstance(space, Fourier) and N[ax] > space.N:
-                    shape[ax] = N[ax]
-            c0 = np.zeros(shape, dtype=c.dtype)
-            sl = [slice(0, c.shape[ax]) for ax in range(dim)]
-            for ax, space in enumerate(self.basespaces):
-                if isinstance(space, Fourier) and N[ax] > space.N:
-                    sl[ax] = space.wavenumbers()
-                c0[tuple(sl)] = c
-            c = jnp.array(c0)
-        return self._backward(c, kind, N)
-
     @jax.jit(static_argnums=(0, 2, 3))
-    def _backward(
+    def backward(
         self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
     ) -> Array:
-        """Jitted internal backward transform (no padding logic)."""
+        """Jitted backward transform with optional padding."""
         dim: int = len(self)
         if dim == 2:
             for ax in range(dim):
                 axi: int = dim - 1 - ax
                 backward = partial(
-                    self.basespaces[ax]._backward,
+                    self.basespaces[ax].backward,
                     kind=kind,
                     N=self.basespaces[ax].num_quad_points if N is None else N[ax],
                 )
                 c = jax.vmap(backward, in_axes=axi, out_axes=axi)(c)
+
         else:
             for ax in range(dim):
                 backward = partial(
-                    self.basespaces[ax]._backward,
+                    self.basespaces[ax].backward,
                     kind=kind,
                     N=self.basespaces[ax].num_quad_points if N is None else N[ax],
                 )
@@ -374,9 +339,9 @@ class TensorProductSpace:
                 )(u)
         return u
 
-    @jax.jit(static_argnums=0)
-    def forward(self, u: Array) -> Array:
-        """Forward transform (samples -> coefficients) per axis."""
+    @jax.jit(static_argnums=(0, 2))
+    def forward(self, u: Array, N: tuple[int, ...] | None = None) -> Array:
+        """Forward transform with optional truncation."""
         dim: int = len(self)
         if dim == 2:
             for ax in range(dim):

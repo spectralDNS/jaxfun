@@ -309,13 +309,16 @@ class BaseIntegrator(ABC, nnx.Module):
         _, _, nsteps = self.resolve_time(dt, steps=steps, trange=trange)
         if u_hat is None:
             u_hat = self.initial_coefficients()
+        if nsteps <= 0:
+            return u_hat
 
         def inner_n_steps(i: int, u_hat: Array) -> Array:
             u_hat = self.step(u_hat, dt)
             return u_hat
 
-        n_batches = 100
+        n_batches = min(100, nsteps)
         batch_len = nsteps // n_batches
+        remainder = nsteps - n_batches * batch_len
         iterator = (
             tqdm.trange(
                 n_batches, desc="Integrating", unit="step", unit_scale=batch_len
@@ -328,154 +331,7 @@ class BaseIntegrator(ABC, nnx.Module):
             if jnp.isnan(u_hat).any() or jnp.isinf(u_hat).any():
                 break
 
-        u_hat = jax.lax.fori_loop(0, nsteps % batch_len, inner_n_steps, u_hat)
+        if remainder:
+            u_hat = jax.lax.fori_loop(0, remainder, inner_n_steps, u_hat)
 
         return u_hat
-
-
-class RK4(BaseIntegrator):
-    """Regular 4th order Runge-Kutta integrator."""
-
-    def __init__(
-        self,
-        V: OrthogonalSpace,
-        equation: sp.Expr,
-        u0: sp.Expr | Array | None = None,
-        *,
-        time: tuple[float, float] | None = None,
-        initial: sp.Expr | Array | None = None,
-        update: Any | None = None,
-        **params: Any,
-    ):
-        super().__init__(
-            V,
-            equation,
-            u0,
-            time=time,
-            initial=initial,
-            sparse=bool(params.get("sparse", False)),
-            sparse_tol=int(params.get("sparse_tol", 1000)),
-        )
-        self.params = dict(params)
-        self.update_fn = update
-        self._dt: float | None = None
-
-    def setup(self, dt: float) -> None:
-        self.params["dt"] = dt
-        self._dt = dt
-
-    @nnx.jit
-    def step(self, u_hat: Array, dt: float) -> Array:
-        k1 = self.total_rhs(u_hat)
-        k2 = self.total_rhs(u_hat + 0.5 * dt * k1)
-        k3 = self.total_rhs(u_hat + 0.5 * dt * k2)
-        k4 = self.total_rhs(u_hat + dt * k3)
-        return u_hat + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-
-
-class BackwardEuler(BaseIntegrator):
-    """First-order implicit Euler for linear terms (IMEX for nonlinear terms)."""
-
-    def __init__(
-        self,
-        V: OrthogonalSpace,
-        equation: sp.Expr,
-        u0: sp.Expr | Array | None = None,
-        *,
-        time: tuple[float, float] | None = None,
-        initial: sp.Expr | Array | None = None,
-        **params: Any,
-    ):
-        super().__init__(
-            V,
-            equation,
-            u0,
-            time=time,
-            initial=initial,
-            sparse=bool(params.get("sparse", False)),
-            sparse_tol=int(params.get("sparse_tol", 1000)),
-        )
-        self.params = dict(params)
-        self._dt: float | None = None
-        self._system_diag = nnx.data(None)
-        self._system_matrix = nnx.data(None)
-
-    def setup(self, dt: float) -> None:
-        self.params["dt"] = dt
-        self._dt = dt
-        self._system_diag = nnx.data(None)
-        self._system_matrix = nnx.data(None)
-        if self.linear_operator is None:
-            return
-
-        if self.mass_diag is not None and self.linear_diag is not None:
-            self._system_diag = nnx.data(self.mass_diag - dt * self.linear_diag)
-            return
-
-        mass_mat = (
-            _operator_to_dense(self.mass_operator)
-            if self.mass_operator is not None
-            else jnp.diag(self.mass_diag.reshape((-1,)))
-        )
-        linear_mat = _operator_to_dense(self.linear_operator)
-        self._system_matrix = nnx.data(mass_mat - dt * linear_mat)
-
-    def step(self, u_hat: Array, dt: float) -> Array:
-        rhs = self.apply_mass(u_hat)
-        if self.linear_forcing is not None:
-            rhs = rhs + dt * jnp.asarray(self.linear_forcing)
-        if self.has_nonlinear:
-            rhs = rhs + dt * self.apply_mass(self.nonlinear_rhs(u_hat))
-
-        if self._system_diag is not None:
-            return rhs / self._system_diag
-        if self._system_matrix is not None:
-            return jnp.linalg.solve(self._system_matrix, rhs.reshape((-1,))).reshape(
-                rhs.shape
-            )
-        return self.apply_mass_inverse(rhs)
-
-
-if __name__ == "__main__":
-    import jax
-
-    jax.config.update("jax_enable_x64", True)
-
-    import jax.numpy as jnp
-    import matplotlib.pyplot as plt
-
-    from jaxfun.galerkin.Fourier import Fourier
-    from jaxfun.operators import Constant
-
-    N = 512
-    V = Fourier(N)
-    (x,) = V.system.base_scalars()
-    t = V.system.base_time()
-    u = TrialFunction(V, name="u", transient=True)
-    v = TestFunction(V, name="v")
-    u0 = sp.cos(sp.pi * x)
-    A = 5
-    B = 4
-    u0 = (
-        3 * A**2 / sp.cosh(0.5 * A * (x - sp.pi + 2)) ** 2
-        + 3 * B**2 / sp.cosh(0.5 * B * (x - sp.pi + 1)) ** 2
-    )
-    mu = Constant("mu", sp.Rational(11, 500))
-    mu = Constant("mu", sp.S.One)
-    equation = v * (u.diff(t) + u * u.diff(x) + mu**2 * u.diff(x, 3))
-
-    integrator = RK4(V, equation, u0, sparse=True)
-    uh = project1D(u0, V)
-
-    dt = 0.00001
-    dt = 0.01 / N**2
-    trange = (0.0, 0.006)
-    uh_final = integrator.solve(dt=dt, trange=trange, u_hat=uh)
-    u_final = V.backward(uh_final)
-    print(u_final)
-    plt.plot(V.mesh(), u_final.real)
-    plt.title(f"RK4 solution at t={trange[1]:.3f}")
-    plt.xlabel("x")
-    plt.ylabel("u")
-    plt.grid()
-    plt.show()

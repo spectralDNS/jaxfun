@@ -648,6 +648,10 @@ class SpectralModule(BaseModule):
         """Return spatial dimensionality of the basespace."""
         return self.space.dims
 
+    def set_kernel(self, kernel: Array) -> None:
+        """Set kernel parameters directly."""
+        self.kernel = nnx.Param(kernel)
+
     def __call__(self, x: Array) -> Array:
         """Evaluate spectral expansion at coordinates.
 

@@ -55,13 +55,13 @@ u_num = V.backward(uhat_T).real
 u_ex = sp.sin(x - c.val * T)
 u_ex_j = lambdify(x, u_ex)(xj)
 
-rel_error = jnp.linalg.norm(u_num - u_ex_j) / jnp.linalg.norm(u_ex_j)
+error = jnp.linalg.norm(u_num - u_ex_j)
 if "PYTEST" in os.environ:
     # Backward Euler is diffusive for pure advection; keep tolerance loose.
-    assert rel_error < 0.35, rel_error
+    assert error < 0.35, error
     sys.exit(1)
 
-print("Relative L2 error =", float(rel_error))
+print("L2 error =", float(error))
 plt.plot(xj, lambdify(x, u0)(xj), "--k", label="initial")
 plt.plot(xj, u_ex_j, "r", label="exact")
 plt.plot(xj, u_num, "b", label="backward euler")

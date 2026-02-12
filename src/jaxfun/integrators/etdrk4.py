@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 
 import jax.numpy as jnp
 import jax.scipy.linalg as jsp_linalg
@@ -57,6 +57,10 @@ def _phi_matrices(z: Array) -> tuple[Array, Array, Array]:
     return phi1, phi2, phi3
 
 
+def _apply_etd_operator(op: Array, u: Array, is_diag: bool) -> Array:
+    return op * u if is_diag else op @ u
+
+
 class ETDRK4(BaseIntegrator):
     """Fourth-order exponential time differencing for semilinear systems."""
 
@@ -81,42 +85,7 @@ class ETDRK4(BaseIntegrator):
         )
         self.params = dict(params)
         self._dt: float | None = None
-
-        # Diagonal-mode coefficients.
-        self._E_diag = nnx.data(None)
-        self._E2_diag = nnx.data(None)
-        self._Q_diag = nnx.data(None)
-        self._f1_diag = nnx.data(None)
-        self._f2_diag = nnx.data(None)
-        self._f3_diag = nnx.data(None)
-
-        # Matrix-mode coefficients.
-        self._E_mat = nnx.data(None)
-        self._E2_mat = nnx.data(None)
-        self._Q_mat = nnx.data(None)
-        self._f1_mat = nnx.data(None)
-        self._f2_mat = nnx.data(None)
-        self._f3_mat = nnx.data(None)
-
-        self._forcing_rhs = nnx.data(None)
-
-    def setup(self, dt: float) -> None:
-        self.params["dt"] = dt
-        self._dt = dt
-
-        self._E_diag = nnx.data(None)
-        self._E2_diag = nnx.data(None)
-        self._Q_diag = nnx.data(None)
-        self._f1_diag = nnx.data(None)
-        self._f2_diag = nnx.data(None)
-        self._f3_diag = nnx.data(None)
-
-        self._E_mat = nnx.data(None)
-        self._E2_mat = nnx.data(None)
-        self._Q_mat = nnx.data(None)
-        self._f1_mat = nnx.data(None)
-        self._f2_mat = nnx.data(None)
-        self._f3_mat = nnx.data(None)
+        # self._coeffs = nnx.data({})
 
         zero = jnp.zeros(self.functionspace.num_dofs)
         forcing_rhs = (
@@ -126,51 +95,52 @@ class ETDRK4(BaseIntegrator):
         )
         self._forcing_rhs = nnx.data(forcing_rhs)
 
-        if self.mass_diag is not None and (
-            self.linear_operator is None or self.linear_diag is not None
-        ):
+    def setup(self, dt: float) -> None:
+        self.params["dt"] = dt
+        self._dt = dt
+
+        self.is_diag = nnx.static(
+            self.mass_diag is not None
+            and (self.linear_operator is None or self.linear_diag is not None)
+        )
+
+        if self.is_diag:
             Ldiag = (
                 jnp.zeros_like(self.mass_diag)
                 if self.linear_operator is None
                 else self.linear_diag / self.mass_diag
             )
             E, E2, Q, f1, f2, f3 = _etdrk4_diag_coeffs(Ldiag, dt)
-            self._E_diag = nnx.data(E)
-            self._E2_diag = nnx.data(E2)
-            self._Q_diag = nnx.data(Q)
-            self._f1_diag = nnx.data(f1)
-            self._f2_diag = nnx.data(f2)
-            self._f3_diag = nnx.data(f3)
-            return
-
-        if self.linear_operator is None:
-            Lmat = jnp.zeros((zero.size, zero.size), dtype=zero.dtype)
         else:
-            A = _operator_to_dense(self.linear_operator)
-            if self.mass_diag is not None:
-                m = self.mass_diag.reshape((-1,))
-                Lmat = A / m[:, None]
-            elif self.mass_operator is not None:
-                M = _operator_to_dense(self.mass_operator)
-                Lmat = jnp.linalg.solve(M, A)
+            zero = jnp.zeros(self.functionspace.num_dofs)
+            if self.linear_operator is None:
+                Lmat = jnp.zeros((zero.size, zero.size), dtype=zero.dtype)
             else:
-                Lmat = A
+                A = _operator_to_dense(self.linear_operator)
+                if self.mass_diag is not None:
+                    m = self.mass_diag.reshape((-1,))
+                    Lmat = A / m[:, None]
+                elif self.mass_operator is not None:
+                    M = _operator_to_dense(self.mass_operator)
+                    Lmat = cast(Array, jnp.linalg.solve(M, A))
+                else:
+                    Lmat = A
 
-        z = dt * Lmat
-        E = jsp_linalg.expm(z)
-        E2 = jsp_linalg.expm(z / 2)
-        phi1_h2, _, _ = _phi_matrices(z / 2)
-        phi1, phi2, phi3 = _phi_matrices(z)
-        f1 = phi1 - 3 * phi2 + 4 * phi3
-        f2 = phi2 - 2 * phi3
-        f3 = phi3
+            z = dt * Lmat
+            E = cast(Array, jsp_linalg.expm(z))
+            E2 = cast(Array, jsp_linalg.expm(z / 2))
+            Q, _, _ = _phi_matrices(z / 2)
+            phi1, phi2, phi3 = _phi_matrices(z)
+            f1 = phi1 - 3 * phi2 + 4 * phi3
+            f2 = phi2 - 2 * phi3
+            f3 = phi3
 
-        self._E_mat = nnx.data(E)
-        self._E2_mat = nnx.data(E2)
-        self._Q_mat = nnx.data(phi1_h2)
-        self._f1_mat = nnx.data(f1)
-        self._f2_mat = nnx.data(f2)
-        self._f3_mat = nnx.data(f3)
+        self.E = nnx.data(E)
+        self.E2 = nnx.data(E2)
+        self.Q = nnx.data(Q)
+        self.f1 = nnx.data(f1)
+        self.f2 = nnx.data(f2)
+        self.f3 = nnx.data(f3)
 
     def _N(self, u_hat: Array) -> Array:
         nval = (
@@ -179,48 +149,30 @@ class ETDRK4(BaseIntegrator):
         return nval + self._forcing_rhs
 
     def step(self, u_hat: Array, dt: float) -> Array:
-        if self._dt is None or abs(self._dt - dt) > 1e-12:
-            self.setup(dt)
+        shape = u_hat.shape
 
-        if self._E_diag is not None:
-            n1 = self._N(u_hat)
-            a = self._E2_diag * u_hat + dt * self._Q_diag * n1
-            n2 = self._N(a)
-            b = self._E2_diag * u_hat + dt * self._Q_diag * n2
-            n3 = self._N(b)
-            c = self._E2_diag * a + dt * self._Q_diag * (2 * n3 - n1)
-            n4 = self._N(c)
-            return self._E_diag * u_hat + dt * (
-                self._f1_diag * n1 + 2 * self._f2_diag * (n2 + n3) + self._f3_diag * n4
-            )
+        def to_state(x: Array) -> Array:
+            return x if self.is_diag else x.reshape((-1,))
 
-        if self._E_mat is not None:
-            shape = u_hat.shape
-            u0 = u_hat.reshape((-1,))
-            n1 = self._N(u_hat).reshape((-1,))
+        def from_state(x: Array) -> Array:
+            return x if self.is_diag else x.reshape(shape)
 
-            a = (self._E2_mat @ u0 + dt * (self._Q_mat @ n1)).reshape(shape)
-            n2 = self._N(a).reshape((-1,))
+        def apply(op: Array, u: Array) -> Array:
+            return _apply_etd_operator(op, u, self.is_diag)
 
-            b = (self._E2_mat @ u0 + dt * (self._Q_mat @ n2)).reshape(shape)
-            n3 = self._N(b).reshape((-1,))
+        u0 = to_state(u_hat)
+        n1 = to_state(self._N(from_state(u0)))
+        a = apply(self.E2, u0) + dt * apply(self.Q, n1)
+        n2 = to_state(self._N(from_state(a)))
+        b = apply(self.E2, u0) + dt * apply(self.Q, n2)
+        n3 = to_state(self._N(from_state(b)))
+        c = apply(self.E2, a) + dt * apply(self.Q, 2 * n3 - n1)
+        n4 = to_state(self._N(from_state(c)))
 
-            c = (
-                self._E2_mat @ a.reshape((-1,)) + dt * (self._Q_mat @ (2 * n3 - n1))
-            ).reshape(shape)
-            n4 = self._N(c).reshape((-1,))
-
-            un = self._E_mat @ u0 + dt * (
-                self._f1_mat @ n1 + 2 * (self._f2_mat @ (n2 + n3)) + self._f3_mat @ n4
-            )
-            return un.reshape(shape)
-
-        # Safety fallback (should not be hit): explicit RK4 on full RHS.
-        k1 = self.total_rhs(u_hat)
-        k2 = self.total_rhs(u_hat + 0.5 * dt * k1)
-        k3 = self.total_rhs(u_hat + 0.5 * dt * k2)
-        k4 = self.total_rhs(u_hat + dt * k3)
-        return u_hat + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+        un = apply(self.E, u0) + dt * (
+            apply(self.f1, n1) + 2 * apply(self.f2, n2 + n3) + apply(self.f3, n4)
+        )
+        return from_state(un)
 
     def solve_with_frames(
         self,

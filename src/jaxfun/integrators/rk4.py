@@ -3,6 +3,7 @@ from typing import Any
 import sympy as sp
 from flax import nnx
 
+from jaxfun.galerkin import Composite, DirectSum
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.typing import Array
 
@@ -14,7 +15,7 @@ class RK4(BaseIntegrator):
 
     def __init__(
         self,
-        V: OrthogonalSpace,
+        V: OrthogonalSpace | Composite | DirectSum,
         equation: sp.Expr,
         u0: sp.Expr | Array | None = None,
         *,

@@ -392,6 +392,8 @@ class DirectSum:
         num_dofs: Free DOFs (from Composite part).
     """
 
+    is_transient = False
+
     def __init__(self, a: Composite | OrthogonalSpace, b: BCGeneric) -> None:
         assert isinstance(b, BCGeneric)
         self.basespaces: tuple[Composite, BCGeneric] = (a, b)
@@ -429,9 +431,17 @@ class DirectSum:
         return self.basespaces[1].bnd_vals()
 
     @property
+    def rank(self) -> int:
+        return self.basespaces[0].rank
+
+    @property
     def dim(self) -> int:
         """Return total dimension (homogeneous + boundary)."""
         return self.basespaces[0].dim + self.basespaces[1].dim
+
+    @property
+    def dims(self) -> int:
+        return self.basespaces[0].dim
 
     @property
     def num_dofs(self) -> int:
@@ -451,6 +461,10 @@ class DirectSum:
         return self.basespaces[0].backward(c, kind, N) + self.basespaces[1].backward(
             self.bnd_vals(), kind, N
         )
+
+    def forward(self, u: Array) -> Array:
+        """Project physical samples u -> direct-sum coefficients."""
+        raise NotImplementedError("Forward transform not implemented for DirectSum.")
 
 
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:

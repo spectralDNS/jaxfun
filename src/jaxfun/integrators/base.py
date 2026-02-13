@@ -8,7 +8,7 @@ import tqdm
 from flax import nnx
 from jax.experimental.sparse import BCOO
 
-from jaxfun.galerkin import TestFunction, TrialFunction
+from jaxfun.galerkin import Composite, DirectSum, TestFunction, TrialFunction
 from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import inner, project1D
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
@@ -178,7 +178,7 @@ def _assemble_mass_setup(
 class BaseIntegrator(ABC, nnx.Module):
     def __init__(
         self,
-        V: OrthogonalSpace,
+        V: OrthogonalSpace | DirectSum | Composite,
         equation: sp.Expr,
         u0: sp.Expr | Array | None = None,
         *,
@@ -275,6 +275,8 @@ class BaseIntegrator(ABC, nnx.Module):
 
     @nnx.jit
     def nonlinear_rhs(self, uh: Array) -> Array:
+        # This method is impure as we are altering the kernel outside with wrong trace
+        # level. This is quite hacky, and should be improved.
         self.module.set_kernel(uh.reshape(1, -1))
         return self.functionspace.forward(self.residual.evaluate(self.module))
 

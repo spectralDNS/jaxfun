@@ -21,7 +21,7 @@ from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
 from jaxfun.coordinates import BaseTime, CoordSys
-from jaxfun.galerkin import Chebyshev
+from jaxfun.galerkin import Chebyshev, DirectSum
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.galerkin.tensorproductspace import (
     TensorProductSpace,
@@ -913,7 +913,11 @@ class FlaxFunction(Function):
     """
 
     functionspace: (
-        NNSpace | OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+        NNSpace
+        | OrthogonalSpace
+        | TensorProductSpace
+        | VectorTensorProductSpace
+        | DirectSum
     )
     t: BaseTime
     module: BaseModule
@@ -924,7 +928,11 @@ class FlaxFunction(Function):
 
     def __new__(
         cls: type[Self],
-        V: NNSpace | OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace,
+        V: NNSpace
+        | OrthogonalSpace
+        | TensorProductSpace
+        | VectorTensorProductSpace
+        | DirectSum,
         name: str,
         *,
         module: BaseModule | None = None,

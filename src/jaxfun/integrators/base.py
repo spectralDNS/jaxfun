@@ -132,6 +132,49 @@ def _solve_operator(op: Any, rhs: Array) -> Array:
     return x.reshape(rhs.shape)
 
 
+def _split_operator_and_forcing(form: Any) -> tuple[Any | None, Any | None]:
+    if form is None:
+        return None, None
+    if isinstance(form, tuple):
+        if len(form) == 2:
+            return form[0], form[1]
+        return form, None
+    if isinstance(form, list | BCOO) or hasattr(form, "mat") or hasattr(form, "mats"):
+        return form, None
+
+    arr = jnp.asarray(form)
+    if arr.ndim <= 1:
+        return None, form
+    return form, None
+
+
+def _assemble_linear_setup(
+    expr: sp.Expr, sparse: bool, sparse_tol: int
+) -> tuple[Any | None, Any | None, Array | None]:
+    if sp.sympify(expr) == 0:
+        return None, None, None
+
+    linear_form = inner(expr, sparse=sparse, sparse_tol=sparse_tol)
+    linear_operator, linear_forcing = _split_operator_and_forcing(linear_form)
+    linear_diag = _diag_from_matrix(linear_operator)
+    return linear_operator, linear_forcing, linear_diag
+
+
+def _assemble_mass_setup(
+    V: Any, sparse: bool, sparse_tol: int
+) -> tuple[Any | None, Array | None]:
+    v = TestFunction(V)
+    u = TrialFunction(V)
+    mass_form = inner(v * u, sparse=sparse, sparse_tol=sparse_tol)
+    mass_operator, mass_forcing = _split_operator_and_forcing(mass_form)
+    if mass_forcing is not None:
+        raise NotImplementedError("Mass assembly returned forcing, unsupported for now")
+    mass_diag = _diag_from_matrix(mass_operator)
+    if mass_diag is not None:
+        return None, mass_diag
+    return mass_operator, mass_diag
+
+
 class BaseIntegrator(ABC, nnx.Module):
     def __init__(
         self,
@@ -173,55 +216,17 @@ class BaseIntegrator(ABC, nnx.Module):
         self.nonlinear_expr = replace_trial_with_flaxfunction(
             nonlinear, trial, flax_func
         )
-        # uh = project(u0, V)
         self.module = cast(SpectralModule, flax_func.module)
-        # self.module.kernel.set_value(uh.reshape(1, -1))
 
-        df = float(V.domain_factor)
-        norm_squared = V.norm_squared()
-        mass_operator: Any | None = None
-        mass_diag: Array | None = None
-        if norm_squared is not None:
-            mass_diag = jnp.asarray(norm_squared / df)
-        else:
-            mass_form = inner(
-                test * trial,
-                sparse=self.sparse,
-                sparse_tol=self.sparse_tol,
-            )
-            if isinstance(mass_form, tuple) and len(mass_form) == 2:
-                mass_operator = mass_form[0]
-            else:
-                mass_operator = mass_form
-            mass_diag = _diag_from_matrix(mass_operator)
+        mass_operator, mass_diag = _assemble_mass_setup(
+            V, sparse=self.sparse, sparse_tol=self.sparse_tol
+        )
         self.mass_operator = nnx.data(mass_operator)
         self.mass_diag = nnx.data(mass_diag)
 
-        linear_operator: Any | None = None
-        linear_forcing: Any | None = None
-        linear_diag: Array | None = None
-        if sp.sympify(linear) != 0:
-            linear_form = inner(
-                self.linear_expr,
-                sparse=self.sparse,
-                sparse_tol=self.sparse_tol,
-            )
-            if isinstance(linear_form, tuple) and len(linear_form) == 2:
-                linear_operator, linear_forcing = linear_form
-            elif (
-                isinstance(linear_form, list | BCOO)
-                or hasattr(linear_form, "mat")
-                or hasattr(linear_form, "mats")
-            ):
-                linear_operator = linear_form
-            else:
-                arr = jnp.asarray(linear_form)
-                if arr.ndim == 1:
-                    linear_operator = None
-                    linear_forcing = linear_form
-                else:
-                    linear_operator = linear_form
-            linear_diag = _diag_from_matrix(linear_operator)
+        linear_operator, linear_forcing, linear_diag = _assemble_linear_setup(
+            self.linear_expr, sparse=self.sparse, sparse_tol=self.sparse_tol
+        )
 
         self.linear_operator = nnx.data(linear_operator)
         self.linear_forcing = nnx.data(linear_forcing)
@@ -271,8 +276,6 @@ class BaseIntegrator(ABC, nnx.Module):
     @nnx.jit
     def nonlinear_rhs(self, uh: Array) -> Array:
         self.module.set_kernel(uh.reshape(1, -1))
-        # self.module.kernel = self.module.kernel.at[:].set(uh.reshape(1, -1))
-        # self.module.kernel.set_value(uh.reshape(1, -1))
         return self.functionspace.forward(self.residual.evaluate(self.module))
 
     @nnx.jit
@@ -293,7 +296,6 @@ class BaseIntegrator(ABC, nnx.Module):
     @abstractmethod
     def step(self, u_hat: Array, dt: float) -> Array: ...
 
-    @abstractmethod
     def setup(self, dt: float) -> None: ...
 
     def solve(
@@ -303,35 +305,56 @@ class BaseIntegrator(ABC, nnx.Module):
         u_hat: Array | None = None,
         trange: tuple[float, float] | None = None,
         progress: bool = True,
+        n_batches: int = 100,
+        return_each_step: bool = False,
     ) -> Array:
-        # if self._dt is None or abs(self._dt - dt) > 1e-12:
+        if n_batches <= 0:
+            raise ValueError("n_batches must be a positive integer")
+
         self.setup(dt)
-        _, _, nsteps = self.resolve_time(dt, steps=steps, trange=trange)
+        _, _, n_steps = self.resolve_time(dt, steps=steps, trange=trange)
+
         if u_hat is None:
             u_hat = self.initial_coefficients()
-        if nsteps <= 0:
-            return u_hat
+        if n_steps <= 0:
+            if not return_each_step:
+                return u_hat
+            return jnp.empty((0,) + u_hat.shape, dtype=u_hat.dtype)
 
         def inner_n_steps(i: int, u_hat: Array) -> Array:
             u_hat = self.step(u_hat, dt)
             return u_hat
 
-        n_batches = min(100, nsteps)
-        batch_len = nsteps // n_batches
-        remainder = nsteps - n_batches * batch_len
+        batch_count = min(n_batches, n_steps)
+
+        batch_len = n_steps // batch_count
+        remainder = n_steps - batch_count * batch_len
+        states: list[Array] = [u_hat]
+        diverged = False
+
         iterator = (
             tqdm.trange(
-                n_batches, desc="Integrating", unit="step", unit_scale=batch_len
+                batch_count, desc="Integrating", unit="step", unit_scale=batch_len
             )
             if progress
-            else range(n_batches)
+            else range(batch_count)
         )
         for _ in iterator:
-            u_hat = jax.lax.fori_loop(0, batch_len, inner_n_steps, u_hat)
+            u_hat: Array = jax.lax.fori_loop(0, batch_len, inner_n_steps, u_hat)
+            if return_each_step:
+                states.append(u_hat)
             if jnp.isnan(u_hat).any() or jnp.isinf(u_hat).any():
+                diverged = True
                 break
 
-        if remainder:
-            u_hat = jax.lax.fori_loop(0, remainder, inner_n_steps, u_hat)
+        if remainder and not diverged:
+            u_hat: Array = jax.lax.fori_loop(0, remainder, inner_n_steps, u_hat)
+            if return_each_step:
+                states.append(u_hat)
+
+        if return_each_step:
+            if len(states) == 0:
+                return jnp.empty((0,) + u_hat.shape, dtype=u_hat.dtype)
+            return jnp.stack(states)
 
         return u_hat

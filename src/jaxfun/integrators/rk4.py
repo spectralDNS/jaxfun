@@ -36,10 +36,6 @@ class RK4(BaseIntegrator):
         self.update_fn = update
         self._dt: float | None = None
 
-    def setup(self, dt: float) -> None:
-        self.params["dt"] = dt
-        self._dt = dt
-
     @nnx.jit
     def step(self, u_hat: Array, dt: float) -> Array:
         k1 = self.total_rhs(u_hat)

@@ -33,13 +33,10 @@ class BackwardEuler(BaseIntegrator):
             sparse_tol=int(params.get("sparse_tol", 1000)),
         )
         self.params = dict(params)
-        self._dt: float | None = None
         self._system_diag = nnx.data(None)
         self._system_matrix = nnx.data(None)
 
     def setup(self, dt: float) -> None:
-        self.params["dt"] = dt
-        self._dt = dt
         self._system_diag = nnx.data(None)
         self._system_matrix = nnx.data(None)
         if self.linear_operator is None:

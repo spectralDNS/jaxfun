@@ -1029,31 +1029,18 @@ class FlaxFunction(Function):
             mesh.append(lambdify(s, r, modules="jax")(*xs.T))
         return jnp.array(mesh).T
 
+    @property
+    def c_names(self) -> str:
+        """Return comma-separated coordinate names."""
+        return ", ".join([i.name for i in self.args[:-1]])
+
     def __str__(self) -> str:
         name = "\033[1m%s\033[0m" % (self.name,) if self.rank == 1 else self.name  # noqa: UP031
-        return "".join(
-            (
-                name,
-                "(",
-                ", ".join([i.name for i in self.args[:-1]]),
-                "; ",
-                self.args[-1].name,  # ty:ignore[unresolved-attribute]
-                ")",
-            )
-        )
+        return f"{name}({self.c_names}; {self.functionspace.name})"
 
     def _latex(self, printer: Any = None) -> str:
         name = r"\mathbf{ {%s} }" % (self.name,) if self.rank == 1 else self.name  # noqa: UP031
-        return "".join(
-            (
-                name,
-                "(",
-                ", ".join([i.name for i in self.args[:-1]]),
-                "; ",
-                self.args[-1].name,  # ty:ignore[unresolved-attribute]
-                ")",
-            )
-        )
+        return f"{name}({self.c_names}; {self.functionspace.name})"
 
     def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self.__str__())

@@ -3,7 +3,6 @@ from typing import Any, cast
 import jax.numpy as jnp
 import jax.scipy.linalg as jsp_linalg
 import sympy as sp
-import tqdm
 from flax import nnx
 
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
@@ -84,8 +83,6 @@ class ETDRK4(BaseIntegrator):
             sparse_tol=int(params.get("sparse_tol", 1000)),
         )
         self.params = dict(params)
-        self._dt: float | None = None
-        # self._coeffs = nnx.data({})
 
         zero = jnp.zeros(self.functionspace.num_dofs)
         forcing_rhs = (
@@ -96,9 +93,6 @@ class ETDRK4(BaseIntegrator):
         self._forcing_rhs = nnx.data(forcing_rhs)
 
     def setup(self, dt: float) -> None:
-        self.params["dt"] = dt
-        self._dt = dt
-
         self.is_diag = nnx.static(
             self.mass_diag is not None
             and (self.linear_operator is None or self.linear_diag is not None)
@@ -173,39 +167,3 @@ class ETDRK4(BaseIntegrator):
             apply(self.f1, n1) + 2 * apply(self.f2, n2 + n3) + apply(self.f3, n4)
         )
         return from_state(un)
-
-    def solve_with_frames(
-        self,
-        dt: float,
-        steps: int | None = None,
-        u_hat: Array | None = None,
-        trange: tuple[float, float] | None = None,
-        snapshot_stride: int = 1,
-        include_initial: bool = True,
-        progress: bool = True,
-    ) -> tuple[Array, Array]:
-        self.setup(dt)
-        t0, _, nsteps = self.resolve_time(dt, steps=steps, trange=trange)
-        if u_hat is None:
-            u_hat = self.initial_coefficients()
-
-        stride = max(1, int(snapshot_stride))
-        states: list[Array] = []
-        times: list[float] = []
-        if include_initial:
-            states.append(u_hat)
-            times.append(t0)
-
-        iterator = (
-            tqdm.trange(nsteps, desc="Integrating", unit="step")
-            if progress
-            else range(nsteps)
-        )
-        for i in iterator:
-            u_hat = self.step(u_hat, dt)
-            t = t0 + (i + 1) * dt
-            if (i + 1) % stride == 0 or i == nsteps - 1:
-                states.append(u_hat)
-                times.append(t)
-
-        return jnp.stack(states), jnp.array(times)

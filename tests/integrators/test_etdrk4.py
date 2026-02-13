@@ -40,15 +40,3 @@ def test_etdrk4_solve_and_frames_interface() -> None:
     u_ex = lambdify(x, sp.sin(x - c.val * T))(xj)
     rel_error = jnp.linalg.norm(u_num - u_ex) / jnp.linalg.norm(u_ex)
     assert float(rel_error) < 1e-4
-
-    frames, times = integrator.solve_with_frames(
-        dt=dt,
-        steps=steps,
-        snapshot_stride=40,
-        include_initial=True,
-        progress=False,
-    )
-    assert frames.ndim == 2
-    assert times.shape[0] == frames.shape[0]
-    assert float(times[0]) == 0.0
-    assert abs(float(times[-1]) - T) < 1e-6

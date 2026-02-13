@@ -4,7 +4,7 @@ import copy
 import itertools
 from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
-from typing import TypeGuard
+from typing import TYPE_CHECKING, TypeGuard
 
 import jax
 import jax.numpy as jnp
@@ -18,6 +18,10 @@ from jaxfun.utils.common import eliminate_near_zeros, jit_vmap, lambdify
 
 from .composite import BCGeneric, BoundaryConditions, Composite, DirectSum
 from .orthogonal import OrthogonalSpace
+
+if TYPE_CHECKING:
+    from jaxfun.galerkin.inner import RecognizableArray
+
 
 tensor_product_symbol = "\u2297"
 multiplication_sign = "\u00d7"
@@ -759,7 +763,7 @@ class TPMatrix:  # noqa: B903
 
     def __init__(
         self,
-        mats: Sequence[Array],
+        mats: Sequence[RecognizableArray],
         scale: complex,
         test_space: TensorProductSpace | VectorTensorProductSpace,
         trial_space: TensorProductSpace | VectorTensorProductSpace,

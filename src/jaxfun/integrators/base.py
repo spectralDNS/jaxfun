@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, cast
+from typing import cast
 
 import jax
 import jax.numpy as jnp
@@ -12,9 +12,15 @@ from jaxfun.galerkin import Composite, DirectSum, TestFunction, TrialFunction
 from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import inner, project1D
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
+from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
 from jaxfun.pinns import FlaxFunction, Residual
 from jaxfun.pinns.module import SpectralModule
-from jaxfun.typing import Array
+from jaxfun.typing import (
+    Array,
+    GalerkinAssembledForm,
+    GalerkinOperator,
+    GalerkinOperatorLike,
+)
 from jaxfun.utils import split_linear_nonlinear_terms, split_time_derivative_terms
 
 
@@ -37,7 +43,7 @@ def replace_trial_with_flaxfunction(
 def _bcoo_diagonal(mat: BCOO) -> Array | None:
     if mat.ndim != 2 or mat.shape[0] != mat.shape[1]:
         return None
-    indices = jnp.asarray(mat.indices)
+    indices = mat.indices
     if indices.shape[1] != 2:
         return None
     if not bool(jnp.all(indices[:, 0] == indices[:, 1])):
@@ -46,12 +52,13 @@ def _bcoo_diagonal(mat: BCOO) -> Array | None:
     return diag.at[indices[:, 0]].add(mat.data)
 
 
-def _diag_from_matrix(obj: Any) -> Array | None:
+def _diag_from_matrix(obj: GalerkinOperatorLike | None) -> Array | None:
     if obj is None:
         return None
-    if isinstance(obj, list | tuple):
+    if isinstance(obj, list):
+        items = cast(list[GalerkinOperator], obj)
         diag_sum = None
-        for item in obj:
+        for item in items:
             diag = _diag_from_matrix(item)
             if diag is None:
                 return None
@@ -59,19 +66,23 @@ def _diag_from_matrix(obj: Any) -> Array | None:
         return diag_sum
     if isinstance(obj, BCOO):
         return _bcoo_diagonal(obj)
-    if hasattr(obj, "mats"):
-        mats = list(obj.mats)
+    if isinstance(obj, TPMatrices):
+        return _diag_from_matrix(cast(list[GalerkinOperator], list(obj.tpmats)))
+    if isinstance(obj, TPMatrix):
+        mats = obj.mats
         if len(mats) == 0:
             return None
-        diagonals = [_diag_from_matrix(mat) for mat in mats]
-        if any(diag is None or diag.ndim != 1 for diag in diagonals):
-            return None
-        diagonal = cast(Array, diagonals[0])
+        diagonals: list[Array] = []
+        for diag in (_diag_from_matrix(item) for item in mats):
+            if diag is None or diag.ndim != 1:
+                return None
+            diagonals.append(diag)
+        diagonal = diagonals[0]
         for axis, diag in enumerate(diagonals[1:], start=1):
             shape = (1,) * axis + (diag.shape[0],)
-            diagonal = diagonal[..., None] * cast(Array, diag).reshape(shape)
+            diagonal = diagonal[..., None] * diag.reshape(shape)
         return diagonal
-    if hasattr(obj, "mat"):
+    if isinstance(obj, TensorMatrix):
         return _diag_from_matrix(obj.mat)
     arr = jnp.asarray(obj)
     if arr.ndim == 2 and arr.shape[0] == arr.shape[1]:
@@ -81,49 +92,52 @@ def _diag_from_matrix(obj: Any) -> Array | None:
     return None
 
 
-def _apply_operator(op: Any, u: Array) -> Array:
+def _apply_operator(op: GalerkinOperatorLike | None, u: Array) -> Array:
     if op is None:
         return jnp.zeros_like(u)
     if isinstance(op, list):
-        out = jnp.zeros_like(u)
-        for item in op:
-            out = out + _apply_operator(item, u)
-        return out
-    if hasattr(op, "tpmats"):
-        return sum((mat(u) for mat in op.tpmats), jnp.zeros_like(u))
-    if callable(op) and not isinstance(op, BCOO):
+        items = cast(list[GalerkinOperator], op)
+        applied = [_apply_operator(item, u) for item in items]
+        return jnp.sum(jnp.stack(applied), axis=0)
+    if isinstance(op, TPMatrices | TPMatrix):
         return op(u)
-    if hasattr(op, "mat"):
-        return op.mat @ u
-    return op @ u
+    if isinstance(op, TensorMatrix):
+        return _apply_operator(op.mat, u)
+    if isinstance(op, BCOO):
+        return op @ u
+    arr = jnp.asarray(op)
+    if arr.ndim == u.ndim:
+        return arr * u
+    if arr.ndim != 2:
+        raise ValueError("Can only apply rank-1 or rank-2 operators")
+    return arr @ u
 
 
-def _operator_to_dense(op: Any) -> Array:
+def _operator_to_dense(op: GalerkinOperatorLike) -> Array:
     if isinstance(op, BCOO):
         return op.todense()
     if isinstance(op, list):
-        mats = [_operator_to_dense(item) for item in op]
+        items = cast(list[GalerkinOperator], op)
+        mats = [_operator_to_dense(item) for item in items]
         return sum(mats[1:], mats[0]) if len(mats) > 0 else jnp.array([])
-    if hasattr(op, "tpmats"):
+    if isinstance(op, TPMatrices):
         mats = [_operator_to_dense(item) for item in op.tpmats]
         return sum(mats[1:], mats[0]) if len(mats) > 0 else jnp.array([])
-    if hasattr(op, "mats"):
+    if isinstance(op, TPMatrix):
         mats = [_operator_to_dense(item) for item in op.mats]
         if len(mats) == 0:
             return jnp.array([])
-        dense = mats[0]
+        dense: Array = mats[0]
         for mat in mats[1:]:
             dense = jnp.kron(dense, mat)
-        return cast(Array, dense * getattr(op, "scale", 1))
-    if hasattr(op, "mat"):
-        mat = op.mat
-        if isinstance(mat, BCOO):
-            return mat.todense()
-        return jnp.asarray(mat)
+        scale = jnp.asarray(op.scale)
+        return cast(Array, dense * scale)
+    if isinstance(op, TensorMatrix):
+        return _operator_to_dense(op.mat)
     return jnp.asarray(op)
 
 
-def _solve_operator(op: Any, rhs: Array) -> Array:
+def _solve_operator(op: GalerkinOperatorLike, rhs: Array) -> Array:
     mat = _operator_to_dense(op)
     if mat.ndim != 2:
         raise ValueError("Can only solve systems with rank-2 operators")
@@ -132,40 +146,45 @@ def _solve_operator(op: Any, rhs: Array) -> Array:
     return x.reshape(rhs.shape)
 
 
-def _split_operator_and_forcing(form: Any) -> tuple[Any | None, Any | None]:
+def _split_operator_and_forcing(
+    form: GalerkinAssembledForm,
+) -> tuple[GalerkinOperatorLike | None, Array | None]:
     if form is None:
         return None, None
     if isinstance(form, tuple):
-        if len(form) == 2:
-            return form[0], form[1]
+        operator, forcing = cast(tuple[GalerkinOperatorLike, Array | None], form)
+        rhs = jnp.asarray(forcing) if forcing is not None else None
+        return operator, rhs
+    if isinstance(form, list | BCOO | TPMatrix | TensorMatrix | TPMatrices):
         return form, None
-    if isinstance(form, list | BCOO) or hasattr(form, "mat") or hasattr(form, "mats"):
-        return form, None
-
     arr = jnp.asarray(form)
     if arr.ndim <= 1:
-        return None, form
-    return form, None
+        return None, arr
+    return arr, None
 
 
 def _assemble_linear_setup(
     expr: sp.Expr, sparse: bool, sparse_tol: int
-) -> tuple[Any | None, Any | None, Array | None]:
+) -> tuple[GalerkinOperatorLike | None, Array | None, Array | None]:
     if sp.sympify(expr) == 0:
         return None, None, None
 
-    linear_form = inner(expr, sparse=sparse, sparse_tol=sparse_tol)
+    linear_form = cast(
+        GalerkinAssembledForm, inner(expr, sparse=sparse, sparse_tol=sparse_tol)
+    )
     linear_operator, linear_forcing = _split_operator_and_forcing(linear_form)
     linear_diag = _diag_from_matrix(linear_operator)
     return linear_operator, linear_forcing, linear_diag
 
 
 def _assemble_mass_setup(
-    V: Any, sparse: bool, sparse_tol: int
-) -> tuple[Any | None, Array | None]:
+    V: OrthogonalSpace | DirectSum | Composite, sparse: bool, sparse_tol: int
+) -> tuple[GalerkinOperatorLike | None, Array | None]:
     v = TestFunction(V)
     u = TrialFunction(V)
-    mass_form = inner(v * u, sparse=sparse, sparse_tol=sparse_tol)
+    mass_form = cast(
+        GalerkinAssembledForm, inner(v * u, sparse=sparse, sparse_tol=sparse_tol)
+    )
     mass_operator, mass_forcing = _split_operator_and_forcing(mass_form)
     if mass_forcing is not None:
         raise NotImplementedError("Mass assembly returned forcing, unsupported for now")
@@ -192,8 +211,8 @@ class BaseIntegrator(ABC, nnx.Module):
         if initial is None:
             raise ValueError("Initial condition must be provided via `u0` or `initial`")
 
-        self.sparse = bool(sparse)
-        self.sparse_tol = int(sparse_tol)
+        self.sparse = sparse
+        self.sparse_tol = sparse_tol
         self.time = time
         self.initial = initial
         self.functionspace = V
@@ -221,16 +240,16 @@ class BaseIntegrator(ABC, nnx.Module):
         mass_operator, mass_diag = _assemble_mass_setup(
             V, sparse=self.sparse, sparse_tol=self.sparse_tol
         )
-        self.mass_operator = nnx.data(mass_operator)
-        self.mass_diag = nnx.data(mass_diag)
+        self.mass_operator: GalerkinOperatorLike | None = nnx.data(mass_operator)
+        self.mass_diag: Array | None = nnx.data(mass_diag)
 
         linear_operator, linear_forcing, linear_diag = _assemble_linear_setup(
             self.linear_expr, sparse=self.sparse, sparse_tol=self.sparse_tol
         )
 
-        self.linear_operator = nnx.data(linear_operator)
-        self.linear_forcing = nnx.data(linear_forcing)
-        self.linear_diag = nnx.data(linear_diag)
+        self.linear_operator: GalerkinOperatorLike | None = nnx.data(linear_operator)
+        self.linear_forcing: Array | None = nnx.data(linear_forcing)
+        self.linear_diag: Array | None = nnx.data(linear_diag)
 
         points: Array = V.mesh()[:, None]
         self.residual = Residual(self.nonlinear_expr, points)
@@ -334,12 +353,11 @@ class BaseIntegrator(ABC, nnx.Module):
         states: list[Array] = [u_hat]
         diverged = False
 
+        r_batch = range(batch_count)
         iterator = (
-            tqdm.trange(
-                batch_count, desc="Integrating", unit="step", unit_scale=batch_len
-            )
+            tqdm.tqdm(r_batch, desc="Integrating", unit="step", unit_scale=batch_len)
             if progress
-            else range(batch_count)
+            else r_batch
         )
         for _ in iterator:
             u_hat: Array = jax.lax.fori_loop(0, batch_len, inner_n_steps, u_hat)

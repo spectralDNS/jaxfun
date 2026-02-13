@@ -1,14 +1,17 @@
-from typing import Any, cast
+from collections.abc import Callable
+from typing import cast
 
 import jax.numpy as jnp
-import jax.scipy.linalg as jsp_linalg
 import sympy as sp
 from flax import nnx
+from jax.scipy.linalg import expm as _expm
 
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.typing import Array
 
 from .base import BaseIntegrator, _operator_to_dense
+
+expm = cast(Callable[[Array], Array], _expm)
 
 
 def _phi1(z: Array) -> Array:
@@ -48,7 +51,7 @@ def _etdrk4_diag_coeffs(
 def _phi_matrices(z: Array) -> tuple[Array, Array, Array]:
     n = z.shape[0]
     I = jnp.eye(n, dtype=z.dtype)
-    expz = jsp_linalg.expm(z)
+    expz = expm(z)
     zinv = jnp.linalg.pinv(z)
     phi1 = zinv @ (expz - I)
     phi2 = zinv @ (phi1 - I)
@@ -71,19 +74,9 @@ class ETDRK4(BaseIntegrator):
         *,
         time: tuple[float, float] | None = None,
         initial: sp.Expr | Array | None = None,
-        **params: Any,
+        **params,
     ):
-        super().__init__(
-            V,
-            equation,
-            u0,
-            time=time,
-            initial=initial,
-            sparse=bool(params.get("sparse", False)),
-            sparse_tol=int(params.get("sparse_tol", 1000)),
-        )
-        self.params = dict(params)
-
+        super().__init__(V, equation, u0, time=time, initial=initial, **params)
         zero = jnp.zeros(self.functionspace.num_dofs)
         forcing_rhs = (
             self.apply_mass_inverse(jnp.asarray(self.linear_forcing))
@@ -93,16 +86,18 @@ class ETDRK4(BaseIntegrator):
         self._forcing_rhs = nnx.data(forcing_rhs)
 
     def setup(self, dt: float) -> None:
-        self.is_diag = nnx.static(
-            self.mass_diag is not None
-            and (self.linear_operator is None or self.linear_diag is not None)
+        is_diag = self.mass_diag is not None and (
+            self.linear_operator is None or self.linear_diag is not None
         )
+        self.is_diag = nnx.static(is_diag)
 
-        if self.is_diag:
+        if is_diag:
+            mass_diag = self.mass_diag
+            assert mass_diag is not None
             Ldiag = (
-                jnp.zeros_like(self.mass_diag)
+                jnp.zeros_like(mass_diag)
                 if self.linear_operator is None
-                else self.linear_diag / self.mass_diag
+                else cast(Array, self.linear_diag) / mass_diag
             )
             E, E2, Q, f1, f2, f3 = _etdrk4_diag_coeffs(Ldiag, dt)
         else:
@@ -121,8 +116,8 @@ class ETDRK4(BaseIntegrator):
                     Lmat = A
 
             z = dt * Lmat
-            E = cast(Array, jsp_linalg.expm(z))
-            E2 = cast(Array, jsp_linalg.expm(z / 2))
+            E = expm(z)
+            E2 = expm(z / 2)
             Q, _, _ = _phi_matrices(z / 2)
             phi1, phi2, phi3 = _phi_matrices(z)
             f1 = phi1 - 3 * phi2 + 4 * phi3
@@ -144,15 +139,16 @@ class ETDRK4(BaseIntegrator):
 
     def step(self, u_hat: Array, dt: float) -> Array:
         shape = u_hat.shape
+        is_diag = bool(self.is_diag)
 
         def to_state(x: Array) -> Array:
-            return x if self.is_diag else x.reshape((-1,))
+            return x if is_diag else x.reshape((-1,))
 
         def from_state(x: Array) -> Array:
-            return x if self.is_diag else x.reshape(shape)
+            return x if is_diag else x.reshape(shape)
 
         def apply(op: Array, u: Array) -> Array:
-            return _apply_etd_operator(op, u, self.is_diag)
+            return _apply_etd_operator(op, u, is_diag)
 
         u0 = to_state(u_hat)
         n1 = to_state(self._N(from_state(u0)))

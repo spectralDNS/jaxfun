@@ -21,7 +21,6 @@ class RK4(BaseIntegrator):
         *,
         time: tuple[float, float] | None = None,
         initial: sp.Expr | Array | None = None,
-        update: Any | None = None,
         **params: Any,
     ):
         super().__init__(
@@ -30,12 +29,8 @@ class RK4(BaseIntegrator):
             u0,
             time=time,
             initial=initial,
-            sparse=bool(params.get("sparse", False)),
-            sparse_tol=int(params.get("sparse_tol", 1000)),
+            **params,
         )
-        self.params = dict(params)
-        self.update_fn = update
-        self._dt: float | None = None
 
     @nnx.jit
     def step(self, u_hat: Array, dt: float) -> Array:

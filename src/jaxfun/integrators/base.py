@@ -292,7 +292,6 @@ class BaseIntegrator(ABC, nnx.Module):
             return rhs
         return _solve_operator(self.mass_operator, rhs)
 
-    @nnx.jit
     def nonlinear_rhs(self, uh: Array) -> Array:
         # This method is impure as we are altering the kernel outside with wrong trace
         # level. This is quite hacky, and should be improved.

@@ -9,8 +9,8 @@ from .base import BaseIntegrator, _operator_to_dense
 class BackwardEuler(BaseIntegrator):
     """First-order implicit Euler for linear terms (IMEX for nonlinear terms)."""
 
-    _system_diag: Array | None = None
-    _system_matrix: Array | None = None
+    _system_diag: Array | None = nnx.data(None)
+    _system_matrix: Array | None = nnx.data(None)
 
     def setup(self, dt: float) -> None:
         if self.linear_operator is None:

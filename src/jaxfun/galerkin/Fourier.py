@@ -107,6 +107,17 @@ class Fourier(OrthogonalSpace):
         """
         return jax.lax.exp(1j * self.wavenumbers() * X)
 
+    @jax.jit(static_argnums=(0, 2))
+    def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
+        """Return k-th derivative Vandermonde."""
+        v = self.wavenumbers(eliminate_highest_freq=k % 2 and self.N % 2 == 0)
+        y = self.eval_basis_functions(X)
+        z = (1j * v) ** k * y
+        # z = jacn(self.eval_basis_functions, k)(X)
+        # if k % 2 == 1 and self.N % 2 == 0:
+        #   z = z.at[:, X.shape[0] // 2].set(0)
+        return z
+
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Inverse FFT (possible padding) to physical space.
@@ -165,7 +176,8 @@ class Fourier(OrthogonalSpace):
         """Return canonical reference domain [0, 2π]."""
         return Domain(0, 2 * sp.pi)
 
-    def wavenumbers(self, N: int = 0) -> Array:
+    @jax.jit(static_argnums=(0, 1, 2))
+    def wavenumbers(self, N: int = 0, eliminate_highest_freq: bool = False) -> Array:
         """Return ordered integer wavenumbers matching FFT layout.
 
         Args:
@@ -175,7 +187,10 @@ class Fourier(OrthogonalSpace):
             Integer array of length N with ordering from fftfreq.
         """
         N = self.N if N == 0 else N
-        return jnp.fft.fftfreq(N, 1 / N).astype(int)
+        k = jnp.fft.fftfreq(N, 1 / N).astype(int)
+        if eliminate_highest_freq and N % 2 == 0:
+            k = k.at[N // 2].set(0)
+        return k
 
     def norm_squared(self) -> Array:
         """Return L2 norm squared of each basis function over [0, 2π]."""

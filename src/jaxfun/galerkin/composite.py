@@ -375,6 +375,34 @@ class BCGeneric(Composite):
         N = self.num_quad_points if N == 0 else N
         return self.orthogonal.quad_points_and_weights(N)
 
+    def get_homogeneous(self) -> Composite:
+        """Return new Composite with homogeneous boundary values."""
+        raise NotImplementedError("BCGeneric does not support get_homogeneous()")
+
+    def get_padded(self, N: int) -> Composite:
+        """Return new BCGeneric enlarged (padded) to size N (same stencil)."""
+        raise NotImplementedError("BCGeneric does not support get_padded()")
+
+    def to_composite_like(self) -> Composite:
+        """Return a Composite instance with BCGeneric state copied in.
+
+        Useful for constructing boundary matrices.
+        """
+        obj = Composite.__new__(Composite)
+        obj.__dict__.update(copy.deepcopy(self.__dict__))
+        return obj
+
+
+def get_stencil_from_S(S: sp.Matrix) -> dict:
+    d = {}
+    upperband = S.shape[1]
+    lowerband = S.shape[0] - 1
+    for i in range(-lowerband, upperband):
+        u = S.diagonal(i).copy()
+        if abs(u).max() > 1e-6:
+            d[i] = u
+    return d
+
 
 class DirectSum:
     """Direct sum V = Composite ⊕ BCGeneric lifting boundary data.
@@ -402,6 +430,8 @@ class DirectSum:
         self._num_quad_points = a._num_quad_points
         self.map_reference_domain = a.map_reference_domain
         self.map_true_domain = a.map_true_domain
+        self.dims = a.dims
+        self.rank = a.rank
 
     def __getitem__(self, i: int) -> Composite | BCGeneric:
         """Return i-th summand."""
@@ -451,6 +481,13 @@ class DirectSum:
         return self.basespaces[0].backward(c, kind, N) + self.basespaces[1].backward(
             self.bnd_vals(), kind, N
         )
+
+    @jax.jit(static_argnums=(0, 3))
+    def evaluate_derivative(self, X: Array, c: Array, k: int = 0) -> float:
+        """Evaluate k-th derivative at X (composite + boundary)."""
+        return self.basespaces[0].evaluate_derivative(X, c, k) + self.basespaces[
+            1
+        ].evaluate_derivative(X, self.bnd_vals(), k)
 
 
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:

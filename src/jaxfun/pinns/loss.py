@@ -315,7 +315,8 @@ class Residual:
         Returns:
             Array: The residuals at points self.x, self.target
         """
-        return self(self.x, self.target, module)
+        Js = self._compute_gradients(module, self.x)
+        return self(self.x, self.target, module, Js=Js)
 
 
 class ResidualVPINN(Residual):

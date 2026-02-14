@@ -118,11 +118,11 @@ def test_directsum_two_inhomogeneous_bnd_evaluate():
     ue = T.system.expr_psi_to_base_scalar(ue)
     uf = project(ue, T)
     x, y = T.system.base_scalars()
-    u0 = T.evaluate(jnp.array([0.5, 0.5]), uf)  # triggers boundary reconstruction path
+    u0 = T.evaluate(jnp.array([0.5, 0.5]), uf, True)
     assert abs(u0 - ue.subs({x: 0.5, y: 0.5})) < ulp(100)
     u1 = T.evaluate_mesh([jnp.array([[0.5]]), jnp.array([[0.5]])], uf)
     assert abs(u1[0, 0] - ue.subs({x: 0.5, y: 0.5})) < ulp(100)
-    u0 = T.evaluate(jnp.array([[0.5, 0.5], [0.6, 0.6]]), uf)
+    u0 = T.evaluate(jnp.array([[0.5, 0.5], [0.6, 0.6]]), uf, False)
     assert abs(u0[0] - ue.subs({x: 0.5, y: 0.5})) < ulp(100)
     assert abs(u0[1] - ue.subs({x: 0.6, y: 0.6})) < ulp(100)
     u1 = T.evaluate_mesh([jnp.array([[0.5, 0.6]]), jnp.array([[0.5, 0.6]])], uf)
@@ -130,3 +130,12 @@ def test_directsum_two_inhomogeneous_bnd_evaluate():
     assert abs(u1[0, 1] - ue.subs({x: 0.5, y: 0.6})) < ulp(100)
     assert abs(u1[1, 0] - ue.subs({x: 0.6, y: 0.5})) < ulp(100)
     assert abs(u1[1, 1] - ue.subs({x: 0.6, y: 0.6})) < ulp(100)
+
+
+if __name__ == "__main__":
+    # test_tensorproductspace_broadcast_and_evaluate_2d()
+    # test_tensorproductspace_forward_directsum()
+    # test_tpmatrices_call_and_kron_3d()
+    # test_inner_linear_form_3d_outer_products()
+    # test_inner_sparse_multivar_path()
+    test_directsum_two_inhomogeneous_bnd_evaluate()

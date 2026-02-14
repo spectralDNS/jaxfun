@@ -1,16 +1,16 @@
 import importlib
 from typing import Literal, TypeGuard, cast, overload
 
-import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
 from jax.experimental.sparse import BCOO
+from sympy.core.function import AppliedUndef
 
 from jaxfun.typing import TrialSpaceType
 from jaxfun.utils.common import lambdify, matmat, tosparse
 
-from .arguments import TestFunction, TrialFunction
+from .arguments import TestFunction, TrialFunction, evaluate_jaxfunction_expr
 from .composite import BCGeneric, Composite, DirectSum
 from .forms import (
     _has_functionspace,
@@ -102,7 +102,7 @@ def inner(
         has_bcs = False
 
         for key, ai in a0.items():
-            if key in ("coeff", "multivar"):
+            if key in ("coeff", "multivar", "jaxfunction"):
                 continue
 
             assert isinstance(ai, sp.Expr)
@@ -127,7 +127,9 @@ def inner(
             if isinstance(uf, BCGeneric):
                 has_bcs = True
 
-            z = inner_bilinear(ai, vf, uf, sc, global_indices, "multivar" in a0)
+            z = inner_bilinear(
+                ai, vf, uf, sc, global_indices, "multivar" in a0 or "jaxfunction" in a0
+            )
 
             if isinstance(z, tuple):  # multivar
                 mats.append(z)
@@ -136,12 +138,13 @@ def inner(
             if z.size == 0:
                 continue
             if isinstance(uf, BCGeneric) and test_space.dims == 1:
-                bresults.append(-(z @ jnp.array(uf.bcs.orderedvals())))
+                sign = 1 if all_linear else -1
+                bresults.append(sign * (z @ jnp.array(uf.bcs.orderedvals())))
                 continue
             if "linear" in coeffs and test_space.dims == 1:
                 sign = 1 if all_linear else -1
                 scale = coeffs["linear"].get("scale", 1) * sign
-                bresults.append(scale * (z @ coeffs["linear"]["jaxfunction"].array))
+                bresults.append(scale * (z @ coeffs["linear"]["jaxcoeff"].array))
 
             sc = 1
             mats.append(z)
@@ -156,24 +159,33 @@ def inner(
             # multivariable form, like sqrt(x+y)*u*v, that cannot be separated
             assert isinstance(test_space, TensorProductSpace)
             mats: list[tuple[Array, Array]] = cast(list[tuple[Array, Array]], mats)
-            Am = assemble_multivar(mats, a0["multivar"], test_space)
 
+            scales = []
+            if "multivar" in a0:
+                scales.append(a0["multivar"])
+            if "jaxfunction" in a0:
+                scales.append(
+                    evaluate_jaxfunction_expr(a0["jaxfunction"], test_space.mesh())
+                )
+            Am = assemble_multivar(mats, scales, test_space)
             if has_bcs:
+                sign = 1 if all_linear else -1
                 assert isinstance(trial_space, TensorProductSpace)
                 bresults.append(
-                    -(Am @ trial_space.bndvals[(tuple(trial))].flatten()).reshape(
-                        test_space.num_dofs
-                    )
+                    sign
+                    * jnp.einsum("ikjl,kl->ij", Am, trial_space.bndvals[tuple(trial)])
                 )
+
             else:
                 if "linear" in coeffs:
                     sign = 1 if all_linear else -1
                     bresults.append(
                         sign
-                        * (
-                            Am @ coeffs["linear"]["jaxfunction"].array.flatten()
-                        ).reshape(test_space.num_dofs)
+                        * jnp.einsum(
+                            "ikjl,kl->ij", Am, coeffs["linear"]["jaxcoeff"].array
+                        )
                     )
+
                 if "bilinear" in coeffs:
                     assert coeffs["bilinear"] == 1
                     assert isinstance(trial_space, TensorProductSpace)
@@ -195,7 +207,7 @@ def inner(
                     assert isinstance(trial_space, TensorProductSpace)
                     fun = trial_space.bndvals[tuple(trial)]
                 else:
-                    jfs = coeffs["linear"]["jaxfunction"].functionspace
+                    jfs = coeffs["linear"]["jaxcoeff"].functionspace
                     assert isinstance(jfs, DirectSumTPS)
                     fun = jfs.bndvals[tuple(trial)]
                 bresults.append(-(mats[0] @ fun @ mats[1].T))
@@ -204,7 +216,7 @@ def inner(
                     sign = 1 if all_linear else -1
                     bresults.append(
                         (sign * coeffs["linear"]["scale"])
-                        * (mats[0] @ coeffs["linear"]["jaxfunction"].array @ mats[1].T)
+                        * (mats[0] @ coeffs["linear"]["jaxcoeff"].array @ mats[1].T)
                     )
 
                 if "bilinear" in coeffs:
@@ -245,7 +257,7 @@ def inner(
 
         bs = []
         for key, bi in b0.items():
-            if key in ("coeff", "multivar"):
+            if key in ("coeff", "multivar", "jaxfunction"):
                 continue
 
             assert isinstance(bi, sp.Expr)
@@ -258,21 +270,29 @@ def inner(
                 bi,
                 v.functionspace,
                 sc,
-                "multivar" in b0 or isinstance(jaxarrays, Array),
+                "multivar" in b0
+                or isinstance(jaxarrays, Array)
+                or ("jaxfunction" in b0),
             )
-
             sc = 1
             bs.append(z)
         if isinstance(test_space, OrthogonalSpace):
-            bresults.append(bs[0])
+            if isinstance(bs[0], tuple):
+                # JAXArray (no multivar)
+                Pi = bs[0][0]
+                bresults.append(Pi.T @ jaxarrays)
+            else:
+                bresults.append(bs[0])
         elif len(test_space) == 2:
             if isinstance(bs[0], tuple):
-                # multivar
+                # multivar or JAXArray
                 if "multivar" in b0:
                     assert isinstance(test_space, TensorProductSpace)
                     s = test_space.system.base_scalars()
                     xj = test_space.mesh()
                     uj = lambdify(s, b0["multivar"], modules="jax")(*xj)
+                elif "jaxfunction" in b0:
+                    uj = evaluate_jaxfunction_expr(b0["jaxfunction"], test_space.mesh())
                 else:
                     uj = jaxarrays
                 bresults.append(bs[0][0].T @ uj @ bs[1][0])
@@ -428,7 +448,7 @@ def inner_bilinear(
     for aii in ai.args:
         found_basis = False
         for p in sp.core.traversal.preorder_traversal(aii):
-            if hasattr(p, "argument"):
+            if getattr(p, "argument", -1) in (0, 1):
                 found_basis = True
                 break
         if found_basis:
@@ -439,6 +459,15 @@ def inner_bilinear(
                 elif getattr(aii.args[0], "argument", -1) == 1:
                     assert j == 0
                     j = int(aii.derivative_count)
+            continue
+        jaxfunction = None
+        for p in sp.core.traversal.preorder_traversal(aii):
+            if getattr(p, "argument", -1) == 2:  # JAXFunction->AppliedUndef
+                jaxfunction = p
+                break
+        if jaxfunction:
+            h = evaluate_jaxfunction_expr(aii, xj, cast(AppliedUndef, jaxfunction))
+            scale *= h
             continue
         if len(aii.free_symbols) > 0:
             s = aii.free_symbols.pop()
@@ -528,6 +557,16 @@ def inner_linear(
                     assert i == 0
                     i = int(bii.derivative_count)
                 continue
+
+            jaxfunction = None
+            for p in sp.core.traversal.preorder_traversal(bii):
+                if getattr(p, "argument", -1) == 2:  # JAXFunction->AppliedUndef
+                    jaxfunction = p
+                    break
+            if jaxfunction:
+                h = evaluate_jaxfunction_expr(bii, xj, cast(AppliedUndef, jaxfunction))
+                uj *= h
+                continue
             # bii contains coordinates in the domain of v, e.g., (r, theta) for polar
             # Need to compute bii as bii(x(X)), since we use quadrature points
             if len(bii.free_symbols) > 0:
@@ -553,7 +592,7 @@ def contains_sympy_symbols(obj: object) -> TypeGuard[sp.Expr]:
 
 def assemble_multivar(
     mats: list[tuple[Array, Array]],
-    scale: sp.Expr | Array,
+    scale: sp.Expr | Array | list[sp.Expr | Array],
     test_space: TensorProductSpace,
 ) -> Array:
     """Contract separated multivariable factors into global matrix.
@@ -571,25 +610,20 @@ def assemble_multivar(
     """
     P0, P1 = mats[0]
     P2, P3 = mats[1]
-    i, k = P0.shape[1], P1.shape[1]
-    j, l = P2.shape[1], P3.shape[1]
-    if contains_sympy_symbols(scale):
-        s = test_space.system.base_scalars()
-        xj = test_space.mesh()
-        scale = lambdify(s, scale, modules="jax")(*xj)
-    else:
-        scale = cast(Array, jnp.ones((P0.shape[0], P1.shape[0])) * scale)
+    sci = jnp.array([1.0])
+    for sc in scale if isinstance(scale, list) else [scale]:
+        if not isinstance(sc, Array) and contains_sympy_symbols(sc):
+            s = test_space.system.base_scalars()
+            xj = test_space.mesh()
+            sc = lambdify(s, sc, modules="jax")(*xj)
+        elif isinstance(sc, float | complex):
+            sc = jnp.ones((P0.shape[0], P1.shape[0])) * sc
+        else:
+            sc = cast(Array, sc)
+        sci = sci * sc
 
-    def fun(p0: Array, p1: Array, p2: Array, p3: Array) -> Array:
-        ph0 = p0[:, None] * p1
-        ph1 = p2[:, None] * p3
-        return ph0.T @ scale @ ph1
-
-    a = jax.vmap(
-        jax.vmap(fun, in_axes=(None, None, 1, None)), in_axes=(1, None, None, None)
-    )(P0, P1, P2, P3)
-
-    return a.reshape((i * j, k * l))
+    a = jnp.einsum("pi,pk,qj,ql,pq->ikjl", P0, P1, P2, P3, sci)
+    return a
 
 
 def project1D(ue: sp.Expr, V: OrthogonalSpace | Composite | DirectSum) -> Array:

@@ -21,7 +21,7 @@ from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
 from jaxfun.coordinates import BaseTime, CoordSys
-from jaxfun.galerkin import Chebyshev
+from jaxfun.galerkin import Chebyshev, DirectSum
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.galerkin.tensorproductspace import (
     TensorProductSpace,
@@ -657,12 +657,11 @@ class SpectralModule(BaseModule):
         Returns:
             Values (N,) if d=1 else (N, rank+1).
         """
-        kernel = self.kernel[...]
-        if isinstance(self.space, OrthogonalSpace):
+        if isinstance(self.space, OrthogonalSpace | DirectSum):
             X = self.space.map_reference_domain(x)
-            return self.space.evaluate(X, kernel[0])
+            return self.space.evaluate(X, self.kernel[0])
 
-        z = self.space.evaluate(x, kernel, True)
+        z = self.space.evaluate(x, self.kernel, True)
         if self.space.rank == 0:
             return jnp.expand_dims(z, -1)
         return z
@@ -933,7 +932,7 @@ class FlaxFunction(Function):
         args = list(coors._cartesian_xyz)
         t = BaseTime(V.system)
         args = args + [t] if V.is_transient else args
-        args = args + [sp.Symbol(V.name)]
+        args = args + [sp.Dummy()]
         obj = cast(Self, Function.__new__(cls, *args))
         obj.functionspace = V
         obj.t = t
@@ -1060,7 +1059,7 @@ class FlaxFunction(Function):
     def __call__(self, x: Array) -> Array:
         """Evaluate underlying module; flatten scalar output if rank 0."""
         y = self.module(x)
-        if self.rank == 0:
+        if self.rank == 0 and y.shape[-1] == 1:
             return y[:, 0]
         return y
 

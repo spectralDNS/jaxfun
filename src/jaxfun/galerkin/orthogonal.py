@@ -93,16 +93,29 @@ class OrthogonalSpace(BaseSpace):
 
     @jit_vmap(in_axes=(0, None))
     def evaluate(self, X: float | Array, c: Array) -> Array:
-        """Evaluate truncated series sum_k c_k psi_k(X).
+        """Evaluate series sum_k c_k psi_k(X).
 
         Args:
             X: Evaluation point(s) in reference coordinates.
-            c: Coefficient vector (length <= N).
+            c: Coefficient vector ( <= self.N).
 
         Returns:
             Array of shape like X containing series evaluation.
         """
-        return self.eval_basis_functions(X)[: c.shape[0]] @ c
+        return self.eval_basis_functions(X)[..., : len(c)] @ c
+
+    @jax.jit(static_argnums=(0, 3))
+    def evaluate_derivative(self, X: float | Array, c: Array, k: int = 0) -> Array:
+        """Evaluate truncated series sum_k c_k psi_k(X).
+
+        Args:
+            X: Evaluation point(s) in reference coordinates.
+            c: Coefficient vector ( <= self.N).
+            k: Derivative order (default 0 -> function value).
+        Returns:
+            Array of shape like X containing series evaluation.
+        """
+        return self.evaluate_basis_derivative(X, k)[..., : len(c)] @ c
 
     @jax.jit(static_argnums=0)
     def vandermonde(self, X: Array) -> Array:

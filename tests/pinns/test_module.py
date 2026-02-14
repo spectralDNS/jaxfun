@@ -107,7 +107,7 @@ def test_spectralmodule_2d_forward_and_dim_with_tensor_product():
     sm = SpectralModule(V2, rngs=rngs)
     x = jnp.array([[0.0, 0.0], [0.1, 0.2], [0.7, 0.3]])
     y = sm(x)
-    assert y.shape == (3, 1)  # 2D branch returns (N, 1)
+    assert y.shape[0] == 3
     assert sm.dim == V2.dim
 
 

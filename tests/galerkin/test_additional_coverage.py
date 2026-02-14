@@ -73,7 +73,7 @@ def test_split_coeff_mul_and_add_jaxf():
     jf = JAXFunction(coeffs, C, name="U")
     # Add (number + JAXFunction) path; scale stays 1, bilinear captured
     d2 = split_coeff(sp.Integer(2) + jf)
-    assert d2["bilinear"] == 2 and "jaxfunction" not in d2["linear"]
+    assert d2["bilinear"] == 2 and "jaxcoeff" not in d2["linear"]
 
 
 def test_directsum_tps_two_inhomogeneous():

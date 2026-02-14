@@ -194,8 +194,8 @@ def test_lsqr_norm_grad_loss_i():
 def test_lsqr_norm_grad_loss():
     V = FunctionSpace(2, Legendre.Legendre, name="V")
     u = FlaxFunction(V, "u", kernel_init=nnx.initializers.ones)
-    x1 = jnp.array([[0.2, 0.5]])
-    x2 = jnp.array([[0.3, 0.4]])
+    x1 = jnp.array([[0.2, 0.5]]).T
+    x2 = jnp.array([[0.3, 0.4]]).T
     lsqr = Loss((u, x1, u(x1)), (u - 1, x2, u(x2) - 1))
     norms = lsqr.norm_grad_loss(u.module, *lsqr.args)
     assert norms.shape == (2,)  # Two residuals

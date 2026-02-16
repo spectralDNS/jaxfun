@@ -11,10 +11,11 @@ from jaxfun.galerkin import (
     TensorProduct,
     TestFunction,
     TrialFunction,
+    VectorTensorProductSpace,
 )
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.tensorproductspace import TPMatrices
-from jaxfun.operators import Div, Grad
+from jaxfun.operators import Div, Dot, Grad
 from jaxfun.utils.common import ulp
 
 
@@ -142,11 +143,11 @@ def test_jaxfunction_directsum_2d(space):
     v = TestFunction(T)
     A, b = inner(u * v)
     w = JAXFunction(jnp.ones(T.num_dofs), T, name="uf")
-    b0 = A[0] @ w + b
+    b0 = A[0] @ w - b
     b1 = inner(v * w)
     assert jnp.linalg.norm(b0 - b1) < ulp(100)
     C, c = inner(Div(Grad(u)) * v)
-    b0 = TPMatrices(C) @ w + c
+    b0 = TPMatrices(C) @ w - c
     b1 = inner(v * Div(Grad(w)))
     assert jnp.linalg.norm(b0 - b1) < ulp(100)
 
@@ -181,6 +182,28 @@ def test_jaxfunction_nonlin_2d(space):
     b0 = A[0] @ w
     b1 = inner(v * w**2)
     assert jnp.linalg.norm(b0 - b1) < ulp(100000)
+
+
+@pytest.mark.parametrize(
+    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi)
+)
+def test_jaxfunction_2d_vector(space):
+    N = 8
+    D = space(N)
+    T = TensorProduct(D, D)
+    V = VectorTensorProductSpace(T, name="V")
+    u = TrialFunction(V)
+    v = TestFunction(V)
+    A = inner(Dot(u, v))
+    uf = JAXFunction(jnp.ones((2, N, N)), V)
+    b0 = jnp.stack(
+        (
+            A[1] @ uf.array[A[1].global_indices[1]],
+            A[0] @ uf.array[A[0].global_indices[1]],
+        )
+    )
+    b1 = inner(Dot(uf, v))
+    assert jnp.linalg.norm(b0 - b1) < ulp(100)
 
 
 if __name__ == "__main__":

@@ -400,8 +400,8 @@ class TensorProductSpace:
 class VectorTensorProductSpace:
     """Vector-valued tensor product space.
 
-    Represents a tuple of identical (or differing) TensorProductSpace
-    objects corresponding to vector components.
+    Represents a tuple of identical (or differing in boundary conditions)
+    TensorProductSpace objects corresponding to vector components.
 
     Attributes:
         tensorspaces: Tuple of component tensor spaces.
@@ -427,6 +427,7 @@ class VectorTensorProductSpace:
         self.name = name
         self.tensorname = multiplication_sign.join([b.name for b in self.tensorspaces])
         self.mesh = self.tensorspaces[0].mesh
+        self.evaluate_mesh = self.tensorspaces[0].evaluate_mesh
 
     def __len__(self) -> int:
         """Return number of vector components."""
@@ -482,6 +483,16 @@ class VectorTensorProductSpace:
             vi = space.evaluate(x, ci, use_einsum)
             vals.append(vi)
         return jnp.array(vals)
+
+    @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
+    def evaluate_derivative(self, x: Array, c: Array, k: int = 0) -> Array:
+        """Evaluate vector expansion derivatives at scattered points."""
+        vals = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = c[i]
+            vi = space.evaluate_derivative(x, ci, k)
+            vals.append(vi)
+        return jnp.stack(vals)
 
 
 def TensorProduct(

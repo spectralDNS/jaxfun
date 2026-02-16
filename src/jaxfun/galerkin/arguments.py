@@ -37,8 +37,6 @@ from .tensorproductspace import (
 
 t, x, y, z = sp.symbols("t,x,y,z", real=True)
 
-functionspacedict = {}
-
 indices = "ijklmn"
 
 
@@ -136,7 +134,6 @@ def _get_computational_function(arg: str, V: TestSpaceType) -> Expr | AppliedUnd
         SymPy Expr representing assembled test/trial function.
     """
     base_scalars = V.system.base_scalars()
-    functionspacedict[V.name] = V
     offset = V.dims if arg == "trial" else 0
     if isinstance(V, OrthogonalSpace):
         assert base_scalars[0].is_Symbol
@@ -152,8 +149,6 @@ def _get_computational_function(arg: str, V: TestSpaceType) -> Expr | AppliedUnd
         )
 
     elif isinstance(V, TensorProductSpace):
-        for space in V.basespaces:
-            functionspacedict[space.name] = space
         return sp.Mul.fromiter(
             get_BasisFunction(
                 v.fun_str,
@@ -170,9 +165,6 @@ def _get_computational_function(arg: str, V: TestSpaceType) -> Expr | AppliedUnd
 
     elif isinstance(V, VectorTensorProductSpace):
         b = V.system.base_vectors()
-        for Vi in V:
-            for v in Vi:
-                functionspacedict[v.name] = v
         return VectorAdd.fromiter(
             sp.Mul.fromiter(
                 get_BasisFunction(
@@ -350,6 +342,41 @@ class TrialFunction(ExpansionFunction):
                 comp_fun(TensorProductSpace(s, fspace.system, f"{fspace.name}{i}"))
                 for i, s in enumerate(tensorspaces)
             )
+        elif isinstance(fspace, VectorTensorProductSpace):
+            vector = []
+            for i, (bi, tpspaces) in enumerate(
+                zip(fspace.system.base_vectors(), fspace.tensorspaces, strict=True)
+            ):
+                f = []
+                spaces = tpspaces.basespaces
+                for space in spaces:
+                    if isinstance(space, DirectSum):
+                        f.append(space)
+                    else:
+                        f.append([space])
+                tpspaces = itertools.product(*f)
+                for Vi in tpspaces:
+                    T = TensorProductSpace(Vi, fspace.system, f"{fspace.name}{i}")
+                    f = (
+                        sp.Mul.fromiter(
+                            get_BasisFunction(
+                                v.fun_str,
+                                global_index=i,
+                                local_index=getattr(a, "_id", [0])[0],
+                                rank=1,
+                                offset=fspace.dims,
+                                functionspace=v,
+                                argument=1,
+                                arg=a,
+                            )
+                            for a, v in zip(
+                                fspace.system.base_scalars(), T, strict=True
+                            )
+                        )
+                        * bi
+                    )
+                    vector.append(f)
+            return VectorAdd.fromiter(vector)
 
         return comp_fun(fspace)
 
@@ -772,7 +799,7 @@ class JAXFunction(ExpansionFunction):
                 self.name,
                 array=self.array,
                 global_index=0,
-                rank=rank,
+                rank=0,
                 functionspace=fs,
                 argument=2,
                 args=fs.system.base_scalars(),
@@ -784,10 +811,10 @@ class JAXFunction(ExpansionFunction):
         return VectorAdd.fromiter(
             get_JAXFunction(
                 self.name,
-                array=self.array,
+                array=self.array[i],
                 global_index=i,
-                rank=rank,
-                functionspace=fs,
+                rank=0,
+                functionspace=fs[i],
                 argument=2,
                 args=fs.system.base_scalars(),
             )
@@ -820,7 +847,7 @@ def evaluate_jaxfunction_expr(
                 jaxf = cast(AppliedUndef, p)
                 break
     assert hasattr(jaxf, "functionspace") and hasattr(jaxf, "array")
-    V: OrthogonalSpace = cast(OrthogonalSpace, jaxf.functionspace)
+    V = cast(FunctionSpaceType, jaxf.functionspace)
     if isinstance(a, sp.Pow):
         wa = a.args[0]
         dc = getattr(wa, "derivative_count", 0)

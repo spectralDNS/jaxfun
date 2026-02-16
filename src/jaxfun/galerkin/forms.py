@@ -356,10 +356,7 @@ def split(forms: sp.Expr) -> ResultDict:
     for arg in sp.Add.make_args(forms):
         basisfunctions = get_basisfunctions(arg)
         bilinear = basisfunctions[1] not in (None, set())
-        if bilinear or check_if_nonlinear_in_jaxfunction(arg):
-            arg = arg.doit(linear=False)
-        else:
-            arg = arg.doit(linear=True)
+        arg = arg.doit(linear=not (bilinear or check_if_nonlinear_in_jaxfunction(arg)))
         for argi in sp.Add.make_args(arg.factor().expand()):
             basisfunctions = get_basisfunctions(argi)
             d = _split(argi)

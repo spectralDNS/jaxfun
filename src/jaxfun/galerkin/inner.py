@@ -131,7 +131,8 @@ def inner(
             if isinstance(uf, BCGeneric):
                 has_bcs = True
 
-            z = inner_bilinear(ai, vf, uf, sc, "multivar" in a0 or "jaxfunction" in a0)
+            is_multivar = "multivar" in a0 or "jaxfunction" in a0
+            z = inner_bilinear(ai, vf, uf, sc, is_multivar)
 
             if isinstance(z, tuple):  # multivar
                 mats.append((z, global_indices))
@@ -297,14 +298,14 @@ def inner(
             assert isinstance(vf, OrthogonalSpace)
             assert _has_globalindex(v)
             global_index = v.global_index
-
+            is_multivar = (
+                "multivar" in b0 or "jaxfun" in b0 or isinstance(jaxarrays, Array)
+            )
             z = inner_linear(
                 bi,
                 vf,
                 sc,
-                "multivar" in b0
-                or isinstance(jaxarrays, Array)
-                or ("jaxfunction" in b0),
+                is_multivar,
             )
             sc = 1
             bs.append(z)

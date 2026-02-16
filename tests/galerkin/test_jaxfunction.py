@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 import pytest
+import sympy as sp
 
 from jaxfun.galerkin import (
     Chebyshev,
@@ -13,7 +14,7 @@ from jaxfun.galerkin import (
     TrialFunction,
     VectorTensorProductSpace,
 )
-from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.inner import inner, project
 from jaxfun.galerkin.tensorproductspace import TPMatrices
 from jaxfun.operators import Div, Dot, Grad
 from jaxfun.utils.common import ulp
@@ -206,6 +207,25 @@ def test_jaxfunction_2d_vector(space):
     assert jnp.linalg.norm(b0 - b1) < ulp(100)
 
 
+def test_evaluate_derivative():
+    N = 8
+    D = Legendre.Legendre(N)
+    T = TensorProduct(D, D)
+    x, y = T.system.base_scalars()
+    ue = sp.sin(x) * sp.cos(y)
+    uh = project(ue, T)
+    w = JAXFunction(uh, T, name="w")
+    xj, yj = T.mesh()
+    k = (1, 1)
+    dw_dx = T.evaluate_derivative((xj, yj), w.array, k=k)
+    from IPython import embed
+
+    embed()
+    dw_dx_analytic = JAXFunction(project(sp.diff(ue, x, y), T), T).backward()
+    assert jnp.linalg.norm(dw_dx - dw_dx_analytic) < ulp(1000)
+
+
 if __name__ == "__main__":
     # test_jaxfunction_2d(Chebyshev.Chebyshev)
-    test_jaxfunction_nonlin_diff(Chebyshev.Chebyshev)
+    # test_jaxfunction_nonlin_diff(Chebyshev.Chebyshev)
+    test_evaluate_derivative()

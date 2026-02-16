@@ -2,7 +2,7 @@
 
 The functions traverse SymPy expressions composed of:
   * Test / trial basis Functions (argument attribute 0 / 1)
-  * JAX-backed symbolic wrappers (JAXFunction, Jaxf, JAXArray)
+  * JAX-backed symbolic wrappers (JAXFunction, Jaxc, JAXArray)
   * Derivatives, sums, products, numeric coefficients
 
 They identify:
@@ -35,7 +35,7 @@ from jaxfun.typing import (
     TestSpaceType,
 )
 
-from .arguments import JAXArray, Jaxc, Jaxf, JAXFunction, TestFunction, TrialFunction
+from .arguments import JAXArray, Jaxc, JAXFunction, TestFunction, TrialFunction
 
 
 class _HasTestSpace(Protocol):
@@ -142,18 +142,6 @@ def get_jaxfunctions(
         if getattr(p, "argument", -1) == 2:
             jaxfunctions.add(p)
     return jaxfunctions
-
-
-def get_jaxf(a: sp.Expr | float) -> set[Jaxf]:
-    """Return set of Jaxf symbolic wrappers inside expression.
-
-    Args:
-        a: SymPy expression.
-
-    Returns:
-        Set with zero or more Jaxf objects.
-    """
-    return sp.sympify(a).atoms(Jaxf)
 
 
 def check_if_nonlinear_in_jaxfunction(a: sp.Expr) -> bool:
@@ -331,12 +319,6 @@ def split(forms: sp.Expr) -> ResultDict:
                 else:
                     multivar.append(arg)
 
-                # if isinstance(arg, sp.Derivative) or hasattr(arg, "argument"):
-                #    rest.append(arg)
-                # elif isinstance(arg, JAXFunction | Jaxf):
-                #    jfun.append(arg)
-                # else:
-                #    scale.append(arg)
             if len(rest) > 0:
                 d: InnerResultDict = sp.separatevars(
                     sp.Mul(*rest), dict=True, symbols=V.system._base_scalars

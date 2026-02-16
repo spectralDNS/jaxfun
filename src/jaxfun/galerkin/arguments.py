@@ -483,75 +483,6 @@ class JAXArray(BaseFunction):
         return f"{latex_symbols[self.name]}({self.functionspace.name})"
 
 
-class Jaxf(BaseFunction):
-    r"""The coefficients of a JAXFunction.
-
-    A JAXFunction represents a complete function in a given function space,
-    backed by a JAX array of coefficients. That is, in 1D it represents the
-    function u(x) defined by
-    .. math::
-
-        u(x) = \sum_i \hat{u}_{i} \phi_i(x)
-
-    where the coefficients :math:`\hat{u}_{i}` are stored in the JAXFunction array,
-    and :math:`\phi_i(x)` are the basis functions of the function space.
-    The higher dimensional cases (tensor product spaces, vector-valued spaces)
-    are handled similarly with different definitions of the basis functions.
-
-    When assembling weak forms, the JAXFunction is expanded into a TrialFunction
-    multiplied by the Jaxf symbolic coefficient array. The Jaxf object holds the
-    reference to the coefficient array and function space, allowing for assembly
-    of the system matrices and vectors.
-
-    Examples:
-        >>> import jax.numpy as jnp
-        >>> from jaxfun.galerkin import Chebyshev, inner
-        >>> from jaxfun.galerkin.arguments import Jaxf, JAXFunction, TestFunction, \
-        ... TrialFunction
-        >>> V = Chebyshev.Chebyshev(4, name="V")
-        >>> w = JAXFunction(jnp.ones(V.dim), V, name="w")
-        >>> v = TestFunction(V, name="v")
-        >>> b = inner(v * w)
-        >>> assert jnp.all(b == jnp.array([3.1415927, 1.5707964, 1.5707964, 1.5707964]))
-        >>> u = TrialFunction(V, name="u")
-        >>> a = inner(u * v)
-        >>> assert jnp.all(b == a @ w.array)
-        >>> assert w.doit().__str__() == r'\hat{w}_{j}(V)*T_j(x)'
-        >>> assert isinstance(w.doit().args[0], Jaxf)
-
-    Args:
-        array: JAX array of coefficients.
-        V: Function space instance.
-        name: Optional name for the Jaxf object.
-
-    """
-
-    array: Array
-    functionspace: FunctionSpaceType
-    name: str
-
-    def __new__(
-        cls,
-        array: Array,
-        V: FunctionSpaceType,
-        name: str | None = None,
-    ) -> Self:
-        obj: Self = Function.__new__(cls, sp.Dummy())
-        obj.array = array
-        obj.functionspace = V
-        obj.name = name if name is not None else "Jaxf"
-        return obj
-
-    def doit(self, **hints: dict) -> Self:
-        return self
-
-    def __str__(self) -> str:
-        return f"{self.name}({self.functionspace.name})"
-
-    def _latex(self, printer: Any = None) -> str:
-        return f"{latex_symbols[self.name]}({self.functionspace.name})"
-
-
 class Jaxc(sp.Dummy):
     r"""The coefficients of a JAXFunction.
 
@@ -575,7 +506,7 @@ class Jaxc(sp.Dummy):
     Examples:
         >>> import jax.numpy as jnp
         >>> from jaxfun.galerkin import Chebyshev, inner
-        >>> from jaxfun.galerkin.arguments import Jaxf, JAXFunction, TestFunction, \
+        >>> from jaxfun.galerkin.arguments import Jaxc, JAXFunction, TestFunction, \
         ... TrialFunction
         >>> V = Chebyshev.Chebyshev(4, name="V")
         >>> w = JAXFunction(jnp.ones(V.dim), V, name="w")
@@ -586,7 +517,7 @@ class Jaxc(sp.Dummy):
         >>> a = inner(u * v)
         >>> assert jnp.all(b == a @ w.array)
         >>> assert w.doit().__str__() == r'\hat{w}_{j}*T_j(x)'
-        >>> assert isinstance(w.doit().args[0], Jaxf)
+        >>> assert isinstance(w.doit().args[0], Jaxc)
 
     Args:
         array: JAX array of coefficients.
@@ -600,7 +531,6 @@ class Jaxc(sp.Dummy):
 
     def __new__(cls, array: Array, V: FunctionSpaceType, name: str) -> Self:
         obj = super().__new__(cls, name)
-        # The _id is used for equating purposes, and for hashing
         obj.array = array
         obj.functionspace = V
         obj.argument = 2
@@ -610,13 +540,13 @@ class Jaxc(sp.Dummy):
         return self
 
     def __str__(self) -> str:
-        return f"{self.name}"
+        return {self.name}
 
     def __repr__(self) -> str:
         return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
-        return f"{latex_symbols[self.name]}"
+        return latex_symbols[self.name]
 
 
 def get_JAXFunction(
@@ -722,7 +652,7 @@ class JAXFunction(ExpansionFunction):
     Examples:
         >>> import jax.numpy as jnp
         >>> from jaxfun.galerkin import Chebyshev, inner
-        >>> from jaxfun.galerkin.arguments import Jaxf, JAXFunction, TestFunction, \
+        >>> from jaxfun.galerkin.arguments import JAXFunction, TestFunction, \
         ... TrialFunction
         >>> V = Chebyshev.Chebyshev(4, name="V")
         >>> w = JAXFunction(jnp.ones(V.dim), V, name="w")

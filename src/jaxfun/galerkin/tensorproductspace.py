@@ -290,28 +290,12 @@ class TensorProductSpace:
         Returns:
             Array of evaluated field values with broadcast shape.
         """
-        dim: int = len(self)
-        if dim == 2:
-            T0, T1 = self.basespaces
-            C0 = T0.evaluate_basis_derivative(
-                jnp.atleast_1d(T0.map_reference_domain(x[0]).squeeze()), k[0]
+        for i, Ti in enumerate(self.basespaces):
+            Ci = Ti.evaluate_basis_derivative(
+                jnp.atleast_1d(Ti.map_reference_domain(x[i]).squeeze()), k[i]
             )
-            C1 = T1.evaluate_basis_derivative(
-                jnp.atleast_1d(T1.map_reference_domain(x[1]).squeeze()), k[1]
-            )
-            return jnp.einsum("ij,jk,lk->il", C0, c, C1)
-        else:
-            T0, T1, T2 = self.basespaces
-            C0 = T0.evaluate_basis_derivative(
-                jnp.atleast_1d(T0.map_reference_domain(x[0]).squeeze()), k[0]
-            )
-            C1 = T1.evaluate_basis_derivative(
-                jnp.atleast_1d(T1.map_reference_domain(x[1]).squeeze()), k[1]
-            )
-            C2 = T2.evaluate_basis_derivative(
-                jnp.atleast_1d(T2.map_reference_domain(x[2]).squeeze()), k[2]
-            )
-            c = jnp.einsum("ik,jl,nm,klm->ijn", C0, C1, C2, c)
+            c = jnp.tensordot(Ci, c, axes=(1, i))
+            c = jnp.moveaxis(c, 0, i)
         return c
 
     def get_padded(self, N: tuple[int, ...]) -> TensorProductSpace:

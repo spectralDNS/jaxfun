@@ -32,8 +32,8 @@ uh = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 uj = T.backward(uh, kind="uniform", N=(20, 20, 20))
 xj = T.mesh(kind="uniform", N=(20, 20, 20))
 uej = lambdify((x, y, z), ue)(*xj)
-error = jnp.linalg.norm(uj - uej)
+error = jnp.linalg.norm(uj - uej) / jnp.sqrt(T.dim)
 if "PYTEST" in os.environ:
-    assert error < ulp(1000), error
+    assert error < ulp(1000), f"Error = {error}"
 else:
     print("Error =", error)

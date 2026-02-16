@@ -438,7 +438,7 @@ def divergence(v: TensorLike) -> VectorLike | Expr:
     coord_sys = _get_coord_systems(v)
     if len(coord_sys) == 1:
         # v should be a vector/dyadic with Cartesian or covariant basis vectors
-        coord_sys = cast(CoordSys, next(iter(coord_sys)))
+        coord_sys = next(iter(coord_sys))
         x = coord_sys.base_scalars()
         bt = coord_sys.get_contravariant_basis_vector
         res = Add.fromiter(Dot(Derivative(v, x[i]), bt(i)) for i in range(len(x)))
@@ -498,7 +498,7 @@ def gradient(field: Expr | VectorLike, transpose: bool = False) -> TensorLike:
     if len(coord_sys) == 0:
         return _zero_for_rank(rank)
     if len(coord_sys) == 1:
-        coord_sys = cast(CoordSys, next(iter(coord_sys)))
+        coord_sys = next(iter(coord_sys))
         x = cast_bs(coord_sys.base_scalars())
         b = tuple(coord_sys.get_contravariant_basis_vector(i) for i in range(len(x)))
         if _is_vectorlike(field):
@@ -566,7 +566,7 @@ def curl(v: VectorLike) -> VectorLike:
     if isinstance(v, BasisDependentZero):
         return Vector.zero
     if len(coord_sys) == 1:
-        coord_sys = cast(CoordSys, next(iter(coord_sys)))
+        coord_sys = next(iter(coord_sys))
         x = cast_bs(coord_sys.base_scalars())
         b = tuple(coord_sys.get_contravariant_basis_vector(i) for i in range(len(x)))
         outvec = Add.fromiter(Cross(b[i], v.diff(x[i])) for i in range(len(x)))

@@ -277,13 +277,15 @@ class TensorProductSpace:
         return c
 
     @jax.jit(static_argnums=(0, 3))
-    def evaluate_derivative(self, x: list[Array], c: Array, k: int = 0) -> Array:
+    def evaluate_derivative(
+        self, x: list[Array], c: Array, k: tuple[int, ...]
+    ) -> Array:
         """Evaluate expansion (with derivatives) on provided tensor-product mesh arrays.
 
         Args:
             x: List of per-axis coordinate arrays (broadcasted or 1D).
             c: Coefficient tensor shaped (N0, N1, ...).
-            k: Derivative order (0 for function itself, 1 for first derivative, etc.).
+            k: Derivative order for each axis.
 
         Returns:
             Array of evaluated field values with broadcast shape.
@@ -292,22 +294,22 @@ class TensorProductSpace:
         if dim == 2:
             T0, T1 = self.basespaces
             C0 = T0.evaluate_basis_derivative(
-                jnp.atleast_1d(T0.map_reference_domain(x[0]).squeeze()), k
+                jnp.atleast_1d(T0.map_reference_domain(x[0]).squeeze()), k[0]
             )
-            C1 = T1.eval_basis_functions(
-                jnp.atleast_1d(T1.map_reference_domain(x[1]).squeeze())
+            C1 = T1.evaluate_basis_derivative(
+                jnp.atleast_1d(T1.map_reference_domain(x[1]).squeeze()), k[1]
             )
             return jnp.einsum("ij,jk,lk->il", C0, c, C1)
         else:
             T0, T1, T2 = self.basespaces
             C0 = T0.evaluate_basis_derivative(
-                jnp.atleast_1d(T0.map_reference_domain(x[0]).squeeze()), k
+                jnp.atleast_1d(T0.map_reference_domain(x[0]).squeeze()), k[0]
             )
             C1 = T1.evaluate_basis_derivative(
-                jnp.atleast_1d(T1.map_reference_domain(x[1]).squeeze()), k
+                jnp.atleast_1d(T1.map_reference_domain(x[1]).squeeze()), k[1]
             )
             C2 = T2.evaluate_basis_derivative(
-                jnp.atleast_1d(T2.map_reference_domain(x[2]).squeeze()), k
+                jnp.atleast_1d(T2.map_reference_domain(x[2]).squeeze()), k[2]
             )
             c = jnp.einsum("ik,jl,nm,klm->ijn", C0, C1, C2, c)
         return c
@@ -485,7 +487,7 @@ class VectorTensorProductSpace:
         return jnp.array(vals)
 
     @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
-    def evaluate_derivative(self, x: Array, c: Array, k: int = 0) -> Array:
+    def evaluate_derivative(self, x: Array, c: Array, k: tuple[int, ...]) -> Array:
         """Evaluate vector expansion derivatives at scattered points."""
         vals = []
         for i, space in enumerate(self.tensorspaces):

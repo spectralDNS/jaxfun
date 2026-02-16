@@ -347,14 +347,14 @@ class TrialFunction(ExpansionFunction):
             for i, (bi, tpspaces) in enumerate(
                 zip(fspace.system.base_vectors(), fspace.tensorspaces, strict=True)
             ):
-                f = []
+                fi = []
                 spaces = tpspaces.basespaces
                 for space in spaces:
                     if isinstance(space, DirectSum):
-                        f.append(space)
+                        fi.append(space)
                     else:
-                        f.append([space])
-                tpspaces = itertools.product(*f)
+                        fi.append([space])
+                tpspaces = itertools.product(*fi)
                 for Vi in tpspaces:
                     T = TensorProductSpace(Vi, fspace.system, f"{fspace.name}{i}")
                     f = (
@@ -751,7 +751,8 @@ class JAXFunction(ExpansionFunction):
     ) -> Self:
         coors: CoordSys = V.system
         obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
-        assert array.shape == V.num_dofs if V.dims > 1 else (V.num_dofs,), (
+        dof_shape = V.num_dofs if V.dims > 1 else (V.num_dofs,)
+        assert array.shape == dof_shape, (
             f"Array shape {array.shape} does not match number of DOFs {V.num_dofs} for function space {V.name}"  # noqa: E501
         )
         obj.array = array
@@ -766,7 +767,7 @@ class JAXFunction(ExpansionFunction):
         return self.functionspace.backward(self.array)
 
     def doit(self, **hints: Any) -> Expr | AppliedUndef:
-        hints = {"linear": False, **hints}
+        hints["linear"] = hints.get("linear", False)
         fs = self.functionspace
         rank = getattr(fs, "rank", 0)
 
@@ -850,12 +851,16 @@ def evaluate_jaxfunction_expr(
     V = cast(FunctionSpaceType, jaxf.functionspace)
     if isinstance(a, sp.Pow):
         wa = a.args[0]
-        dc = getattr(wa, "derivative_count", 0)
-        h = V.evaluate_derivative(xj, jaxf.array, k=int(dc))
+        variables = getattr(wa, "variables", ())
+        var = tuple(variables.count(s) for s in V.system.base_scalars())
+        var = var[0] if V.dims == 1 else var
+        h = V.evaluate_derivative(xj, jaxf.array, k=var)
         h = h ** int(a.exp)
     elif isinstance(a, sp.Derivative):
-        dc = int(a.derivative_count)
-        h = V.evaluate_derivative(xj, jaxf.array, k=int(dc))
+        variables = getattr(a, "variables", ())
+        var = tuple(variables.count(s) for s in V.system.base_scalars())
+        var = var[0] if V.dims == 1 else var
+        h = V.evaluate_derivative(xj, jaxf.array, k=var)
 
     else:
         if not isinstance(V, OrthogonalSpace | DirectSum):

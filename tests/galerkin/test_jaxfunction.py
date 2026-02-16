@@ -207,4 +207,5 @@ def test_jaxfunction_2d_vector(space):
 
 
 if __name__ == "__main__":
-    test_jaxfunction_2d(Chebyshev.Chebyshev)
+    # test_jaxfunction_2d(Chebyshev.Chebyshev)
+    test_jaxfunction_nonlin_diff(Chebyshev.Chebyshev)

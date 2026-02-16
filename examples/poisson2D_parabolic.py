@@ -54,7 +54,7 @@ uej = lambdify((tau, sigma), ue)(rj, tj)
 
 error = jnp.linalg.norm(uj - uej) / N
 if "PYTEST" in os.environ:
-    assert error < ulp(10000), f"Error {error} exceeds tolerance"
+    assert error < ulp(10000), f"Error {error} exceeds tolerance {ulp(10000)}"
     sys.exit(1)
 
 print("Error =", error)

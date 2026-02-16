@@ -122,15 +122,16 @@ def inner(
             assert isinstance(uf, OrthogonalSpace)
             assert _has_globalindex(v)
             assert _has_globalindex(u)
+
+            # Store the global indices used in each matrix in case of vector-valued
+            # space, for assembly of BC contributions and/or multivariable forms
             global_indices = v.global_index, u.global_index
 
             trial.append(uf)
             if isinstance(uf, BCGeneric):
                 has_bcs = True
 
-            z = inner_bilinear(
-                ai, vf, uf, sc, global_indices, "multivar" in a0 or "jaxfunction" in a0
-            )
+            z = inner_bilinear(ai, vf, uf, sc, "multivar" in a0 or "jaxfunction" in a0)
 
             if isinstance(z, tuple):  # multivar
                 mats.append((z, global_indices))
@@ -162,8 +163,8 @@ def inner(
             assert len(mats) == 2
             assert isinstance(test_space, TensorProductSpace)
             mats_ = [
-                cast(tuple[Array, Array], mats[0][0]),  # x-dir
-                cast(tuple[Array, Array], mats[1][0]),  # y-dir
+                cast(tuple[Array, Array], mats[0][0]),  # test/trial x-dir
+                cast(tuple[Array, Array], mats[1][0]),  # test/trial y-dir
             ]
             gi = [m[1] for m in mats]
 
@@ -363,22 +364,10 @@ def toBCOO(z: Array, sparse_tol: int) -> BCOO:
 def vectorize_bresult(
     res: Array, space: TensorProductSpace | VectorTensorProductSpace, global_index: int
 ) -> Array:
-    if isinstance(space, VectorTensorProductSpace):
-        zeros = jnp.zeros_like(res)
-        if space.dims == 2:
-            return (
-                jnp.stack((zeros, res))
-                if global_index == 1
-                else jnp.stack((res, zeros))
-            )
-        elif space.dims == 3:
-            if global_index == 1:
-                return jnp.stack((zeros, res, zeros))
-            elif global_index == 2:
-                return jnp.stack((zeros, zeros, res))
-            else:
-                return jnp.stack((res, zeros, zeros))
-    return res
+    if not isinstance(space, VectorTensorProductSpace):
+        return res
+    out = jnp.zeros((space.dims,) + res.shape, dtype=res.dtype)
+    return out.at[global_index].set(res)
 
 
 def process_results(
@@ -442,7 +431,6 @@ def inner_bilinear(
     v: OrthogonalSpace,
     u: OrthogonalSpace,
     sc: float | complex,
-    global_indices: tuple[int, int],
     multivar: Literal[False],
 ) -> Array: ...
 @overload
@@ -451,7 +439,6 @@ def inner_bilinear(
     v: OrthogonalSpace,
     u: OrthogonalSpace,
     sc: float | complex,
-    global_indices: tuple[int, int],
     multivar: Literal[True],
 ) -> tuple[Array, Array]: ...
 def inner_bilinear(
@@ -459,7 +446,6 @@ def inner_bilinear(
     v: OrthogonalSpace,
     u: OrthogonalSpace,
     sc: float | complex,
-    global_indices: tuple[int, int],
     multivar: bool,
 ) -> Array | tuple[Array, Array]:
     """Assemble single bilinear form contribution term.
@@ -473,7 +459,6 @@ def inner_bilinear(
         v: Test function space (Orthogonal or Composite).
         u: Trial function space.
         sc: Scalar bilinear coefficient (after linear split).
-        global_indices: Tuple of global indices for test and trial functions.
         multivar: True if coefficient not separable (handled upstream).
 
     Returns:
@@ -506,8 +491,7 @@ def inner_bilinear(
                 jaxfunction = p
                 break
         if jaxfunction:
-            h = evaluate_jaxfunction_expr(aii, xj, cast(AppliedUndef, jaxfunction))
-            scale *= h
+            scale *= evaluate_jaxfunction_expr(aii, xj, cast(AppliedUndef, jaxfunction))
             continue
         if len(aii.free_symbols) > 0:
             s = aii.free_symbols.pop()
@@ -595,11 +579,10 @@ def inner_linear(
             jaxfunction = None
             for p in sp.core.traversal.preorder_traversal(bii):
                 if getattr(p, "argument", -1) == 2:  # JAXFunction->AppliedUndef
-                    jaxfunction = p
+                    jaxfunction = cast(AppliedUndef, p)
                     break
             if jaxfunction:
-                h = evaluate_jaxfunction_expr(bii, xj, cast(AppliedUndef, jaxfunction))
-                uj *= h
+                uj *= evaluate_jaxfunction_expr(bii, xj, jaxfunction)
                 continue
             # bii contains coordinates in the domain of v, e.g., (r, theta) for polar
             # Need to compute bii as bii(x(X)), since we use quadrature points

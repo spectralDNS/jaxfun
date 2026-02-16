@@ -34,6 +34,6 @@ xj = T.mesh(kind="uniform", N=(20, 20, 20))
 uej = lambdify((x, y, z), ue)(*xj)
 error = jnp.linalg.norm(uj - uej) / jnp.sqrt(T.dim)
 if "PYTEST" in os.environ:
-    assert error < ulp(1000), f"Error = {error}"
+    assert error < ulp(1000), f"Error = {error} exceeds tolerance {ulp(1000)}"
 else:
     print("Error =", error)

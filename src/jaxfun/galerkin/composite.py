@@ -485,9 +485,9 @@ class DirectSum:
     @jax.jit(static_argnums=(0, 3))
     def evaluate_derivative(self, X: Array, c: Array, k: int = 0) -> float:
         """Evaluate k-th derivative at X (composite + boundary)."""
-        return self.basespaces[0].evaluate_derivative(X, c, k) + self.basespaces[
-            1
-        ].evaluate_derivative(X, self.bnd_vals(), k)
+        cs, bs = self.basespaces
+        bv = self.bnd_vals()
+        return cs.evaluate_derivative(X, c, k) + bs.evaluate_derivative(X, bv, k)
 
 
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:

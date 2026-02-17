@@ -231,10 +231,3 @@ def test_evaluate_derivative():
     # dw_dx_dy2 = T.evaluate_derivative((xj, yj), w.array, k=(1, 2))
     # dw_dx_dy2_analytic = JAXFunction(sp.diff(ue, x, y, y), T).backward()
     # assert jnp.linalg.norm(dw_dx_dy2 - dw_dx_dy2_analytic) < ulp(1000000)
-
-
-if __name__ == "__main__":
-    # test_jaxfunction_2d(Chebyshev.Chebyshev)
-    # test_jaxfunction_nonlin_diff(Chebyshev.Chebyshev)
-    test_evaluate_derivative()
-    # test_jaxfunction_nonlin_2d(Chebyshev.Chebyshev)

@@ -188,6 +188,26 @@ class Chebyshev(Jacobi):
 
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
+    @jax.jit(static_argnums=(0, 2, 3))
+    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+        """Return Chebyshev series evaluated at quadrature points.
+
+        Args:
+            c: Coefficient array of length N.
+
+        Returns:
+            Reversed coefficient array.
+        """
+        n: int = self.N if N == 0 else N
+
+        if kind == "quadrature":
+            if n > len(c):
+                c = jnp.pad(c, (0, n - len(c)))
+            sign = (-1) ** jnp.arange(n)
+            uh = c * sign
+            return 0.5 * uh[0] + n * jax.scipy.fft.idct(uh, n=n)
+        return super().backward(c, kind=kind, N=n)  # Does not require padding of c
+
     def norm_squared(self) -> Array:
         """Return L2 norms squared over [-1, 1] with Chebyshev weight.
 

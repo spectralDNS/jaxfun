@@ -31,10 +31,10 @@ jobs:
 
       - name: Run fast tests (default, excludes slow)
         run: |
-          JAX_ENABLE_X64=0 uv run pytest -m 'not slow'
-          JAX_ENABLE_X64=1 uv run pytest -m 'not slow'
+          uv run pytest -m 'not slow'
+          uv run pytest --float64 -m 'not slow'
 
       - name: Run slow demo tests
         run: |
-          JAX_ENABLE_X64=0 uv run pytest -m slow
-          JAX_ENABLE_X64=1 uv run pytest -m slow
+          uv run pytest -m slow
+          uv run pytest --float64 -m slow

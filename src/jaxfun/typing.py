@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, Protocol, cast, ove
 import sympy as sp
 from jax import Array as Array
 from jax.typing import ArrayLike as ArrayLike
-from sympy.core.backend import AppliedUndef
+from sympy.core.function import AppliedUndef
 from sympy.vector import (
     Dyadic,
     DyadicAdd,

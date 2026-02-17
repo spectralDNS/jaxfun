@@ -135,7 +135,7 @@ def get_jaxfunctions(
         a: SymPy expression.
 
     Returns:
-        Set with zero or more JAXArray objects.
+        Set with zero or more JAXFunction/Jaxc objects.
     """
     jaxfunctions: set[JAXFunction] = set()
     for p in sp.core.traversal.iterargs(sp.sympify(a)):
@@ -151,7 +151,7 @@ def check_if_nonlinear_in_jaxfunction(a: sp.Expr) -> bool:
         a: SymPy expression.
 
     Returns:
-        True if expression is linear in any JAXFunction, False otherwise.
+        True if expression is nonlinear in any JAXFunction, False otherwise.
     """
     jaxfunctions = get_jaxfunctions(a)
     have_jaxfunctions = len(jaxfunctions) > 0 or len(a.atoms(Jaxc)) > 0

@@ -404,14 +404,14 @@ def process_results(
 
     if len(aresults) > 0 and dims > 1 and sparse:
         for a0 in aresults:
-            assert isinstance(a0, TPMatrix)
-            a0.mats: list[BCOO] = [
-                toBCOO(
-                    a0.mats[i],
-                    sparse_tol,
-                )
-                for i in range(a0.dims)
-            ]
+            if isinstance(a0, TPMatrix):
+                a0.mats: list[BCOO] = [
+                    toBCOO(
+                        a0.mats[i],
+                        sparse_tol,
+                    )
+                    for i in range(a0.dims)
+                ]
 
     if len(bresults) > 0:
         bresults: Array = jnp.sum(jnp.array(bresults), axis=0)
@@ -661,7 +661,7 @@ def project1D(ue: sp.Expr, V: OrthogonalSpace | Composite | DirectSum) -> Array:
     return uh
 
 
-def project(ue: sp.Basic, V: TrialSpaceType) -> Array:
+def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
     """Project expression onto (possibly tensor) space V.
 
     Args:
@@ -672,6 +672,7 @@ def project(ue: sp.Basic, V: TrialSpaceType) -> Array:
         Coefficient array shaped to V.num_dofs.
     """
     if V.dims == 1:
+        assert isinstance(V, OrthogonalSpace | Composite | DirectSum)
         return project1D(ue, V)
 
     if V.is_orthogonal:

@@ -297,9 +297,9 @@ class TensorProductSpace:
         """
         for i, Ti in enumerate(self.basespaces):
             Ci = Ti.evaluate_basis_derivative(
-                jnp.atleast_1d(Ti.map_reference_domain(x[i]).squeeze()), k[i]
+                Ti.map_reference_domain(x[i]).squeeze(), k[i]
             )
-            c = jnp.tensordot(Ci, c, axes=(1, i))
+            c = jnp.tensordot(Ci, c, axes=(1, i), precision=jax.lax.Precision.HIGHEST)
             c = jnp.moveaxis(c, 0, i)
         return c
 

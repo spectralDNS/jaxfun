@@ -89,7 +89,7 @@ def is_linear_mul(node: sp.Mul, dependent: TrialFunction | sp.Function) -> bool:
     dependent_factors = [a for a in node.args if a.has(dependent)]
     if len(dependent_factors) == 1:
         return is_linear_in_dependent(dependent_factors[0], dependent)
-    return not len(dependent_factors) > 1
+    return len(dependent_factors) == 0
 
 
 def is_linear_pow(node: sp.Pow, dependent: TrialFunction | sp.Function) -> bool:

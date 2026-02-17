@@ -21,7 +21,7 @@ from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
 from jaxfun.coordinates import BaseTime, CoordSys
-from jaxfun.galerkin import Chebyshev
+from jaxfun.galerkin import Chebyshev, DirectSum
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.galerkin.tensorproductspace import (
     TensorProductSpace,
@@ -648,6 +648,10 @@ class SpectralModule(BaseModule):
         """Return spatial dimensionality of the basespace."""
         return self.space.dims
 
+    def set_kernel(self, kernel: Array) -> None:
+        """Set kernel parameters directly."""
+        self.kernel = nnx.Param(kernel)
+
     def __call__(self, x: Array) -> Array:
         """Evaluate spectral expansion at coordinates.
 
@@ -909,7 +913,11 @@ class FlaxFunction(Function):
     """
 
     functionspace: (
-        NNSpace | OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+        NNSpace
+        | OrthogonalSpace
+        | TensorProductSpace
+        | VectorTensorProductSpace
+        | DirectSum
     )
     t: BaseTime
     module: BaseModule
@@ -920,7 +928,11 @@ class FlaxFunction(Function):
 
     def __new__(
         cls: type[Self],
-        V: NNSpace | OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace,
+        V: NNSpace
+        | OrthogonalSpace
+        | TensorProductSpace
+        | VectorTensorProductSpace
+        | DirectSum,
         name: str,
         *,
         module: BaseModule | None = None,
@@ -1025,31 +1037,18 @@ class FlaxFunction(Function):
             mesh.append(lambdify(s, r, modules="jax")(*xs.T))
         return jnp.array(mesh).T
 
+    @property
+    def c_names(self) -> str:
+        """Return comma-separated coordinate names."""
+        return ", ".join([i.name for i in self.args[:-1]])
+
     def __str__(self) -> str:
         name = "\033[1m%s\033[0m" % (self.name,) if self.rank == 1 else self.name  # noqa: UP031
-        return "".join(
-            (
-                name,
-                "(",
-                ", ".join([i.name for i in self.args[:-1]]),
-                "; ",
-                self.args[-1].name,  # ty:ignore[unresolved-attribute]
-                ")",
-            )
-        )
+        return f"{name}({self.c_names}; {self.functionspace.name})"
 
     def _latex(self, printer: Any = None) -> str:
         name = r"\mathbf{ {%s} }" % (self.name,) if self.rank == 1 else self.name  # noqa: UP031
-        return "".join(
-            (
-                name,
-                "(",
-                ", ".join([i.name for i in self.args[:-1]]),
-                "; ",
-                self.args[-1].name,  # ty:ignore[unresolved-attribute]
-                ")",
-            )
-        )
+        return f"{name}({self.c_names}; {self.functionspace.name})"
 
     def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self.__str__())

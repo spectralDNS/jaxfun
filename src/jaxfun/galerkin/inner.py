@@ -330,7 +330,11 @@ def process_results(
     sparse: bool,
     sparse_tol: int,
 ) -> (
-    Array | list[Array] | BCOO | tuple[list[Array] | Array | BCOO, list[Array] | Array]
+    Array
+    | list[Array]
+    | BCOO
+    | list[TPMatrix]
+    | tuple[list[Array] | Array | BCOO | list[TPMatrix], list[Array] | Array]
 ):
     """Finalize assembly results (sum terms, optional sparsify).
 
@@ -354,13 +358,10 @@ def process_results(
             aresults: BCOO = tosparse(aresults, tol=sparse_tol)
 
     if len(aresults) > 0 and dims > 1 and sparse:
+        aresults: list[TPMatrix] = cast(list[TPMatrix], aresults)
         for a0 in aresults:
             a0.mats: list[RecognizableBCOO] = [
-                tosparse_and_attach(
-                    a0.mats[i],  # ty:ignore[possibly-missing-attribute]
-                    sparse_tol,
-                )
-                for i in range(a0.dims)  # ty:ignore[possibly-missing-attribute]
+                tosparse_and_attach(a0.mats[i], sparse_tol) for i in range(a0.dims)
             ]
 
     if len(bresults) > 0:

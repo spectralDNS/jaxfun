@@ -117,7 +117,7 @@ class Chebyshev(Jacobi):
 
     @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
-        """Return Gauss–Chebyshev (first kind) nodes and weights.
+        """Return Gauss-Chebyshev (first kind) nodes and weights.
 
         Nodes:
             x_k = cos(pi*(2k+1)/(2N)), k=0..N-1

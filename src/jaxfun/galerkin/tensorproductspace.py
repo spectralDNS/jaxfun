@@ -295,13 +295,15 @@ class TensorProductSpace:
         Returns:
             Array of evaluated field values with broadcast shape.
         """
+        df = 1
         for i, Ti in enumerate(self.basespaces):
             Ci = Ti.evaluate_basis_derivative(
                 Ti.map_reference_domain(x[i]).squeeze(), k[i]
             )
             c = jnp.tensordot(Ci, c, axes=(1, i), precision=jax.lax.Precision.HIGHEST)
             c = jnp.moveaxis(c, 0, i)
-        return c
+            df = df * (Ti.domain_factor ** k[i])
+        return c * df
 
     def get_padded(self, N: tuple[int, ...]) -> TensorProductSpace:
         """Return new tensor space with each axis padded/truncated to N."""

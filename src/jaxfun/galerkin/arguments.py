@@ -267,14 +267,13 @@ class TestFunction(ExpansionFunction):
         obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
         obj.argument = 0
         if isinstance(V, DirectSum):
-            obj.functionspace = V[0].get_homogeneous()
+            obj.functionspace = V[0]
         elif isinstance(V, TensorProductSpace | DirectSumTPS):
             f = []
             vname = V.name
             for space in V.basespaces:
                 if isinstance(space, DirectSum):
-                    f.append(space[0].get_homogeneous())
-                    vname += "0"
+                    f.append(space[0])
                 else:
                     f.append(space)
             obj.functionspace = TensorProductSpace(f, name=vname, system=V.system)
@@ -285,8 +284,7 @@ class TestFunction(ExpansionFunction):
                 g = []
                 for s in space:
                     if isinstance(s, DirectSum):
-                        g.append(s[0].get_homogeneous())
-                        vname += "0"
+                        g.append(s[0])
                     else:
                         g.append(s)
                 f.append(TensorProductSpace(g, name=vname, system=V.system))
@@ -540,7 +538,7 @@ class Jaxc(sp.Dummy):
         return self
 
     def __str__(self) -> str:
-        return {self.name}
+        return self.name
 
     def __repr__(self) -> str:
         return self.__str__()
@@ -675,17 +673,22 @@ class JAXFunction(ExpansionFunction):
 
     def __new__(
         cls,
-        array: Array,
+        array: Array | sp.Expr,
         V: FunctionSpaceType,
         name: str | None = None,
     ) -> Self:
         coors: CoordSys = V.system
         obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
+        if isinstance(array, sp.Expr):
+            from .inner import project
+
+            array = project(array, V)
+        obj.array = array
         dof_shape = V.num_dofs if V.dims > 1 else (V.num_dofs,)
         assert array.shape == dof_shape, (
             f"Array shape {array.shape} does not match number of DOFs {V.num_dofs} for function space {V.name}"  # noqa: E501
         )
-        obj.array = array
+
         obj.functionspace = V
         obj.argument = 2
         obj.name = name if name is not None else "JAXFunction"
@@ -786,6 +789,7 @@ def evaluate_jaxfunction_expr(
         var = var[0] if V.dims == 1 else var
         h = V.evaluate_derivative(xj, jaxf.array, k=var)
         h = h ** int(a.exp)
+
     elif isinstance(a, sp.Derivative):
         variables = getattr(a, "variables", ())
         var = tuple(variables.count(s) for s in V.system.base_scalars())

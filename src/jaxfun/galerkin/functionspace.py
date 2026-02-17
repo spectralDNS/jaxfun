@@ -144,6 +144,7 @@ def FunctionSpace(
             name=name + "_b",
             fun_str=fun_str + "_b",
         )
+        C.name += "0"
         return DirectSum(C, B)
     return space(
         N,

@@ -53,6 +53,8 @@ class OrthogonalSpace(BaseSpace):
         orthogonal: Self alias (Composite replaces with underlying).
     """
 
+    is_orthogonal = True
+
     def __init__(
         self,
         N: int,
@@ -177,9 +179,8 @@ class OrthogonalSpace(BaseSpace):
         if sp.sympify(sg).is_number:
             wj = wj * float(sg)
         else:
-            sg = lambdify(self.system.base_scalars()[0], self.map_expr_true_domain(sg))(
-                xj
-            )
+            x = self.system.base_scalars()[0]
+            sg = lambdify(x, self.map_expr_true_domain(sg))(xj)
             wj = wj * sg
         return (u * wj) @ jnp.conj(Pi)
 
@@ -357,3 +358,7 @@ class OrthogonalSpace(BaseSpace):
             name=self.name + "p",
             fun_str=self.fun_str + "p",
         )
+
+    def get_orthogonal(self) -> Self:
+        """Return self (orthogonal space is self; overridden in Composite)."""
+        return self

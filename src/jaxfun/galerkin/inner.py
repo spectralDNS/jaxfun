@@ -299,7 +299,7 @@ def inner(
             assert _has_globalindex(v)
             global_index = v.global_index
             is_multivar = (
-                "multivar" in b0 or "jaxfun" in b0 or isinstance(jaxarrays, Array)
+                "multivar" in b0 or "jaxfunction" in b0 or isinstance(jaxarrays, Array)
             )
             z = inner_linear(
                 bi,
@@ -661,7 +661,7 @@ def project1D(ue: sp.Expr, V: OrthogonalSpace | Composite | DirectSum) -> Array:
     return uh
 
 
-def project(ue: sp.Basic, V: OrthogonalSpace | TensorProductSpace) -> Array:
+def project(ue: sp.Basic, V: TrialSpaceType) -> Array:
     """Project expression onto (possibly tensor) space V.
 
     Args:
@@ -671,6 +671,13 @@ def project(ue: sp.Basic, V: OrthogonalSpace | TensorProductSpace) -> Array:
     Returns:
         Coefficient array shaped to V.num_dofs.
     """
+    if V.dims == 1:
+        return project1D(ue, V)
+
+    if V.is_orthogonal:
+        uj = lambdify(V.system.base_scalars(), ue, modules="jax")(*V.mesh())
+        return V.forward(uj)
+
     u = TrialFunction(V)
     v = TestFunction(V)
     M, b = inner(v * (u - ue))

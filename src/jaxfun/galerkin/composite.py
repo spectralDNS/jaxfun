@@ -129,6 +129,8 @@ class Composite(OrthogonalSpace):
         scaling: Scaling expression applied to user stencil.
     """
 
+    is_orthogonal: bool = False
+
     def __init__(  # noqa: D401  (docstring above)
         self,
         N: int,
@@ -313,6 +315,10 @@ class Composite(OrthogonalSpace):
             beta=self.orthogonal.beta,
         )
 
+    def get_orthogonal(self) -> OrthogonalSpace:
+        """Return underlying orthogonal basis instance."""
+        return self.orthogonal
+
 
 class BCGeneric(Composite):
     """Basis spanning only boundary-constraint enforcing functions.
@@ -420,6 +426,8 @@ class DirectSum:
         num_dofs: Free DOFs (from Composite part).
     """
 
+    is_orthogonal = False
+
     def __init__(self, a: Composite | OrthogonalSpace, b: BCGeneric) -> None:
         assert isinstance(b, BCGeneric)
         self.basespaces: tuple[Composite, BCGeneric] = (a, b)
@@ -481,6 +489,16 @@ class DirectSum:
         return self.basespaces[0].backward(c, kind, N) + self.basespaces[1].backward(
             self.bnd_vals(), kind, N
         )
+
+    @jax.jit(static_argnums=0)
+    def forward(self, uj: Array) -> Array:
+        """Project physical samples u -> direct-sum coefficients."""
+        from .arguments import TestFunction, TrialFunction
+
+        u = TrialFunction(self)
+        v = TestFunction(self)
+        M, b = inner(v * (u - uj))
+        return jnp.linalg.solve(M, b)
 
     @jax.jit(static_argnums=(0, 3))
     def evaluate_derivative(self, X: Array, c: Array, k: int = 0) -> float:

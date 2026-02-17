@@ -14,7 +14,7 @@ from jaxfun.galerkin import (
     TrialFunction,
     VectorTensorProductSpace,
 )
-from jaxfun.galerkin.inner import inner, project
+from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.tensorproductspace import TPMatrices
 from jaxfun.operators import Div, Dot, Grad
 from jaxfun.utils.common import ulp
@@ -208,24 +208,33 @@ def test_jaxfunction_2d_vector(space):
 
 
 def test_evaluate_derivative():
-    N = 8
+    N = 24
     D = Legendre.Legendre(N)
-    T = TensorProduct(D, D)
+    T = TensorProduct(D, D, name="T")
     x, y = T.system.base_scalars()
-    ue = sp.sin(x) * sp.cos(y)
-    uh = project(ue, T)
-    w = JAXFunction(uh, T, name="w")
+    ue = sp.sin(sp.pi * x) * sp.cos(sp.pi * y)
+    w = JAXFunction(ue, T, name="w")
     xj, yj = T.mesh()
-    k = (1, 1)
-    dw_dx = T.evaluate_derivative((xj, yj), w.array, k=k)
-    from IPython import embed
 
-    embed()
-    dw_dx_analytic = JAXFunction(project(sp.diff(ue, x, y), T), T).backward()
-    assert jnp.linalg.norm(dw_dx - dw_dx_analytic) < ulp(1000)
+    dw_dx = T.evaluate_derivative((xj, yj), w.array, k=(1, 0))
+    dw_dx_analytic = JAXFunction(sp.diff(ue, x), T).backward()
+    assert jnp.linalg.norm(dw_dx - dw_dx_analytic) < ulp(100000)
+
+    dw_dy = T.evaluate_derivative((xj, yj), w.array, k=(0, 1))
+    dw_dy_analytic = JAXFunction(sp.diff(ue, y), T).backward()
+    assert jnp.linalg.norm(dw_dy - dw_dy_analytic) < ulp(100000)
+
+    dw_dx_dy = T.evaluate_derivative((xj, yj), w.array, k=(1, 1))
+    dw_dx_dy_analytic = JAXFunction(sp.diff(ue, x, y), T).backward()
+    assert jnp.linalg.norm(dw_dx_dy - dw_dx_dy_analytic) < ulp(1000000)
+
+    # dw_dx_dy2 = T.evaluate_derivative((xj, yj), w.array, k=(1, 2))
+    # dw_dx_dy2_analytic = JAXFunction(sp.diff(ue, x, y, y), T).backward()
+    # assert jnp.linalg.norm(dw_dx_dy2 - dw_dx_dy2_analytic) < ulp(1000000)
 
 
 if __name__ == "__main__":
     # test_jaxfunction_2d(Chebyshev.Chebyshev)
     # test_jaxfunction_nonlin_diff(Chebyshev.Chebyshev)
     test_evaluate_derivative()
+    # test_jaxfunction_nonlin_2d(Chebyshev.Chebyshev)

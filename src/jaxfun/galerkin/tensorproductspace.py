@@ -94,6 +94,11 @@ class TensorProductSpace:
         """Return tensor rank (0 for scalar-valued space)."""
         return 0
 
+    @property
+    def is_orthogonal(self) -> bool:
+        """Return True if underlying bases are all orthogonal."""
+        return all(space.is_orthogonal for space in self.basespaces)
+
     def shape(self) -> tuple[int, ...]:
         """Return raw modal shape (N0, N1, ...)."""
         return tuple([space.N for space in self.basespaces])
@@ -307,6 +312,13 @@ class TensorProductSpace:
             paddedspaces, system=self.system, name=self.name + "p"
         )
 
+    def get_orthogonal(self) -> TensorProductSpace:
+        """Return underlying orthogonal basis instance."""
+        orthogonal_spaces = [space.get_orthogonal() for space in self.basespaces]
+        return TensorProductSpace(
+            orthogonal_spaces, system=self.system, name=self.name + "o"
+        )
+
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
         self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
@@ -447,6 +459,11 @@ class VectorTensorProductSpace:
         """Return tuple of active degrees of freedom per axis."""
         return (self.dims,) + self.tensorspaces[0].num_dofs
 
+    @property
+    def is_orthogonal(self) -> bool:
+        """Return True if underlying bases are all orthogonal."""
+        return all(space.is_orthogonal for space in self.tensorspaces)
+
     def shape(self) -> tuple[int, ...]:
         """Return raw modal shape (N0, N1, ...)."""
         return (self.dims,) + self.tensorspaces[0].shape()
@@ -479,6 +496,14 @@ class VectorTensorProductSpace:
             vi = space.evaluate_derivative(x, ci, k)
             vals.append(vi)
         return jnp.stack(vals)
+
+    def forward(self, u: Array, N: tuple[int, ...] | None = None) -> Array:
+        """Forward transform with optional truncation."""
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.forward(u[i], N)
+            coeffs.append(ci)
+        return jnp.stack(coeffs)
 
 
 def TensorProduct(

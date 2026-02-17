@@ -14,12 +14,12 @@ def test_split_coeff_number_and_add():
     # Add of number and JAXFunction
     V = Chebyshev.Chebyshev(4)
     coeffs = jax.random.normal(jax.random.PRNGKey(0), shape=(V.N,))
-    jf = JAXFunction(coeffs, V).doit()
+    jf = JAXFunction(coeffs, V).doit(linear=True)
     with pytest.raises(AssertionError):
         _ = split_coeff(sp.Integer(2) + jf)
     f = jf.args[0]
     c2_raw = split_coeff(sp.Integer(2) + f)
-    assert c2_raw["bilinear"] == 2.0 and c2_raw["linear"]["jaxfunction"] is f
+    assert c2_raw["bilinear"] == 2.0 and c2_raw["linear"]["jaxcoeff"] is f
 
 
 def test_split_and_add_result():

@@ -2,7 +2,7 @@
 
 The functions traverse SymPy expressions composed of:
   * Test / trial basis Functions (argument attribute 0 / 1)
-  * JAX-backed symbolic wrappers (JAXFunction, Jaxf, JAXArray)
+  * JAX-backed symbolic wrappers (JAXFunction, Jaxc, JAXArray)
   * Derivatives, sums, products, numeric coefficients
 
 They identify:
@@ -35,7 +35,7 @@ from jaxfun.typing import (
     TestSpaceType,
 )
 
-from .arguments import JAXArray, Jaxf, JAXFunction, TestFunction, TrialFunction
+from .arguments import JAXArray, Jaxc, JAXFunction, TestFunction, TrialFunction
 
 
 class _HasTestSpace(Protocol):
@@ -124,22 +124,60 @@ def get_jaxarrays(
     return sp.sympify(a).atoms(JAXArray)
 
 
+def get_jaxfunctions(
+    a: sp.Expr | float,
+) -> set[JAXFunction]:
+    """Return set of JAXFunction symbolic wrappers inside expression.
+
+    JAXFunction nodes are identified through attribute 'argument' == 2.
+
+    Args:
+        a: SymPy expression.
+
+    Returns:
+        Set with zero or more JAXFunction/Jaxc objects.
+    """
+    jaxfunctions: set[JAXFunction] = set()
+    for p in sp.core.traversal.iterargs(sp.sympify(a)):
+        if getattr(p, "argument", -1) == 2:
+            jaxfunctions.add(p)
+    return jaxfunctions
+
+
+def check_if_nonlinear_in_jaxfunction(a: sp.Expr) -> bool:
+    """Check if expression is nonlinear in any JAXFunction.
+
+    Args:
+        a: SymPy expression.
+
+    Returns:
+        True if expression is nonlinear in any JAXFunction, False otherwise.
+    """
+    jaxfunctions = get_jaxfunctions(a)
+    have_jaxfunctions = len(jaxfunctions) > 0 or len(a.atoms(Jaxc)) > 0
+    if not have_jaxfunctions:
+        return False
+    assert len(jaxfunctions) <= 1, "Multiple JAXFunctions found"
+    ad = a.doit(linear=True)  # assume linear
+    jf = ad.atoms(Jaxc).pop()
+    return sp.diff(ad, jf, 2) != 0
+
+
 def split_coeff(c0: sp.Expr | float) -> CoeffDict:
     """Split coefficient for bilinear form into linear / bilinear pieces.
 
     Patterns handled:
       * Pure number -> {'bilinear': scalar}
-      * Single Jaxf -> {'linear': {'scale': 1, 'jaxfunction': Jaxf}}
-      * Product including Jaxf -> scale isolated
-      * Sum of numbers / (scaled) Jaxf terms -> combined
+      * Single Jaxc -> {'linear': {'scale': 1, 'jaxfunction': Jaxc}}
+      * Product including Jaxc -> scale isolated
+      * Sum of numbers / (scaled) Jaxc terms -> combined
 
     Args:
-        c0: SymPy expression with optional Jaxf factor(s).
-
+        c0: SymPy expression with optional Jaxc factor(s).
     Returns:
         Dictionary with possible keys:
           'bilinear': numeric scalar (if present)
-          'linear': {'scale': number, NotRequired('jaxfunction': Jaxf)}
+          'linear': {'scale': number, NotRequired('jaxfunction': Jaxc)}
 
     Raises:
         AssertionError: If basis functions are present in the coefficient.
@@ -153,30 +191,29 @@ def split_coeff(c0: sp.Expr | float) -> CoeffDict:
     if c0.is_number:
         coeffs["bilinear"] = float(c0) if c0.is_real else complex(c0)
 
-    elif isinstance(c0, Jaxf):
-        coeffs["linear"] = LinearCoeffDict(scale=1, jaxfunction=c0)
+    elif isinstance(c0, Jaxc):
+        coeffs["linear"] = LinearCoeffDict(scale=1, jaxcoeff=c0)
 
     elif isinstance(c0, sp.Mul):
         coeffs["linear"] = LinearCoeffDict(scale=1)
         for ci in c0.args:
-            if isinstance(ci, Jaxf):
-                coeffs["linear"]["jaxfunction"] = ci
+            if isinstance(ci, Jaxc):
+                coeffs["linear"]["jaxcoeff"] = ci
             else:
                 coeffs["linear"]["scale"] *= float(ci) if ci.is_real else complex(ci)
 
     elif isinstance(c0, sp.Add):
         linear_coeffs = LinearCoeffDict(scale=1)
         coeffs.update(CoeffDict(linear=linear_coeffs, bilinear=0))
-        # coeffs.update({"linear": {"scale": 1, "jaxfunction": None}, "bilinear": 0})
         for arg in c0.args:
             if arg.is_number:
                 coeffs["bilinear"] = float(arg) if arg.is_real else complex(arg)
-            elif isinstance(arg, Jaxf):
-                coeffs["linear"]["jaxfunction"] = arg
+            elif isinstance(arg, Jaxc):
+                coeffs["linear"]["jaxcoeff"] = arg
             elif isinstance(arg, sp.Mul):
                 for ci in arg.args:
-                    if isinstance(ci, Jaxf):
-                        coeffs["linear"]["jaxfunction"] = ci
+                    if isinstance(ci, Jaxc):
+                        coeffs["linear"]["jaxcoeff"] = ci
                     else:
                         coeffs["linear"]["scale"] *= (
                             float(ci) if ci.is_real else complex(ci)
@@ -232,7 +269,7 @@ def split(forms: sp.Expr) -> ResultDict:
     For each additive term:
       * Identify presence of trial basis -> classify as bilinear
       * Otherwise classify as linear
-      * Separate variable factors and coefficient (JAXFunction / Jaxf)
+      * Separate variable factors and coefficient (JAXFunction / Jaxc)
       * Combine like terms via add_result
 
     Args:
@@ -261,37 +298,54 @@ def split(forms: sp.Expr) -> ResultDict:
             ms, dict=True, symbols=V.system._base_scalars
         )
         if d is None and isinstance(ms, sp.Mul):
-            scale = []
+            multivar = []
             rest = []
             jfun = []
+            jaxc = []
             for arg in ms.args:
-                if isinstance(arg, sp.Derivative) or hasattr(arg, "argument"):
+                test, trial = get_basisfunctions(arg)
+                if test is not None or trial is not None:
                     rest.append(arg)
-                elif isinstance(arg, JAXFunction | Jaxf):
+                    continue
+                jaxfuns = get_jaxfunctions(arg)
+                if len(jaxfuns) > 0:
                     jfun.append(arg)
+                    continue
+                if arg.atoms(Jaxc):
+                    jaxc.append(arg)
+                    continue
+                if len(arg.free_symbols) == 1:
+                    rest.append(arg)
                 else:
-                    scale.append(arg)
+                    multivar.append(arg)
+
             if len(rest) > 0:
                 d: InnerResultDict = sp.separatevars(
                     sp.Mul(*rest), dict=True, symbols=V.system._base_scalars
                 )
             if isinstance(d, dict):
-                if len(scale) > 0:
-                    d["multivar"] = sp.Mul(*scale)
+                if len(multivar) > 0:
+                    d["multivar"] = sp.Mul(*multivar)
                 if len(jfun) > 0:
-                    d["coeff"] = jfun[0]
+                    d["jaxfunction"] = jfun[0]
+                if len(jaxc) > 0:
+                    d["coeff"] = jaxc[0]
         if d is None:
             raise RuntimeError("Could not split form")
         return d
 
     result = ResultDict(linear=[], bilinear=[])
-    for arg in sp.Add.make_args(forms.doit().factor().expand()):
+    for arg in sp.Add.make_args(forms):
         basisfunctions = get_basisfunctions(arg)
-        d = _split(arg)
-        if basisfunctions[1] in (None, set()):
-            result["linear"] = add_result(result["linear"], d, V.system)
-        else:
-            result["bilinear"] = add_result(result["bilinear"], d, V.system)
+        bilinear = basisfunctions[1] not in (None, set())
+        arg = arg.doit(linear=not (bilinear or check_if_nonlinear_in_jaxfunction(arg)))
+        for argi in sp.Add.make_args(arg.factor().expand()):
+            basisfunctions = get_basisfunctions(argi)
+            d = _split(argi)
+            if basisfunctions[1] in (None, set()):
+                result["linear"] = add_result(result["linear"], d, V.system)
+            else:
+                result["bilinear"] = add_result(result["bilinear"], d, V.system)
 
     return result
 
@@ -319,6 +373,9 @@ def add_result(
         if jnp.all(jnp.array([g[s] == d[s] for s in system.base_scalars()])):
             if "multivar" not in d:
                 g["coeff"] += d["coeff"]
+            elif "multivar" not in g:
+                g["multivar"] = d["coeff"] * d["multivar"]
+                g["coeff"] = 1
             else:
                 g["multivar"] = (
                     g["coeff"] * g["multivar"] + d["coeff"] * d["multivar"]

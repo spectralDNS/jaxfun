@@ -99,7 +99,7 @@ def _(N, V, display):
 
     h = JAXFunction(jnp.ones(N), V, name="h")
     display(h)
-    display(h.doit())
+    display(h.doit(linear=True))
     return JAXFunction, h, jnp
 
 
@@ -115,7 +115,7 @@ def _(mo):
 def _(JAXFunction, N, T, display, jnp):
     b = JAXFunction(jnp.ones((N, N)), T, name="b")
     display(b)
-    display(b.doit())
+    display(b.doit(linear=True))
     return
 
 
@@ -123,7 +123,7 @@ def _(JAXFunction, N, T, display, jnp):
 def _(JAXFunction, N, W, display, jnp):
     c = JAXFunction(jnp.ones((2, N, N)), W, name="c")
     display(c)
-    display(c.doit())
+    display(c.doit(linear=True))
     return
 
 
@@ -161,7 +161,7 @@ def _(mo):
 
 @app.cell
 def _(h, v):
-    (h * v).doit()
+    (h * v).doit(linear=True)
     return
 
 

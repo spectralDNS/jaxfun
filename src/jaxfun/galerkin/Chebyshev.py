@@ -188,6 +188,47 @@ class Chebyshev(Jacobi):
 
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
+    @jax.jit(static_argnums=(0, 2, 3))
+    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+        """Return Chebyshev series evaluated at quadrature points.
+
+        Args:
+            c: Coefficient array of length N.
+
+        Returns:
+            Reversed coefficient array.
+        """
+        n: int = self.N if N == 0 else N
+
+        if kind == "quadrature":
+            if n > len(c):
+                c = jnp.pad(c, (0, n - len(c)))
+            sign = (-1) ** jnp.arange(n)
+            uh = c * sign
+            return 0.5 * uh[0] + n * jax.scipy.fft.idct(uh, n=n)
+        return super().backward(c, kind=kind, N=n)  # Does not require padding of c
+
+    @jax.jit(static_argnums=(0, 2))
+    def forward(self, u: Array, N: int = 0) -> Array:
+        """Return Chebyshev coefficients for function values at quadrature points.
+
+        Args:
+            u: Function values at quadrature points.
+            N: Number of modes to return (defaults self.N if 0).
+
+        Returns:
+            Coefficient array of length N.
+        """
+        N: int = self.N if N == 0 else N
+        n: int = len(u)
+        assert len(u) >= N, "Only truncation supported for forward transform"
+        sign = (-1) ** jnp.arange(n)
+        uh = jax.scipy.fft.dct(u, n=n)
+        uh = uh.at[0].set(uh[0] / 2) * sign / n
+        if len(u) > N:
+            uh = uh[:N]
+        return uh
+
     def norm_squared(self) -> Array:
         """Return L2 norms squared over [-1, 1] with Chebyshev weight.
 

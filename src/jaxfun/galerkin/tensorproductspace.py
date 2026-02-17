@@ -4,7 +4,7 @@ import copy
 import itertools
 from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
-from typing import TypeGuard
+from typing import TYPE_CHECKING, TypeGuard
 
 import jax
 import jax.numpy as jnp
@@ -14,6 +14,9 @@ from jax import Array
 from scipy import sparse as scipy_sparse
 
 from jaxfun.coordinates import CoordSys
+
+if TYPE_CHECKING:
+    from jaxfun.galerkin import JAXFunction
 from jaxfun.utils.common import eliminate_near_zeros, jit_vmap, lambdify
 
 from .composite import BCGeneric, BoundaryConditions, Composite, DirectSum
@@ -90,6 +93,11 @@ class TensorProductSpace:
     def rank(self) -> int:
         """Return tensor rank (0 for scalar-valued space)."""
         return 0
+
+    @property
+    def is_orthogonal(self) -> bool:
+        """Return True if underlying bases are all orthogonal."""
+        return all(space.is_orthogonal for space in self.basespaces)
 
     def shape(self) -> tuple[int, ...]:
         """Return raw modal shape (N0, N1, ...)."""
@@ -273,6 +281,28 @@ class TensorProductSpace:
             c = jnp.einsum(path, *C, c)
         return c
 
+    @jax.jit(static_argnums=(0, 3))
+    def evaluate_derivative(
+        self, x: list[Array], c: Array, k: tuple[int, ...]
+    ) -> Array:
+        """Evaluate expansion (with derivatives) on provided tensor-product mesh arrays.
+
+        Args:
+            x: List of per-axis coordinate arrays (broadcasted or 1D).
+            c: Coefficient tensor shaped (N0, N1, ...).
+            k: Derivative order for each axis.
+
+        Returns:
+            Array of evaluated field values with broadcast shape.
+        """
+        for i, Ti in enumerate(self.basespaces):
+            Ci = Ti.evaluate_basis_derivative(
+                Ti.map_reference_domain(x[i]).squeeze(), k[i]
+            )
+            c = jnp.tensordot(Ci, c, axes=(1, i), precision=jax.lax.Precision.HIGHEST)
+            c = jnp.moveaxis(c, 0, i)
+        return c
+
     def get_padded(self, N: tuple[int, ...]) -> TensorProductSpace:
         """Return new tensor space with each axis padded/truncated to N."""
         paddedspaces = [
@@ -280,6 +310,13 @@ class TensorProductSpace:
         ]
         return TensorProductSpace(
             paddedspaces, system=self.system, name=self.name + "p"
+        )
+
+    def get_orthogonal(self) -> TensorProductSpace:
+        """Return underlying orthogonal basis instance."""
+        orthogonal_spaces = [space.get_orthogonal() for space in self.basespaces]
+        return TensorProductSpace(
+            orthogonal_spaces, system=self.system, name=self.name + "o"
         )
 
     @jax.jit(static_argnums=(0, 2, 3))
@@ -361,8 +398,8 @@ class TensorProductSpace:
 class VectorTensorProductSpace:
     """Vector-valued tensor product space.
 
-    Represents a tuple of identical (or differing) TensorProductSpace
-    objects corresponding to vector components.
+    Represents a tuple of identical (or differing in boundary conditions)
+    TensorProductSpace objects corresponding to vector components.
 
     Attributes:
         tensorspaces: Tuple of component tensor spaces.
@@ -387,6 +424,8 @@ class VectorTensorProductSpace:
         self.system: CoordSys = self.tensorspaces[0].system
         self.name = name
         self.tensorname = multiplication_sign.join([b.name for b in self.tensorspaces])
+        self.mesh = self.tensorspaces[0].mesh
+        self.evaluate_mesh = self.tensorspaces[0].evaluate_mesh
 
     def __len__(self) -> int:
         """Return number of vector components."""
@@ -420,6 +459,15 @@ class VectorTensorProductSpace:
         """Return tuple of active degrees of freedom per axis."""
         return (self.dims,) + self.tensorspaces[0].num_dofs
 
+    @property
+    def is_orthogonal(self) -> bool:
+        """Return True if underlying bases are all orthogonal."""
+        return all(space.is_orthogonal for space in self.tensorspaces)
+
+    def shape(self) -> tuple[int, ...]:
+        """Return raw modal shape (N0, N1, ...)."""
+        return (self.dims,) + self.tensorspaces[0].shape()
+
     @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
     def evaluate(self, x: Array, c: Array, use_einsum: bool) -> Array:
         """Evaluate vector expansion at scattered points.
@@ -438,6 +486,24 @@ class VectorTensorProductSpace:
             vi = space.evaluate(x, ci, use_einsum)
             vals.append(vi)
         return jnp.array(vals)
+
+    @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
+    def evaluate_derivative(self, x: Array, c: Array, k: tuple[int, ...]) -> Array:
+        """Evaluate vector expansion derivatives at scattered points."""
+        vals = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = c[i]
+            vi = space.evaluate_derivative(x, ci, k)
+            vals.append(vi)
+        return jnp.stack(vals)
+
+    def forward(self, u: Array, N: tuple[int, ...] | None = None) -> Array:
+        """Forward transform with optional truncation."""
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.forward(u[i], N)
+            coeffs.append(ci)
+        return jnp.stack(coeffs)
 
 
 def TensorProduct(
@@ -691,6 +757,13 @@ class DirectSumTPS(TensorProductSpace):
             a.append(v.evaluate(x, self.coeff(c, f, v), use_einsum))
         return jnp.sum(jnp.array(a), axis=0)
 
+    def evaluate_derivative(self, x: Array, c: Array, k: int) -> Array:
+        """Evaluate direct sum tensor product expansion at scattered points."""
+        a: list[Array] = []
+        for f, v in self.tpspaces.items():
+            a.append(v.evaluate_derivative(x, self.coeff(c, f, v), k))
+        return jnp.sum(jnp.array(a), axis=0)
+
     def evaluate_mesh(
         self, x: list[Array], c: Array, use_einsum: bool = False
     ) -> Array:
@@ -722,14 +795,41 @@ class TPMatrices:
         self.tpmats: list[TPMatrix] = tpmats
 
     @jax.jit(static_argnums=0)
-    def __call__(self, u: Array):
+    def _apply_array(self, u: Array) -> Array:
+        return jnp.sum(jnp.array([mat._matmul_array(u) for mat in self.tpmats]), axis=0)
+
+    def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply summed tensor product operator to u."""
-        return jnp.sum(jnp.array([mat(u) for mat in self.tpmats]), axis=0)
+        from jaxfun.galerkin import JAXFunction
+
+        w = u.array if isinstance(u, JAXFunction) else u
+        return self._apply_array(w)
 
     @jax.jit(static_argnums=0)
-    def precond(self, u: Array):
+    def _precond_array(self, u: Array) -> Array:
+        return jnp.sum(
+            jnp.array([mat._precond_array(u) for mat in self.tpmats]), axis=0
+        )
+
+    def precond(self, u: Array | JAXFunction) -> Array:
         """Apply summed diagonal preconditioner to u."""
-        return jnp.sum(jnp.array([mat.M(u) for mat in self.tpmats]), axis=0)
+        from jaxfun.galerkin import JAXFunction
+
+        w = u.array if isinstance(u, JAXFunction) else u
+        return self._precond_array(w)
+
+    def __matmul__(self, u: Array | JAXFunction) -> Array:
+        """Alias to __call__ for @ operator."""
+        return self.__call__(u)
+
+    def __rmatmul__(self, u: Array | JAXFunction) -> Array:
+        """Right matmul (u @ A) treating u as left factor."""
+        from jaxfun.galerkin import JAXFunction
+
+        w = u.array if isinstance(u, JAXFunction) else u
+        return jnp.sum(
+            jnp.array([mat._rmatmul_array(w) for mat in self.tpmats]), axis=0
+        )
 
 
 class precond:
@@ -786,28 +886,54 @@ class TPMatrix:  # noqa: B903
         return jnp.kron(*self.mats)
 
     @jax.jit(static_argnums=0)
-    def __call__(self, u: Array):
+    def _matmul_array(self, w: Array) -> Array:
+        return self.mats[0] @ w @ self.mats[1].T
+
+    def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply matrix to rank-2 coefficient array u."""
-        return self.mats[0] @ u @ self.mats[1].T
+        from jaxfun.galerkin import JAXFunction
+
+        w = u.array if isinstance(u, JAXFunction) else u
+        return self._matmul_array(w)
 
     @jax.jit(static_argnums=0)
-    def precond(self, u: Array):
+    def _precond_array(self, w: Array) -> Array:
+        return self.M(w)
+
+    def precond(self, u: Array | JAXFunction) -> Array:
         """Apply diagonal preconditioner to u."""
-        return self.M(u)
+        from jaxfun.galerkin import JAXFunction
 
-    @jax.jit(static_argnums=0)
-    def __matmul__(self, u: Array) -> Array:
+        w = u.array if isinstance(u, JAXFunction) else u
+        return self._precond_array(w)
+
+    def __matmul__(self, u: Array | JAXFunction) -> Array:
         """Alias to __call__ for @ operator."""
-        return self.mats[0] @ u @ self.mats[1].T
+        return self.__call__(u)
 
     @jax.jit(static_argnums=0)
-    def __rmatmul__(self, u: Array) -> Array:
+    def _rmatmul_array(self, w: Array) -> Array:
+        return self.mats[0].T @ w @ self.mats[1]
+
+    def __rmatmul__(self, u: Array | JAXFunction) -> Array:
         """Right matmul (u @ A) treating u as left factor."""
-        return self.mats[0].T @ u @ self.mats[1]
+        from jaxfun.galerkin import JAXFunction
+
+        w = u.array if isinstance(u, JAXFunction) else u
+        return self._rmatmul_array(w)
 
 
 class TensorMatrix:  # noqa: B903
-    """Non-separable (fully assembled) tensor product matrix wrapper.
+    """Non-separable tensor with dims * 2 indices.
+
+    For test function v_{ij} and trial function u_{kl}, the tensor
+    represents  A_{ikjl}.
+
+    Matrix vector product
+
+    .. math::
+
+        v_{ij} = \\sum_{k,l} A_{ikjl} u_{kl}
 
     Stored when coefficient is non-separable in coordinates so Kron
     factorization is unavailable.
@@ -823,9 +949,35 @@ class TensorMatrix:  # noqa: B903
         test_space: TensorProductSpace,
         trial_space: TensorProductSpace,
     ) -> None:
-        self.mat = mat
+        self.mat = mat  # mat is A_ikjl
         self.test_space = test_space
         self.trial_space = trial_space
+
+    @jax.jit(static_argnums=0)
+    def _matmul_array(self, w: Array) -> Array:
+        return jnp.einsum("ikjl,kl->ij", self.mat, w)
+
+    def __call__(self, u: Array | JAXFunction) -> Array:
+        """Apply matrix to coefficient array u."""
+        from jaxfun.galerkin import JAXFunction
+
+        w = u.array if isinstance(u, JAXFunction) else u
+        return self._matmul_array(w)
+
+    def __matmul__(self, u: Array | JAXFunction) -> Array:
+        """Alias to __call__ for @ operator."""
+        return self.__call__(u)
+
+    @jax.jit(static_argnums=0)
+    def _rmatmul_array(self, w: Array) -> Array:
+        return jnp.einsum("ij,ikjl->kl", w, self.mat)
+
+    def __rmatmul__(self, u: Array | JAXFunction) -> Array:
+        """Right matmul (u @ A) treating u as left factor."""
+        from jaxfun.galerkin import JAXFunction
+
+        w = u.array if isinstance(u, JAXFunction) else u
+        return self._rmatmul_array(w)
 
 
 def tpmats_to_scipy_sparse(

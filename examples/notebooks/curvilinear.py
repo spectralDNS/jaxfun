@@ -295,7 +295,7 @@ def _(mo):
     \boldsymbol{p} = (\boldsymbol{p} \cdot \boldsymbol{b}_r) \boldsymbol{b}_r + (\boldsymbol{p} \cdot \boldsymbol{b}_{\theta}) \boldsymbol{b}_{\theta} + (\boldsymbol{p} \cdot \boldsymbol{b}_{z}) \boldsymbol{b}_{z} = r \boldsymbol{b}_r + z \mathbf{b}_z
     $$
 
-    This is called a projection of the vector $\boldsymbol{p}$ to the polar basis. The projection can be computed with method `from_cartesian`:
+    This is called a projection of the vector $\boldsymbol{p}$ to the cylinder basis. The projection can be computed with method `from_cartesian`:
     """)
     return
 
@@ -444,7 +444,7 @@ def _(mo):
     \text{div}(\mathbf{v}) = \nabla \cdot \mathbf{v} = \frac{\partial \mathbf{v}}{\partial X^j} \cdot \mathbf{b}^j = \frac{1}{\sqrt{g}} \frac{\partial {v}^{i} \sqrt{g}}{\partial X^{i}},\tag{16}
     \end{equation}
 
-    and the Laplacian of the scalar field $u$ can be written as
+    and the Laplacian of the scalar field $f$ can be written as
 
     \begin{equation}
     \text{div}(\text{grad}(f)) = \nabla^2 f  = \frac{1}{\sqrt{g}}\frac{\partial}{\partial X^{i}}\left( g^{ij} \sqrt{g} \frac{\partial {f}}{\partial X^{j}}\right). \tag{17}
@@ -472,7 +472,7 @@ def _(mo):
 
     available in Jaxfun as method `get_christoffel_second`.
 
-    The term $\frac{\partial {v}^{i}}{\partial X^j} + \Gamma^{i}_{kj} {v}^k$ is called the covariant derivative of vector component ${v}^{i}$.
+    The term $\frac{\partial {v}^{i}}{\partial X^j} + \Gamma^{i}_{kj} {v}^k$ is called the covariant derivative of vector components.
 
     The Christoffel symbol falls out of the last identity for the curl due to the symmetry $\Gamma^{k}_{ji} = \Gamma^k_{ij}$.
     """)
@@ -511,7 +511,7 @@ def _(C, display, r, theta):
     g = Grad(w)
     display(g)
     display(g.doit())
-    return (Div,)
+    return Div, Grad
 
 
 @app.cell
@@ -520,6 +520,98 @@ def _(Div, bv, display, r, z):
     q = Div(D)
     display(q)
     display(q.doit())
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Curvilinear equations
+
+    Lets consider the Laplace operator in curvilinear coordinates. For this we use a `ScalarFunction` and Jaxfun operators:
+    """)
+    return
+
+
+@app.cell
+def _(C, Div, Grad, display):
+    from jaxfun.galerkin.arguments import ScalarFunction
+
+    u_ = ScalarFunction(name="u", system=C)
+    Lu = Div(Grad(u_))
+    display(Lu)
+    return Lu, u_
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    The Laplace operator is displayed in Cartesian coordinates. When evaluated, we get the equation in cylinder coordinates:
+    """)
+    return
+
+
+@app.cell
+def _(Lu, display):
+    display(Lu.doit())
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    Note the map from Cartesian function $u(x, y, z)$ for the generic (unevaluated) operator to computational $U(r, \theta, z)$ in the evaluated equation.
+
+    We can also look at the gradient
+    """)
+    return
+
+
+@app.cell
+def _(Grad, display, u_):
+    display(Grad(u_))
+    return
+
+
+@app.cell
+def _(Grad, display, u_):
+    display(Grad(u_).doit())
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    Note the small difference here from most textbooks that present the gradient as (see, e.g., [wikipedia](https://en.wikipedia.org/wiki/Gradient))
+
+    $$
+    \nabla u = \frac{\partial U}{\partial r} \hat{\mathbf{b}}_r + \frac{1}{r}\frac{\partial U}{\partial \theta} \hat{\mathbf{b}}_{\theta} + \frac{\partial U}{\partial z}\hat{\mathbf{b}}_z
+    $$
+
+    using normalized (unit) basis vectors $\hat{\mathbf{b}}_r = {\mathbf{b}}_r, \hat{\mathbf{b}}_{\theta} = \mathbf{b}_{\theta} / r$ and $\hat{\mathbf{b}}_z = \mathbf{b}_z$. Replacing the hat vectors above with the covariant basis vectors leads to the same result.
+    """)
+    return
+
+
+app._unparsable_cell(
+    r"""
+    The curl of a gradient should be zero. Lets verify
+    """,
+    name="_",
+)
+
+
+@app.cell
+def _(Grad, display, u_):
+    from jaxfun.operators import Curl
+
+    display(Curl(Grad(u_)))
+    return (Curl,)
+
+
+@app.cell
+def _(C, Curl, Grad, display, u_):
+    display(C.simplify(Curl(Grad(u_)).doit()))
     return
 
 

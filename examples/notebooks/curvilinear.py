@@ -593,12 +593,12 @@ def _(mo):
     return
 
 
-app._unparsable_cell(
-    r"""
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     The curl of a gradient should be zero. Lets verify
-    """,
-    name="_",
-)
+    """)
+    return
 
 
 @app.cell

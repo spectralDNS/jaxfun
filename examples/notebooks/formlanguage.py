@@ -12,18 +12,18 @@ def _(mo):
     Jaxfun consists of a rich form-language that is used to formulate problems. This language is built on top of Sympy's Function and Vector classes. The fundamental idea is that you choose a functionspace and then you create functions on that space. For the global Galerkin method, this means that you work with functions like
 
     \begin{equation}
-    v(x) = \sum_{i=0}^N \hat{v}_i \phi_i(x) \tag{1}
+    v(x) = \sum_{i=0}^{N-1} \hat{v}_i \phi_i(x) \tag{1}
     \end{equation}
 
-    where $v(x)$ is your function, $\phi_i(x)$ are $N+1$ basis functions and $\hat{v}_i$ are $N+1$ unknown expansion coefficients. The functionspace corresponding to this function is $V=\text{span}\{\phi_i\}_{i=0}^N$. When we say that $v(x) \in V$, this means that $v$ can be expanded as shown in Eq. (1), but we do not necessarily know the coefficients.
+    where $v(x)$ is your function, $\phi_i(x)$ are $N$ basis functions and $\hat{v}_i$ are $N$ unknown expansion coefficients. The functionspace corresponding to this function is $V=\text{span}\{\phi_i\}_{i=0}^{N-1}$. When we say that $v(x) \in V$, this means that $v$ can be expanded as shown in Eq. (1), but we do not necessarily know the coefficients.
 
     A tensorproductspace in 2D Cartesian space can be defined as $T = V \otimes V$. A scalar function $f \in T$ is then defined as
 
     \begin{equation}
-    f(x, y) = \sum_{i=0}^N \sum_{j=0}^N \hat{f}_{ij} \phi_i(x) \phi_j(y) \tag{2}
+    f(x, y) = \sum_{i=0}^{N-1} \sum_{j=0}^{N-1} \hat{f}_{ij} \phi_i(x) \phi_j(y) \tag{2}
     \end{equation}
 
-    with the unknown matrix $F=\{\hat{f}_{ij}\}_{i,j=0}^N \in \mathbb{R}^{(N+1) \times (N+1)}$.
+    with the unknown matrix $F=\{\hat{f}_{ij}\}_{i,j=0}^{N-1} \in \mathbb{R}^{N \times N}$.
 
     A vector tensorproductspace in 2D can be defined as $W = T \times T$. A function $\boldsymbol{w} \in W$ is then defined as
 

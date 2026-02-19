@@ -596,7 +596,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    The curl of a gradient should be zero. Lets verify
+    The curl of a gradient should be zero. Lets verify:
     """)
     return
 

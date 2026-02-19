@@ -243,7 +243,7 @@ def _rank_of_dot(t1: VectorLike, t2: DyadicLike) -> Literal[1]: ...
 def _rank_of_dot(t1: DyadicLike, t2: VectorLike) -> Literal[1]: ...
 @overload
 def _rank_of_dot(t1: DyadicLike, t2: DyadicLike) -> Literal[2]: ...
-def _rank_of_dot(t1: VectorLike | DyadicLike, t2: VectorLike | DyadicLike) -> Rank:
+def _rank_of_dot(t1: TensorLike, t2: TensorLike) -> Rank:
     if _is_vectorlike(t1):
         return 0 if _is_vectorlike(t2) else 1
     else:
@@ -298,10 +298,18 @@ def dot(t1: DyadicLike, t2: VectorLike) -> VectorLike: ...
 @overload
 def dot(t1: DyadicLike, t2: DyadicLike) -> DyadicLike: ...
 def dot(t1: TensorLike, t2: TensorLike) -> TensorLike | Expr:
-    """Return the (possibly contracted) inner product of two tensors.
+    """Return the inner contraction of vectors and dyadics.
 
     Supports Vector·Vector, Vector·Dyadic, Dyadic·Vector and Dyadic·Dyadic,
     recursively distributing over sums and scalar multiples.
+
+    Note that we use the term "dot product" here in a generalized sense to
+    mean the inner contraction of tensors.
+
+    The result of the contraction is a tensor of rank equal to the sum of the ranks
+    of the inputs minus 2. That is, Vector·Vector returns a scalar (rank 0),
+    Vector·Dyadic and Dyadic·Vector return a vector (rank 1), and Dyadic·Dyadic
+    returns a dyadic (rank 2).
 
     For unevaluated dot product, use Dot.
 
@@ -634,9 +642,9 @@ class Grad(Gradient):
     def _latex(self, printer: Any = None) -> str:
         printer = printer if printer is not None else LatexPrinter()
         return (
-            f"\\displaystyle (\\nabla {printer._print(self._expr)})^T"
+            f"\\displaystyle (\\nabla \\left({printer._print(self._expr)}\\right))^T"
             if self._transpose
-            else f"\\displaystyle \\nabla {printer._print(self._expr)}"
+            else f"\\displaystyle \\nabla \\left({printer._print(self._expr)}\\right)"
         )
 
 

@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.19.8"
+__generated_with = "0.19.11"
 app = marimo.App(width="medium")
 
 
@@ -23,15 +23,15 @@ def _(mo):
     f(x, y) = \sum_{i=0}^N \sum_{j=0}^N \hat{f}_{ij} \phi_i(x) \phi_j(y) \tag{2}
     \end{equation}
 
-    with the unknown matrix $F=\{f_{ij}\}_{i,j=0}^N \in \mathbb{R}^{(N+1) \times (N+1)}$.
+    with the unknown matrix $F=\{\hat{f}_{ij}\}_{i,j=0}^N \in \mathbb{R}^{(N+1) \times (N+1)}$.
 
     A vector tensorproductspace in 2D can be defined as $W = T \times T$. A function $\boldsymbol{w} \in W$ is then defined as
 
     \begin{equation}
-    \boldsymbol{w}(x, y) = w_x(x, y) \boldsymbol{i} + w_y(x, y) \boldsymbol{j} \tag{3}
+    \boldsymbol{w}(x, y) = w^{(0)}(x, y) \boldsymbol{i} + w^{(1)}(x, y) \boldsymbol{j} \tag{3}
     \end{equation}
 
-    where $\boldsymbol{i}$ and $\boldsymbol{j}$ are Cartesian unit vectors in $x$ and $y$ direction, respectively. In Eq. (3) both $w_x$ and $w_y$ can be expanded as shown in Eq (2).
+    where $\boldsymbol{i}$ and $\boldsymbol{j}$ are Cartesian unit vectors in $x$ and $y$ direction, respectively, and $w^{(i)}$ represents component $i$ of the vector. That is, $w^{(0)} = \boldsymbol{w} \cdot \boldsymbol{i}$ and $w^{(1)} = \boldsymbol{w} \cdot \boldsymbol{j}$. In Eq. (3) both $w^{(0)}$ and $w^{(1)}$ can be expanded as shown in Eq (2).
 
     In Jaxfun you choose the functionspace and then you create functions. Let's create samples of all the three Galerkin functions defined above ($v(x), f(x, y), \boldsymbol{w}(x, y)$):
     """)
@@ -42,7 +42,10 @@ def _(mo):
 def _():
     from IPython.display import display
 
+    import jax.numpy as jnp
+
     from jaxfun.galerkin import (
+        JAXFunction,
         Legendre,
         TensorProduct,
         TestFunction,
@@ -51,7 +54,7 @@ def _():
         inner,
     )
 
-    N = 8
+    N = 20
     V = Legendre.Legendre(N, name="V", fun_str="phi")
     T = TensorProduct(V, V, name="T")
     W = VectorTensorProductSpace(T, name="W")
@@ -61,7 +64,7 @@ def _():
     display(v)
     display(f)
     display(w)
-    return N, T, TrialFunction, V, W, display, f, inner, v, w
+    return JAXFunction, N, T, TrialFunction, V, W, display, f, inner, jnp, v, w
 
 
 @app.cell
@@ -85,28 +88,78 @@ def _(display, f, v, w):
 @app.cell
 def _(mo):
     mo.md(r"""
-    Note that since TestFunctions do not contain any expansion coefficients, only the basis functions are shown.
+    Note that since test functions do not contain any expansion coefficients, only the basis functions are shown. The superscript in parenthesis on the vector components shows the index into the vector of basis functions. Hence, $\phi_i^{(0)}(x)$ is the $i$'th basis function in the first component of the vector space $W$, and $\phi_j^{(1)}(y)$ is the $j$'th basis function in the second component of $W$.
 
-    JAXFunctions are complete functions, containing also the expansion coefficients. When evaluated, the JAXFunction returns the product of the expansion coefficients and a basis function.
+    A trial function is similar to the test function, but represents the unknown solution that we are trying to find. The trial function is displayed exactly like the test function, but with a different index. Remember the test function on $V$ was displayed as $\phi_i(x)$. The trial function is displayed as $\phi_j(x)$:
     """)
     return
 
 
 @app.cell
-def _(N, V, display):
-    import jax.numpy as jnp
-    from jaxfun.galerkin import JAXFunction
+def _(TrialFunction, V, display):
+    u = TrialFunction(V, name="u")
+    display(u)
+    display(u.doit())
+    return (u,)
 
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    Trial and test functions are used together to assemble matrices in variational forms. Consider the L2 inner product
+
+    $$
+    (u, v)_{L^2(\Omega)} = \int_{\Omega} \phi_j(x)\phi_i(x)dx, (i, j) \in (0, \ldots, N-1) \times (0, \ldots, N-1)
+    $$
+
+    where $u$ is a trial function and $v$ is a test function. The left hand side is in unevaluated form and the right hand side with the integral is in evaluated form using the basis functions retrieved from `doit`. This inner product results in a matrix $A \in \mathbb{R}^{N \times N}$ with components $a_{ij} = \int_{\Omega} \phi_j(x)\phi_i(x)dx$.
+    """)
+    return
+
+
+@app.cell
+def _(display, inner, u, v):
+    A = inner(u * v)
+    display(u * v)
+    display((u * v).doit())
+    print("Shape of matrix A =", A.shape)
+    return (A,)
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    The integral is computed using numerical quadrature on the quadrature points of the Legendre basis functions. For multidimensional problems we get tensor product matrices, that we will get back to in a little while. First, there is a third function that deserves some attentions. The `JAXFunction`s are complete Galerkin functions, containing also the expansion coefficients of the Galerkin function.
+    """)
+    return
+
+
+@app.cell
+def _(JAXFunction, N, V, display, jnp):
     h = JAXFunction(jnp.ones(N), V, name="h")
     display(h)
     display(h.doit(linear=True))
-    return JAXFunction, h, jnp
+    return (h,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Here there is summation implied by repeating indices. The same goes for the other two function spaces.
+    The JAXFunction displayed above is shown first in unevaluated state. It is shown as a function of $x$, created on the function space `V`. When evaluated using `doit`, the JAXFunction returns the product of its expansion coefficients $\hat{h}_j$ and trial basis functions (using the same index as the trial function). Note that there is summation implied by repeating indices. Unlike the test and trial functions, the JAXFunction may appear in expressions in non-linear form. In that case, we do not expand the function with indices, but treat it like any other computable function. Note the missing keyword argument `linear=True` below:
+    """)
+    return
+
+
+@app.cell
+def _(display, h):
+    display(h.doit())
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    We can create JAXFunctions for any of the three spaces created initially in this notebook:
     """)
     return
 
@@ -116,6 +169,7 @@ def _(JAXFunction, N, T, display, jnp):
     b = JAXFunction(jnp.ones((N, N)), T, name="b")
     display(b)
     display(b.doit(linear=True))
+    display(b.doit())
     return
 
 
@@ -124,37 +178,14 @@ def _(JAXFunction, N, W, display, jnp):
     c = JAXFunction(jnp.ones((2, N, N)), W, name="c")
     display(c)
     display(c.doit(linear=True))
+    display(c.doit())
     return
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Consider the L2 inner product
-
-    $$
-    (u, v)_{L^2(\Omega)} = \int_{\Omega} \phi_j(x)\phi_i(x)dx, (i, j) \in (0, \ldots, N) \times (0, \ldots, N)
-    $$
-
-    This inner product results in a matrix $A \in \mathbb{R}^{N+1 \times N+1}$ with components $a_{ij} = \int_{\Omega} \phi_j(x)\phi_i(x)dx$. We can create the trial function `u`, and when printing the evaluated trial function, it appears with the index j.
-    """)
-    return
-
-
-@app.cell
-def _(TrialFunction, V, display, inner, v):
-    u = TrialFunction(V, name="u")
-    A = inner(u * v)
-    print(A.shape)
-    display(u * v)
-    display((u * v).doit())
-    return (A,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    For the JAXFunction `h` we get instead
+    Consider the $L^2$ inner product $(h, v)_{L^2(\Omega)}$. The integrand is now
     """)
     return
 
@@ -174,6 +205,14 @@ def _(mo):
 
 
 @app.cell
+def _(h, v):
+    from jaxfun.galerkin.forms import split
+
+    split(v * h)
+    return
+
+
+@app.cell
 def _(h, inner, v):
     hv = inner(h * v)
     print(hv.shape)
@@ -183,7 +222,7 @@ def _(h, inner, v):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    The vector `hv` equals the matrix vector product$A h$
+    The vector `hv` equals the matrix vector product $A h$
     """)
     return
 
@@ -241,8 +280,27 @@ def _(mo):
     M(\boldsymbol{z}; \theta) =  W^{L} \sigma( W^{L-1} \ldots \sigma( W^1 \boldsymbol{z} + \boldsymbol{b}^1) \ldots + \boldsymbol{b}^{L-1})  + \boldsymbol{b}^L
     $$
 
-    where $\theta = \{W^l, \boldsymbol{b}^l\}_{l=1}^L$ represents all the unknowns in the model and $W^l, \boldsymbol{b}^l$ represents the weights and biases on level $l$. The model input $\boldsymbol{z}$ can be anything. For example, $\boldsymbol{z}$ can represent $(x), (x, y), (x, y, z), (x, t), (x, y, t), ...$. For $Z$ number of inputs the scalar function $M_{\theta}: \mathbb{R}^Z \rightarrow \mathbb{R}$. Similarly, a vector function in 2D space is simply $M_{\theta}: \mathbb{R}^Z \rightarrow \mathbb{R}^2$.
+    where $\theta = \{W^l, \boldsymbol{b}^l\}_{l=1}^L$ represents all the unknowns in the model and $W^l, \boldsymbol{b}^l$ represents the weights and biases on level $l$. The model input $\boldsymbol{z}$ can be anything. For example, $\boldsymbol{z}$ can represent $(x), (x, y), (x, y, z), (x, t), (x, y, t), ...$. For $Z$ number of inputs the scalar function $M_{\theta}: \mathbb{R}^Z \rightarrow \mathbb{R}$. Similarly, a vector function in 2D space is simply $M_{\theta}: \mathbb{R}^Z \rightarrow \mathbb{R}^2$. The neural networks are represented in Jaxfun through a `FlaxFunction`, and we can use them in any numer of dimensions and also of vector rank.
     """)
+    return
+
+
+@app.cell
+def _(display):
+    from jaxfun.pinns import FlaxFunction, MLPSpace
+
+    M1 = MLPSpace([20], dims=1, rank=0, name="M1")
+    M2 = MLPSpace([20], dims=2, rank=0, name="M2")
+    M3 = MLPSpace([20], dims=2, rank=1, name="M3")
+    f1 = FlaxFunction(M1, name="a")
+    f2 = FlaxFunction(M2, name="b")
+    f3 = FlaxFunction(M3, name="c")
+    display(f1)
+    display(f2)
+    display(f3)
+    display(f1.doit())
+    display(f2.doit())
+    display(f3.doit())
     return
 
 

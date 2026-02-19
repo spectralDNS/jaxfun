@@ -937,7 +937,9 @@ class FlaxFunction(Function):
         obj.functionspace = V
         obj.t = t
         obj.module = (
-            get_flax_module(V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)
+            get_flax_module(
+                V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs, name=V.name
+            )
             if module is None
             else module
         )
@@ -990,11 +992,10 @@ class FlaxFunction(Function):
             )(*args)  # type: ignore[return-value]
 
         if V.rank == 1:
-            s = V.system.base_scalars()
             b = V.system.base_vectors()
             return VectorAdd.fromiter(
                 Function(
-                    self.fun_str + "_" + s[i].name,
+                    "".join([self.fun_str, "^{(", str(i), ")}"]),
                     global_index=i,
                     functionspace_name=V.name,
                     rank_parent=V.rank,
@@ -1032,7 +1033,7 @@ class FlaxFunction(Function):
                 "(",
                 ", ".join([i.name for i in self.args[:-1]]),
                 "; ",
-                self.args[-1].name,  # ty:ignore[unresolved-attribute]
+                self.module.name,
                 ")",
             )
         )
@@ -1045,7 +1046,7 @@ class FlaxFunction(Function):
                 "(",
                 ", ".join([i.name for i in self.args[:-1]]),
                 "; ",
-                self.args[-1].name,  # ty:ignore[unresolved-attribute]
+                self.module.name,
                 ")",
             )
         )

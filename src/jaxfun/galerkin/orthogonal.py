@@ -107,7 +107,7 @@ class OrthogonalSpace(BaseSpace):
         return self.eval_basis_functions(X)[..., : len(c)] @ c
 
     @jax.jit(static_argnums=(0, 3))
-    def evaluate_derivative(self, x: float | Array, c: Array, k: int = 0) -> Array:
+    def evaluate_derivative(self, x: Array, c: Array, k: int = 0) -> Array:
         """Evaluate truncated series sum_k c_k psi_k(X).
 
         Args:

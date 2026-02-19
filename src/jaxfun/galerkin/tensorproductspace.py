@@ -4,7 +4,7 @@ import copy
 import itertools
 from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
-from typing import TYPE_CHECKING, TypeGuard
+from typing import TYPE_CHECKING, TypeGuard, overload
 
 import jax
 import jax.numpy as jnp
@@ -1029,3 +1029,22 @@ def tpmats_to_scipy_kron(A: list[TPMatrix], tol: int = 100) -> scipy_sparse.csc_
                 for b in a
             ]
         )
+
+
+@overload
+def vec(A: Array, tol: int = 100) -> Array: ...
+@overload
+def vec(A: list[TPMatrix], tol: int = 100) -> scipy_sparse.csc_matrix: ...
+def vec(A: Array | list[TPMatrix], tol: int = 100) -> Array | scipy_sparse.csc_matrix:
+    """Vectorize array or list of TPMatrix objects.
+
+    Args:
+        A: Array or list of TPMatrix objects to vectorize.
+
+    Returns:
+        Flattened array or concatenated vector of flattened arrays.
+    """
+    if not isinstance(A, Array):
+        return tpmats_to_scipy_kron(A, tol=tol)
+    else:
+        return A.flatten()

@@ -309,6 +309,7 @@ def inner(
             )
             sc = 1
             bs.append(z)
+
         if isinstance(test_space, OrthogonalSpace):
             if isinstance(bs[0], tuple):
                 # JAXArray (no multivar)
@@ -324,8 +325,7 @@ def inner(
                 # multivar or JAXArray
                 if "multivar" in b0:
                     s = test_space.system.base_scalars()
-                    xj = test_space.mesh()
-                    uj = lambdify(s, b0["multivar"], modules="jax")(*xj)
+                    uj = lambdify(s, b0["multivar"], modules="jax")(*test_space.mesh())
                 elif "jaxfunction" in b0:
                     uj = evaluate_jaxfunction_expr(b0["jaxfunction"], test_space.mesh())
                 else:

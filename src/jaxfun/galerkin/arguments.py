@@ -16,6 +16,7 @@ from functools import partial
 from typing import Any, Self, cast
 
 import jax
+import jax.numpy as jnp
 import sympy as sp
 from jax import Array
 from sympy import Basic, Expr, Function, Tuple
@@ -744,7 +745,7 @@ class JAXFunction(ExpansionFunction):
 
         return VectorAdd.fromiter(
             get_JAXFunction(
-                self.name,
+                "".join((self.name, "^{(", str(i), ")}")),
                 array=self.array[i],
                 global_index=i,
                 rank=0,
@@ -766,10 +767,35 @@ class JAXFunction(ExpansionFunction):
 
     @jax.jit(static_argnums=0)
     def __call__(self, x: Array) -> Array:
+        """Evaluate the JAXFunction at given points x in the physical domain.
+
+        Args:
+            x: Coordinates (N, d). Created by calling self.functionspace.flatmesh().
+        """
         if isinstance(self.functionspace, OrthogonalSpace | DirectSum):
             X = self.functionspace.map_reference_domain(x)
             return self.functionspace.evaluate(X, self.array)
-        return self.functionspace.evaluate(x, self.array, True)
+        z = self.functionspace.evaluate(x, self.array, True)
+        if self.functionspace.rank == 0:
+            return jnp.expand_dims(z, -1)
+        return z
+
+    @jax.jit(static_argnums=0)
+    def evaluate_mesh(self, x: Array | list[Array]) -> Array:
+        """Evaluate the JAXFunction at given points x in the physical domain.
+
+        Args:
+            x: Cartesian product coordinates. For example, for a 2D tensor product
+            space, x should be a list of two arrays [x1, x2], where x1 and x2 are 1D
+            arrays of coordinates in each dimension.The mesh is formed by calling
+            the self.functionspace.mesh().
+        """
+        if isinstance(self.functionspace, OrthogonalSpace | DirectSum):
+            assert isinstance(x, Array)
+            X = self.functionspace.map_reference_domain(x)
+            return self.functionspace.evaluate(X, self.array)
+
+        return self.functionspace.evaluate_mesh(x, self.array, True)
 
 
 def evaluate_jaxfunction_expr(

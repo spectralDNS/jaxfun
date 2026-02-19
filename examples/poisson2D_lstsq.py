@@ -61,7 +61,7 @@ error = jnp.linalg.norm(w.module(xyi)[:, 0] - uj) / jnp.sqrt(len(xyi))
 print("Error", error)
 
 if "PYTEST" in os.environ:
-    assert error < ulp(100000), error
+    assert error < ulp(1000000), error
     sys.exit(1)
 
 

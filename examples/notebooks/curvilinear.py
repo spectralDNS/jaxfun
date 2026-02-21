@@ -45,13 +45,19 @@ def _(mo):
     x^i=x^i(\mathbf{X}), \quad \text{for } i \in \mathcal{I}^n.\tag{4}
     \end{equation}
 
-    Using these generic maps a function $u : \Omega^m \rightarrow \mathbb{K}$, where $\mathbb{K}$ may be either $\mathbb{R}$ or $\mathbb{C}$, may now be transformed to the computational space as
+    Using these generic maps a function $u : \Omega^m \rightarrow \mathbb{K}$, where $\mathbb{K}$ may be either $\mathbb{R}$ or $\mathbb{C}$, may now be transformed from physicsal to computational space as
 
     \begin{equation}
-    u(\mathbf{x}) = u(\mathbf{x}(\mathbf{X})) = \tilde{u}(\mathbf{X}),\tag{5}
+    u(\mathbf{x}) = u(\mathbf{x}(\mathbf{X})) = U(\mathbf{X}(\mathbf{x})) = U(\mathbf{X}),\tag{5}
     \end{equation}
 
-    where $\tilde{u} : \mathbb{I}^m \rightarrow \mathbb{K}$. A tilde is used throughout this article to denote a function transformed to the computational domain, but we will not use a tilde for functions that are defined directly and used exclusively in computational space. Also, we will skip the middle step above from now on and simply use either $u(\mathbf{x})$ or $\tilde{u}(\mathbf{X})$.
+    A simple and well known example is for polar coordinates, where the Cartesian coordinates $x$ and $y$ are mapped to the polar coordinates $r$ and $\theta$ as
+
+    $$
+    x(r, \theta) = r \cos \theta \quad \text{and} \quad  y(r, \theta) = r \sin \theta
+    $$
+
+    A Cartesian function for a circle of radius one is $u(x, y) = \sqrt{x^2 + y^2} -1$. Inserting for the polar maps we get $u(x(r, \theta), y(r, \theta)) = \sqrt{(r \cos \theta)^2 + (r \sin \theta)^2} - 1 = r - 1 = U(r, \theta)$.
     """)
     return
 
@@ -59,15 +65,15 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    A position vector can now be written as a function of the new coordinates
+    The transformation for any curvilinear coordinate system will be defined through the use of a position vector, which can be written as a function of the new coordinates
 
     \begin{equation}
         \mathbf{r}(\mathbf{X}) = x^i(\mathbf{X}) \,\mathbf{i}_i,\tag{6}
     \end{equation}
 
-    where there is here, and throughout this article, summation implied by repeating indices. The Cartesian unit basis vectors are denoted as $\mathbf{i}_i\in\mathbb{R}^n$ for $i\in \mathcal{I}^n$.
+    where there is here, and throughout this article, summation implied by repeating indices. The Cartesian unit basis vectors are denoted as $\mathbf{i}_i\in\mathbb{R}^n$ for $i\in \mathcal{I}^n$. The position vector can describe any point in the physical domain $\Omega^m$.
 
-    The Jacobian matrix for the transformation between coordinate systems is described by
+    A Jacobian matrix for the transformation between coordinate systems is described by
 
     \begin{equation}
         J_{ij}(\mathbf{X}) = \frac{\partial x^{i}}{\partial X^{j}}, \quad \text{for } i,j \in \mathcal{I}^{n \times m}, \tag{7}
@@ -99,23 +105,15 @@ def _(mo):
         \mathbf{b}^{i} \cdot \mathbf{b}_{j} = \delta_{j}^{i}, \quad \text{for } i, j \, \in \mathcal{I}^{m \times m}.\tag{10}
     \end{equation}
 
-    A vector $\mathbf{v}(\mathbf{x}) = \tilde{\mathbf{v}}(\mathbf{X})$ can be given in either basis as
+    Any vector $\mathbf{v}$ (boldface lower case letter notation) can be given with either co- or contravariant basis functions and we write them as
 
     \begin{equation}
-        \mathbf{v} = \tilde{v}^{i} \mathbf{b}_i = \tilde{v}_i \mathbf{b}^{i},\tag{11}
+        \mathbf{v} = {v}^{i} \mathbf{b}_i = {v}_i \mathbf{b}^{i},\tag{11}
     \end{equation}
 
-    where $\tilde{v}_{i}(\mathbf{X})$ and $\tilde{v}^{i}(\mathbf{X})$ are co- and contravariant vector components, respectively. The vector can also be given in a Cartesian coordinate system as $\mathbf{v}(\mathbf{x}) = v^{j}\mathbf{i}_j$.
+    where ${v}_{i}(\mathbf{X})$ and ${v}^{i}(\mathbf{X})$ are co- and contravariant vector components, respectively. The sub or superscript of the coefficient are used to recognise which basis functions are used. The vector can also be given with Cartesian basis vectors, but that is a special case that should be obvious from the context, like for the position vector $\mathbf{r} =) x^{i}\mathbf{i}_i$. The Cartesian vectors are thus used with the contravariant vector component notation.
 
-    The components $\tilde{v}^{i}$ are called contravariant vector components and the components $\tilde{v}_i$ are called covariant vector components. When a vector is written with contravariant vector components $\mathbf{v} = \tilde{v}^{i} \mathbf{b}_i$, the vector is called a contravariant vector. This is the default used by Jaxfun. When the vector is written with covariant components $\mathbf{v} = \tilde{v}_i \mathbf{b}^{i}$ it is called a covariant vector. This is a bit confusing since a contravariant vector is using covariant basis vectors and vice versa!
-
-    In what follows we will drop the tilde on the vector components and work with simply
-
-    \begin{equation}
-        \mathbf{v} = {v}^{i} \mathbf{b}_i = {v}_i \mathbf{b}^{i}.
-    \end{equation}
-
-    It should be obvious from the context that we are working with curvilinear vectors in curvilinear coordinates.
+    When a vector is written with contravariant vector components $\mathbf{v} = {v}^{i} \mathbf{b}_i$, the vector is called a contravariant vector. This is the default used by Jaxfun. When the vector is written with covariant components $\mathbf{v} = {v}_i \mathbf{b}^{i}$ it is called a covariant vector. This is a bit confusing since a contravariant vector is using covariant basis vectors and vice versa!
     """)
     return
 
@@ -143,14 +141,14 @@ def _(mo):
     \end{equation}
 
     where $[g_{ij}]$ represents the tensor with components $g_{ij}$.
-    Note that if $m=n$, then $\sqrt{g}$ is equal to the determinant of the Jacobian matrix. Also note that the basis vectors are not necessarily orthogonal. If they are, then $[g_{ij}]$ and $[g^{ij}]$ are diagonal matrices.
+    Note that if $m=n$, then $\sqrt{g}$ is equal to the determinant of the Jacobian matrix. Also note that if the basis vectors are orthogonal, then $[g_{ij}]$ and $[g^{ij}]$ are diagonal matrices and the co- and contravariant basis vectors  $\mathbf{b}_{i}$ and $\mathbf{b}^{i}$ are parallel.
 
     We can get the contravariant basis vectors from the covariant and vice versa using
 
     $$
     \begin{align*}
-    \mathbf{b}^{i} &= \mathbf{b}_{i} g^{ij} \\
-    \mathbf{b}_{i} &= \mathbf{b}^{i} g_{ij}
+    \mathbf{b}^{i} &= g^{ij} \mathbf{b}_{j} \\
+    \mathbf{b}_{i} &= g_{ij} \mathbf{b}^{j}
     \end{align*}
     $$
 
@@ -209,9 +207,17 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Note that we here on the last line overwrite the sympy symbols `r`, `theta`, `z` with objects of type `BaseScalar`.
+    Note that the curvilinear coordinate system is created from only the forward map $\mathbf{x}(\mathbf{X})$ and we do not need to provide the reverse map $\mathbf{X}(\mathbf{x})$, which for the cylinder coordinates would be
 
-    Create two contravariant vectors and take the dot product:
+    $$
+    r = \sqrt{x^2+y^2}, \quad \theta = \tan^{-1}(y/x), \quad z = z.
+    $$
+
+    This is because Jaxfun is using the covariant basis vectors computed from the forward map, and the contravariant basis vector may then be computed simply from the $\mathbf{b}^i = g^{ij} \mathbf{b}_j$, where $[g^{ij}] = [g_{ij}]^{-1}$. So the reverse map is not explicitly used and as such it does not have to be provided by the user.
+
+    Note that on the last line in the code section above we overwrite the sympy symbols `r`, `theta`, `z` with objects of type `BaseScalar`.
+
+    As an example create two contravariant vectors and take the dot product:
     """)
     return
 
@@ -306,6 +312,19 @@ def _(C, display, p):
     return
 
 
+@app.cell
+def _(C):
+    C.to_cartesian(C.b_theta)
+
+    return
+
+
+@app.cell
+def _(C):
+    C.get_contravariant_basis(True)
+    return
+
+
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
@@ -377,7 +396,7 @@ def _(mo):
 
     Note that some authors do not use a dot for the contraction of a dyad with a vector and would write instead $(\mathbf{u} \otimes \mathbf{v}) \mathbf{w}$. Since we use the `Dot/dot` in Jaxfun to represent the contraction of both dyadics and vectors, we find it more appropriate to include the dot also for contraction of higher order tensors.
 
-    A linear combination of dyads is called a dyadic. For example $\mathbf{A} = 2(\mathbf{u} \otimes \mathbf{v}) + 3 (\mathbf{w} \otimes \mathbf{z})$. Note that even though a dyad is a second order tensor, not all second order tensors are dyads. That is, we cannot always write the tensor $\mathbf{A}$ as the tensor product of two vectors $\mathbf{u} \otimes \mathbf{v}$
+    A linear combination of dyads is called a dyadic. For example $\mathbf{A} = 2(\mathbf{u} \otimes \mathbf{v}) + 3 (\mathbf{w} \otimes \mathbf{z})$. Note that even though a dyad is a second order tensor, not all second order tensors are dyads. That is, we cannot always write the tensor $\mathbf{A}$ as the tensor product of two vectors $\mathbf{u} \otimes \mathbf{v}$.
 
     The contraction of two dyads leads to a dyad
 

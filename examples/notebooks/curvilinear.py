@@ -11,6 +11,8 @@ def _(mo):
 
     Jaxfun is developed to work with any curvilinear coordinate system and not just the regular Cartesian. A user should describe equations for a generic coordinate system using operators like `div`, `grad`, `dot`, `outer`, `cross` and `curl`. The correct equations in curvilinear coordinates should then be automatically derived by Jaxfun under the hood. What goes on under the hood is described in more detail in this article.
 
+    There is not really enough time or space to go through all details regarding curvilinear coordinates here, so the interested reader is referred to the excellent online textbook by Kelly, PA. Mechanics Lecture Notes: An introduction to Solid Mechanics.  Available from [here](http://homepages.engineering.auckland.ac.nz/~pkel015/SolidMechanicsBooks/index.html)
+
     In the following we will consider two coordinate systems, the Cartesian with coordinates
 
     \begin{equation}
@@ -45,10 +47,10 @@ def _(mo):
     x^i=x^i(\mathbf{X}), \quad \text{for } i \in \mathcal{I}^n.\tag{4}
     \end{equation}
 
-    Using these generic maps a function $u : \Omega^m \rightarrow \mathbb{K}$, where $\mathbb{K}$ may be either $\mathbb{R}$ or $\mathbb{C}$, may now be transformed from physicsal to computational space as
+    Using these generic maps a function $u : \Omega^m \rightarrow \mathbb{K}$, where $\mathbb{K}$ may be either $\mathbb{R}$ or $\mathbb{C}$, may now be transformed from physical to computational space as
 
     \begin{equation}
-    u(\mathbf{x}) = u(\mathbf{x}(\mathbf{X})) = U(\mathbf{X}(\mathbf{x})) = U(\mathbf{X}),\tag{5}
+    u(\mathbf{x}) = u(\mathbf{x}(\mathbf{X})) = U(\mathbf{X}),\tag{5}
     \end{equation}
 
     A simple and well known example is for polar coordinates, where the Cartesian coordinates $x$ and $y$ are mapped to the polar coordinates $r$ and $\theta$ as
@@ -72,14 +74,6 @@ def _(mo):
     \end{equation}
 
     where there is here, and throughout this article, summation implied by repeating indices. The Cartesian unit basis vectors are denoted as $\mathbf{i}_i\in\mathbb{R}^n$ for $i\in \mathcal{I}^n$. The position vector can describe any point in the physical domain $\Omega^m$.
-
-    A Jacobian matrix for the transformation between coordinate systems is described by
-
-    \begin{equation}
-        J_{ij}(\mathbf{X}) = \frac{\partial x^{i}}{\partial X^{j}}, \quad \text{for } i,j \in \mathcal{I}^{n \times m}, \tag{7}
-    \end{equation}
-
-    where the index set  $\mathcal{I}^{n \times m} = \mathcal{I}^m \times \mathcal{I}^n$.
     """)
     return
 
@@ -87,19 +81,23 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
+    A curvilinear coordinate system can be described using two different sets of basis vectors, the co- or contravariant basis vectors.
+
     The covariant basis vectors are defined as
 
     \begin{equation}
         \mathbf{b}_i(\mathbf{X}) = \frac{\partial \mathbf{r}}{\partial X^{i}}, \quad \text{for } i \, \in \mathcal{I}^m,\tag{8}
     \end{equation}
 
-    and contravariant basis vectors are defined as
+    The covariant basis vectors $\mathbf{b}_i$ are tangent to the $m$ coordinate curves $X^i$.
+
+    The contravariant basis vectors are defined as
 
     \begin{equation}
         \mathbf{b}^{i}(\mathbf{X}) =  \mathbf{i}_j\frac{\partial X^{i}}{\partial x^j}, \quad \text{for } i \, \in \mathcal{I}^m.\tag{9}
     \end{equation}
 
-    The co- and contravariant basis vectors satisfy
+    The contravariant basis vectors are orthogonal to the covariant basis vectors
 
     \begin{equation}
         \mathbf{b}^{i} \cdot \mathbf{b}_{j} = \delta_{j}^{i}, \quad \text{for } i, j \, \in \mathcal{I}^{m \times m}.\tag{10}
@@ -111,7 +109,7 @@ def _(mo):
         \mathbf{v} = {v}^{i} \mathbf{b}_i = {v}_i \mathbf{b}^{i},\tag{11}
     \end{equation}
 
-    where ${v}_{i}(\mathbf{X})$ and ${v}^{i}(\mathbf{X})$ are co- and contravariant vector components, respectively. The sub or superscript of the coefficient are used to recognise which basis functions are used. The vector can also be given with Cartesian basis vectors, but that is a special case that should be obvious from the context, like for the position vector $\mathbf{r} =) x^{i}\mathbf{i}_i$. The Cartesian vectors are thus used with the contravariant vector component notation.
+    where ${v}_{i}(\mathbf{X})$ and ${v}^{i}(\mathbf{X})$ are co- and contravariant vector components, respectively. The sub or superscript of the coefficient are used to recognise which basis functions are used. The vector can also be given with Cartesian basis vectors, but that is a special case that should be obvious from the context, like for the position vector $\mathbf{r} = x^{i}\mathbf{i}_i$. The Cartesian vectors are thus used with the contravariant vector component notation.
 
     When a vector is written with contravariant vector components $\mathbf{v} = {v}^{i} \mathbf{b}_i$, the vector is called a contravariant vector. This is the default used by Jaxfun. When the vector is written with covariant components $\mathbf{v} = {v}_i \mathbf{b}^{i}$ it is called a covariant vector. This is a bit confusing since a contravariant vector is using covariant basis vectors and vice versa!
     """)
@@ -180,11 +178,128 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    We will illustrate by creating a cylindrical coordinate system, defined from the position vector
+    We illustrate first with a simple example. Consider a simple skewed coordinate system defined by $x(u, v) = u + v$ and $y(u, v) = v$, with $u, v \in [0, 2]\times [0, 2]$, such that the position vector is
+
+    $$
+    \mathbf{r}(u, v) = (u+v) \mathbf{i} + v \mathbf{j},
+    $$
+
+    where $\mathbf{i}$ and $\mathbf{j}$ are the Cartesian unit basis vectors. The coordinate curves are straight lines, but they are not orthogonal to each other. The covariant basis vectors are $\mathbf{b}_u = \frac{\partial \mathbf{r}}{\partial u} = \mathbf{i}$ and $\mathbf{b}_v = \frac{\partial \mathbf{r}}{ \partial v} = \mathbf{i} + \mathbf{j}$, and the contravariant basis vectors are $\mathbf{b}^u = \mathbf{i} - \mathbf{j}$ and $\mathbf{b}^v = \mathbf{j}$. The basis vectors are illustrated in the figure below. Note that the covariant base vectors align with the constant curvelines and the contravariant base vectors are orthogonal to the gridlines. The contravariant vectors are as such the vectors that point orthogonally out from the physical domain $\Omega$. That is, $\mathbf{b}^{u}$ points out of the domain below defined by the curveline drawn at constant $v=2$, i.e., $u = x - 2$.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(get_CoordSys, np, sp):
+    from jaxfun.utils import lambdify
+    import matplotlib.pyplot as plt
+
+    def plot():
+        u, v = sp.symbols("u, v", real=True, positive=True)
+        P = get_CoordSys("P", sp.Lambda((u, v), (u + v, v)))
+        u, v = P.base_scalars()
+        rv = P.position_vector(False)
+        assert isinstance(rv, sp.Tuple)
+
+        b = P.get_covariant_basis()
+        bt = P.get_contravariant_basis()
+
+        r0 = 2.0
+        t0 = 1.0
+        pos = np.array(
+            [lambdify((u, v), rv[0])(r0, t0), lambdify((u, v), rv[1])(r0, t0)]
+        )
+
+        b_num = np.array(
+            [[lambdify((u, v), b[i, j])(r0, t0) for j in range(2)] for i in range(2)],
+            dtype=float,
+        )
+        bt_num = np.array(
+            [[lambdify((u, v), bt[i, j])(r0, t0) for j in range(2)] for i in range(2)],
+            dtype=float,
+        )
+
+        fig, ax = plt.subplots(figsize=(5, 5))
+        ax.set_aspect("equal")
+        ax.set_title("Gridlines and basis vectors")
+
+        u_grid = np.linspace(0.0, 2.0, 7)
+        v_grid = np.linspace(0.0, 2.0, 7)
+        v_line = np.linspace(0.0, 2.0, 100)
+        u_line = np.linspace(0.0, 2.0, 100)
+
+        for u0 in u_grid:
+            x_line = lambdify((u, v), rv[0])(u0, v_line)
+            y_line = lambdify((u, v), rv[1])(u0, v_line)
+            ax.plot(x_line, y_line, color="0.85", linewidth=1)
+
+        for v0 in v_grid:
+            x_line = np.atleast_1d(lambdify((u, v), rv[0])(u_line, v0))
+            y_line = np.atleast_1d(lambdify((u, v), rv[1])(u_line, v0))
+            if y_line.shape[0] == 1:
+                y_line = np.full_like(x_line, y_line.item())
+            ax.plot(x_line, y_line, color="0.85", linewidth=1)
+
+        ax.quiver(
+            *pos,
+            *b_num[0],
+            color="tab:blue",
+            angles="xy",
+            scale_units="xy",
+            scale=1,
+            label=r"$\mathbf{b}_u$",
+        )
+        ax.quiver(
+            *pos,
+            *b_num[1],
+            color="tab:blue",
+            angles="xy",
+            scale_units="xy",
+            scale=1,
+            alpha=0.5,
+            label=r"$\mathbf{b}_v$",
+        )
+        ax.quiver(
+            *pos,
+            *bt_num[0],
+            color="tab:orange",
+            angles="xy",
+            scale_units="xy",
+            scale=1,
+            label=r"$\mathbf{b}^u$",
+        )
+        ax.quiver(
+            *pos,
+            *bt_num[1],
+            color="tab:orange",
+            angles="xy",
+            scale_units="xy",
+            scale=1,
+            alpha=0.5,
+            label=r"$\mathbf{b}^v$",
+        )
+
+        ax.set_xlim(-0.2, 4.2)
+        ax.set_ylim(-0.2, 2.2)
+        ax.legend(loc="upper left")
+        plt.show()
+
+    plot()
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Cylindrical coordinate system
+
+    We will illustrate further by creating an orthogonal cylindrical coordinate system, defined from the position vector
 
     $$
     \mathbf{r}(r, \theta, z) = r \cos \theta \mathbf{i} + r \sin \theta \mathbf{j} + z \mathbf{k}
     $$
+
+    where $r \in [0, 1]$ and $\theta \in (0, 2 \pi]$
     """)
     return
 
@@ -201,7 +316,7 @@ def _():
         "C", sp.Lambda((r, theta, z), (r * sp.cos(theta), r * sp.sin(theta), z))
     )
     r, theta, z = C.base_scalars()
-    return C, Dot, display, dot, r, theta, z
+    return C, Dot, display, dot, get_CoordSys, r, sp, theta, z
 
 
 @app.cell(hide_code=True)
@@ -217,7 +332,7 @@ def _(mo):
 
     Note that on the last line in the code section above we overwrite the sympy symbols `r`, `theta`, `z` with objects of type `BaseScalar`.
 
-    As an example create two contravariant vectors and take the dot product:
+    As a first example create two contravariant vectors and take the dot product:
     """)
     return
 
@@ -265,7 +380,7 @@ def _(mo):
     mo.md(r"""
     The metric tensor is diagonal since the cylindrical coordinates are orthogonal.
 
-    We can also create vectors in Cartesian Coordinates and transform them into the curvilinear system. For example
+    We can also create vectors in Cartesian Coordinates and transform them into the curvilinear system. For example, the position vector in Cartesian coordinates is
     """)
     return
 
@@ -295,13 +410,13 @@ def _(display, p):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    We can get this vector $\mathbf{p}$ in cylinder coordinates by computing
+    We can get this vector $\mathbf{p}$ as fully contravariant by computing
 
     $$
     \boldsymbol{p} = (\boldsymbol{p} \cdot \boldsymbol{b}_r) \boldsymbol{b}_r + (\boldsymbol{p} \cdot \boldsymbol{b}_{\theta}) \boldsymbol{b}_{\theta} + (\boldsymbol{p} \cdot \boldsymbol{b}_{z}) \boldsymbol{b}_{z} = r \boldsymbol{b}_r + z \mathbf{b}_z
     $$
 
-    This is called a projection of the vector $\boldsymbol{p}$ to the cylinder basis. The projection can be computed with method `from_cartesian`:
+    This is called a projection of the vector $\boldsymbol{p}$ onto the covariant cylinder basis. The projection can be computed with method `from_cartesian`:
     """)
     return
 
@@ -312,16 +427,39 @@ def _(C, display, p):
     return
 
 
-@app.cell
-def _(C):
-    C.to_cartesian(C.b_theta)
-
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    We can also go the other way and compute the Cartesian vector from the contravariant:
+    """)
     return
 
 
 @app.cell
 def _(C):
+    C.to_cartesian(C.b_theta)
+    return
+
+
+app._unparsable_cell(
+    r"""
+    An we can look at the contravariant basis vectors in terms of Cartesian coordinates
+    """,
+    name="_",
+)
+
+
+@app.cell
+def _(C):
     C.get_contravariant_basis(True)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    The point is that a vector $\mathbf{v}$ can be formulated using several different basis vectors and there may be advantages or disadvantages to all of them.
+    """)
     return
 
 
@@ -425,7 +563,7 @@ def _(bb, display, r, theta):
     B = r * bv[1, 1] + theta * bv[2, 2]
     display(A)
     display(B)
-    return A, B, bv
+    return A, B, bv, np
 
 
 @app.cell(hide_code=True)
@@ -456,6 +594,8 @@ def _(mo):
     \begin{equation}
     \text{grad}(f) = \nabla f = \frac{\partial {f}}{\partial X^{i}}\,\mathbf{b}^{i} = \frac{\partial {f}}{\partial X^{i}} g^{ij} \,\mathbf{b}_{j}. \tag{15}
     \end{equation}
+
+    Note that some authors would use $F$ instead of $f$ in these last expressions and the outcome would be the same since $f(\mathbf{x}) = F(\mathbf{X})$. In Jaxfun computations we use of course $F(\mathbf{X})$ since these $F's$ are functions of the variables that we are taking the derivatives with respect to.
 
     The divergence of a vector $\mathbf{v}(\mathbf{x})$, in terms of its contravariant components, is given as
 

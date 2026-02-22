@@ -89,7 +89,7 @@ def _(mo):
         \mathbf{b}_i(\mathbf{X}) = \frac{\partial \mathbf{r}}{\partial X^{i}}, \quad \text{for } i \, \in \mathcal{I}^m,\tag{8}
     \end{equation}
 
-    The covariant basis vectors $\mathbf{b}_i$ are tangent to the $m$ coordinate curves $X^i$.
+    The covariant basis vectors $\mathbf{b}_i$ are tangent to the $m$ coordinate curves $X^i(\mathbf{x})$.
 
     The contravariant basis vectors are defined as
 
@@ -178,13 +178,13 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    We illustrate first with a simple example. Consider a simple skewed coordinate system defined by $x(u, v) = u + v$ and $y(u, v) = v$, with $u, v \in [0, 2]\times [0, 2]$, such that the position vector is
+    We illustrate first with a simple example. Consider a simple skewed coordinate system defined by $x(u, v) = u + v$ and $y(u, v) = v$, with curvilinear coordinates $u, v \in [0, 2]\times [0, 2]$, such that the position vector is
 
     $$
     \mathbf{r}(u, v) = (u+v) \mathbf{i} + v \mathbf{j},
     $$
 
-    where $\mathbf{i}$ and $\mathbf{j}$ are the Cartesian unit basis vectors. The coordinate curves are straight lines, but they are not orthogonal to each other. The covariant basis vectors are $\mathbf{b}_u = \frac{\partial \mathbf{r}}{\partial u} = \mathbf{i}$ and $\mathbf{b}_v = \frac{\partial \mathbf{r}}{ \partial v} = \mathbf{i} + \mathbf{j}$, and the contravariant basis vectors are $\mathbf{b}^u = \mathbf{i} - \mathbf{j}$ and $\mathbf{b}^v = \mathbf{j}$. The basis vectors are illustrated in the figure below. Note that the covariant base vectors align with the constant curvelines and the contravariant base vectors are orthogonal to the gridlines. The contravariant vectors are as such the vectors that point orthogonally out from the physical domain $\Omega$. That is, $\mathbf{b}^{u}$ points out of the domain below defined by the curveline drawn at constant $v=2$, i.e., $u = x - 2$.
+    where $\mathbf{i}$ and $\mathbf{j}$ are the Cartesian unit basis vectors. The coordinate curves are straight lines, but they are not orthogonal to each other. The covariant basis vectors are $\mathbf{b}_u = \frac{\partial \mathbf{r}}{\partial u} = \mathbf{i}$ and $\mathbf{b}_v = \frac{\partial \mathbf{r}}{ \partial v} = \mathbf{i} + \mathbf{j}$, and the contravariant basis vectors are $\mathbf{b}^u = \mathbf{i} - \mathbf{j}$ and $\mathbf{b}^v = \mathbf{j}$. The basis vectors are illustrated in the figure below. Note that the covariant base vectors align with the constant gridlines (the coordinate curves of $u$ and $v$) and the contravariant base vectors are orthogonal to the gridlines. The contravariant vectors are as such the vectors that point orthogonally out from the physical domain $\Omega$. That is, $\mathbf{b}^{u}$ points out of the domain below defined by the curveline drawn at constant $v=2$, i.e., $u = x - 2$.
     """)
     return
 
@@ -387,8 +387,8 @@ def _(mo):
 
 @app.cell
 def _(C, display):
-    N = C._parent  # The Cartesian coordinate system
-    p = N.x * N.i + N.y * N.j + N.z * N.k
+    R = C._parent  # The Cartesian coordinate system
+    p = R.x * R.i + R.y * R.j + R.z * R.k
     display(p)
     return (p,)
 
@@ -430,7 +430,7 @@ def _(C, display, p):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    We can also go the other way and compute the Cartesian vector from the contravariant:
+    We can also go the other way and compute a Cartesian vector from a contravariant:
     """)
     return
 
@@ -441,12 +441,12 @@ def _(C):
     return
 
 
-app._unparsable_cell(
-    r"""
-    An we can look at the contravariant basis vectors in terms of Cartesian coordinates
-    """,
-    name="_",
-)
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    And we can look at the contravariant basis vectors in terms of Cartesian coordinates
+    """)
+    return
 
 
 @app.cell
@@ -595,7 +595,7 @@ def _(mo):
     \text{grad}(f) = \nabla f = \frac{\partial {f}}{\partial X^{i}}\,\mathbf{b}^{i} = \frac{\partial {f}}{\partial X^{i}} g^{ij} \,\mathbf{b}_{j}. \tag{15}
     \end{equation}
 
-    Note that some authors would use $F$ instead of $f$ in these last expressions and the outcome would be the same since $f(\mathbf{x}) = F(\mathbf{X})$. In Jaxfun computations we use of course $F(\mathbf{X})$ since these $F's$ are functions of the variables that we are taking the derivatives with respect to.
+    Note that we could use $F$ instead of $f$ in these last expressions since $f(\mathbf{x}) = F(\mathbf{X})$. In Jaxfun computations we naturally use $F(\mathbf{X})$ since the gradient is performed on evaluated expressions that live in the computational space. See the section below on curvilinear equations.
 
     The divergence of a vector $\mathbf{v}(\mathbf{x})$, in terms of its contravariant components, is given as
 

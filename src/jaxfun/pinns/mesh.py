@@ -486,7 +486,7 @@ class TimeMarchingMesh(CartesianProductMesh):
         assert isinstance(m0[-1], Line), "Last submesh must be a Line (time axis)"
         self.deltat: float = float(m0[-1].right - m0[-1].left)
         self.timestep: int = 0
-        self._spatial_mesh: ParameterMesh = None
+        self._spatial_mesh: ParameterMesh | None = None
         super().__init__(*m0)
 
     @property

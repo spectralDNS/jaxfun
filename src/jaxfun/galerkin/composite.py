@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterator
+from typing import Literal, overload
 
 import jax
 import jax.numpy as jnp
@@ -428,9 +429,9 @@ class DirectSum:
 
     is_orthogonal = False
 
-    def __init__(self, a: Composite | OrthogonalSpace, b: BCGeneric) -> None:
+    def __init__(self, a: OrthogonalSpace, b: BCGeneric) -> None:
         assert isinstance(b, BCGeneric)
-        self.basespaces: tuple[Composite, BCGeneric] = (a, b)
+        self.basespaces: tuple[OrthogonalSpace, BCGeneric] = (a, b)
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
         self.system: CoordSys = a.system
@@ -441,7 +442,11 @@ class DirectSum:
         self.dims = a.dims
         self.rank = a.rank
 
-    def __getitem__(self, i: int) -> Composite | BCGeneric:
+    @overload
+    def __getitem__(self, i: Literal[0]) -> OrthogonalSpace: ...
+    @overload
+    def __getitem__(self, i: Literal[1]) -> BCGeneric: ...
+    def __getitem__(self, i: int) -> OrthogonalSpace | BCGeneric:
         """Return i-th summand."""
         return self.basespaces[i]
 
@@ -449,46 +454,42 @@ class DirectSum:
         """Return number of summands (always 2)."""
         return len(self.basespaces)
 
-    def __iter__(self) -> Iterator[Composite | BCGeneric]:
+    def __iter__(self) -> Iterator[OrthogonalSpace | BCGeneric]:
         """Iterate over summands."""
         return iter(self.basespaces)
 
     @property
     def orthogonal(self) -> OrthogonalSpace:
         """Return underlying orthogonal basis (from homogeneous component)."""
-        return self.basespaces[0].orthogonal
+        return self[0].orthogonal
 
     def mesh(self, kind: str = "quadrature", N: int = 0) -> Array:
         """Return mesh from homogeneous Composite summand."""
-        return self.basespaces[0].mesh(kind=kind, N=N)
+        return self[0].mesh(kind=kind, N=N)
 
     def bnd_vals(self) -> Array:
         """Return boundary lifting values (from BCGeneric)."""
-        return self.basespaces[1].bnd_vals()
+        return self[1].bnd_vals()
 
     @property
     def dim(self) -> int:
         """Return total dimension (homogeneous + boundary)."""
-        return self.basespaces[0].dim + self.basespaces[1].dim
+        return self[0].dim + self[1].dim
 
     @property
     def num_dofs(self) -> int:
         """Return free degrees of freedom (Composite part)."""
-        return self.basespaces[0].num_dofs
+        return self[0].num_dofs
 
     @jax.jit(static_argnums=0)
     def evaluate(self, X: float, c: Array) -> float:
         """Evaluate direct-sum function at X with composite coeffs c."""
-        return self.basespaces[0].evaluate(X, c) + self.basespaces[1].evaluate(
-            X, self.bnd_vals()
-        )
+        return self[0].evaluate(X, c) + self[1].evaluate(X, self.bnd_vals())
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Backward transform (composite + boundary contribution)."""
-        return self.basespaces[0].backward(c, kind, N) + self.basespaces[1].backward(
-            self.bnd_vals(), kind, N
-        )
+        return self[0].backward(c, kind, N) + self[1].backward(self.bnd_vals(), kind, N)
 
     @jax.jit(static_argnums=0)
     def forward(self, uj: Array) -> Array:
@@ -503,9 +504,9 @@ class DirectSum:
     @jax.jit(static_argnums=(0, 3))
     def evaluate_derivative(self, X: Array, c: Array, k: int = 0) -> float:
         """Evaluate k-th derivative at X (composite + boundary)."""
-        cs, bs = self.basespaces
+        a, b = self.basespaces
         bv = self.bnd_vals()
-        return cs.evaluate_derivative(X, c, k) + bs.evaluate_derivative(X, bv, k)
+        return a.evaluate_derivative(X, c, k) + b.evaluate_derivative(X, bv, k)
 
 
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:

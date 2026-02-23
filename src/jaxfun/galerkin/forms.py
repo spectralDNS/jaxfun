@@ -42,6 +42,7 @@ from .arguments import (
     JAXFunction,
     TestFunction,
     TrialFunction,
+    get_arg,
 )
 
 
@@ -97,7 +98,7 @@ def get_basisfunctions(
     trial_found: set[TrialFunction | AppliedUndef] = set()
     for p in sp.core.traversal.iterargs(sp.sympify(a)):
         if isinstance(p, TestFunction | TrialFunction | AppliedUndef):
-            match getattr(p, "argument", ArgumentTag.NONE):
+            match get_arg(p):
                 case ArgumentTag.TRIAL:
                     trial_found.add(p)
                 case ArgumentTag.TEST:
@@ -148,7 +149,7 @@ def get_jaxfunctions(
     """
     jaxfunctions: set[JAXFunction] = set()
     for p in sp.core.traversal.iterargs(sp.sympify(a)):
-        if getattr(p, "argument", ArgumentTag.NONE) == ArgumentTag.JAXFUNC:
+        if get_arg(p) is ArgumentTag.JAXFUNC:
             jaxfunctions.add(p)
     return jaxfunctions
 

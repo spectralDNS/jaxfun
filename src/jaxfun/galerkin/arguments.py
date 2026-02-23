@@ -51,6 +51,10 @@ class ArgumentTag(Enum):
     NONE = -1
 
 
+def get_arg(p: Any) -> ArgumentTag:
+    return getattr(p, "argument", ArgumentTag.NONE)
+
+
 def get_BasisFunction(
     name: str,
     *,
@@ -816,9 +820,7 @@ def evaluate_jaxfunction_expr(
 ) -> Array:
     if jaxf is None:
         for p in sp.core.traversal.preorder_traversal(a):
-            if (
-                getattr(p, "argument", ArgumentTag.NONE) == ArgumentTag.JAXFUNC
-            ):  # JAXFunction->AppliedUndef
+            if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
                 jaxf = cast(AppliedUndef, p)
                 break
     assert hasattr(jaxf, "functionspace") and hasattr(jaxf, "array")

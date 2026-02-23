@@ -15,6 +15,7 @@ from .arguments import (
     TestFunction,
     TrialFunction,
     evaluate_jaxfunction_expr,
+    get_arg,
 )
 from .composite import BCGeneric, Composite, DirectSum
 from .forms import (
@@ -479,32 +480,22 @@ def inner_bilinear(
     for aii in ai.args:
         found_basis = False
         for p in sp.core.traversal.preorder_traversal(aii):
-            if getattr(p, "argument", ArgumentTag.NONE) in (
-                ArgumentTag.TEST,
-                ArgumentTag.TRIAL,
-            ):
+            if get_arg(p) in (ArgumentTag.TEST, ArgumentTag.TRIAL):
                 found_basis = True
                 break
         if found_basis:
             if isinstance(aii, sp.Derivative):
-                if (
-                    getattr(aii.args[0], "argument", ArgumentTag.NONE)
-                    == ArgumentTag.TEST
-                ):
+                arg = get_arg(aii.args[0])
+                if arg is ArgumentTag.TEST:
                     assert i == 0
                     i = int(aii.derivative_count)
-                elif (
-                    getattr(aii.args[0], "argument", ArgumentTag.NONE)
-                    == ArgumentTag.TRIAL
-                ):
+                elif arg is ArgumentTag.TRIAL:
                     assert j == 0
                     j = int(aii.derivative_count)
             continue
         jaxfunction = None
         for p in sp.core.traversal.preorder_traversal(aii):
-            if (
-                getattr(p, "argument", ArgumentTag.NONE) == ArgumentTag.JAXFUNC
-            ):  # JAXFunction->AppliedUndef
+            if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
                 jaxfunction = cast(AppliedUndef, p)
                 break
         if jaxfunction:
@@ -576,7 +567,7 @@ def inner_linear(
     df = float(vo.domain_factor)
     i = 0
     uj = jnp.array([sc])  # incorporate scalar coefficient into first vector
-    if getattr(bi, "argument", ArgumentTag.NONE) == ArgumentTag.TEST:
+    if get_arg(bi) is ArgumentTag.TEST:
         pass
     elif isinstance(bi, sp.Derivative):
         i = int(bi.derivative_count)
@@ -584,7 +575,7 @@ def inner_linear(
         for bii in bi.args:
             found_basis = False
             for p in sp.core.traversal.preorder_traversal(bii):
-                if getattr(p, "argument", ArgumentTag.NONE) == ArgumentTag.TEST:
+                if get_arg(p) is ArgumentTag.TEST:
                     found_basis = True
                     break
             if found_basis:
@@ -595,9 +586,7 @@ def inner_linear(
 
             jaxfunction = None
             for p in sp.core.traversal.preorder_traversal(bii):
-                if (
-                    getattr(p, "argument", ArgumentTag.NONE) == ArgumentTag.JAXFUNC
-                ):  # JAXFunction->AppliedUndef
+                if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
                     jaxfunction = cast(AppliedUndef, p)
                     break
             if jaxfunction:

@@ -1166,6 +1166,10 @@ class CoordSys(Basic):
             return DyadicAdd.fromiter(
                 self.simplify(f) * b for b, f in expr.components.items()
             )
+        elif isinstance(expr, VectorMul):
+            return self.simplify(expr.measure_number) * expr.base_vector
+        elif isinstance(expr, DyadicMul):
+            return self.simplify(expr.measure_number) * expr.base_dyadic
         return self.expr_psi_to_base_scalar(
             sp.simplify(self.expr_base_scalar_to_psi(expr), measure=self._measure)
         )

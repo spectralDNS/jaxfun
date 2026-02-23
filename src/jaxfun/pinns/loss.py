@@ -167,6 +167,8 @@ class Residual:
         keys: Set of keys identifying required evaluations of FlaxFunctions.
     """
 
+    x_id: int
+
     def __init__(
         self,
         f: sp.Expr,
@@ -197,7 +199,7 @@ class Residual:
         self.target_expr = t_expr
         self.target0 = target
         self.base_scalars = s
-        self.target = self._compute_target(x)
+        self.target: Array = self._compute_target(x)
 
         if weights.sharding != x.sharding and jax.local_device_count() > 1:
             if len(weights.shape) > 0 and weights.shape[0] == x.shape[0]:
@@ -205,10 +207,11 @@ class Residual:
             else:
                 weights = jax.device_put(weights, NamedSharding(x.sharding.mesh, P()))  # ty:ignore[unresolved-attribute]
 
-        self.x, self.weights = x, weights
+        self.x: Array = x
+        self.weights: Array = weights
 
         # Build list of equations and all required evaluations of flaxfunctions
-        eqs = []
+        eqs: list[ResidualFn] = []
         keys = set()
         for h in expr:
             eqs.append(get_fn(h, s))
@@ -226,8 +229,8 @@ class Residual:
                 if get_arg(p) is ArgumentTag.JAXFUNC:
                     keys.add((id(x), mod_id, 0))
 
-        self.eqs = tuple(eqs)
-        self.keys = keys
+        self.eqs: tuple[ResidualFn, ...] = tuple(eqs)
+        self.keys: set[tuple[int, int, int]] = keys
 
     def __call__(
         self,
@@ -237,7 +240,8 @@ class Residual:
         Js: dict[tuple[int, int, int], Array] | None = None,
         x_id: int | None = None,
     ) -> Array:
-        return sum([eq(x, module, Js=Js, x_id=x_id) for eq in self.eqs]) - target
+        applied_eqs: list[Array] = [eq(x, module, Js=Js, x_id=x_id) for eq in self.eqs]
+        return sum(applied_eqs, start=jnp.array(0)) - target
 
     def update_arrays(self, x: Array) -> None:
         """Update the collocation points and target values
@@ -452,8 +456,8 @@ class ResidualVPINN(Residual):
         self.target_dict: dict[int, sp.Expr] = t_v
 
         # Build list of equations and all required evaluations of flaxfunctions
-        eqs = []
-        keys = set()
+        eqs: list[tuple[ResidualFn, int]] = []
+        keys: set[tuple[int, int, int]] = set()
         for h in expr:
             assert isinstance(h, sp.Mul)
             hn, hi = _pop_test_and_get_derivative_count(h.args)
@@ -470,8 +474,8 @@ class ResidualVPINN(Residual):
                     continue
                 if get_arg(p) is ArgumentTag.JAXFUNC:
                     keys.add((id(x), mod_id, 0))
-        self.eqs = tuple(eqs)
-        self.keys = keys
+        self.eqs: tuple[tuple[ResidualFn, int], ...] = tuple(eqs)
+        self.keys: set[tuple[int, int, int]] = keys
 
         if weights.sharding != x.sharding and jax.local_device_count() > 1:
             if len(weights.shape) > 0 and weights.shape[0] == x.shape[0]:
@@ -569,7 +573,7 @@ class ResidualVPINN(Residual):
         )
 
 
-def process_input(*fs, residuals=None) -> list[Residual | ResidualVPINN]:
+def process_input(*fs, residuals=None) -> tuple[Residual | ResidualVPINN, ...]:
     from jaxfun.operators import Dot
 
     if residuals is None:
@@ -595,7 +599,7 @@ def process_input(*fs, residuals=None) -> list[Residual | ResidualVPINN]:
 
         else:
             residuals.append(res(*((f[0], f1) + f[2:])))
-    return residuals
+    return tuple(residuals)
 
 
 class Loss:
@@ -696,10 +700,10 @@ class Loss:
             >>> loss_fn = Loss((eq, xj), (u, xb, 0, 10))
         """
 
-        self.residuals = process_input(*fs, residuals=[])
+        self.residuals: tuple[Residual, ...] = process_input(*fs, residuals=[])
 
         # Store the unique collocation points and their order for later use
-        self.xs = {id(eq.x): eq.x for eq in self.residuals}
+        self.xs: dict[int, Array] = {id(eq.x): eq.x for eq in self.residuals}
         x_keys = list(self.xs.keys())
         self.x_ids = tuple(x_keys.index(id(eq.x)) for eq in self.residuals)
         # use indices into xs (0, 1, ...) as keys instead of id(x)
@@ -711,7 +715,7 @@ class Loss:
         self.keys = set(key for i, eq in enumerate(self.residuals) for key in eq.keys)
 
     @property
-    def args(self) -> tuple[tuple[Array], tuple[Array]]:
+    def args(self) -> tuple[tuple[Array, ...], tuple[Array, ...]]:
         targets = tuple(eq.target for eq in self.residuals)
         return tuple(self.xs.values()), targets
 
@@ -728,10 +732,12 @@ class Loss:
                 "Cannot determine local mesh, collocation points are not sharded "
                 "over all local devices"
             )
-        return self.residuals[0].x.sharding.mesh
+
+        # TODO: Does `x.sharding` actually have the attribute `mesh`?
+        return self.residuals[0].x.sharding.mesh  # ty:ignore[unresolved-attribute]
 
     def _compute_residual_arrays(
-        self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array]
+        self, module: nnx.Module, xs: tuple[Array, ...], targets: tuple[Array, ...]
     ) -> list[Array]:
         """Return the residuals for all collocation points
 
@@ -753,7 +759,11 @@ class Loss:
         ]
 
     def JTJ(
-        self, module: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+        self,
+        module: nnx.Module,
+        gw: Array,
+        xs: tuple[Array, ...],
+        targets: tuple[Array, ...],
     ) -> Array:
         """Return the Gauss-Newton approximation to the Hessian
 
@@ -787,7 +797,11 @@ class Loss:
 
     @nnx.jit(static_argnums=0)
     def value_and_grad_and_JTJ(
-        self, module: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+        self,
+        module: nnx.Module,
+        gw: Array,
+        xs: tuple[Array, ...],
+        targets: tuple[Array, ...],
     ) -> tuple[Array, Array, Array]:
         """Return the loss value, gradient and JTJ
 
@@ -864,7 +878,11 @@ class Loss:
         return jnp.array(L2)
 
     def loss_i(
-        self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array], i: int
+        self,
+        module: nnx.Module,
+        xs: tuple[Array, ...],
+        targets: tuple[Array, ...],
+        i: int,
     ) -> Array:
         """Return the loss for equation i
 
@@ -885,7 +903,11 @@ class Loss:
         )
 
     def norm_grad_loss_i(
-        self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array], i: int
+        self,
+        module: nnx.Module,
+        xs: tuple[Array, ...],
+        targets: tuple[Array, ...],
+        i: int,
     ) -> Array:
         """Return the norm of the gradient of the loss for equation i
 
@@ -904,7 +926,7 @@ class Loss:
         )
 
     def norm_grad_loss(
-        self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array]
+        self, module: nnx.Module, xs: tuple[Array, ...], targets: tuple[Array, ...]
     ) -> Array:
         """Return the norms of the gradients of the losses for all equations
 
@@ -923,7 +945,7 @@ class Loss:
         return jnp.array(norms)
 
     def compute_global_weights(
-        self, module: nnx.Module, xs: tuple[Array], targets: tuple[Array]
+        self, module: nnx.Module, xs: tuple[Array, ...], targets: tuple[Array, ...]
     ) -> Array:
         """Return global weights based on the norms of the gradients
 
@@ -945,8 +967,8 @@ class Loss:
         module: nnx.Module,
         gw: Array,
         alpha: float,
-        xs: tuple[Array],
-        targets: tuple[Array],
+        xs: tuple[Array, ...],
+        targets: tuple[Array, ...],
     ) -> Array:
         """Return updated global weights
 
@@ -969,7 +991,7 @@ class Loss:
         return new * (1 - alpha) + gw * alpha
 
     def _compute_gradients(
-        self, module: nnx.Module, xs: tuple[Array]
+        self, module: nnx.Module, xs: tuple[Array, ...]
     ) -> dict[tuple[int, int, int], Array]:
         """Return (as a dictionary) all the required evaluations of module
         for the loss function"""
@@ -985,7 +1007,11 @@ class Loss:
         return Js
 
     def loss_with_gw(
-        self, module: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+        self,
+        module: nnx.Module,
+        gw: Array,
+        xs: tuple[Array, ...],
+        targets: tuple[Array, ...],
     ) -> Array:
         """Return the weighted loss with given global weights
 

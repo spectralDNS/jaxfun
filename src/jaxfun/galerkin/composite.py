@@ -168,7 +168,7 @@ class Composite(OrthogonalSpace):
         return self.orthogonal.quad_points_and_weights(N)
 
     @jax.jit(static_argnums=0)
-    def evaluate(self, X: float, c: Array) -> float:
+    def evaluate(self, X: Array, c: Array) -> Array:
         """Evaluate constrained expansion at X with composite coeffs c."""
         return self.orthogonal.evaluate(X, self.to_orthogonal(c))
 
@@ -482,7 +482,7 @@ class DirectSum:
         return self[0].num_dofs
 
     @jax.jit(static_argnums=0)
-    def evaluate(self, X: float, c: Array) -> float:
+    def evaluate(self, X: Array, c: Array) -> Array:
         """Evaluate direct-sum function at X with composite coeffs c."""
         return self[0].evaluate(X, c) + self[1].evaluate(X, self.bnd_vals())
 

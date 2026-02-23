@@ -63,7 +63,7 @@ class BaseModule(nnx.Module):
             return NotImplemented
         return nnx.graphdef(self) == nnx.graphdef(other) and self.name == other.name
 
-    def update_time(self, deltat: float) -> None:
+    def update_time(self, deltat: float | Array) -> None:
         pass
 
     @property
@@ -255,7 +255,7 @@ class KANLayer(nnx.Module):
             else [Domain(-1, 1) for _ in range(in_features)]
         )
 
-        self.basespaces = (
+        self.basespaces: list[OrthogonalSpace] = (
             [
                 basespace(spectral_size, domain=domains[i], system=subsystems[i])  # type: ignore[index]
                 for i in range(in_features)
@@ -266,7 +266,7 @@ class KANLayer(nnx.Module):
             ]  # Hidden layer domain [-1, 1] matches tanh activation range
         )
 
-    def update_time(self, deltat: float) -> None:
+    def update_time(self, deltat: float | Array) -> None:
         """Update time-dependent domain for input layer.
 
         Args:
@@ -274,9 +274,8 @@ class KANLayer(nnx.Module):
         """
         if not self.hidden:
             d = self.basespaces[-1]._domain
-            self.basespaces[-1]._domain = Domain(
-                float(d.lower + deltat), float(d.upper + deltat)
-            )
+            l, u = float(d.lower), float(d.upper)
+            self.basespaces[-1]._domain = Domain(float(l + deltat), float(u + deltat))
 
     def compute_basis(self, x: Array) -> list[Array]:
         if not self.hidden:
@@ -737,7 +736,7 @@ class KANMLPModule(BaseModule):
         st = nnx.split(self, nnx.Param)[1]
         return ravel_pytree(st)[0].shape[0]
 
-    def update_time(self, deltat: float) -> None:
+    def update_time(self, deltat: float | Array) -> None:
         self.layer_in.update_time(deltat)
 
     def __call__(self, x: Array) -> Array:
@@ -834,7 +833,7 @@ class sPIKANModule(BaseModule):
         st = nnx.state(self)
         return ravel_pytree(st)[0].shape[0]
 
-    def update_time(self, deltat: float) -> None:
+    def update_time(self, deltat: float | Array) -> None:
         self.layer_in.update_time(deltat)
 
     def __call__(self, x: Array) -> Array:

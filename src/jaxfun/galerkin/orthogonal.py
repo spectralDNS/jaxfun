@@ -69,7 +69,7 @@ class OrthogonalSpace(BaseSpace):
         self._num_quad_points: int = N
         if domain is None:
             domain = self.reference_domain
-        self._domain = Domain(*domain)
+        self._domain: Domain = Domain(*domain)
         self.bcs: BoundaryConditions | None = None
         self.orthogonal: Self = self
         self.stencil = {0: 1}

@@ -108,7 +108,7 @@ class Legendre(Jacobi):
         return x, w
 
     @jit_vmap(in_axes=(0, None))
-    def eval_basis_function(self, X: float, i: int) -> float:
+    def eval_basis_function(self, X: Array, i: int) -> Array:
         """Evaluate single Legendre polynomial P_i at X.
 
         Args:

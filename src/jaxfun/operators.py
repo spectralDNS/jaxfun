@@ -578,7 +578,7 @@ def curl(v: VectorLike) -> VectorLike:
         x = cast_bs(coord_sys.base_scalars())
         b = tuple(coord_sys.get_contravariant_basis_vector(i) for i in range(len(x)))
         outvec = Add.fromiter(Cross(b[i], v.diff(x[i])) for i in range(len(x)))
-        return outvec.doit()
+        return coord_sys.simplify(outvec.doit())
 
     assert hasattr(v, "_sys") and isinstance(v._sys, CoordSys)
     if len(coord_sys) == 2 and v._sys.is_cartesian:

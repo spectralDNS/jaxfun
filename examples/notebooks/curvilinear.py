@@ -47,7 +47,7 @@ def _(mo):
     x^i=x^i(\mathbf{X}), \quad \text{for } i \in \mathcal{I}^n.\tag{4}
     \end{equation}
 
-    Using these generic maps a function $u : \Omega^m \rightarrow \mathbb{K}$, where $\mathbb{K}$ may be either $\mathbb{R}$ or $\mathbb{C}$, may now be transformed from physical to computational space as
+    Using these generic maps a function $u : \Omega^m \rightarrow \mathbb{K}$, where $\mathbb{K}$ may be either $\mathbb{R}$ or $\mathbb{C}$, may now be transformed from physical to computational space through a change of variables as
 
     \begin{equation}
     u(\mathbf{x}) = u(\mathbf{x}(\mathbf{X})) = U(\mathbf{X}),\tag{5}
@@ -103,13 +103,13 @@ def _(mo):
         \mathbf{b}^{i} \cdot \mathbf{b}_{j} = \delta_{j}^{i}, \quad \text{for } i, j \, \in \mathcal{I}^{m \times m}.\tag{10}
     \end{equation}
 
-    Any vector $\mathbf{v}$ (boldface lower case letter notation) can be given with either co- or contravariant basis functions and we write them as
+    Any vector $\mathbf{v}(\mathbf{X})$ (boldface lower case letter) can be given with either co- or contravariant basis functions in the computational domain and we write them as
 
     \begin{equation}
         \mathbf{v} = {v}^{i} \mathbf{b}_i = {v}_i \mathbf{b}^{i},\tag{11}
     \end{equation}
 
-    where ${v}_{i}(\mathbf{X})$ and ${v}^{i}(\mathbf{X})$ are co- and contravariant vector components, respectively. The sub or superscript of the coefficient are used to recognise which basis functions are used. The vector can also be given with Cartesian basis vectors, but that is a special case that should be obvious from the context, like for the position vector $\mathbf{r} = x^{i}\mathbf{i}_i$. The Cartesian vectors are thus used with the contravariant vector component notation.
+    where ${v}_{i}(\mathbf{X})$ and ${v}^{i}(\mathbf{X})$ are co- and contravariant vector components, respectively. The sub- or superscript of the coefficient are used to recognise which basis functions are used. The vector $\mathbf{v}$ can also be given in Cartesian basis vectors, but since both sub- and superscripts are taken, we must make use of an alternative notation that includes the Cartesian variables $\mathbf{v}(\mathbf{x}) = v^{i}(\mathbf{x}) \mathbf{i}_i$.
 
     When a vector is written with contravariant vector components $\mathbf{v} = {v}^{i} \mathbf{b}_i$, the vector is called a contravariant vector. This is the default used by Jaxfun. When the vector is written with covariant components $\mathbf{v} = {v}_i \mathbf{b}^{i}$ it is called a covariant vector. This is a bit confusing since a contravariant vector is using covariant basis vectors and vice versa!
     """)
@@ -589,15 +589,19 @@ def _(mo):
 
     ### Vector operations
 
-    The gradient of a scalar field $f(\mathbf{x})$ is termed $\text{grad}(f)$ and equals
+    The gradient of a scalar field $f(\mathbf{x}) (=F(\mathbf{X}))$ is termed $\text{grad}(f)$ and equals
 
     \begin{equation}
-    \text{grad}(f) = \nabla f = \frac{\partial {f}}{\partial X^{i}}\,\mathbf{b}^{i} = \frac{\partial {f}}{\partial X^{i}} g^{ij} \,\mathbf{b}_{j}. \tag{15}
+    \text{grad}(f) = \nabla f = \frac{\partial {F}}{\partial X^{i}}\,\mathbf{b}^{i} = \frac{\partial {F}}{\partial X^{i}} g^{ij} \,\mathbf{b}_{j}. \tag{15}
     \end{equation}
 
-    Note that we could use $F$ instead of $f$ in these last expressions since $f(\mathbf{x}) = F(\mathbf{X})$. In Jaxfun computations we naturally use $F(\mathbf{X})$ since the gradient is performed on evaluated expressions that live in the computational space. See the section below on curvilinear equations.
+    Note that the computation in curvilinear coordinates is simply using a change of variables and the chain rule
 
-    The divergence of a vector $\mathbf{v}(\mathbf{x})$, in terms of its contravariant components, is given as
+    $$
+    \nabla f = \frac{\partial f(\mathbf{x})}{\partial x_i} \mathbf{i}_{i} = \frac{\partial F(\mathbf{X})}{\partial X^j} \frac{\partial X^j}{\partial x_i} \mathbf{i}_{i} = \frac{\partial F}{\partial X^j} \mathbf{b}^j.
+    $$
+
+    The divergence of a vector $\mathbf{v}$, in terms of its contravariant components, is given as
 
     \begin{equation}
     \text{div}(\mathbf{v}) = \nabla \cdot \mathbf{v} = \frac{\partial \mathbf{v}}{\partial X^j} \cdot \mathbf{b}^j = \frac{1}{\sqrt{g}} \frac{\partial {v}^{i} \sqrt{g}}{\partial X^{i}},\tag{16}
@@ -606,7 +610,7 @@ def _(mo):
     and the Laplacian of the scalar field $f$ can be written as
 
     \begin{equation}
-    \text{div}(\text{grad}(f)) = \nabla^2 f  = \frac{1}{\sqrt{g}}\frac{\partial}{\partial X^{i}}\left( g^{ij} \sqrt{g} \frac{\partial {f}}{\partial X^{j}}\right). \tag{17}
+    \text{div}(\text{grad}(f)) = \nabla^2 f  = \frac{1}{\sqrt{g}}\frac{\partial}{\partial X^{i}}\left( g^{ij} \sqrt{g} \frac{\partial {F}}{\partial X^{j}}\right). \tag{17}
     \end{equation}
 
     Note that $g^{ij}$ and $\sqrt{g}$ will act as variable coefficients when the operators are used in differential equations.
@@ -614,19 +618,19 @@ def _(mo):
     The curl of a vector is defined as
 
     $$
-    \text{curl}(\mathbf{v}) = \nabla \times \mathbf{v} = \mathbf{b}^{j} \times \frac{\partial \mathbf{v}}{\partial X^j} = \frac{\varepsilon_{ijk}}{\sqrt{g}} \frac{\partial {v}_k}{\partial X^j} \mathbf{b}_i
+    \text{curl}(\mathbf{v}) = \nabla \times \mathbf{v} = \mathbf{b}^{j} \times \frac{\partial \mathbf{v}}{\partial X^j} = \frac{\varepsilon_{ijk}}{\sqrt{g}} \frac{\partial {v}_k}{\partial X^j} \mathbf{b}_i \tag{18}
     $$
 
     The partial derivative $\frac{\partial \mathbf{v}}{\partial X^j}$ is implemented in Jaxfun as the `diff` operator working on vectors. The partial derivative can be computed as
 
     $$
-    \frac{\partial \mathbf{v}}{\partial X^j} = \left(\frac{\partial {v}^{i}}{\partial X^j} + \Gamma^{i}_{kj} {v}^k\right) \mathbf{b}_i
+    \frac{\partial \mathbf{v}}{\partial X^j} = \left(\frac{\partial {v}^{i}}{\partial X^j} + \Gamma^{i}_{kj} {v}^k\right) \mathbf{b}_i \tag{19}
     $$
 
     where $\Gamma^{i}_{kj}$ is the Christoffel symbol of the second kind
 
     $$
-    \Gamma^{k}_{ji} = \frac{\partial \mathbf{b}_{i}}{\partial X^j} \cdot \mathbf{b}^k
+    \Gamma^{k}_{ji} = \frac{\partial \mathbf{b}_{i}}{\partial X^j} \cdot \mathbf{b}^k \tag{20}
     $$
 
     available in Jaxfun as method `get_christoffel_second`.
@@ -646,7 +650,7 @@ def _(mo):
     The gradient of a vector is a second order tensor
 
     $$
-    \text{grad}(\mathbf{v}) = \frac{\partial \mathbf{v}}{\partial X^j} \otimes \mathbf{b}^j
+    \text{grad}(\mathbf{v}) = \frac{\partial \mathbf{v}}{\partial X^j} \otimes \mathbf{b}^j \tag{21}
     $$
 
     Note that if $\nabla$ is interpreted as a vector, then this corresponds to $(\nabla \otimes \mathbf{v})^T$. However, in Jaxfun printing we interpret $\nabla$ as an operator and as such $\text{grad}(\mathbf{v})$ is printed as $\nabla \mathbf{v}$.
@@ -654,7 +658,7 @@ def _(mo):
     The divergence of a second order tensor $\mathbf{A}$ is
 
     $$
-    \text{div}(\mathbf{A}) = \frac{\partial \mathbf{A}}{\partial X^j} \cdot \mathbf{b}^j
+    \text{div}(\mathbf{A}) = \frac{\partial \mathbf{A}}{\partial X^j} \cdot \mathbf{b}^j \tag{22}
     $$
 
     Again, if $\nabla$ is interpreted as a vector, then $\text{div}(\mathbf{A}) = \nabla \cdot \mathbf{A}^T$. But in Jaxfun's printing $\nabla$ is an operator acting over the last axis of its input tensor. Hence the divergence of a tensor is printed as $\nabla \cdot \mathbf{A}$.
@@ -769,12 +773,74 @@ def _(Grad, display, u_):
 
 
 @app.cell
-def _(C, Curl, Grad, display, u_):
-    display(C.simplify(Curl(Grad(u_)).doit()))
+def _(Curl, Grad, display, u_):
+    display(Curl(Grad(u_)).doit())
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Inner products
+
+    The weighted $L_{\omega}^2(\Omega^m)$ inner product is defined as
+
+    $$
+    (u(\mathbf{x}), v(\mathbf{x}))_{L_{\omega}^2(\Omega^m)} = \int_{\Omega^m}u(\mathbf{x}) \overline{v}(\mathbf{x}) \omega(\mathbf{x}) d\lambda^m \tag{23}
+    $$
+
+    where as before $m$= 1, 2 or 3 represents a curve, surface or volume, and  $d\lambda^m$ represents an infinitesimal line, surface or volume element. The overline on $\overline{v}$ represents a complex conjugate.
+
+    The computational domain is a hypercube, with $\mathbb{I}^2 = \text{I}^0 \times \text{I}^1$ and $\mathbb{I}^3 = \text{I}^0 \times \text{I}^1 \times \text{I}^2$, where $\text{I}^m$ is the interval used for computational dimension $m$. When computing the inner product, we first transform the integral to computational coordinates. We use the following mapped  function approximations
+
+    $$
+    u(\mathbf{x}) = U(X^0) = \sum_{k=0}^{N-1} \hat{u}_k \phi_k(X^0),
+    $$
+
+    $$
+    u(\mathbf{x}) = U(X^0, X^1) = \sum_{k=0}^{N_0-1}\sum_{j=0}^{N_1-1} \hat{u}_{kj} \phi_k(X^0) \psi_j(X^1),
+    $$
+
+    $$
+    u(\mathbf{x}) = U(X^0, X^1, X^2) = \sum_{k=0}^{N_0-1}\sum_{j=0}^{N_1-1} \sum_{i=0}^{N_2-1}\hat{u}_{kji} \phi_k(X^0) \psi_j(X^1) \gamma_i(X^2),
+    $$
+
+    for curves, surfaces or volumes.
+
+    Consider a differential equation of the form
+
+    \begin{equation}
+        L u(\mathbf{x}) = f(\mathbf{x}), \quad \text{for } \mathbf{x} \in \Omega^m, \tag{24}
+    \end{equation}
+
+    where $L$ is a linear operator, $f(\mathbf{x}) \in L^2_{\omega}(\Omega^m)$, and $u(\mathbf{x}) \in \text{V}(\Omega^m)$. The weighted variational forms obtained by multiplying the differential equation by a test function and integrating over the domain are
+
+    \begin{align}
+        a(u, v)_{{L_{\omega}^2(\Omega^m)}} &= \int_{\Omega^m} L u(\mathbf{x}) \,v^*(\mathbf{x}) \, \omega(\mathbf{x}) \, d\lambda^m, \tag{25} \\
+        (f, v)_{L_{\omega}^2(\Omega^m)} &= \int_{\Omega^m} f(\mathbf{x}) \,v^*(\mathbf{x}) \, \omega(\mathbf{x}) \, d\lambda^m, \tag{26}
+    \end{align}
+
+    and the weighted Galerkin method is to find $u \in \text{V}(\Omega^m)$ such that
+
+    \begin{equation}
+        a(u, v)_{L_{\omega}^2(\Omega^m)} = (f, v)_{L_{\omega}^2(\Omega^m)}, \quad \forall \, v \in \text{V}(\Omega^m). \tag{27}
+    \end{equation}
+
+    For either curves, surfaces or volumes, the integrals are transformed to
+
+    \begin{align}
+        a(u, v)_{L_{\omega}^2(\Omega^m)} &=  \int_{\mathbb{I}^m} {L} U \, \overline{V} \, W \, \sqrt{g} d{X}, \tag{28}\\
+        (f, v)_{L_{\omega}^2(\Omega^m)} &= \int_{\mathbb{I}^m} F \,\overline{V} \, W \, \sqrt{g} d{X}, \tag{29}
+    \end{align}
+
+    where $d{X}=\prod_{i\in \mathcal{I}^m} dX^{i}$ and ${L}U$ is an operator transformed to computational space, like Eqs. (17). The computational weights $W(\mathbf{X})$ are determined by the choice of basis functions. Note that the transformation makes use of $d\lambda^m = \sqrt{g}d{X}$ for all $m \le n$.
+
+    An example solving Helmholtz equation on an annulus is given in the following  [notebook](https://spectraldns.github.io/jaxfun/annulus.html).
+    """)
+    return
+
+
+@app.cell(hide_code=True)
 def _():
     import marimo as mo
 

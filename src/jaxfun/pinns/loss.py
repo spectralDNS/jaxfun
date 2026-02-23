@@ -15,6 +15,7 @@ from jax.sharding import NamedSharding, PartitionSpec as P
 
 from jaxfun.coordinates import BaseScalar, get_system
 from jaxfun.galerkin import TestFunction
+from jaxfun.galerkin.arguments import ArgumentTag
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.typing import Array, Loss_Tuple
 from jaxfun.utils import lambdify
@@ -46,7 +47,7 @@ def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
 
 def get_flaxfunction_args(a: sp.Basic) -> tuple[sp.Symbol | BaseScalar, ...] | None:
     for p in sp.core.traversal.iterargs(a):
-        if getattr(p, "argument", -1) == 2:
+        if getattr(p, "argument", ArgumentTag.NONE) == ArgumentTag.JAXFUNC:
             return p.args
     return None
 
@@ -56,7 +57,7 @@ def get_flaxfunctions(
 ) -> set[FlaxFunction]:
     flax_found = set()
     for p in sp.core.traversal.iterargs(a):
-        if getattr(p, "argument", -1) == 2:
+        if getattr(p, "argument", ArgumentTag.NONE) == ArgumentTag.JAXFUNC:
             flax_found.add(p)
     return flax_found
 
@@ -65,7 +66,7 @@ def get_testfunction(
     a: sp.Basic,
 ) -> TestFunction | None:
     for p in sp.core.traversal.iterargs(a):
-        if getattr(p, "argument", -1) == 0:
+        if getattr(p, "argument", ArgumentTag.NONE) == ArgumentTag.TEST:
             return p
     return None
 
@@ -218,11 +219,12 @@ class Residual:
             for p in sp.core.traversal.iterargs(h):
                 if (
                     isinstance(p, sp.Derivative)
-                    and getattr(p.args[0], "argument", -1) == 2
+                    and getattr(p.args[0], "argument", ArgumentTag.NONE)
+                    == ArgumentTag.JAXFUNC
                 ):
                     keys.add((id(x), mod_id, p.derivative_count))
                     continue
-                if getattr(p, "argument", -1) == 2:
+                if getattr(p, "argument", ArgumentTag.NONE) == ArgumentTag.JAXFUNC:
                     keys.add((id(x), mod_id, 0))
 
         self.eqs = tuple(eqs)
@@ -463,11 +465,12 @@ class ResidualVPINN(Residual):
             for p in sp.core.traversal.iterargs(hn):
                 if (
                     isinstance(p, sp.Derivative)
-                    and getattr(p.args[0], "argument", -1) == 2
+                    and getattr(p.args[0], "argument", ArgumentTag.NONE)
+                    == ArgumentTag.JAXFUNC
                 ):
                     keys.add((id(x), mod_id, p.derivative_count))
                     continue
-                if getattr(p, "argument", -1) == 2:
+                if getattr(p, "argument", ArgumentTag.NONE) == ArgumentTag.JAXFUNC:
                     keys.add((id(x), mod_id, 0))
         self.eqs = tuple(eqs)
         self.keys = keys

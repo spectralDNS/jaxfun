@@ -12,8 +12,9 @@ Key constructs:
 
 import itertools
 from abc import abstractmethod
+from enum import Enum, unique
 from functools import partial
-from typing import Any, Self, cast
+from typing import Any, Literal, Self, cast
 
 import jax
 import jax.numpy as jnp
@@ -41,6 +42,15 @@ t, x, y, z = sp.symbols("t,x,y,z", real=True)
 indices = "ijklmn"
 
 
+@unique
+class ArgumentTag(Enum):
+    TEST = 0
+    TRIAL = 1
+    JAXFUNC = 2
+    JAXARR = 3
+    NONE = -1
+
+
 def get_BasisFunction(
     name: str,
     *,
@@ -49,7 +59,7 @@ def get_BasisFunction(
     rank: int,
     offset: int,
     functionspace: BaseSpace,
-    argument: int,
+    argument: ArgumentTag,
     arg: BaseScalar,
 ) -> AppliedUndef:
     """Create a symbolic basis function with enriched printing.
@@ -64,7 +74,8 @@ def get_BasisFunction(
         rank: Tensor rank of the overall function space (0 or 1).
         offset: Shift applied to index selection (test vs trial).
         functionspace: Parent function space object.
-        argument: 0 for test, 1 for trial (stored on Function).
+        argument: ArgumentTag.TEST for test, ArgumentTag.TRIAL for trial (stored on
+            Function).
         arg: Underlying BaseScalar symbol (coordinate).
 
     Returns:
@@ -145,7 +156,7 @@ def _get_computational_function(arg: str, V: TestSpaceType) -> Expr | AppliedUnd
             rank=0,
             offset=offset,
             functionspace=V,
-            argument=0 if arg == "test" else 1,
+            argument=ArgumentTag.TEST if arg == "test" else ArgumentTag.TRIAL,
             arg=base_scalars[0],
         )
 
@@ -158,7 +169,7 @@ def _get_computational_function(arg: str, V: TestSpaceType) -> Expr | AppliedUnd
                 rank=0,
                 offset=offset,
                 functionspace=v,
-                argument=0 if arg == "test" else 1,
+                argument=ArgumentTag.TEST if arg == "test" else ArgumentTag.TRIAL,
                 arg=a,
             )
             for a, v in zip(base_scalars, V.basespaces, strict=False)
@@ -175,7 +186,7 @@ def _get_computational_function(arg: str, V: TestSpaceType) -> Expr | AppliedUnd
                     rank=1,
                     offset=offset,
                     functionspace=v,
-                    argument=0 if arg == "test" else 1,
+                    argument=ArgumentTag.TEST if arg == "test" else ArgumentTag.TRIAL,
                     arg=a,
                 )
                 for a, v in zip(base_scalars, Vi, strict=False)
@@ -256,7 +267,7 @@ class TestFunction(ExpansionFunction):
     """
 
     __test__ = False  # prevent pytest from considering this a test.
-    argument: int
+    argument: Literal[ArgumentTag.TEST]
     functionspace: TestSpaceType
 
     def __new__(
@@ -266,7 +277,7 @@ class TestFunction(ExpansionFunction):
     ) -> Self:
         coors = V.system
         obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
-        obj.argument = 0
+        obj.argument = ArgumentTag.TEST
         if isinstance(V, DirectSum):
             obj.functionspace = V[0]
         elif isinstance(V, TensorProductSpace | DirectSumTPS):
@@ -307,7 +318,7 @@ class TrialFunction(ExpansionFunction):
     with direct-sum factors expand into additive combinations of products.
     """
 
-    argument: int
+    argument: Literal[ArgumentTag.TRIAL]
     functionspace: TrialSpaceType
 
     def __new__(
@@ -320,7 +331,7 @@ class TrialFunction(ExpansionFunction):
         obj.functionspace = V
         obj.name = name if name is not None else "TrialFunction"
         obj.own_name = "TrialFunction"
-        obj.argument = 1
+        obj.argument = ArgumentTag.TRIAL
         return obj
 
     def doit(self, **hints: dict) -> Expr | AppliedUndef:
@@ -365,7 +376,7 @@ class TrialFunction(ExpansionFunction):
                                 rank=1,
                                 offset=fspace.dims,
                                 functionspace=v,
-                                argument=1,
+                                argument=ArgumentTag.TRIAL,
                                 arg=a,
                             )
                             for a, v in zip(
@@ -451,7 +462,7 @@ class JAXArray(BaseFunction):
 
     array: Array
     functionspace: FunctionSpaceType
-    argument: int
+    argument: Literal[ArgumentTag.JAXARR]
 
     def __new__(
         cls,
@@ -462,7 +473,7 @@ class JAXArray(BaseFunction):
         obj: Self = Function.__new__(cls, sp.Dummy())
         obj.array = array
         obj.functionspace = V
-        obj.argument = 3
+        obj.argument = ArgumentTag.JAXARR
         obj.name = name if name is not None else "JAXArray"
         return obj
 
@@ -526,13 +537,14 @@ class Jaxc(sp.Dummy):
 
     array: Array
     functionspace: FunctionSpaceType
+    argument: Literal[ArgumentTag.JAXFUNC]
     _is_Symbol: bool = True
 
     def __new__(cls, array: Array, V: FunctionSpaceType, name: str) -> Self:
         obj = super().__new__(cls, name)
         obj.array = array
         obj.functionspace = V
-        obj.argument = 2
+        obj.argument = ArgumentTag.JAXFUNC
         return obj
 
     def doit(self, **hints: dict) -> Self:
@@ -555,7 +567,7 @@ def get_JAXFunction(
     global_index: int,
     rank: int,
     functionspace: FunctionSpaceType,
-    argument: int,
+    argument: ArgumentTag,
     args: Tuple,
 ) -> AppliedUndef:
     """Create a symbolic basis function with enriched printing.
@@ -569,7 +581,8 @@ def get_JAXFunction(
         global_index: Global component index for vector-valued spaces.
         rank: Tensor rank of the overall function space (0 or 1).
         functionspace: Parent function space object.
-        argument: 0 for test, 1 for trial (stored on Function).
+        argument: ArgumentTag.TEST for test, ArgumentTag.TRIAL for trial (stored on
+            Function).
         args: Underlying BaseScalar symbols (coordinates).
 
     Returns:
@@ -669,7 +682,7 @@ class JAXFunction(ExpansionFunction):
     """
 
     array: Array
-    argument: int
+    argument: Literal[ArgumentTag.JAXFUNC]
     functionspace: FunctionSpaceType
 
     def __new__(
@@ -691,7 +704,7 @@ class JAXFunction(ExpansionFunction):
         )
 
         obj.functionspace = V
-        obj.argument = 2
+        obj.argument = ArgumentTag.JAXFUNC
         obj.name = name if name is not None else "JAXFunction"
         obj.own_name = "JAXFunction"
         return obj
@@ -736,7 +749,7 @@ class JAXFunction(ExpansionFunction):
                 global_index=0,
                 rank=0,
                 functionspace=fs,
-                argument=2,
+                argument=ArgumentTag.JAXFUNC,
                 args=fs.system.base_scalars(),
             )
 
@@ -750,7 +763,7 @@ class JAXFunction(ExpansionFunction):
                 global_index=i,
                 rank=0,
                 functionspace=fs[i],
-                argument=2,
+                argument=ArgumentTag.JAXFUNC,
                 args=fs.system.base_scalars(),
             )
             * bi
@@ -803,7 +816,9 @@ def evaluate_jaxfunction_expr(
 ) -> Array:
     if jaxf is None:
         for p in sp.core.traversal.preorder_traversal(a):
-            if getattr(p, "argument", -1) == 2:  # JAXFunction->AppliedUndef
+            if (
+                getattr(p, "argument", ArgumentTag.NONE) == ArgumentTag.JAXFUNC
+            ):  # JAXFunction->AppliedUndef
                 jaxf = cast(AppliedUndef, p)
                 break
     assert hasattr(jaxf, "functionspace") and hasattr(jaxf, "array")

@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from collections.abc import Callable, Sequence
-from typing import Any, NotRequired, Self, TypedDict, cast
+from typing import Any, Literal, NotRequired, Self, TypedDict, cast
 
 import jax
 import jax.numpy as jnp
@@ -22,6 +22,7 @@ from sympy.vector import VectorAdd
 
 from jaxfun.coordinates import BaseTime, CoordSys
 from jaxfun.galerkin import Chebyshev, DirectSum
+from jaxfun.galerkin.arguments import ArgumentTag
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.galerkin.tensorproductspace import (
     TensorProductSpace,
@@ -914,7 +915,7 @@ class FlaxFunction(Function):
     module: BaseModule
     name: str
     fun_str: str
-    argument: int
+    argument: Literal[ArgumentTag.JAXFUNC]
     rngs: nnx.Rngs
 
     def __new__(
@@ -945,7 +946,7 @@ class FlaxFunction(Function):
         )
         obj.name = name
         obj.fun_str = fun_str if fun_str is not None else name
-        obj.argument = 2
+        obj.argument = ArgumentTag.JAXFUNC
         obj.rngs = rngs
         return obj
 
@@ -988,7 +989,7 @@ class FlaxFunction(Function):
                 functionspace_name=V.name,
                 rank_parent=V.rank,
                 module=self.module,
-                argument=2,
+                argument=ArgumentTag.JAXFUNC,
             )(*args)  # type: ignore[return-value]
 
         if V.rank == 1:
@@ -1000,7 +1001,7 @@ class FlaxFunction(Function):
                     functionspace_name=V.name,
                     rank_parent=V.rank,
                     module=self.module,
-                    argument=2,
+                    argument=ArgumentTag.JAXFUNC,
                 )(*args)  # ty:ignore[call-non-callable]
                 * b[i]
                 for i in range(V.dims)

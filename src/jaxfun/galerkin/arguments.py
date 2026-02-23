@@ -481,7 +481,7 @@ class JAXArray(BaseFunction):
         obj.name = name if name is not None else "JAXArray"
         return obj
 
-    def forward(self):
+    def forward(self) -> Array:
         assert not isinstance(self.functionspace, VectorTensorProductSpace | DirectSum)
         return self.functionspace.forward(self.array)
 

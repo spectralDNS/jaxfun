@@ -951,12 +951,12 @@ class FlaxFunction(Function):
         return obj
 
     @property
-    def rank(self):
+    def rank(self) -> int:
         """Return tensor rank of the represented field."""
         return self.functionspace.rank
 
     @property
-    def dim(self):
+    def dim(self) -> int:
         """Return flattened parameter count of underlying module."""
         return self.module.dim
 

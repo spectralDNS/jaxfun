@@ -569,7 +569,7 @@ class ResidualVPINN(Residual):
         )
 
 
-def process_input(*fs, residuals=None):
+def process_input(*fs, residuals=None) -> list[Residual | ResidualVPINN]:
     from jaxfun.operators import Dot
 
     if residuals is None:

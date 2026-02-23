@@ -34,6 +34,7 @@ __all__ = (
 )
 
 
+# TODO: Add typehints for this
 def jit_vmap(
     in_axes: int | None | tuple[int | None, ...] = 0,
     out_axes: Any = 0,

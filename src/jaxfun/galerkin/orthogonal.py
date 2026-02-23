@@ -222,7 +222,7 @@ class OrthogonalSpace(BaseSpace):
         return self.dim
 
     @property
-    def rank(self):
+    def rank(self) -> int:
         """Return tensor rank (0 for scalar spaces)."""
         return 0
 
@@ -351,7 +351,7 @@ class OrthogonalSpace(BaseSpace):
 
         return DirectSum(self, b)
 
-    def get_padded(self, N: int):
+    def get_padded(self, N: int) -> Self:
         """Return new instance with padded/truncated number of modes N."""
         return self.__class__(
             N,

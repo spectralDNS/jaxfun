@@ -44,8 +44,13 @@
           "description": "Galerkin solver for annulus geometry"
         },
         {
+          "file": "poisson2d.html",
+          "label": "Poisson 2D",
+          "description": "Galerkin solver for 2D Poisson equation"
+        },
+        {
           "file": "polar.html",
-          "label": "Polar",
+          "label": "Polar coordinates",
           "description": "Some notes on polar coordinates and Galerkin solvers"
         }
       ]

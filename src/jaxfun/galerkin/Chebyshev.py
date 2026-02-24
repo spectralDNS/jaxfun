@@ -138,7 +138,7 @@ class Chebyshev(Jacobi):
         )
 
     @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
-    def eval_basis_function(self, X: float, i: int) -> float:
+    def eval_basis_function(self, X: Array, i: int) -> Array:
         """Evaluate single Chebyshev polynomial T_i at points X.
 
         Iterative two-term recurrence:

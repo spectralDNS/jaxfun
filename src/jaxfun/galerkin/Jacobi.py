@@ -112,7 +112,7 @@ class Jacobi(OrthogonalSpace):
         return jnp.array(x), jnp.array(w)
 
     @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
-    def eval_basis_function(self, X: float, i: int) -> float:
+    def eval_basis_function(self, X: Array, i: int) -> Array:
         """Evaluate single Jacobi polynomial P_i^{(α,β)}(X).
 
         Iterative two-term recurrence:
@@ -145,7 +145,7 @@ class Jacobi(OrthogonalSpace):
         return jax.lax.fori_loop(2, i + 1, body_fun, (x0, X))[-1]
 
     @jit_vmap(in_axes=0)
-    def eval_basis_functions(self, X: float) -> Array:
+    def eval_basis_functions(self, X: Array) -> Array:
         """Evaluate all Jacobi polynomials P_0..P_{N-1} at X.
 
         Args:
@@ -158,8 +158,8 @@ class Jacobi(OrthogonalSpace):
         a, b = float(self.alpha), float(self.beta)
 
         def inner_loop(
-            carry: tuple[float, float], n: int
-        ) -> tuple[tuple[float, float], float]:
+            carry: tuple[Array, Array], n: int
+        ) -> tuple[tuple[Array, Array], Array]:
             x0_, x1_ = carry
             alf = (2 * n + a + b - 1) * (
                 (2 * n + a + b) * (2 * n + a + b - 2) * X + a**2 - b**2

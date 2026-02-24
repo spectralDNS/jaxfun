@@ -1,7 +1,7 @@
 """Utilities for splitting Galerkin weak forms into linear / bilinear parts.
 
 The functions traverse SymPy expressions composed of:
-  * Test / trial basis Functions (argument attribute 0 / 1)
+  * Test / trial basis Functions (argument attribute ArgumentTag.{TEST,TRIAL})
   * JAX-backed symbolic wrappers (JAXFunction, Jaxc)
   * AppliedUndef Sympy Functions
   * Derivatives, sums, products, numeric coefficients
@@ -33,7 +33,14 @@ from jaxfun.typing import (
     TestSpaceType,
 )
 
-from .arguments import Jaxc, JAXFunction, TestFunction, TrialFunction
+from .arguments import (
+    ArgumentTag,
+    Jaxc,
+    JAXFunction,
+    TestFunction,
+    TrialFunction,
+    get_arg,
+)
 
 
 class _HasTestSpace(Protocol):
@@ -69,8 +76,8 @@ def get_basisfunctions(
     """Return test / trial basis Function objects present in expression.
 
     A basis Function is recognized by a custom attribute 'argument':
-      argument == 0 : test function
-      argument == 1 : trial function
+      argument == ArgumentTag.TEST : test function
+      argument == ArgumentTag.TRIAL : trial function
 
     Depending on multiplicity the return values are either a single
     Function, a set of Functions, or None if absent.
@@ -88,10 +95,11 @@ def get_basisfunctions(
     trial_found: set[TrialFunction | AppliedUndef] = set()
     for p in sp.core.traversal.iterargs(sp.sympify(a)):
         if isinstance(p, TestFunction | TrialFunction | AppliedUndef):
-            if getattr(p, "argument", -1) == 1:
-                trial_found.add(p)
-            if getattr(p, "argument", -1) == 0:
-                test_found.add(p)
+            match get_arg(p):
+                case ArgumentTag.TRIAL:
+                    trial_found.add(p)
+                case ArgumentTag.TEST:
+                    test_found.add(p)
 
     match (len(test_found), len(trial_found)):
         case (1, 1):
@@ -111,7 +119,8 @@ def get_jaxfunctions(
 ) -> set[JAXFunction]:
     """Return set of JAXFunction symbolic wrappers inside expression.
 
-    JAXFunction nodes are identified through attribute 'argument' == 2.
+    JAXFunction nodes are identified through attribute
+    'argument' == ArgumentTag.JAXFUNC.
 
     Args:
         a: SymPy expression.
@@ -121,7 +130,7 @@ def get_jaxfunctions(
     """
     jaxfunctions: set[JAXFunction] = set()
     for p in sp.core.traversal.iterargs(sp.sympify(a)):
-        if getattr(p, "argument", -1) == 2:
+        if get_arg(p) is ArgumentTag.JAXFUNC:
             jaxfunctions.add(p)
     return jaxfunctions
 

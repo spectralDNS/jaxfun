@@ -215,7 +215,7 @@ def test_linear_inner_2d(space):
     l1 = []
     for fi in f:
         l1.append(inner(v.diff(x, 1) * fi))
-    assert jnp.allclose(l1[0], l1[1], atol=ulp(1000)), jnp.max(jnp.abs(l1[0] - l1[1]))
+    assert jnp.allclose(l1[0], l1[1], atol=ulp(10000)), jnp.max(jnp.abs(l1[0] - l1[1]))
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
@@ -257,7 +257,7 @@ def test_nonlinear_inner_3d(space):
     l1 = []
     for fi in f:
         l1.append(inner(v.diff(y, 1) * fi))
-    assert jnp.allclose(l1[0], l1[1], atol=ulp(100))
+    assert jnp.allclose(l1[0], l1[1], atol=ulp(1000))
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))

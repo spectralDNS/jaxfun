@@ -6,7 +6,14 @@ import pytest
 import sympy as sp
 from jax.experimental.sparse import BCOO
 
-from jaxfun.galerkin import Composite, TestFunction, TrialFunction
+from jaxfun.galerkin import (
+    Composite,
+    JAXArray,
+    JAXFunction,
+    TensorProduct,
+    TestFunction,
+    TrialFunction,
+)
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
@@ -171,5 +178,124 @@ answer2 = {
     },
 }
 
+
+@pytest.mark.parametrize("space", (Legendre, Chebyshev))
+def test_linear_inner(space):
+    N = 11
+    V = space(N)
+    x = V.system.x
+    v = TestFunction(V)
+    a = JAXFunction(sp.sin(x), V, name="a")
+    b = JAXArray(jnp.sin(V.mesh()), V, name="b")
+    f = [sp.sin(x), a, b]
+    l0 = []
+    for fi in f:
+        l0.append(inner(v * fi))
+    assert jnp.allclose(l0[0], l0[1], atol=ulp(100))
+    assert jnp.allclose(l0[0], l0[2], atol=ulp(100))
+
+    l1 = []
+    for fi in f:
+        l1.append(inner(v.diff(x, 1) * fi))
+    assert jnp.allclose(l1[0], l1[1], atol=ulp(100))
+    assert jnp.allclose(l1[0], l1[2], atol=ulp(100))
+
+
+@pytest.mark.parametrize("space", (Legendre, Chebyshev))
+def test_linear_inner_2d(space):
+    N = 11
+    V = space(N)
+    T = TensorProduct(V, V)
+    x, y = T.system.base_scalars()
+    v = TestFunction(T)
+    a = JAXFunction(sp.sin(x) * sp.cos(y), T, name="a")
+    xj, yj = T.mesh()
+    b = JAXArray(jnp.sin(xj) * jnp.cos(yj), T, name="b")
+    f = [sp.sin(x) * sp.cos(y), a, b]
+    l0 = []
+    for fi in f:
+        l0.append(inner(v * fi))
+    assert jnp.allclose(l0[0], l0[1], atol=ulp(100))
+    assert jnp.allclose(l0[0], l0[2], atol=ulp(100))
+
+    l1 = []
+    for fi in f:
+        l1.append(inner(v.diff(x, 1) * fi))
+    assert jnp.allclose(l1[0], l1[1], atol=ulp(100))
+    assert jnp.allclose(l1[0], l1[2], atol=ulp(100))
+
+
+@pytest.mark.parametrize("space", (Legendre, Chebyshev))
+def test_linear_inner_3d(space):
+    N = 11
+    V = space(N)
+    T = TensorProduct(V, V, V)
+    x, y, z = T.system.base_scalars()
+    v = TestFunction(T)
+    a = JAXFunction(sp.sin(x) * sp.cos(y) * sp.sin(z), T, name="a")
+    xj, yj, zj = T.mesh()
+    b = JAXArray(jnp.sin(xj) * jnp.cos(yj) * jnp.sin(zj), T, name="b")
+    f = [sp.sin(x) * sp.cos(y) * sp.sin(z), a, b]
+    l0 = []
+    for fi in f:
+        l0.append(inner(v * fi))
+    assert jnp.allclose(l0[0], l0[1], atol=ulp(100))
+    assert jnp.allclose(l0[0], l0[2], atol=ulp(100))
+
+    l1 = []
+    for fi in f:
+        l1.append(inner(v.diff(x, 1) * fi))
+    assert jnp.allclose(l1[0], l1[1], atol=ulp(100))
+    assert jnp.allclose(l1[0], l1[2], atol=ulp(100))
+
+
+@pytest.mark.parametrize("space", (Legendre, Chebyshev))
+def test_nonlinear_inner_3d(space):
+    N = 11
+    V = space(N)
+    T = TensorProduct(V, V, V)
+    x, y, z = T.system.base_scalars()
+    v = TestFunction(T)
+    a = JAXFunction(sp.sin(x) * sp.cos(y) * sp.sin(z), T, name="a")
+    xj, yj, zj = T.mesh()
+    b = JAXArray((jnp.sin(xj) * jnp.cos(yj) * jnp.sin(zj)) ** 2, T, name="b")
+    f = [(sp.sin(x) * sp.cos(y) * sp.sin(z)) ** 2, a**2, b]  # nonlinear jaxfunction
+    l0 = []
+    for fi in f:
+        l0.append(inner(v * fi))
+    assert jnp.allclose(l0[0], l0[1], atol=ulp(100))
+    assert jnp.allclose(l0[0], l0[2], atol=ulp(100))
+
+    l1 = []
+    for fi in f:
+        l1.append(inner(v.diff(y, 1) * fi))
+    assert jnp.allclose(l1[0], l1[1], atol=ulp(100))
+    assert jnp.allclose(l1[0], l1[2], atol=ulp(100))
+
+
+@pytest.mark.parametrize("space", (Legendre, Chebyshev))
+def test_bilinear_inner(space):
+    N = 11
+    V = space(N)
+    x = V.system.x
+    v = TestFunction(V)
+    u = TrialFunction(V)
+    a = JAXFunction(sp.sin(x), V, name="a")
+    b = JAXArray(jnp.sin(V.mesh()), V, name="b")
+    f = [sp.sin(x), a, b]
+    l0 = []
+    for fi in f[2:]:
+        l0.append(inner(v * u * fi))
+
+    assert jnp.allclose(l0[0], l0[1], atol=ulp(100))
+    assert jnp.allclose(l0[0], l0[2], atol=ulp(100))
+
+    l1 = []
+    for fi in f:
+        l1.append(inner(v.diff(x, 1) * u * fi))
+    assert jnp.allclose(l1[0], l1[1], atol=ulp(100))
+    assert jnp.allclose(l1[0], l1[2], atol=ulp(100))
+
+
 if __name__ == "__main__":
-    pass
+    test_bilinear_inner(Legendre)

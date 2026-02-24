@@ -787,8 +787,8 @@ class JAXFunction(ExpansionFunction):
         Args:
             x: Cartesian product coordinates. For example, for a 2D tensor product
             space, x should be a list of two arrays [x1, x2], where x1 and x2 are 1D
-            arrays of coordinates in each dimension.The mesh is formed by calling
-            the self.functionspace.mesh().
+            arrays of coordinates in each dimension. Such a mesh is formed by calling
+            self.functionspace.mesh().
         """
         if isinstance(self.functionspace, OrthogonalSpace | DirectSum):
             assert isinstance(x, Array)

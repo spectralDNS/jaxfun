@@ -709,7 +709,7 @@ def _(C, Div, Grad, display):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    The Laplace operator is displayed in Cartesian coordinates. When evaluated, we get the equation in cylinder coordinates:
+    The Laplace operator is displayed in Cartesian coordinates. When evaluated, we get the operator in cylinder coordinates:
     """)
     return
 
@@ -723,7 +723,7 @@ def _(Lu, display):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Note the map from Cartesian function $u(x, y, z)$ for the generic (unevaluated) operator to computational $U(r, \theta, z)$ in the evaluated equation.
+    Note the map from Cartesian function $u(x, y, z)$ for the generic (unevaluated) operator to computational $U(r, \theta, z)$ in the evaluated domain.
 
     We can also look at the gradient
     """)
@@ -791,7 +791,7 @@ def _(mo):
 
     where as before $m$= 1, 2 or 3 represents a curve, surface or volume, and  $d\lambda^m$ represents an infinitesimal line, surface or volume element. The overline on $\overline{v}$ represents a complex conjugate.
 
-    The computational domain is a hypercube, with $\mathbb{I}^2 = \text{I}^0 \times \text{I}^1$ and $\mathbb{I}^3 = \text{I}^0 \times \text{I}^1 \times \text{I}^2$, where $\text{I}^m$ is the interval used for computational dimension $m$. When computing the inner product, we first transform the integral to computational coordinates. We use the following mapped  function approximations
+    The computational domain is a hypercube, with $\mathbb{I}^2 = \text{I}^0 \times \text{I}^1$ and $\mathbb{I}^3 = \text{I}^0 \times \text{I}^1 \times \text{I}^2$, where $\text{I}^m$ is the interval used for computational dimension $m$. When computing the inner product, we first transform the integral to computational coordinates. We use the following mapped tensor product function approximations
 
     $$
     u(\mathbf{x}) = U(X^0) = \sum_{k=0}^{N-1} \hat{u}_k \phi_k(X^0),
@@ -816,8 +816,8 @@ def _(mo):
     where $L$ is a linear operator, $f(\mathbf{x}) \in L^2_{\omega}(\Omega^m)$, and $u(\mathbf{x}) \in \text{V}(\Omega^m)$. The weighted variational forms obtained by multiplying the differential equation by a test function and integrating over the domain are
 
     \begin{align}
-        a(u, v)_{{L_{\omega}^2(\Omega^m)}} &= \int_{\Omega^m} L u(\mathbf{x}) \,v^*(\mathbf{x}) \, \omega(\mathbf{x}) \, d\lambda^m, \tag{25} \\
-        (f, v)_{L_{\omega}^2(\Omega^m)} &= \int_{\Omega^m} f(\mathbf{x}) \,v^*(\mathbf{x}) \, \omega(\mathbf{x}) \, d\lambda^m, \tag{26}
+        a(u, v)_{{L_{\omega}^2(\Omega^m)}} &= \int_{\Omega^m} L u(\mathbf{x}) \,\overline{v}(\mathbf{x}) \, \omega(\mathbf{x}) \, d\lambda^m, \tag{25} \\
+        (f, v)_{L_{\omega}^2(\Omega^m)} &= \int_{\Omega^m} f(\mathbf{x}) \,\overline{v}(\mathbf{x}) \, \omega(\mathbf{x}) \, d\lambda^m, \tag{26}
     \end{align}
 
     and the weighted Galerkin method is to find $u \in \text{V}(\Omega^m)$ such that

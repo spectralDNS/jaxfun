@@ -111,7 +111,7 @@ class Jacobi(OrthogonalSpace):
         x, w = roots_jacobi(N, float(self.alpha), float(self.beta))
         return jnp.array(x), jnp.array(w)
 
-    @jit_vmap(in_axes=(0, None))
+    @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
     def eval_basis_function(self, X: float, i: int) -> float:
         """Evaluate single Jacobi polynomial P_i^{(α,β)}(X).
 

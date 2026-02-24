@@ -17,10 +17,8 @@ from .forms import (
     _has_globalindex,
     _has_testspace,
     get_basisfunctions,
-    get_jaxarrays,
     split,
     split_coeff,
-    split_linear_coeff,
 )
 from .orthogonal import OrthogonalSpace
 from .tensorproductspace import (
@@ -52,7 +50,6 @@ def inner(
       * Direct sums of tensor product spaces
       * Multivariable non-separable coefficients (symbolic factor kept)
       * JAXFunction (produces linear contributions)
-      * JAXArray factors in linear forms
 
     Args:
         expr: SymPy expression containing TestFunction (mandatory) and
@@ -176,6 +173,7 @@ def inner(
                 scales.append(
                     evaluate_jaxfunction_expr(a0["jaxfunction"], test_space.mesh())
                 )
+
             Am = assemble_multivar(mats_, scales, test_space)
             if has_bcs:
                 sign = 1 if all_linear else -1
@@ -244,9 +242,18 @@ def inner(
             else:
                 if "linear" in coeffs:
                     sign = 1 if all_linear else -1
-                    res = (sign * coeffs["linear"]["scale"]) * (
-                        mats_[0] @ coeffs["linear"]["jaxcoeff"].array @ mats_[1].T
-                    )
+                    if test_space.dims == 2:
+                        res = (sign * coeffs["linear"]["scale"]) * (
+                            mats_[0] @ coeffs["linear"]["jaxcoeff"].array @ mats_[1].T
+                        )
+                    else:
+                        res = sign * jnp.einsum(
+                            "il,jm,kn,lmn->ijk",
+                            mats_[0],
+                            mats_[1],
+                            mats_[2],
+                            coeffs["linear"]["jaxcoeff"].array,
+                        )
                     bresults.append(vectorize_bresult(res, test_space, gi[0][0]))
 
                 if "bilinear" in coeffs:
@@ -268,18 +275,8 @@ def inner(
                         )
                     )
 
-    # Pure linear forms: (no JAXFunctions, but could be unseparable in coefficients and
-    # contain JAXArrays)
+    # Pure linear forms
     for b0 in b_forms:
-        jaxarrays = get_jaxarrays(b0["coeff"])
-        if len(jaxarrays) == 1:
-            jaxarrays = split_linear_coeff(b0["coeff"])
-            b0["coeff"] = 1
-        elif len(jaxarrays) > 1:
-            raise NotImplementedError(
-                "Only one JAXArray allowed in linear form at present"
-            )
-
         sc = sp.sympify(b0["coeff"])
         sc = float(sc) if sc.is_real else complex(sc)
         if len(a_forms) > 0:
@@ -298,9 +295,7 @@ def inner(
             assert isinstance(vf, OrthogonalSpace)
             assert _has_globalindex(v)
             global_index = v.global_index
-            is_multivar = (
-                "multivar" in b0 or "jaxfunction" in b0 or isinstance(jaxarrays, Array)
-            )
+            is_multivar = "multivar" in b0 or "jaxfunction" in b0
             z = inner_linear(
                 bi,
                 vf,
@@ -311,25 +306,20 @@ def inner(
             bs.append(z)
 
         if isinstance(test_space, OrthogonalSpace):
-            if isinstance(bs[0], tuple):
-                # JAXArray (no multivar)
-                Pi = bs[0][0]
-                bresults.append(Pi.T @ jaxarrays)
-            else:
-                bresults.append(bs[0])
+            bresults.append(bs[0])
         elif (
             isinstance(test_space, TensorProductSpace | VectorTensorProductSpace)
             and len(test_space) == 2
         ):
             if isinstance(bs[0], tuple):
-                # multivar or JAXArray
+                # multivar or JAXFunction
                 if "multivar" in b0:
                     s = test_space.system.base_scalars()
                     uj = lambdify(s, b0["multivar"], modules="jax")(*test_space.mesh())
                 elif "jaxfunction" in b0:
                     uj = evaluate_jaxfunction_expr(b0["jaxfunction"], test_space.mesh())
                 else:
-                    uj = jaxarrays
+                    raise ValueError("Expected multivar or jaxfunction key in b0")
                 res = bs[0][0].T @ uj @ bs[1][0]
                 bresults.append(vectorize_bresult(res, test_space, global_index))
 
@@ -341,8 +331,20 @@ def inner(
             isinstance(test_space, TensorProductSpace | VectorTensorProductSpace)
             and len(test_space) == 3
         ):
-            res = jnp.multiply.outer(jnp.multiply.outer(bs[0], bs[1]), bs[2])
-            bresults.append(vectorize_bresult(res, test_space, global_index))
+            if isinstance(bs[0], tuple):
+                # multivar or JAXFunction
+                if "multivar" in b0:
+                    s = test_space.system.base_scalars()
+                    uj = lambdify(s, b0["multivar"], modules="jax")(*test_space.mesh())
+                elif "jaxfunction" in b0:
+                    uj = evaluate_jaxfunction_expr(b0["jaxfunction"], test_space.mesh())
+                else:
+                    raise ValueError("Expected multivar or jaxfunction key in b0")
+                res = jnp.einsum("il,jm,kn,ijk->lmn", bs[0][0], bs[1][0], bs[2][0], uj)
+                bresults.append(vectorize_bresult(res, test_space, global_index))
+            else:
+                res = jnp.multiply.outer(jnp.multiply.outer(bs[0], bs[1]), bs[2])
+                bresults.append(vectorize_bresult(res, test_space, global_index))
 
     return process_results(
         aresults, bresults, return_all_items, test_space.dims, sparse, sparse_tol

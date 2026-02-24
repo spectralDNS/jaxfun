@@ -82,7 +82,7 @@ class Fourier(OrthogonalSpace):
         points = jnp.arange(N, dtype=float) * 2 * jnp.pi / N
         return points, jnp.full(N, 2 * jnp.pi / N)
 
-    @jit_vmap(in_axes=(0, None))
+    @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
     def eval_basis_function(self, X: float, i: int) -> Array:
         """Evaluate single basis function exp(i k_i X).
 

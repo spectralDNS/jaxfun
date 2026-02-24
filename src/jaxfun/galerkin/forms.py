@@ -2,7 +2,8 @@
 
 The functions traverse SymPy expressions composed of:
   * Test / trial basis Functions (argument attribute 0 / 1)
-  * JAX-backed symbolic wrappers (JAXFunction, Jaxc, JAXArray)
+  * JAX-backed symbolic wrappers (JAXFunction, Jaxc)
+  * AppliedUndef Sympy Functions
   * Derivatives, sums, products, numeric coefficients
 
 They identify:
@@ -12,9 +13,7 @@ They identify:
 
 Main entry points:
   get_basisfunctions(expr) -> locate test / trial functions
-  get_jaxarrays(expr)      -> locate JAXArray symbols
   split_coeff(expr)        -> split bilinear/linear coefficient (for bilinear forms)
-  split_linear_coeff(expr) -> assemble scalar/array coefficient (for linear forms)
   split(form_expr)         -> decompose full weak form into grouped terms
 """
 
@@ -22,7 +21,6 @@ from typing import Protocol, TypeGuard
 
 import jax.numpy as jnp
 import sympy as sp
-from jax import Array
 from sympy.core.function import AppliedUndef
 
 from jaxfun.coordinates import CoordSys, get_system as get_system
@@ -35,7 +33,7 @@ from jaxfun.typing import (
     TestSpaceType,
 )
 
-from .arguments import JAXArray, Jaxc, JAXFunction, TestFunction, TrialFunction
+from .arguments import Jaxc, JAXFunction, TestFunction, TrialFunction
 
 
 class _HasTestSpace(Protocol):
@@ -106,22 +104,6 @@ def get_basisfunctions(
             return test_found, trial_found
         case _:
             return None, None
-
-
-def get_jaxarrays(
-    a: sp.Expr | float,
-) -> set[JAXArray]:
-    """Return set of JAXArray symbolic wrappers inside expression.
-
-    JAXArray nodes are identified through attribute 'argument' == 3.
-
-    Args:
-        a: SymPy expression.
-
-    Returns:
-        Set with zero or more JAXArray objects.
-    """
-    return sp.sympify(a).atoms(JAXArray)
 
 
 def get_jaxfunctions(
@@ -219,48 +201,6 @@ def split_coeff(c0: sp.Expr | float) -> CoeffDict:
                             float(ci) if ci.is_real else complex(ci)
                         )
     return coeffs
-
-
-def split_linear_coeff(c0: sp.Expr | float) -> Array:
-    """Assemble (possibly array-valued) coefficient for a linear form term.
-
-    Accepts at most one JAXArray node (optionally raised to an integer
-    power). All numeric / complex factors are multiplied into a single
-    scalar and broadcast with the array.
-
-    Args:
-        c0: SymPy expression (number, JAXArray, product, or power).
-
-    Returns:
-        jnp.ndarray: Final numeric / array scale.
-
-    Raises:
-        AssertionError: If more than one JAXArray is present.
-        NotImplementedError: If unsupported power pattern encountered.
-    """
-    c0 = sp.sympify(c0)
-    jaxarrays = get_jaxarrays(c0)
-    assert len(jaxarrays) <= 1, "Multiple JAXArrays found in coefficient"
-
-    scale = jnp.array(1.0)
-    args = c0.args if isinstance(c0, sp.Mul) else (c0,)
-
-    for ci in args:
-        if isinstance(ci, JAXArray):
-            scale *= ci.array
-        elif isinstance(ci, sp.Pow):
-            base, exp = ci.args
-            if isinstance(base, JAXArray) and exp.is_number:
-                scale = base.array ** int(exp)
-            else:
-                raise NotImplementedError(
-                    "Only power of JAXArray with integer exponent allowed in linear "
-                    "form at present"
-                )
-        else:
-            scale *= float(ci) if ci.is_real else complex(ci)
-
-    return scale
 
 
 def split(forms: sp.Expr) -> ResultDict:

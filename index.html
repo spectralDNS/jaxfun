@@ -1,71 +1,104 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Marimo Notebooks</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 40px 20px;
-            line-height: 1.6;
-            color: #333;
-        }
-        h1 {
-            color: #2c3e50;
-            border-bottom: 3px solid #3498db;
-            padding-bottom: 10px;
-        }
-        .notebook-list {
-            list-style: none;
-            padding: 0;
-        }
-        .notebook-item {
-            margin: 20px 0;
-            padding: 20px;
-            background: #f8f9fa;
-            border-radius: 8px;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        .notebook-item:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        }
-        .notebook-link {
-            color: #3498db;
-            text-decoration: none;
-            font-size: 1.2em;
-            font-weight: 500;
-        }
-        .notebook-link:hover {
-            color: #2980b9;
-            text-decoration: underline;
-        }
-        footer {
-            margin-top: 60px;
-            padding-top: 20px;
-            border-top: 1px solid #ddd;
-            text-align: center;
-            color: #777;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Marimo Notebooks</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 48px 20px 64px;
+      line-height: 1.6;
+      color: #1f2937;
+      background: #f5f7fb;
+    }
+    h1 {
+      color: #111827;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      color: #4b5563;
+      margin-bottom: 28px;
+    }
+    .section {
+      margin: 28px 0 36px;
+    }
+    .section-title {
+      font-size: 1.1rem;
+      color: #111827;
+      margin: 0 0 16px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: #ffffff;
+      border-radius: 12px;
+      padding: 16px 18px;
+      border: 1px solid #e5e7eb;
+      box-shadow: 0 2px 8px rgba(17, 24, 39, 0.06);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 18px rgba(17, 24, 39, 0.12);
+    }
+    .card a {
+      color: #2563eb;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 1.05rem;
+    }
+    .card a:hover {
+      text-decoration: underline;
+    }
+    .card small {
+      display: block;
+      color: #6b7280;
+      margin-top: 6px;
+    }
+    footer {
+      margin-top: 56px;
+      padding-top: 20px;
+      border-top: 1px solid #e5e7eb;
+      text-align: center;
+      color: #6b7280;
+    }
+  </style>
 </head>
 <body>
-    <h1>📓 Marimo Notebooks</h1>
-    <p>Below you'll find interactive marimo notebooks exported as HTML.</p>
-    <ul class="notebook-list">
-        <li class="notebook-item"><a href="DrivenCavity_lstsq.html" class="notebook-link">DrivenCavity_lstsq</a></li>
-        <li class="notebook-item"><a href="Helmholtz_lstsq.html" class="notebook-link">Helmholtz_lstsq</a></li>
-        <li class="notebook-item"><a href="Wave_lstsq.html" class="notebook-link">Wave_lstsq</a></li>
-        <li class="notebook-item"><a href="annulus.html" class="notebook-link">annulus</a></li>
-        <li class="notebook-item"><a href="curvilinear.html" class="notebook-link">curvilinear</a></li>
-        <li class="notebook-item"><a href="formlanguage.html" class="notebook-link">formlanguage</a></li>
-        <li class="notebook-item"><a href="polar.html" class="notebook-link">polar</a></li>
-    </ul>
-    <footer>
-        <p>Generated with <a href="https://marimo.io" target="_blank">marimo</a></p>
-    </footer>
+  <h1>📓 Marimo Notebooks</h1>
+  <p class="subtitle">Curated, interactive notebooks grouped by topic.</p>
+<div class="section">
+  <div class="section-title">PINNs solvers</div>
+  <div class="grid">
+<div class="card"><a href="DrivenCavity_lstsq.html">DrivenCavity</a><small>Driven Cavity PINNs solver</small></div>
+<div class="card"><a href="Helmholtz_lstsq.html">Helmholtz</a><small>Helmholtz PINNs solver</small></div>
+<div class="card"><a href="Wave_lstsq.html">Wave</a><small>Wave PINNs solver with discrete time-stepping</small></div>
+  </div>
+</div>
+<div class="section">
+  <div class="section-title">Jaxfun language</div>
+  <div class="grid">
+<div class="card"><a href="formlanguage.html">Form language</a><small>The Jaxfun form language</small></div>
+<div class="card"><a href="curvilinear.html">Curvilinear coordinates</a><small>Jaxfun handling of curvilinear coordinates, operators and equations.</small></div>
+  </div>
+</div>
+<div class="section">
+  <div class="section-title">Galerkin solvers</div>
+  <div class="grid">
+<div class="card"><a href="annulus.html">Annulus</a><small>Galerkin solver for annulus geometry</small></div>
+<div class="card"><a href="polar.html">Polar</a><small>Some notes on polar coordinates and Galerkin solvers</small></div>
+  </div>
+</div>
+  <footer>
+    <p>Generated with <a href="https://marimo.io" target="_blank">marimo</a></p>
+  </footer>
 </body>
 </html>

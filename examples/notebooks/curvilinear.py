@@ -7,7 +7,7 @@ app = marimo.App(width="medium")
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Curvilinear coordinates
+    # Curvilinear coordinates in Jaxfun
 
     Jaxfun is developed to work with any curvilinear coordinate system and not just the regular Cartesian. A user should describe equations for a generic coordinate system using operators like `div`, `grad`, `dot`, `outer`, `cross` and `curl`. The correct equations in curvilinear coordinates should then be automatically derived by Jaxfun under the hood. What goes on under the hood is described in more detail in this article.
 

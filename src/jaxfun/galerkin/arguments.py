@@ -6,8 +6,8 @@ function space types (orthogonal, tensor product, vector, direct sums).
 
 Key constructs:
     * TestFunction / TrialFunction: Weak form symbolic arguments.
-    * ScalarFunction / VectorFunction: Physical-domain symbolic fields.
-    * JAXArray / JAXFunction: Bridge between symbolic and JAX arrays.
+    * ScalarFunction / VectorFunction: Physical-domain symbolic fields. No basis.
+    * JAXFunction: Galerkin functions with JAX-backed coefficients.
 """
 
 import itertools
@@ -47,7 +47,6 @@ class ArgumentTag(Enum):
     TEST = 0
     TRIAL = 1
     JAXFUNC = 2
-    JAXARR = 3
     NONE = -1
 
 
@@ -455,46 +454,6 @@ class VectorFunction(BaseFunction):
 
     def _latex(self, printer: Any = None) -> str:
         return r"\mathbf{{%s}}" % (latex_symbols[self.name],) + str(self.args[:-1])  # noqa: UP031
-
-
-class JAXArray(BaseFunction):
-    """Wrapper for a raw JAX array tied to a function space.
-
-    Primarily used as an intermediate symbolic handle that can forward
-    (apply) basis transforms through functionspace.forward().
-    """
-
-    array: Array
-    functionspace: FunctionSpaceType
-    argument: Literal[ArgumentTag.JAXARR]
-
-    def __new__(
-        cls,
-        array: Array,
-        V: FunctionSpaceType,
-        name: str | None = None,
-    ) -> Self:
-        obj: Self = Function.__new__(cls, sp.Dummy())
-        obj.array = array
-        obj.functionspace = V
-        obj.argument = ArgumentTag.JAXARR
-        obj.name = name if name is not None else "JAXArray"
-        return obj
-
-    def forward(self) -> Array:
-        assert not isinstance(self.functionspace, VectorTensorProductSpace | DirectSum)
-        return self.functionspace.forward(self.array)
-
-    def doit(self, **hints: Any) -> Function | Array:
-        if hints.get("deep", False):
-            return self.array
-        return self
-
-    def __str__(self) -> str:
-        return f"{self.name}({self.functionspace.name})"
-
-    def _latex(self, printer: Any = None) -> str:
-        return f"{latex_symbols[self.name]}({self.functionspace.name})"
 
 
 class Jaxc(sp.Dummy):

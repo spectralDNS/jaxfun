@@ -738,12 +738,11 @@ class DirectSumTPS(TensorProductSpace):
     def forward(self, c: Array) -> Array:
         """Solve projection for homogeneous coefficients (lifting removed)."""
         from jaxfun.galerkin import TestFunction, TrialFunction, inner
-        from jaxfun.galerkin.arguments import JAXArray
 
         v = TestFunction(self)
         u = TrialFunction(self)
-        c_sym = JAXArray(c, v.functionspace)
-        A, b = inner((u - c_sym) * v)
+        A, b = inner(u * v)
+        b += v.functionspace.scalar_product(c)
         return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.num_dofs)
 
     def scalar_product(self, c: Array) -> NoReturn:

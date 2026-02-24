@@ -59,7 +59,7 @@ def inner(
 
     Args:
         expr: SymPy expression containing TestFunction (mandatory) and
-            optionally TrialFunction, JAXFunction, JAXArray, scalar
+            optionally TrialFunction, JAXFunction, scalar
             coordinate-dependent factors.
         sparse: If True, sparsify (1D) matrix/tensor factors (BCOO).
         sparse_tol: Zero tolerance (integer multiple of ulp) for sparsify.

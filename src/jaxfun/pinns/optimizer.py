@@ -352,7 +352,9 @@ def GaussNewton(
 
 def train(
     loss_fn: LossFn, allreduce_gradients_and_loss: bool = False
-) -> Callable[[nnx.Module, nnx.Optimizer, Array, tuple[Array], tuple[Array]], Array]:
+) -> Callable[
+    [nnx.Module, nnx.Optimizer, Array, tuple[Array, ...], tuple[Array, ...]], Array
+]:
     """Build a JIT-compiled training step for a loss function.
 
     Args:
@@ -367,23 +369,23 @@ def train(
     if isinstance(loss_fn, Loss):
 
         def loss_with_gw(
-            m: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+            m: nnx.Module, gw: Array, xs: tuple[Array, ...], targets: tuple[Array, ...]
         ) -> Array:
             return loss_fn.loss_with_gw(m, gw, xs, targets)
 
         def JTJ_with_gw(
-            m: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+            m: nnx.Module, gw: Array, xs: tuple[Array, ...], targets: tuple[Array, ...]
         ) -> Array:
             return loss_fn.JTJ(m, gw, xs, targets)
     else:
 
         def loss_with_gw(
-            m: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+            m: nnx.Module, gw: Array, xs: tuple[Array, ...], targets: tuple[Array, ...]
         ) -> Array:
             return loss_fn(m)
 
         def JTJ_with_gw(
-            m: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+            m: nnx.Module, gw: Array, xs: tuple[Array, ...], targets: tuple[Array, ...]
         ) -> Array:
             return jnp.array(0.0)
 
@@ -392,8 +394,8 @@ def train(
         module: nnx.Module,
         optimizer: nnx.Optimizer,
         gw: Array,
-        xs: tuple[Array],
-        targets: tuple[Array],
+        xs: tuple[Array, ...],
+        targets: tuple[Array, ...],
     ) -> Array:
         def value_fn(m: nnx.Module) -> Array:
             return loss_with_gw(m, gw, xs, targets)
@@ -418,7 +420,7 @@ def train(
 
     @nnx.jit
     def value_and_grad(
-        module: nnx.Module, gw: Array, xs: tuple[Array], targets: tuple[Array]
+        module: nnx.Module, gw: Array, xs: tuple[Array, ...], targets: tuple[Array, ...]
     ) -> tuple[Array, PyTree]:
         def value_fn(m: nnx.Module) -> Array:
             return loss_with_gw(m, gw, xs, targets)
@@ -432,8 +434,8 @@ def train(
         module: nnx.Module,
         optimizer: nnx.Optimizer,
         gw: Array,
-        xs: tuple[Array],
-        targets: tuple[Array],
+        xs: tuple[Array, ...],
+        targets: tuple[Array, ...],
     ) -> None:
         def value_fn(m: nnx.Module) -> Array:
             return loss_with_gw(m, gw, xs, targets)
@@ -459,8 +461,8 @@ def train(
         module: nnx.Module,
         optimizer: nnx.Optimizer,
         gw: Array,
-        xs: tuple[Array],
-        targets: tuple[Array],
+        xs: tuple[Array, ...],
+        targets: tuple[Array, ...],
     ) -> Array:
         loss, gradients = value_and_grad(module, gw, xs, targets)
         loss, gradients = allreduce(loss, gradients)
@@ -489,8 +491,8 @@ class Trainer:
             loss_fn: Loss function / object (Loss instance) to optimize.
         """
         assert isinstance(loss_fn, Loss), "Trainer requires an Loss loss function"
-        self.loss_fn = loss_fn
-        self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)
+        self.loss_fn: Loss = loss_fn
+        self.global_weights: Array = jnp.ones(len(self.loss_fn.residuals), dtype=float)
         if jax.local_device_count() > 1 and loss_fn.local_mesh is not None:
             self.global_weights: Array = jax.device_put(
                 self.global_weights,

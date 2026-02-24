@@ -486,14 +486,14 @@ class TimeMarchingMesh(CartesianProductMesh):
         assert isinstance(m0[-1], Line), "Last submesh must be a Line (time axis)"
         self.deltat: float = float(m0[-1].right - m0[-1].left)
         self.timestep: int = 0
-        self._spatial_mesh: ParameterMesh = None
+        self._spatial_mesh: ParameterMesh | None = None
         super().__init__(*m0)
 
     @property
-    def dt(self):
+    def dt(self) -> Array:
         return jnp.hstack((jnp.zeros(self.dim - 1), self.deltat))[None, :]
 
-    def update_time(self):
+    def update_time(self) -> None:
         """Shift time axis forward by deltat."""
         self.timestep += 1
         time_mesh = cast(Line, self.submeshes[-1])
@@ -884,7 +884,7 @@ class ShapelyMesh(SingleParameterMesh, ABC):
     ) -> Literal[1]:
         return 1
 
-    def plot_solution(self, X, values, xb=None, levels=30):
+    def plot_solution(self, X, values, xb=None, levels=30) -> None:
         """Plot solution over polygonal mesh using triangulation.
         Args:
             X      : all sample points (N, 2) = vstack((xi, xb))

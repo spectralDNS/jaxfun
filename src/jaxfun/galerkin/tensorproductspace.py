@@ -4,7 +4,7 @@ import copy
 import itertools
 from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
-from typing import TYPE_CHECKING, TypeGuard, overload
+from typing import TYPE_CHECKING, NoReturn, TypeGuard, overload
 
 import jax
 import jax.numpy as jnp
@@ -712,7 +712,7 @@ class DirectSumTPS(TensorProductSpace):
             for i, s in enumerate(tensorspaces)
         }
 
-    def get_homogeneous(self):
+    def get_homogeneous(self) -> TensorProductSpace:
         """Return tensor space built from homogeneous components only."""
         a0 = (
             self.basespaces[0].basespaces[0]
@@ -746,7 +746,7 @@ class DirectSumTPS(TensorProductSpace):
         A, b = inner((u - c_sym) * v)
         return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.num_dofs)
 
-    def scalar_product(self, c: Array):
+    def scalar_product(self, c: Array) -> NoReturn:
         """Disabled scalar product (non-homogeneous test space)."""
         raise RuntimeError(
             "Scalar product requires homogeneous test space (call on get_homogeneous())"
@@ -793,7 +793,7 @@ class TPMatrices:
     and a combined diagonal preconditioner (sum of per-matrix M(u)).
     """
 
-    def __init__(self, tpmats: list[TPMatrix]):
+    def __init__(self, tpmats: list[TPMatrix]) -> None:
         self.tpmats: list[TPMatrix] = tpmats
 
     @jax.jit(static_argnums=0)
@@ -837,11 +837,12 @@ class TPMatrices:
 class precond:
     """Simple element-wise diagonal preconditioner wrapper."""
 
-    def __init__(self, M):
+    # TODO: add typehint for M
+    def __init__(self, M) -> None:
         self.M = M
 
     @jax.jit(static_argnums=0)
-    def __call__(self, u):
+    def __call__(self, u: Array) -> Array:
         """Return M * u (element-wise scaling)."""
         return self.M * u
 

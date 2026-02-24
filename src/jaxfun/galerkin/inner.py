@@ -10,7 +10,13 @@ from sympy.core.function import AppliedUndef
 from jaxfun.typing import TrialSpaceType
 from jaxfun.utils.common import lambdify, matmat, tosparse
 
-from .arguments import TestFunction, TrialFunction, evaluate_jaxfunction_expr
+from .arguments import (
+    ArgumentTag,
+    TestFunction,
+    TrialFunction,
+    evaluate_jaxfunction_expr,
+    get_arg,
+)
 from .composite import BCGeneric, Composite, DirectSum
 from .forms import (
     _has_functionspace,
@@ -474,25 +480,26 @@ def inner_bilinear(
     for aii in ai.args:
         found_basis = False
         for p in sp.core.traversal.preorder_traversal(aii):
-            if getattr(p, "argument", -1) in (0, 1):
+            if get_arg(p) in (ArgumentTag.TEST, ArgumentTag.TRIAL):
                 found_basis = True
                 break
         if found_basis:
             if isinstance(aii, sp.Derivative):
-                if getattr(aii.args[0], "argument", -1) == 0:
+                arg = get_arg(aii.args[0])
+                if arg is ArgumentTag.TEST:
                     assert i == 0
                     i = int(aii.derivative_count)
-                elif getattr(aii.args[0], "argument", -1) == 1:
+                elif arg is ArgumentTag.TRIAL:
                     assert j == 0
                     j = int(aii.derivative_count)
             continue
         jaxfunction = None
         for p in sp.core.traversal.preorder_traversal(aii):
-            if getattr(p, "argument", -1) == 2:  # JAXFunction->AppliedUndef
-                jaxfunction = p
+            if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
+                jaxfunction = cast(AppliedUndef, p)
                 break
         if jaxfunction:
-            scale *= evaluate_jaxfunction_expr(aii, xj, cast(AppliedUndef, jaxfunction))
+            scale *= evaluate_jaxfunction_expr(aii, xj, jaxfunction)
             continue
         if len(aii.free_symbols) > 0:
             s = aii.free_symbols.pop()
@@ -560,7 +567,7 @@ def inner_linear(
     df = float(vo.domain_factor)
     i = 0
     uj = jnp.array([sc])  # incorporate scalar coefficient into first vector
-    if getattr(bi, "argument", -1) == 0:
+    if get_arg(bi) is ArgumentTag.TEST:
         pass
     elif isinstance(bi, sp.Derivative):
         i = int(bi.derivative_count)
@@ -568,7 +575,7 @@ def inner_linear(
         for bii in bi.args:
             found_basis = False
             for p in sp.core.traversal.preorder_traversal(bii):
-                if getattr(p, "argument", -1) == 0:
+                if get_arg(p) is ArgumentTag.TEST:
                     found_basis = True
                     break
             if found_basis:
@@ -579,7 +586,7 @@ def inner_linear(
 
             jaxfunction = None
             for p in sp.core.traversal.preorder_traversal(bii):
-                if getattr(p, "argument", -1) == 2:  # JAXFunction->AppliedUndef
+                if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
                     jaxfunction = cast(AppliedUndef, p)
                     break
             if jaxfunction:

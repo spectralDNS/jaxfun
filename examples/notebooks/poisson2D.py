@@ -153,7 +153,7 @@ def _(mo):
     The returned `JAXFunction` `h` represents
 
     $$
-    h(x, y) = \sum_{i=0}^{N-1}\sum_{j=0}^{N-1} \hat{h}_{ij} \phi_i(x) \phi_j(y)
+    h(x, y) = \sum_{i=0}^{N-1}\sum_{j=0}^{N-1} \hat{h}_{ij} \phi_i(x) \phi_j(y),
     $$
 
     and can be evaluated for any point in the domain $[0, 1]^2$. We can display `h` both in unevaluated and evaluated state:

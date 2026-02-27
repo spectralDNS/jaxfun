@@ -64,8 +64,11 @@ ue = T.system.expr_psi_to_base_scalar(ue)
 # A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=False)
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=False)
 
-H = jnp.sum(jnp.array([a.mat for a in A]), axis=0)
-uh = jnp.linalg.solve(H, b.flatten()).reshape(b.shape)
+H = jnp.sum(jnp.array([a.mat for a in A]), axis=0)  # H_ikjl
+HT = jnp.transpose(H, (0, 2, 1, 3)).reshape(
+    (H.shape[0] * H.shape[1], H.shape[2] * H.shape[3])
+)  # HT_{i*j,k*l}
+uh = jnp.linalg.solve(HT, b.flatten()).reshape(b.shape)
 
 N = 100
 xij, etaj = T.mesh(kind="uniform", N=(N, N))

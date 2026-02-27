@@ -15,7 +15,7 @@ class Legendre(Jacobi):
     """Legendre polynomial basis (Jacobi with alpha=beta=0).
 
     Provides series and basis evaluation, quadrature nodes/weights, and
-    norm-squared values for P_n on [-1,1].
+    norm-squared values for P_n on [-1, 1].
     """
 
     def __init__(
@@ -45,7 +45,7 @@ class Legendre(Jacobi):
         p(X) = sum_{k=0}^{N-1} c_k P_k(X)
 
         Args:
-            X: Evaluation points in reference domain [-1,1].
+            X: Evaluation points in reference domain [-1, 1].
             c: Coefficient array (length >= 1).
 
         Returns:
@@ -75,7 +75,7 @@ class Legendre(Jacobi):
         """Evaluate Legendre series via forward recurrence accumulation.
 
         Args:
-            X: Evaluation points in reference domain [-1,1].
+            X: Evaluation points in reference domain [-1, 1].
             c: Coefficient array.
 
         Returns:
@@ -107,12 +107,12 @@ class Legendre(Jacobi):
         x, w = leggauss(N)
         return x, w
 
-    @jit_vmap(in_axes=(0, None))
-    def eval_basis_function(self, X: float, i: int) -> float:
+    @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
+    def eval_basis_function(self, X: Array, i: int) -> Array:
         """Evaluate single Legendre polynomial P_i at X.
 
         Args:
-            X: Points in [-1,1].
+            X: Points in [-1, 1].
             i: Polynomial index (0 <= i < N).
 
         Returns:
@@ -134,7 +134,7 @@ class Legendre(Jacobi):
         """Evaluate all Legendre polynomials P_0..P_{N-1} at X.
 
         Args:
-            X: Points in [-1,1].
+            X: Points in [-1, 1].
 
         Returns:
             Array (N,) per X with stacked values.

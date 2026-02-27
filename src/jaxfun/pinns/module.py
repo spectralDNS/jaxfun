@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from collections.abc import Callable, Sequence
-from typing import Any, NotRequired, Self, TypedDict, cast
+from typing import Any, Literal, NotRequired, Self, TypedDict, cast
 
 import jax
 import jax.numpy as jnp
@@ -22,6 +22,7 @@ from sympy.vector import VectorAdd
 
 from jaxfun.coordinates import BaseTime, CoordSys
 from jaxfun.galerkin import Chebyshev, DirectSum
+from jaxfun.galerkin.arguments import ArgumentTag
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.galerkin.tensorproductspace import (
     TensorProductSpace,
@@ -62,7 +63,7 @@ class BaseModule(nnx.Module):
             return NotImplemented
         return nnx.graphdef(self) == nnx.graphdef(other) and self.name == other.name
 
-    def update_time(self, deltat: float) -> None:
+    def update_time(self, deltat: float | Array) -> None:
         pass
 
     @property
@@ -254,7 +255,7 @@ class KANLayer(nnx.Module):
             else [Domain(-1, 1) for _ in range(in_features)]
         )
 
-        self.basespaces = (
+        self.basespaces: list[OrthogonalSpace] = (
             [
                 basespace(spectral_size, domain=domains[i], system=subsystems[i])  # type: ignore[index]
                 for i in range(in_features)
@@ -265,7 +266,7 @@ class KANLayer(nnx.Module):
             ]  # Hidden layer domain [-1, 1] matches tanh activation range
         )
 
-    def update_time(self, deltat: float) -> None:
+    def update_time(self, deltat: float | Array) -> None:
         """Update time-dependent domain for input layer.
 
         Args:
@@ -273,9 +274,8 @@ class KANLayer(nnx.Module):
         """
         if not self.hidden:
             d = self.basespaces[-1]._domain
-            self.basespaces[-1]._domain = Domain(
-                float(d.lower + deltat), float(d.upper + deltat)
-            )
+            l, u = float(d.lower), float(d.upper)
+            self.basespaces[-1]._domain = Domain(float(l + deltat), float(u + deltat))
 
     def compute_basis(self, x: Array) -> list[Array]:
         if not self.hidden:
@@ -661,12 +661,11 @@ class SpectralModule(BaseModule):
         Returns:
             Values (N,) if d=1 else (N, rank+1).
         """
-        kernel = self.kernel[...]
-        if isinstance(self.space, OrthogonalSpace):
+        if isinstance(self.space, OrthogonalSpace | DirectSum):
             X = self.space.map_reference_domain(x)
-            return self.space.evaluate(X, kernel[0])
+            return self.space.evaluate(X, self.kernel[0])
 
-        z = self.space.evaluate(x, kernel, True)
+        z = self.space.evaluate(x, self.kernel, True)
         if self.space.rank == 0:
             return jnp.expand_dims(z, -1)
         return z
@@ -741,7 +740,7 @@ class KANMLPModule(BaseModule):
         st = nnx.split(self, nnx.Param)[1]
         return ravel_pytree(st)[0].shape[0]
 
-    def update_time(self, deltat: float) -> None:
+    def update_time(self, deltat: float | Array) -> None:
         self.layer_in.update_time(deltat)
 
     def __call__(self, x: Array) -> Array:
@@ -838,7 +837,7 @@ class sPIKANModule(BaseModule):
         st = nnx.state(self)
         return ravel_pytree(st)[0].shape[0]
 
-    def update_time(self, deltat: float) -> None:
+    def update_time(self, deltat: float | Array) -> None:
         self.layer_in.update_time(deltat)
 
     def __call__(self, x: Array) -> Array:
@@ -923,7 +922,7 @@ class FlaxFunction(Function):
     module: BaseModule
     name: str
     fun_str: str
-    argument: int
+    argument: Literal[ArgumentTag.JAXFUNC]
     rngs: nnx.Rngs
 
     def __new__(
@@ -945,28 +944,30 @@ class FlaxFunction(Function):
         args = list(coors._cartesian_xyz)
         t = BaseTime(V.system)
         args = args + [t] if V.is_transient else args
-        args = args + [sp.Symbol(V.name)]
+        args = args + [sp.Dummy()]
         obj = cast(Self, Function.__new__(cls, *args))
         obj.functionspace = V
         obj.t = t
         obj.module = (
-            get_flax_module(V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs)
+            get_flax_module(
+                V, kernel_init=kernel_init, bias_init=bias_init, rngs=rngs, name=V.name
+            )
             if module is None
             else module
         )
         obj.name = name
         obj.fun_str = fun_str if fun_str is not None else name
-        obj.argument = 2
+        obj.argument = ArgumentTag.JAXFUNC
         obj.rngs = rngs
         return obj
 
     @property
-    def rank(self):
+    def rank(self) -> int:
         """Return tensor rank of the represented field."""
         return self.functionspace.rank
 
     @property
-    def dim(self):
+    def dim(self) -> int:
         """Return flattened parameter count of underlying module."""
         return self.module.dim
 
@@ -999,20 +1000,19 @@ class FlaxFunction(Function):
                 functionspace_name=V.name,
                 rank_parent=V.rank,
                 module=self.module,
-                argument=2,
+                argument=ArgumentTag.JAXFUNC,
             )(*args)  # type: ignore[return-value]
 
         if V.rank == 1:
-            s = V.system.base_scalars()
             b = V.system.base_vectors()
             return VectorAdd.fromiter(
                 Function(
-                    self.fun_str + "_" + s[i].name,
+                    "".join([self.fun_str, "^{(", str(i), ")}"]),
                     global_index=i,
                     functionspace_name=V.name,
                     rank_parent=V.rank,
                     module=self.module,
-                    argument=2,
+                    argument=ArgumentTag.JAXFUNC,
                 )(*args)  # ty:ignore[call-non-callable]
                 * b[i]
                 for i in range(V.dims)
@@ -1044,11 +1044,11 @@ class FlaxFunction(Function):
 
     def __str__(self) -> str:
         name = "\033[1m%s\033[0m" % (self.name,) if self.rank == 1 else self.name  # noqa: UP031
-        return f"{name}({self.c_names}; {self.functionspace.name})"
+        return f"{name}({self.c_names}; {self.module.name})"
 
     def _latex(self, printer: Any = None) -> str:
         name = r"\mathbf{ {%s} }" % (self.name,) if self.rank == 1 else self.name  # noqa: UP031
-        return f"{name}({self.c_names}; {self.functionspace.name})"
+        return f"{name}({self.c_names}; {self.module.name})"
 
     def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self.__str__())
@@ -1059,7 +1059,7 @@ class FlaxFunction(Function):
     def __call__(self, x: Array) -> Array:
         """Evaluate underlying module; flatten scalar output if rank 0."""
         y = self.module(x)
-        if self.rank == 0:
+        if self.rank == 0 and y.shape[-1] == 1:
             return y[:, 0]
         return y
 

@@ -8,6 +8,7 @@ import sympy as sp
 from jax import Array as Array
 from jax.experimental.sparse import BCOO as BCOO
 from jax.typing import ArrayLike as ArrayLike
+from sympy.core.function import AppliedUndef
 from sympy.vector import (
     Dyadic,
     DyadicAdd,
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
         TensorProductSpace,
         VectorTensorProductSpace,
     )
-    from jaxfun.galerkin.arguments import Jaxf
+    from jaxfun.galerkin.arguments import Jaxc
     from jaxfun.galerkin.orthogonal import OrthogonalSpace
     from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
 
@@ -109,6 +110,7 @@ def cast_bd(t: sp.Tuple[BaseDyadic]) -> tuple[BaseDyadic, ...]:
 class InnerResultDict(TypedDict, extra_items=sp.Expr):
     coeff: sp.Expr | float
     multivar: NotRequired[sp.Expr]
+    jaxfunction: NotRequired[AppliedUndef | sp.Expr]
 
 
 class ResultDict(TypedDict):
@@ -118,7 +120,7 @@ class ResultDict(TypedDict):
 
 class LinearCoeffDict(TypedDict, total=False):
     scale: float
-    jaxfunction: NotRequired[Jaxf]
+    jaxcoeff: NotRequired[Jaxc]
 
 
 class CoeffDict(TypedDict, total=False):

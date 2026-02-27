@@ -6,7 +6,6 @@ from . import (
     orthogonal as orthogonal,
 )
 from .arguments import (
-    JAXArray as JAXArray,
     JAXFunction as JAXFunction,
     TestFunction as TestFunction,
     TrialFunction as TrialFunction,

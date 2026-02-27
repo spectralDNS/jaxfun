@@ -38,3 +38,8 @@ def test_forms_split_linear_and_bilinear():
     assert hasattr(A, "shape")
     A = cast(jax.Array, A)
     assert A.shape[0] == A.shape[1]
+
+
+if __name__ == "__main__":
+    test_scalar_vector_function_print_and_backward()
+    # test_forms_split_linear_and_bilinear()

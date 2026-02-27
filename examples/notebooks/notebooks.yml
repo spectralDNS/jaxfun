@@ -1,0 +1,59 @@
+{
+  "sections": [
+    {
+      "title": "PINNs solvers",
+      "items": [
+        {
+          "file": "DrivenCavity_lstsq.html",
+          "label": "DrivenCavity",
+          "description": "Driven Cavity PINNs solver"
+        },
+        {
+          "file": "Helmholtz_lstsq.html",
+          "label": "Helmholtz",
+          "description": "Helmholtz PINNs solver"
+        },
+        {
+          "file": "Wave_lstsq.html",
+          "label": "Wave",
+          "description": "Wave PINNs solver with discrete time-stepping"
+        }
+      ]
+    },
+    {
+      "title": "Jaxfun language",
+      "items": [
+        {
+          "file": "formlanguage.html",
+          "label": "Form language",
+          "description": "The Jaxfun form language"
+        },
+        {
+          "file": "curvilinear.html",
+          "label": "Curvilinear coordinates",
+          "description": "Jaxfun handling of curvilinear coordinates, operators and equations."
+        }
+      ]
+    },
+    {
+      "title": "Galerkin solvers",
+      "items": [
+        {
+          "file": "annulus.html",
+          "label": "Annulus",
+          "description": "Galerkin solver for annulus geometry"
+        },
+        {
+          "file": "poisson2D.html",
+          "label": "Poisson 2D",
+          "description": "Galerkin solver for 2D Poisson equation"
+        },
+        {
+          "file": "polar.html",
+          "label": "Polar coordinates",
+          "description": "Some notes on polar coordinates and Galerkin solvers"
+        }
+      ]
+    }
+  ]
+}

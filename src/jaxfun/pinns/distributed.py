@@ -8,7 +8,7 @@ from jaxtyping import PyTree
 
 # Identity function is at the top level so that `process_allmean` doesn't
 # recompile on every invocation.
-def _identity_fn(x):
+def _identity_fn[T](x: T) -> T:
     return x
 
 

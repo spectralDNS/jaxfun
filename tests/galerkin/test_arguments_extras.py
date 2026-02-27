@@ -10,10 +10,10 @@ def test_jaxfunction_doit_and_matmul_rank1():
     T = TensorProduct(C, C)
     coeffs = jax.random.normal(jax.random.PRNGKey(10), shape=T.num_dofs)
     jf = JAXFunction(coeffs, T, name="A")
-    expr = jf.doit()
-    # Should produce Jaxf * TrialFunction structure
+    expr = jf.doit(linear=True)
+    # Should produce Jaxc * TrialFunction structure
     assert hasattr(expr, "args")
-    assert expr.args[0].__class__.__name__ == "Jaxf"
+    assert expr.args[0].__class__.__name__ == "Jaxc"
     a = jnp.ones(T.num_dofs)
     _ = jf @ a
     _ = a @ jf

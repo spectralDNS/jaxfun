@@ -107,83 +107,128 @@ jobs:
       - name: Create index.html
         if: steps.check-html.outputs.html_exists == 'true'
         run: |
-          cat > html_output/index.html << 'INDEXEOF'
-          <!DOCTYPE html>
-          <html lang="en">
+          python - << 'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("examples/notebooks/notebooks.yml").read_text())
+          sections = data.get("sections", [])
+
+          def card(item: dict) -> str:
+            label = item.get("label", "Untitled")
+            desc = item.get("description", "")
+            href = item.get("file", "#")
+            desc_html = f"<small>{desc}</small>" if desc else ""
+            return f"<div class=\"card\"><a href=\"{href}\">{label}</a>{desc_html}</div>"
+
+          section_html = []
+          for section in sections:
+            title = section.get("title", "")
+            items = section.get("items", [])
+            cards = "\n".join(card(item) for item in items)
+            section_html.append(
+              "\n".join(
+                [
+                  "<div class=\"section\">",
+                  f"  <div class=\"section-title\">{title}</div>",
+                  "  <div class=\"grid\">",
+                  f"{cards}",
+                  "  </div>",
+                  "</div>",
+                ]
+              )
+            )
+
+          html = """<!DOCTYPE html>
+          <html lang=\"en\">
           <head>
-              <meta charset="UTF-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1.0">
-              <title>Marimo Notebooks</title>
-              <style>
-                  body {
-                      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-                      max-width: 800px;
-                      margin: 0 auto;
-                      padding: 40px 20px;
-                      line-height: 1.6;
-                      color: #333;
-                  }
-                  h1 {
-                      color: #2c3e50;
-                      border-bottom: 3px solid #3498db;
-                      padding-bottom: 10px;
-                  }
-                  .notebook-list {
-                      list-style: none;
-                      padding: 0;
-                  }
-                  .notebook-item {
-                      margin: 20px 0;
-                      padding: 20px;
-                      background: #f8f9fa;
-                      border-radius: 8px;
-                      transition: transform 0.2s, box-shadow 0.2s;
-                  }
-                  .notebook-item:hover {
-                      transform: translateY(-2px);
-                      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-                  }
-                  .notebook-link {
-                      color: #3498db;
-                      text-decoration: none;
-                      font-size: 1.2em;
-                      font-weight: 500;
-                  }
-                  .notebook-link:hover {
-                      color: #2980b9;
-                      text-decoration: underline;
-                  }
-                  footer {
-                      margin-top: 60px;
-                      padding-top: 20px;
-                      border-top: 1px solid #ddd;
-                      text-align: center;
-                      color: #777;
-                  }
-              </style>
+            <meta charset=\"UTF-8\">
+            <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+            <title>Marimo Notebooks</title>
+            <style>
+              body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+                max-width: 1100px;
+                margin: 0 auto;
+                padding: 48px 20px 64px;
+                line-height: 1.6;
+                color: #1f2937;
+                background: #f5f7fb;
+              }
+              h1 {
+                color: #111827;
+                margin-bottom: 8px;
+              }
+              .subtitle {
+                color: #4b5563;
+                margin-bottom: 28px;
+              }
+              .section {
+                margin: 28px 0 36px;
+              }
+              .section-title {
+                font-size: 1.1rem;
+                color: #111827;
+                margin: 0 0 16px;
+                letter-spacing: 0.02em;
+                text-transform: uppercase;
+              }
+              .grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                gap: 16px;
+              }
+              .card {
+                background: #ffffff;
+                border-radius: 12px;
+                padding: 16px 18px;
+                border: 1px solid #e5e7eb;
+                box-shadow: 0 2px 8px rgba(17, 24, 39, 0.06);
+                transition: transform 0.2s ease, box-shadow 0.2s ease;
+              }
+              .card:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 6px 18px rgba(17, 24, 39, 0.12);
+              }
+              .card a {
+                color: #2563eb;
+                text-decoration: none;
+                font-weight: 600;
+                font-size: 1.05rem;
+              }
+              .card a:hover {
+                text-decoration: underline;
+              }
+              .card small {
+                display: block;
+                color: #6b7280;
+                margin-top: 6px;
+              }
+              footer {
+                margin-top: 56px;
+                padding-top: 20px;
+                border-top: 1px solid #e5e7eb;
+                text-align: center;
+                color: #6b7280;
+              }
+            </style>
           </head>
           <body>
-              <h1>📓 Marimo Notebooks</h1>
-              <p>Below you'll find interactive marimo notebooks exported as HTML.</p>
-              <ul class="notebook-list">
-          INDEXEOF
+            <h1>📓 Marimo Notebooks</h1>
+            <p class=\"subtitle\">Curated, interactive notebooks grouped by topic.</p>
+          """
 
-          for html in html_output/*.html; do
-            if [ -f "$html" ] && [ "$html" != "html_output/index.html" ]; then
-              filename=$(basename "$html")
-              name=$(basename "$html" .html)
-              echo "        <li class=\"notebook-item\"><a href=\"$filename\" class=\"notebook-link\">$name</a></li>" >> html_output/index.html
-            fi
-          done
-
-          cat >> html_output/index.html << 'INDEXEOF'
-              </ul>
-              <footer>
-                  <p>Generated with <a href="https://marimo.io" target="_blank">marimo</a></p>
-              </footer>
+          html += "\n".join(section_html)
+          html += """
+            <footer>
+              <p>Generated with <a href=\"https://marimo.io\" target=\"_blank\">marimo</a></p>
+            </footer>
           </body>
           </html>
-          INDEXEOF
+          """
+
+          Path("html_output/index.html").write_text(html)
+          PY
 
       - name: Deploy to GitHub Pages
         if: steps.check-html.outputs.html_exists == 'true'

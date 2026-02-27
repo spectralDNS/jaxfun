@@ -177,7 +177,9 @@ def inner(
                 scales.append(a0["multivar"])
             if "jaxfunction" in a0:
                 scales.append(
-                    evaluate_jaxfunction_expr(a0["jaxfunction"], test_space.mesh())
+                    evaluate_jaxfunction_expr(
+                        a0["jaxfunction"], test_space.mesh_reference()
+                    )
                 )
 
             Am = assemble_multivar(mats_, scales, test_space)
@@ -323,7 +325,9 @@ def inner(
                     s = test_space.system.base_scalars()
                     uj = lambdify(s, b0["multivar"], modules="jax")(*test_space.mesh())
                 elif "jaxfunction" in b0:
-                    uj = evaluate_jaxfunction_expr(b0["jaxfunction"], test_space.mesh())
+                    uj = evaluate_jaxfunction_expr(
+                        b0["jaxfunction"], test_space.mesh_reference()
+                    )
                 else:
                     raise ValueError("Expected multivar or jaxfunction key in b0")
                 res = bs[0][0].T @ uj @ bs[1][0]
@@ -343,7 +347,9 @@ def inner(
                     s = test_space.system.base_scalars()
                     uj = lambdify(s, b0["multivar"], modules="jax")(*test_space.mesh())
                 elif "jaxfunction" in b0:
-                    uj = evaluate_jaxfunction_expr(b0["jaxfunction"], test_space.mesh())
+                    uj = evaluate_jaxfunction_expr(
+                        b0["jaxfunction"], test_space.mesh_reference()
+                    )
                 else:
                     raise ValueError("Expected multivar or jaxfunction key in b0")
                 res = jnp.einsum("il,jm,kn,ijk->lmn", bs[0][0], bs[1][0], bs[2][0], uj)
@@ -475,7 +481,7 @@ def inner_bilinear(
     """
     vo = v.orthogonal
     uo = u.orthogonal
-    xj, wj = vo.quad_points_and_weights()
+    Xj, wj = vo.quad_points_and_weights()
     df = float(vo.domain_factor)
     i, j = 0, 0
     scale = jnp.array([sc])
@@ -501,11 +507,11 @@ def inner_bilinear(
                 jaxfunction = cast(AppliedUndef, p)
                 break
         if jaxfunction:
-            scale *= evaluate_jaxfunction_expr(aii, vo.map_true_domain(xj), jaxfunction)
+            scale *= evaluate_jaxfunction_expr(aii, Xj, jaxfunction)
             continue
         if len(aii.free_symbols) > 0:
             s = aii.free_symbols.pop()
-            scale *= lambdify(s, uo.map_expr_true_domain(aii), modules="jax")(xj)
+            scale *= lambdify(s, uo.map_expr_true_domain(aii), modules="jax")(Xj)
         else:
             scale *= float(aii)  # ty:ignore[invalid-argument-type]
 
@@ -524,8 +530,8 @@ def inner_bilinear(
 
     if z is None:
         w = wj * df ** (i + j - 1) * scale
-        Pi = vo.evaluate_basis_derivative(xj, k=i)
-        Pj = uo.evaluate_basis_derivative(xj, k=j)
+        Pi = vo.evaluate_basis_derivative(Xj, k=i)
+        Pj = uo.evaluate_basis_derivative(Xj, k=j)
 
         if multivar:
             multi: Array = v.apply_stencil_right(w[:, None] * Pi)
@@ -565,7 +571,7 @@ def inner_linear(
         Vector (1D), tuple (Pi,) for multivar, or projected result.
     """
     vo = v.orthogonal
-    xj, wj = vo.quad_points_and_weights()
+    Xj, wj = vo.quad_points_and_weights()
     df = float(vo.domain_factor)
     i = 0
     uj = jnp.array([sc])  # incorporate scalar coefficient into first vector
@@ -592,19 +598,17 @@ def inner_linear(
                     jaxfunction = cast(AppliedUndef, p)
                     break
             if jaxfunction:
-                uj *= evaluate_jaxfunction_expr(
-                    bii, vo.map_true_domain(xj), jaxfunction
-                )
+                uj *= evaluate_jaxfunction_expr(bii, Xj, jaxfunction)
                 continue
             # bii contains coordinates in the domain of v, e.g., (r, theta) for polar
             # Need to compute bii as bii(x(X)), since we use quadrature points
             if len(bii.free_symbols) > 0:
                 s = bii.free_symbols.pop()
-                uj *= lambdify(s, vo.map_expr_true_domain(bii), modules="jax")(xj)
+                uj *= lambdify(s, vo.map_expr_true_domain(bii), modules="jax")(Xj)
             else:
                 uj *= float(bii)  # ty:ignore[invalid-argument-type]
 
-    Pi = vo.evaluate_basis_derivative(xj, k=i)
+    Pi = vo.evaluate_basis_derivative(Xj, k=i)
     w = wj * df ** (i - 1)  # Account for domain different from reference
     if multivar:
         return (v.apply_stencil_right((uj * w)[:, None] * jnp.conj(Pi)),)

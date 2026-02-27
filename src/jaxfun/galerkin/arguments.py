@@ -775,11 +775,11 @@ class JAXFunction(ExpansionFunction):
 
 
 def evaluate_jaxfunction_expr(
-    a: Basic, xj: Array | tuple[Array, ...], jaxf: AppliedUndef | None = None
+    a: Basic, Xj: Array | tuple[Array, ...], jaxf: AppliedUndef | None = None
 ) -> Array:
     """Evaluate a symbolic JAXFunction expression on a mesh.
 
-    Input coordinates ``xj`` are always given in the physical (true) domain.
+    Input coordinates ``Xj`` are always given in the reference domain.
     """
     if jaxf is None:
         for p in sp.core.traversal.preorder_traversal(a):
@@ -789,22 +789,27 @@ def evaluate_jaxfunction_expr(
     assert hasattr(jaxf, "functionspace") and hasattr(jaxf, "array")
     V = cast(FunctionSpaceType, jaxf.functionspace)
 
+    def evaluate_value() -> Array:
+        if isinstance(V, OrthogonalSpace | DirectSum):
+            assert isinstance(Xj, Array)
+            return V.evaluate(Xj, jaxf.array)
+        return V.evaluate_mesh_reference(Xj, jaxf.array, True)
+
     if isinstance(a, sp.Pow):
         wa = a.args[0]
-        variables = getattr(wa, "variables", ())
-        var = tuple(variables.count(s) for s in V.system.base_scalars())
-        var = var[0] if V.dims == 1 else var
-        h = V.evaluate_derivative(xj, jaxf.array, k=var)
+        if isinstance(wa, sp.Derivative):
+            variables = getattr(wa, "variables", ())
+            var = tuple(variables.count(s) for s in V.system.base_scalars())
+            k = var[0] if V.dims == 1 else var
+            h = V.evaluate_derivative_reference(Xj, jaxf.array, k=k)
+        else:
+            h = evaluate_value()
         return h ** int(a.exp)
 
     if isinstance(a, sp.Derivative):
         variables = getattr(a, "variables", ())
         var = tuple(variables.count(s) for s in V.system.base_scalars())
-        var = var[0] if V.dims == 1 else var
-        return V.evaluate_derivative(xj, jaxf.array, k=var)
+        k = var[0] if V.dims == 1 else var
+        return V.evaluate_derivative_reference(Xj, jaxf.array, k=k)
 
-    if not isinstance(V, OrthogonalSpace | DirectSum):
-        return V.evaluate_mesh(xj, jaxf.array, True)
-
-    assert isinstance(xj, Array)
-    return V.evaluate(V.map_reference_domain(xj), jaxf.array)
+    return evaluate_value()

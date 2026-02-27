@@ -473,17 +473,9 @@ class DirectSum:
         return self[1].bnd_vals()
 
     @property
-    def rank(self) -> int:
-        return self.basespaces[0].rank
-
-    @property
     def dim(self) -> int:
         """Return total dimension (homogeneous + boundary)."""
         return self[0].dim + self[1].dim
-
-    @property
-    def dims(self) -> int:
-        return self.basespaces[0].dims
 
     @property
     def num_dofs(self) -> int:

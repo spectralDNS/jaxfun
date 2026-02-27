@@ -22,10 +22,6 @@ from jaxfun.utils.common import eliminate_near_zeros, jit_vmap, lambdify
 from .composite import BCGeneric, BoundaryConditions, Composite, DirectSum
 from .orthogonal import OrthogonalSpace
 
-if TYPE_CHECKING:
-    from jaxfun.galerkin.inner import RecognizableArray
-
-
 tensor_product_symbol = "\u2297"
 multiplication_sign = "\u00d7"
 
@@ -746,6 +742,9 @@ class DirectSumTPS(TensorProductSpace):
         v = TestFunction(self)
         u = TrialFunction(self)
         A, b = inner(u * v)
+        assert not isinstance(v.functionspace, VectorTensorProductSpace), (
+            "Forward transform not implemented for vector-valued spaces"
+        )
         b += v.functionspace.scalar_product(c)
         return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.num_dofs)
 
@@ -865,7 +864,7 @@ class TPMatrix:  # noqa: B903
 
     def __init__(
         self,
-        mats: Sequence[RecognizableArray],
+        mats: Sequence[Array],
         scale: complex,
         test_space: TensorProductSpace | VectorTensorProductSpace,
         trial_space: TensorProductSpace | VectorTensorProductSpace,

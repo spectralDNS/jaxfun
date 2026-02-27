@@ -119,7 +119,21 @@ class TensorProductSpace:
         N: tuple[int, ...] | None = None,
         broadcast: bool = True,
     ) -> tuple[Array, ...]:
-        """Return tensor mesh (as tuple of arrays) in true domain.
+        """Return tensor mesh (as tuple of arrays) in true domain."""
+        X = self.mesh_reference(kind, N, broadcast=False)
+        mesh = []
+        for ax, (Xi, space) in enumerate(zip(X, self.basespaces, strict=False)):
+            xi = space.map_true_domain(Xi)
+            mesh.append(self.broadcast_to_ndims(xi, ax) if broadcast else xi)
+        return tuple(mesh)
+
+    def mesh_reference(
+        self,
+        kind: str = "quadrature",
+        N: tuple[int, ...] | None = None,
+        broadcast: bool = True,
+    ) -> tuple[Array, ...]:
+        """Return tensor mesh (as tuple of arrays) in reference domain.
 
         Args:
             kind: 'quadrature' or 'uniform'.
@@ -133,7 +147,7 @@ class TensorProductSpace:
         if N is None:
             N = self.shape()
         for ax, space in enumerate(self.basespaces):
-            X = space.mesh(kind, N[ax])
+            X = space.mesh_reference(kind, N[ax])
             mesh.append(self.broadcast_to_ndims(X, ax) if broadcast else X)
         return tuple(mesh)
 
@@ -189,13 +203,13 @@ class TensorProductSpace:
 
     # Cannot jit_vmap since tensor product mesh.
     @jax.jit(static_argnums=(0, 3))
-    def evaluate_mesh(
-        self, x: list[Array], c: Array, use_einsum: bool = False
+    def evaluate_mesh_reference(
+        self, X: list[Array], c: Array, use_einsum: bool = False
     ) -> Array:
-        """Evaluate expansion on provided tensor-product mesh arrays.
+        """Evaluate expansion on reference-domain tensor-product mesh arrays.
 
         Args:
-            x: List of per-axis coordinate arrays (broadcasted or 1D).
+            X: List of per-axis reference coordinate arrays (broadcasted or 1D).
             c: Coefficient tensor shaped (N0, N1, ...).
             use_einsum: If True use einsum path; else iterative vmaps.
 
@@ -205,28 +219,19 @@ class TensorProductSpace:
         dim: int = len(self)
         if dim == 2:
             if not use_einsum:
-                for i, (xi, ax) in enumerate(zip(x, range(dim), strict=False)):
+                for i, (Xi, ax) in enumerate(zip(X, range(dim), strict=False)):
                     axi: int = dim - 1 - ax
                     c = jax.vmap(
                         self.basespaces[i].evaluate, in_axes=(None, axi), out_axes=axi
-                    )(
-                        jnp.atleast_1d(
-                            self.basespaces[i].map_reference_domain(xi).squeeze()
-                        ),
-                        c,
-                    )
+                    )(jnp.atleast_1d(Xi.squeeze()), c)
             else:
                 T0, T1 = self.basespaces
-                C0 = T0.eval_basis_functions(
-                    jnp.atleast_1d(T0.map_reference_domain(x[0]).squeeze())
-                )
-                C1 = T1.eval_basis_functions(
-                    jnp.atleast_1d(T1.map_reference_domain(x[1]).squeeze())
-                )
+                C0 = T0.eval_basis_functions(jnp.atleast_1d(X[0].squeeze()))
+                C1 = T1.eval_basis_functions(jnp.atleast_1d(X[1].squeeze()))
                 return jnp.einsum("ij,jk,lk->il", C0, c, C1)
         else:
             if not use_einsum:
-                for i, (xi, ax) in enumerate(zip(x, range(dim), strict=False)):
+                for i, (Xi, ax) in enumerate(zip(X, range(dim), strict=False)):
                     ax0, ax1 = set(range(dim)) - set((ax,))
                     c = jax.vmap(
                         jax.vmap(
@@ -236,44 +241,41 @@ class TensorProductSpace:
                         ),
                         in_axes=(None, ax1),
                         out_axes=ax1,
-                    )(
-                        jnp.atleast_1d(
-                            self.basespaces[i].map_reference_domain(xi).squeeze()
-                        ),
-                        c,
-                    )
+                    )(jnp.atleast_1d(Xi.squeeze()), c)
             else:
                 T0, T1, T2 = self.basespaces
-                C0 = T0.eval_basis_functions(
-                    jnp.atleast_1d(T0.map_reference_domain(x[0]).squeeze())
-                )
-                C1 = T1.eval_basis_functions(
-                    jnp.atleast_1d(T1.map_reference_domain(x[1]).squeeze())
-                )
-                C2 = T2.eval_basis_functions(
-                    jnp.atleast_1d(T2.map_reference_domain(x[2]).squeeze())
-                )
+                C0 = T0.eval_basis_functions(jnp.atleast_1d(X[0].squeeze()))
+                C1 = T1.eval_basis_functions(jnp.atleast_1d(X[1].squeeze()))
+                C2 = T2.eval_basis_functions(jnp.atleast_1d(X[2].squeeze()))
                 c = jnp.einsum("ik,jl,nm,klm->ijn", C0, C1, C2, c)
         return c
 
+    @jax.jit(static_argnums=(0, 3))
+    def evaluate_mesh(
+        self, x: list[Array], c: Array, use_einsum: bool = False
+    ) -> Array:
+        """Evaluate expansion on true-domain tensor-product mesh arrays."""
+        X = [
+            Ti.map_reference_domain(xi)
+            for xi, Ti in zip(x, self.basespaces, strict=False)
+        ]
+        return self.evaluate_mesh_reference(X, c, use_einsum)
+
     @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
-    def evaluate(self, x: Array, c: Array, use_einsum: bool) -> Array:
-        """Evaluate expansion at scattered points (per-axis samples).
+    def evaluate_reference(self, X: Array, c: Array, use_einsum: bool) -> Array:
+        """Evaluate expansion at reference-domain scattered points.
 
         Args:
-            x: Array of per-axis coordinates stacked (N, d).
+            X: Array of per-axis reference coordinates stacked (N, d).
             c: Coefficient tensor.
             use_einsum: Whether to use einsum contraction.
 
         Returns:
-            Evaluated values with shape determined by leading dims of x.
+            Evaluated values with shape determined by leading dims of X.
         """
         dim = len(self)
         T = self.basespaces
-        C = [
-            T[i].eval_basis_functions(T[i].map_reference_domain(x[i]))
-            for i in range(dim)
-        ]
+        C = [T[i].eval_basis_functions(X[i]) for i in range(dim)]
         if not use_einsum:
             c = C[0] @ c @ C[1] if dim == 2 else C[2] @ (C[1] @ (C[0] @ c))
         else:
@@ -281,14 +283,22 @@ class TensorProductSpace:
             c = jnp.einsum(path, *C, c)
         return c
 
+    @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
+    def evaluate(self, x: Array, c: Array, use_einsum: bool) -> Array:
+        """Evaluate expansion at true-domain scattered points."""
+        X = jnp.stack(
+            [Ti.map_reference_domain(x[i]) for i, Ti in enumerate(self.basespaces)]
+        )
+        return self.evaluate_reference(X, c, use_einsum)
+
     @jax.jit(static_argnums=(0, 3))
-    def evaluate_derivative(
-        self, x: list[Array], c: Array, k: tuple[int, ...]
+    def evaluate_derivative_reference(
+        self, X: list[Array], c: Array, k: tuple[int, ...]
     ) -> Array:
-        """Evaluate expansion (with derivatives) on provided tensor-product mesh arrays.
+        """Evaluate derivatives on reference-domain tensor-product mesh arrays.
 
         Args:
-            x: List of per-axis coordinate arrays (broadcasted or 1D).
+            X: List of per-axis reference coordinate arrays (broadcasted or 1D).
             c: Coefficient tensor shaped (N0, N1, ...).
             k: Derivative order for each axis.
 
@@ -297,13 +307,22 @@ class TensorProductSpace:
         """
         df = 1
         for i, Ti in enumerate(self.basespaces):
-            Ci = Ti.evaluate_basis_derivative(
-                Ti.map_reference_domain(x[i]).squeeze(), k[i]
-            )
+            Ci = Ti.evaluate_basis_derivative(jnp.atleast_1d(X[i]).squeeze(), k[i])
             c = jnp.tensordot(Ci, c, axes=(1, i), precision=jax.lax.Precision.HIGHEST)
             c = jnp.moveaxis(c, 0, i)
             df = df * (float(Ti.domain_factor ** k[i]))
         return c * df
+
+    @jax.jit(static_argnums=(0, 3))
+    def evaluate_derivative(
+        self, x: list[Array], c: Array, k: tuple[int, ...]
+    ) -> Array:
+        """Evaluate derivatives on true-domain tensor-product mesh arrays."""
+        X = [
+            Ti.map_reference_domain(xi)
+            for xi, Ti in zip(x, self.basespaces, strict=False)
+        ]
+        return self.evaluate_derivative_reference(X, c, k)
 
     def get_padded(self, N: tuple[int, ...]) -> TensorProductSpace:
         """Return new tensor space with each axis padded/truncated to N."""
@@ -427,7 +446,7 @@ class VectorTensorProductSpace:
         self.name = name
         self.tensorname = multiplication_sign.join([b.name for b in self.tensorspaces])
         self.mesh = self.tensorspaces[0].mesh
-        self.evaluate_mesh = self.tensorspaces[0].evaluate_mesh
+        self.mesh_reference = self.tensorspaces[0].mesh_reference
 
     def __len__(self) -> int:
         """Return number of vector components."""
@@ -472,16 +491,7 @@ class VectorTensorProductSpace:
 
     @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
     def evaluate(self, x: Array, c: Array, use_einsum: bool) -> Array:
-        """Evaluate vector expansion at scattered points.
-
-        Args:
-            x: Array of per-axis coordinates stacked (N, d).
-            c: Coefficient array shaped (dims, N0, N1, ...).
-            use_einsum: Whether to use einsum contraction.
-
-        Returns:
-            Evaluated values with shape determined by leading dims of x.
-        """
+        """Evaluate vector expansion at true-domain scattered points."""
         vals = []
         for i, space in enumerate(self.tensorspaces):
             ci = c[i]
@@ -490,12 +500,67 @@ class VectorTensorProductSpace:
         return jnp.array(vals)
 
     @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
+    def evaluate_reference(self, X: Array, c: Array, use_einsum: bool) -> Array:
+        """Evaluate vector expansion at reference-domain scattered points.
+
+        Args:
+            X: Array of per-axis reference coordinates stacked (N, d).
+            c: Coefficient array shaped (dims, N0, N1, ...).
+            use_einsum: Whether to use einsum contraction.
+
+        Returns:
+            Evaluated values with shape determined by leading dims of X.
+        """
+        vals = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = c[i]
+            vi = space.evaluate_reference(X, ci, use_einsum)
+            vals.append(vi)
+        return jnp.array(vals)
+
+    @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
+    def evaluate_derivative_reference(
+        self, X: Array, c: Array, k: tuple[int, ...]
+    ) -> Array:
+        """Evaluate vector expansion derivatives at reference-domain points."""
+        vals = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = c[i]
+            vi = space.evaluate_derivative_reference(X, ci, k)
+            vals.append(vi)
+        return jnp.stack(vals)
+
+    @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
     def evaluate_derivative(self, x: Array, c: Array, k: tuple[int, ...]) -> Array:
-        """Evaluate vector expansion derivatives at scattered points."""
+        """Evaluate vector expansion derivatives at true-domain points."""
         vals = []
         for i, space in enumerate(self.tensorspaces):
             ci = c[i]
             vi = space.evaluate_derivative(x, ci, k)
+            vals.append(vi)
+        return jnp.stack(vals)
+
+    @jax.jit(static_argnums=(0, 3))
+    def evaluate_mesh_reference(
+        self, X: list[Array], c: Array, use_einsum: bool = False
+    ) -> Array:
+        """Evaluate vector expansion on reference-domain tensor mesh."""
+        vals = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = c[i]
+            vi = space.evaluate_mesh_reference(X, ci, use_einsum)
+            vals.append(vi)
+        return jnp.stack(vals)
+
+    @jax.jit(static_argnums=(0, 3))
+    def evaluate_mesh(
+        self, x: list[Array], c: Array, use_einsum: bool = False
+    ) -> Array:
+        """Evaluate vector expansion on true-domain tensor mesh."""
+        vals = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = c[i]
+            vi = space.evaluate_mesh(x, ci, use_einsum)
             vals.append(vi)
         return jnp.stack(vals)
 
@@ -751,28 +816,54 @@ class DirectSumTPS(TensorProductSpace):
             "Scalar product requires homogeneous test space (call on get_homogeneous())"
         )
 
-    def evaluate(self, x: Array, c: Array, use_einsum: bool = False) -> Array:
-        """Evaluate direct sum tensor product expansion at scattered points."""
+    def evaluate_reference(self, X: Array, c: Array, use_einsum: bool = False) -> Array:
+        """Evaluate direct-sum expansion at reference-domain scattered points."""
         a: list[Array] = []
         for f, v in self.tpspaces.items():
-            a.append(v.evaluate(x, self.coeff(c, f, v), use_einsum))
+            a.append(v.evaluate_reference(X, self.coeff(c, f, v), use_einsum))
         return jnp.sum(jnp.array(a), axis=0)
 
-    def evaluate_derivative(self, x: Array, c: Array, k: int) -> Array:
-        """Evaluate direct sum tensor product expansion at scattered points."""
+    def evaluate(self, x: Array, c: Array, use_einsum: bool = False) -> Array:
+        """Evaluate direct-sum expansion at true-domain scattered points."""
+        X = jnp.stack(
+            [Ti.map_reference_domain(x[i]) for i, Ti in enumerate(self.basespaces)]
+        )
+        return self.evaluate_reference(X, c, use_einsum)
+
+    def evaluate_derivative_reference(
+        self, X: Array, c: Array, k: tuple[int, ...]
+    ) -> Array:
+        """Evaluate derivatives at reference-domain scattered points."""
         a: list[Array] = []
         for f, v in self.tpspaces.items():
-            a.append(v.evaluate_derivative(x, self.coeff(c, f, v), k))
+            a.append(v.evaluate_derivative_reference(X, self.coeff(c, f, v), k))
+        return jnp.sum(jnp.array(a), axis=0)
+
+    def evaluate_derivative(self, x: Array, c: Array, k: tuple[int, ...]) -> Array:
+        """Evaluate derivatives at true-domain scattered points."""
+        X = jnp.stack(
+            [Ti.map_reference_domain(x[i]) for i, Ti in enumerate(self.basespaces)]
+        )
+        return self.evaluate_derivative_reference(X, c, k)
+
+    def evaluate_mesh_reference(
+        self, X: list[Array], c: Array, use_einsum: bool = False
+    ) -> Array:
+        """Evaluate expansion on reference-domain tensor mesh."""
+        a: list[Array] = []
+        for f, v in self.tpspaces.items():
+            a.append(v.evaluate_mesh_reference(X, self.coeff(c, f, v), use_einsum))
         return jnp.sum(jnp.array(a), axis=0)
 
     def evaluate_mesh(
         self, x: list[Array], c: Array, use_einsum: bool = False
     ) -> Array:
-        """Evaluate expansion on tensor mesh (summing lifting parts)."""
-        a: list[Array] = []
-        for f, v in self.tpspaces.items():
-            a.append(v.evaluate_mesh(x, self.coeff(c, f, v), use_einsum))
-        return jnp.sum(jnp.array(a), axis=0)
+        """Evaluate expansion on true-domain tensor mesh (summing lifting parts)."""
+        X = [
+            Ti.map_reference_domain(xi)
+            for xi, Ti in zip(x, self.basespaces, strict=False)
+        ]
+        return self.evaluate_mesh_reference(X, c, use_einsum)
 
     def coeff(
         self,

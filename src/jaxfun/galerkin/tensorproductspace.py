@@ -302,7 +302,7 @@ class TensorProductSpace:
             )
             c = jnp.tensordot(Ci, c, axes=(1, i), precision=jax.lax.Precision.HIGHEST)
             c = jnp.moveaxis(c, 0, i)
-            df = df * (Ti.domain_factor ** k[i])
+            df = df * (float(Ti.domain_factor ** k[i]))
         return c * df
 
     def get_padded(self, N: tuple[int, ...]) -> TensorProductSpace:

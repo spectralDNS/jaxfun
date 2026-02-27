@@ -22,34 +22,22 @@ from jaxfun.operators import Div, Dot, Grad
 from jaxfun.utils.common import ulp
 
 
-@pytest.fixture(
-    params=(
-        pytest.param(None, id="domain-default"),
-        pytest.param(Domain(-2, 2), id="domain-mapped"),
-    )
-)
+@pytest.fixture(params=(None, Domain(-2, 2)), ids=("domain-default", "domain-mapped"))
 def domain(request: pytest.FixtureRequest) -> Domain | None:
     return request.param
 
 
 @pytest.fixture(
-    params=(
-        pytest.param(Legendre.Legendre, id="Legendre"),
-        pytest.param(Chebyshev.Chebyshev, id="Chebyshev"),
-        pytest.param(Fourier.Fourier, id="Fourier"),
-        pytest.param(Jacobi.Jacobi, id="Jacobi"),
-    )
+    params=(Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi),
+    ids=("Legendre", "Chebyshev", "Fourier", "Jacobi"),
 )
 def space(request: pytest.FixtureRequest) -> type[OrthogonalSpace]:
     return request.param
 
 
 @pytest.fixture(
-    params=(
-        pytest.param(Legendre.Legendre, id="Legendre"),
-        pytest.param(Chebyshev.Chebyshev, id="Chebyshev"),
-        pytest.param(Jacobi.Jacobi, id="Jacobi"),
-    )
+    params=(Legendre.Legendre, Chebyshev.Chebyshev, Jacobi.Jacobi),
+    ids=("Legendre", "Chebyshev", "Jacobi"),
 )
 def jspace(request: pytest.FixtureRequest) -> type[Jacobi.Jacobi]:
     return request.param

@@ -2,6 +2,7 @@ from typing import cast
 
 import jax
 import jax.numpy as jnp
+import pytest
 import sympy as sp
 
 from jaxfun.galerkin import (
@@ -103,6 +104,7 @@ def test_inner_sparse_multivar_path():
         assert all(hasattr(m, "data") for m in tp.mats)
 
 
+@pytest.mark.slow
 def test_directsum_two_inhomogeneous_bnd_evaluate():
     from jaxfun.coordinates import x, y
 

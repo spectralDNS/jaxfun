@@ -427,6 +427,7 @@ class DirectSum:
         num_dofs: Free DOFs (from Composite part).
     """
 
+    is_transient = False
     is_orthogonal = False
 
     def __init__(self, a: OrthogonalSpace, b: BCGeneric) -> None:

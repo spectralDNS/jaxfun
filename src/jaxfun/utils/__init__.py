@@ -11,3 +11,8 @@ from .common import (
     ulp as ulp,
 )
 from .fastgl import leggauss as leggauss
+from .sympy_factoring import (
+    drop_time_argument as drop_time_argument,
+    split_linear_nonlinear_terms as split_linear_nonlinear_terms,
+    split_time_derivative_terms as split_time_derivative_terms,
+)

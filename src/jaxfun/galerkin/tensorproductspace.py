@@ -742,6 +742,9 @@ class DirectSumTPS(TensorProductSpace):
         v = TestFunction(self)
         u = TrialFunction(self)
         A, b = inner(u * v)
+        assert not isinstance(v.functionspace, VectorTensorProductSpace), (
+            "Forward transform not implemented for vector-valued spaces"
+        )
         b += v.functionspace.scalar_product(c)
         return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.num_dofs)
 

@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
+from jaxfun import Domain
 from jaxfun.galerkin import (
     Chebyshev,
     Fourier,
@@ -15,17 +16,36 @@ from jaxfun.galerkin import (
     VectorTensorProductSpace,
 )
 from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.galerkin.tensorproductspace import TPMatrices
 from jaxfun.operators import Div, Dot, Grad
 from jaxfun.utils.common import ulp
 
 
-@pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi)
+@pytest.fixture(params=(None, Domain(-2, 2)), ids=("domain-default", "domain-mapped"))
+def domain(request: pytest.FixtureRequest) -> Domain | None:
+    return request.param
+
+
+@pytest.fixture(
+    params=(Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi),
+    ids=("Legendre", "Chebyshev", "Fourier", "Jacobi"),
 )
-def test_jaxfunction(space):
+def space(request: pytest.FixtureRequest) -> type[OrthogonalSpace]:
+    return request.param
+
+
+@pytest.fixture(
+    params=(Legendre.Legendre, Chebyshev.Chebyshev, Jacobi.Jacobi),
+    ids=("Legendre", "Chebyshev", "Jacobi"),
+)
+def jspace(request: pytest.FixtureRequest) -> type[Jacobi.Jacobi]:
+    return request.param
+
+
+def test_jaxfunction(space: type[OrthogonalSpace], domain: Domain | None):
     N = 8
-    D = space(N)
+    D = space(N, domain=domain)
     u = TrialFunction(D)
     v = TestFunction(D)
     A = inner(u * v)
@@ -35,13 +55,10 @@ def test_jaxfunction(space):
     assert jnp.linalg.norm(b0 - b1) < ulp(100)
 
 
-@pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Jacobi.Jacobi)
-)
-def test_jaxfunction_directsum(space):
+def test_jaxfunction_directsum(jspace: type[Jacobi.Jacobi], domain: Domain | None):
     N = 8
     bcs = {"left": {"D": 1}, "right": {"D": 1}}
-    D = FunctionSpace(N, space, bcs=bcs, name="D")
+    D = FunctionSpace(N, jspace, bcs=bcs, domain=domain, name="D")
     u = TrialFunction(D)
     v = TestFunction(D)
     A, b = inner(u * v)
@@ -51,12 +68,9 @@ def test_jaxfunction_directsum(space):
     assert jnp.linalg.norm(b0 - b1) < ulp(100)
 
 
-@pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi)
-)
-def test_jaxfunction_diff(space):
+def test_jaxfunction_diff(space: type[OrthogonalSpace], domain: Domain | None):
     N = 8
-    D = space(N)
+    D = space(N, domain=domain)
     x = D.system.x
     u = TrialFunction(D)
     v = TestFunction(D)
@@ -67,12 +81,9 @@ def test_jaxfunction_diff(space):
     assert jnp.linalg.norm(b0 - b1) < ulp(100)
 
 
-@pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi)
-)
-def test_jaxfunction_nonlin(space):
+def test_jaxfunction_nonlin(space: type[OrthogonalSpace], domain: Domain | None):
     N = 8
-    D = space(N)
+    D = space(N, domain=domain)
     u = TrialFunction(D)
     v = TestFunction(D)
     uf = JAXFunction(jnp.ones(D.num_dofs), D)
@@ -82,13 +93,12 @@ def test_jaxfunction_nonlin(space):
     assert jnp.linalg.norm(b0 - b1) < ulp(1000)
 
 
-@pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Jacobi.Jacobi)
-)
-def test_jaxfunction_directsum_nonlin(space):
+def test_jaxfunction_directsum_nonlin(
+    jspace: type[Jacobi.Jacobi], domain: Domain | None
+):
     N = 8
     bcs = {"left": {"D": 1}, "right": {"D": 1}}
-    D = FunctionSpace(N, space, bcs=bcs, name="D")
+    D = FunctionSpace(N, jspace, bcs=bcs, domain=domain, name="D")
     u = TrialFunction(D)
     v = TestFunction(D)
     uf = JAXFunction(jnp.ones(D.num_dofs), D)
@@ -98,12 +108,9 @@ def test_jaxfunction_directsum_nonlin(space):
     assert jnp.linalg.norm(b0 - b1) < ulp(1000)
 
 
-@pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi)
-)
-def test_jaxfunction_nonlin_diff(space):
+def test_jaxfunction_nonlin_diff(space: type[OrthogonalSpace], domain: Domain | None):
     N = 8
-    D = space(N)
+    D = space(N, domain=domain)
     x = D.system.x
     u = TrialFunction(D)
     v = TestFunction(D)
@@ -114,12 +121,9 @@ def test_jaxfunction_nonlin_diff(space):
     assert jnp.linalg.norm(b0 - b1) < ulp(100000)
 
 
-@pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi)
-)
-def test_jaxfunction_2d(space):
+def test_jaxfunction_2d(space: type[OrthogonalSpace], domain: Domain | None):
     N = 8
-    D = space(N)
+    D = space(N, domain=domain)
     T = TensorProduct(D, D)
     u = TrialFunction(T)
     v = TestFunction(T)
@@ -132,13 +136,10 @@ def test_jaxfunction_2d(space):
     assert jnp.linalg.norm(z.ravel() - b0) < ulp(100)
 
 
-@pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Jacobi.Jacobi)
-)
-def test_jaxfunction_directsum_2d(space):
+def test_jaxfunction_directsum_2d(jspace: type[Jacobi.Jacobi], domain: Domain | None):
     N = 8
     bcs = {"left": {"D": 1}, "right": {"D": 1}}
-    D = FunctionSpace(N, space, bcs=bcs, name="D")
+    D = FunctionSpace(N, jspace, bcs=bcs, domain=domain, name="D")
     T = TensorProduct(D, D, name="T")
     u = TrialFunction(T)
     v = TestFunction(T)
@@ -153,12 +154,9 @@ def test_jaxfunction_directsum_2d(space):
     assert jnp.linalg.norm(b0 - b1) < ulp(100)
 
 
-@pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi)
-)
-def test_jaxfunction_diff_2d(space):
+def test_jaxfunction_diff_2d(space: type[OrthogonalSpace], domain: Domain | None):
     N = 8
-    D = space(N)
+    D = space(N, domain=domain)
     T = TensorProduct(D, D, name="T")
     u = TrialFunction(T)
     v = TestFunction(T)
@@ -169,12 +167,9 @@ def test_jaxfunction_diff_2d(space):
     assert jnp.linalg.norm(b0 - b1) < ulp(100)
 
 
-@pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi)
-)
-def test_jaxfunction_nonlin_2d(space):
+def test_jaxfunction_nonlin_2d(space: type[OrthogonalSpace], domain: Domain | None):
     N = 8
-    D = space(N)
+    D = space(N, domain=domain)
     T = TensorProduct(D, D, name="T")
     u = TrialFunction(T)
     v = TestFunction(T)
@@ -185,12 +180,9 @@ def test_jaxfunction_nonlin_2d(space):
     assert jnp.linalg.norm(b0 - b1) < ulp(100000)
 
 
-@pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi)
-)
-def test_jaxfunction_2d_vector(space):
+def test_jaxfunction_2d_vector(space: type[OrthogonalSpace], domain: Domain | None):
     N = 8
-    D = space(N)
+    D = space(N, domain=domain)
     T = TensorProduct(D, D)
     V = VectorTensorProductSpace(T, name="V")
     u = TrialFunction(V)

@@ -777,6 +777,10 @@ class JAXFunction(ExpansionFunction):
 def evaluate_jaxfunction_expr(
     a: Basic, xj: Array | tuple[Array, ...], jaxf: AppliedUndef | None = None
 ) -> Array:
+    """Evaluate a symbolic JAXFunction expression on a mesh.
+
+    Input coordinates ``xj`` are always given in the physical (true) domain.
+    """
     if jaxf is None:
         for p in sp.core.traversal.preorder_traversal(a):
             if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
@@ -784,23 +788,23 @@ def evaluate_jaxfunction_expr(
                 break
     assert hasattr(jaxf, "functionspace") and hasattr(jaxf, "array")
     V = cast(FunctionSpaceType, jaxf.functionspace)
+
     if isinstance(a, sp.Pow):
         wa = a.args[0]
         variables = getattr(wa, "variables", ())
         var = tuple(variables.count(s) for s in V.system.base_scalars())
         var = var[0] if V.dims == 1 else var
         h = V.evaluate_derivative(xj, jaxf.array, k=var)
-        h = h ** int(a.exp)
+        return h ** int(a.exp)
 
-    elif isinstance(a, sp.Derivative):
+    if isinstance(a, sp.Derivative):
         variables = getattr(a, "variables", ())
         var = tuple(variables.count(s) for s in V.system.base_scalars())
         var = var[0] if V.dims == 1 else var
-        h = V.evaluate_derivative(xj, jaxf.array, k=var)
+        return V.evaluate_derivative(xj, jaxf.array, k=var)
 
-    else:
-        if not isinstance(V, OrthogonalSpace | DirectSum):
-            h = V.evaluate_mesh(xj, jaxf.array, True)
-        else:
-            h = V.evaluate(xj, jaxf.array)
-    return h
+    if not isinstance(V, OrthogonalSpace | DirectSum):
+        return V.evaluate_mesh(xj, jaxf.array, True)
+
+    assert isinstance(xj, Array)
+    return V.evaluate(V.map_reference_domain(xj), jaxf.array)

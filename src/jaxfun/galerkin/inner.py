@@ -501,7 +501,7 @@ def inner_bilinear(
                 jaxfunction = cast(AppliedUndef, p)
                 break
         if jaxfunction:
-            scale *= evaluate_jaxfunction_expr(aii, xj, jaxfunction)
+            scale *= evaluate_jaxfunction_expr(aii, vo.map_true_domain(xj), jaxfunction)
             continue
         if len(aii.free_symbols) > 0:
             s = aii.free_symbols.pop()
@@ -592,7 +592,9 @@ def inner_linear(
                     jaxfunction = cast(AppliedUndef, p)
                     break
             if jaxfunction:
-                uj *= evaluate_jaxfunction_expr(bii, xj, jaxfunction)
+                uj *= evaluate_jaxfunction_expr(
+                    bii, vo.map_true_domain(xj), jaxfunction
+                )
                 continue
             # bii contains coordinates in the domain of v, e.g., (r, theta) for polar
             # Need to compute bii as bii(x(X)), since we use quadrature points

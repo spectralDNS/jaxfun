@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
-import jaxfun.integrators.base as integrator_base
+import jaxfun.integrators.nonlinear as integrator_nonlinear
 from jaxfun import Domain
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev as Cheb
@@ -183,10 +183,10 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
 
     primitive_orders = {
         0
-        if integrator_base._is_jaxfunction_leaf(node)
+        if integrator_nonlinear._is_jaxfunction_leaf(node)
         else int(sp.sympify(node).derivative_count)  # ty:ignore[unresolved-attribute]
         for node in sp.core.traversal.preorder_traversal(integrator.nonlinear_expr)
-        if integrator_base._is_jaxfunction_primitive(node)
+        if integrator_nonlinear._is_jaxfunction_primitive(node)
     }
 
     # Primitive evaluations are cached per unique symbolic primitive node.

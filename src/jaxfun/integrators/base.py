@@ -19,6 +19,7 @@ from jaxfun.galerkin.arguments import (
     get_arg,
 )
 from jaxfun.galerkin.forms import get_basisfunctions
+from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import inner, project1D
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
@@ -78,6 +79,13 @@ class _NonlinearCompiler:
         self.context = context
         self._compiled: dict[sp.Basic, NodeEvaluator] = {}
         self._static: dict[sp.Basic, Array] = {}
+        self._fourier = (
+            context.orthogonal
+            if isinstance(context.orthogonal, Fourier)
+            and context.x_true.shape[0] == context.orthogonal.N
+            else None
+        )
+        self._fourier_scales: dict[int, Array] = {}
 
     def compile(self, expr: sp.Expr) -> NodeEvaluator:
         return self._compile_node(sp.expand(expr))
@@ -94,14 +102,7 @@ class _NonlinearCompiler:
             expanded = sp.expand(node.doit())
             evaluator = self._compile_node(expanded)
         elif _is_jaxfunction_primitive(node):
-            evaluator = self._memoize(
-                node,
-                lambda _cache, node=node: evaluate_jaxfunction_expr(
-                    node,
-                    self.context.x_true,
-                    self.context.jaxfunction,
-                ),
-            )
+            evaluator = self._compile_primitive(node)
         elif not _contains_jaxfunction(node):
             value = self._get_static_value(node)
             evaluator = lambda _cache, value=value: value
@@ -123,6 +124,57 @@ class _NonlinearCompiler:
         if isinstance(node, sp.Function):
             return self._memoize(node, self._compile_function(node, child_eval))
         return self._memoize(node, self._compile_lambdified(node, child_eval))
+
+    def _compile_primitive(self, node: sp.Basic) -> NodeEvaluator:
+        if self._fourier is not None:
+            fourier_eval = self._compile_fourier_primitive(node)
+            if fourier_eval is not None:
+                return self._memoize(node, fourier_eval)
+        return self._memoize(
+            node,
+            lambda _cache, node=node: evaluate_jaxfunction_expr(
+                node,
+                self.context.x_true,
+                self.context.jaxfunction,
+            ),
+        )
+
+    def _compile_fourier_primitive(self, node: sp.Basic) -> NodeEvaluator | None:
+        V = self._fourier
+        if V is None:
+            return None
+
+        jaxf = cast(JAXFunction, self.context.jaxfunction)
+        if _is_jaxfunction_leaf(node):
+            return lambda _cache, V=V, jaxf=jaxf: V.backward(jaxf.array)
+
+        if not _is_direct_jax_derivative(node):
+            return None
+        derivative = cast(sp.Derivative, node)
+        if any(var != self.context.x_symbol for var in derivative.variables):
+            return None
+
+        k = int(derivative.derivative_count)
+        scale = self._fourier_scale(k)
+        return lambda _cache, V=V, jaxf=jaxf, scale=scale: V.backward(
+            scale * jaxf.array
+        )
+
+    def _fourier_scale(self, k: int) -> Array:
+        cached = self._fourier_scales.get(k)
+        if cached is not None:
+            return cached
+
+        V = self._fourier
+        assert V is not None
+        if k == 0:
+            scale = jnp.ones(V.N, dtype=complex)
+        else:
+            eliminate = bool(k % 2 == 1 and V.N % 2 == 0)
+            waves = V.wavenumbers(eliminate_highest_freq=eliminate)
+            scale = (1j * waves * float(V.domain_factor)) ** k
+        self._fourier_scales[k] = scale
+        return scale
 
     def _compile_add(self, child_eval: tuple[NodeEvaluator, ...]) -> NodeEvaluator:
         def evaluate(cache: NodeValueCache) -> Array:
@@ -613,8 +665,7 @@ class BaseIntegrator(ABC, nnx.Module):
 
     @jax.jit(static_argnums=0)
     def total_rhs(self, uh: Array) -> Array:
-        print(jax.make_jaxpr(self.linear_rhs)(uh))
-        return self.linear_rhs(uh)  # + self.nonlinear_rhs(uh)
+        return self.linear_rhs(uh) + self.nonlinear_rhs(uh)
 
     @abstractmethod
     def step(self, u_hat: Array, dt: float) -> Array: ...

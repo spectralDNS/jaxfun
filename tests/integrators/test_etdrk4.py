@@ -1,5 +1,6 @@
 import warnings
 
+import jax
 import jax.numpy as jnp
 import pytest
 import sympy as sp
@@ -145,3 +146,43 @@ def test_etdrk4_kdv_soliton_tracks_exact_short_time() -> None:
     )
     rel_error = jnp.linalg.norm(u_num - u_exact) / jnp.linalg.norm(u_exact)
     assert float(rel_error) < 5e-3
+
+
+def test_etdrk4_kdv_nonlinear_jaxpr_uses_fft_path() -> None:
+    N = 64
+    mu = Constant("mu", sp.Rational(11, 500))
+    V = FourierSpace(N, Domain(-1, 1))
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    (x,) = V.system.base_scalars()
+    t = V.system.base_time()
+
+    weak_form = v * (u.diff(t) + (u * u).diff(x) / 2 + mu**2 * u.diff(x, 3))
+    integrator = ETDRK4(
+        V,
+        weak_form,
+        time=(0.0, 0.01),
+        initial=sp.cos(sp.pi * x),
+        sparse=True,
+        sparse_tol=1000,
+    )
+    uhat0 = integrator.initial_coefficients()
+    jaxpr = jax.make_jaxpr(integrator._N)(uhat0).jaxpr
+
+    def count_primitive(jpr, primitive: str) -> int:
+        total = 0
+        for eqn in jpr.eqns:
+            if str(eqn.primitive) == primitive:
+                total += 1
+            for val in eqn.params.values():
+                if hasattr(val, "jaxpr") and hasattr(val, "consts"):
+                    total += count_primitive(val.jaxpr, primitive)
+                elif isinstance(val, tuple | list):
+                    for item in val:
+                        if hasattr(item, "jaxpr") and hasattr(item, "consts"):
+                            total += count_primitive(item.jaxpr, primitive)
+        return total
+
+    # Fast Fourier path should stay spectral (FFT), not dense basis matmuls.
+    assert count_primitive(jaxpr, "fft") >= 3
+    assert count_primitive(jaxpr, "dot_general") == 0

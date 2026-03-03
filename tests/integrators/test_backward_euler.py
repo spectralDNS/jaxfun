@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
+from jaxfun import Domain
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev as Cheb
 from jaxfun.galerkin.Fourier import Fourier as FourierSpace
@@ -113,3 +114,32 @@ def test_solve_n_batches_and_return_each_step() -> None:
 
     with pytest.raises(ValueError, match="n_batches must be a positive integer"):
         _ = integrator.solve(dt=dt, steps=steps, n_batches=0, progress=False)
+
+
+def test_rk4_nonlinear_rhs_uses_direct_jaxfunction_evaluation() -> None:
+    N = 32
+    V = FunctionSpace(
+        N,
+        FourierSpace,
+        domain=Domain(0.0, 2.0 * float(sp.pi)),
+        name="V",
+        fun_str="E",
+    )
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    (x,) = V.system.base_scalars()
+    t = V.system.base_time()
+
+    u0 = sp.sin(x) + sp.cos(2 * x)
+    weak_form = v * (u.diff(t) + u * u.diff(x))
+    integrator = RK4(V, weak_form, time=(0.0, 0.01), initial=u0, sparse=True)
+
+    uhat = integrator.initial_coefficients()
+    nonlinear = integrator.nonlinear_rhs(uhat)
+
+    xj = V.mesh()
+    u_phys = V.backward(uhat)
+    ux_phys = V.evaluate_derivative(xj, uhat, k=1)
+    expected = V.forward(-u_phys * ux_phys)
+
+    assert jnp.allclose(nonlinear, expected, atol=1e-6, rtol=1e-6)

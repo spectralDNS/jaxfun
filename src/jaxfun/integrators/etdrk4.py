@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from typing import cast
 
+import jax
 import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
@@ -137,6 +138,8 @@ class ETDRK4(BaseIntegrator):
         )
         return nval + self._forcing_rhs
 
+    # @nnx.jit
+    @jax.jit(static_argnums=0)
     def step(self, u_hat: Array, dt: float) -> Array:
         shape = u_hat.shape
         is_diag = bool(self.is_diag)

@@ -440,8 +440,8 @@ class DirectSum:
         self._num_quad_points = a._num_quad_points
         self.map_reference_domain = a.map_reference_domain
         self.map_true_domain = a.map_true_domain
-        self.dims = a.dims
-        self.rank = a.rank
+        self.dims: int = a.dims
+        self.rank: int = a.rank
 
     @overload
     def __getitem__(self, i: Literal[0]) -> OrthogonalSpace: ...

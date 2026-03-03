@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import cast
 
 import jax
@@ -7,21 +8,30 @@ import sympy as sp
 import tqdm
 from flax import nnx
 from jax.experimental.sparse import BCOO
+from sympy.core.function import AppliedUndef
 
 from jaxfun.galerkin import Composite, DirectSum, TestFunction, TrialFunction
+from jaxfun.galerkin.arguments import (
+    ArgumentTag,
+    JAXFunction,
+    evaluate_jaxfunction_expr,
+    get_arg,
+)
 from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import inner, project1D
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
-from jaxfun.pinns import FlaxFunction, Residual
-from jaxfun.pinns.module import SpectralModule
 from jaxfun.typing import (
     Array,
     GalerkinAssembledForm,
     GalerkinOperator,
     GalerkinOperatorLike,
 )
-from jaxfun.utils import split_linear_nonlinear_terms, split_time_derivative_terms
+from jaxfun.utils import (
+    lambdify,
+    split_linear_nonlinear_terms,
+    split_time_derivative_terms,
+)
 
 
 def remove_test_function(expr: sp.Expr, test: TestFunction) -> sp.Expr:
@@ -31,13 +41,124 @@ def remove_test_function(expr: sp.Expr, test: TestFunction) -> sp.Expr:
     return expr
 
 
-def replace_trial_with_flaxfunction(
-    expr: sp.Expr, trial: TrialFunction, flax_func: FlaxFunction
+def replace_trial_with_jaxfunction(
+    expr: sp.Expr, trial: TrialFunction, jax_func: AppliedUndef
 ) -> sp.Expr:
-    "Replace trial function in expr with a FlaxFunction module."
+    "Replace trial function in expr with a JAXFunction."
     if expr.has(trial):
-        return expr.replace(trial, flax_func)  # ty:ignore[invalid-return-type]
+        return expr.replace(trial, jax_func)  # ty:ignore[invalid-return-type]
     return expr
+
+
+def _contains_jaxfunction(expr: sp.Basic) -> bool:
+    return any(
+        get_arg(node) is ArgumentTag.JAXFUNC
+        for node in sp.core.traversal.preorder_traversal(expr)
+    )
+
+
+def _is_jaxfunction_primitive(expr: sp.Basic) -> bool:
+    if get_arg(expr) is ArgumentTag.JAXFUNC:
+        return True
+    if isinstance(expr, sp.Derivative):
+        return _contains_jaxfunction(expr)
+    if isinstance(expr, sp.Pow):
+        base = expr.base
+        if get_arg(base) is ArgumentTag.JAXFUNC:
+            return True
+        if isinstance(base, sp.Derivative):
+            return _contains_jaxfunction(base)
+    return False
+
+
+def _evaluate_jax_term(
+    expr: sp.Basic,
+    x_ref: Array,
+    x_true: Array,
+    jaxfunction: AppliedUndef,
+) -> Array:
+    if isinstance(expr, sp.Pow) and isinstance(expr.base, sp.Derivative):
+        base = evaluate_jaxfunction_expr(expr.base, x_true, jaxfunction)
+        exp = expr.exp
+        if bool(exp.is_integer):
+            return base ** int(exp)
+        return base ** float(exp)
+    if isinstance(expr, sp.Derivative):
+        return evaluate_jaxfunction_expr(expr, x_true, jaxfunction)
+    return evaluate_jaxfunction_expr(expr, x_ref, jaxfunction)
+
+
+def _compile_nonlinear_evaluator(
+    expr: sp.Expr,
+    functionspace: OrthogonalSpace | DirectSum | Composite,
+    x_ref: Array,
+    x_true: Array,
+    jaxfunction: AppliedUndef,
+) -> Callable[[Array], Array]:
+    x = functionspace.system.base_scalars()[0]
+    orthogonal = functionspace.orthogonal
+
+    def _compile_node(node: sp.Basic) -> Callable[[], Array]:
+        node = sp.sympify(node)
+
+        if _is_jaxfunction_primitive(node):
+            return lambda: _evaluate_jax_term(node, x_ref, x_true, jaxfunction)
+
+        if not _contains_jaxfunction(node):
+            evaluated = sp.sympify(node).doit()
+            free_symbols = evaluated.free_symbols
+            if len(free_symbols) == 0:
+                value = float(evaluated) if evaluated.is_real else complex(evaluated)
+                return lambda value=value: jnp.asarray(value)
+            if free_symbols.issubset({x}):
+                mapped = orthogonal.map_expr_true_domain(evaluated)
+                sampled = jnp.asarray(lambdify(x, mapped, modules="jax")(x_ref))
+                return lambda sampled=sampled: sampled
+            names = ", ".join(sorted(str(sym) for sym in free_symbols))
+            raise ValueError(
+                f"Unsupported nonlinear term with unresolved symbols: {names}"
+            )
+
+        if len(node.args) == 0:
+            raise ValueError(f"Unsupported nonlinear term node: {node}")
+
+        child_eval = tuple(_compile_node(arg) for arg in node.args)
+        dummies = sp.symbols(f"_z0:{len(node.args)}", real=True)
+        expr_with_dummies = node.func(*(dummies if len(node.args) > 1 else dummies[:1]))
+        composed = lambdify(
+            dummies if len(node.args) > 1 else dummies[0],
+            expr_with_dummies,
+            modules="jax",
+        )
+
+        if len(child_eval) == 1:
+            return lambda composed=composed, child_eval=child_eval: composed(
+                jnp.asarray(child_eval[0]())
+            )
+        return lambda composed=composed, child_eval=child_eval: composed(
+            *(jnp.asarray(child()) for child in child_eval)
+        )
+
+    compiled = _compile_node(sp.expand(expr))
+
+    def evaluate(uh: Array) -> Array:
+        cast(JAXFunction, jaxfunction).array = uh
+        out = jnp.asarray(compiled())
+        if out.ndim == 0:
+            return jnp.broadcast_to(out, x_ref.shape)
+        if out.ndim == 2 and out.shape[1] == 1:
+            out = jnp.squeeze(out, axis=1)
+        if out.ndim != 1:
+            out = out.reshape((-1,))
+        if out.shape[0] != x_ref.shape[0]:
+            expected_shape = (x_ref.shape[0],)
+            raise ValueError(
+                f"Nonlinear evaluation returned shape {out.shape}; "
+                f"expected {expected_shape}"
+            )
+        return out
+
+    return evaluate
 
 
 def _bcoo_diagonal(mat: BCOO) -> Array | None:
@@ -230,12 +351,8 @@ class BaseIntegrator(ABC, nnx.Module):
         linear, nonlinear = split_linear_nonlinear_terms(-rhs, trial)
         self.has_nonlinear = bool(sp.sympify(nonlinear) != 0)
         self.linear_expr = linear
-        nonlinear = remove_test_function(nonlinear, test)
-        flax_func = FlaxFunction(V, name=f"{trial.name}_flax")
-        self.nonlinear_expr = replace_trial_with_flaxfunction(
-            nonlinear, trial, flax_func
-        )
-        self.module = cast(SpectralModule, flax_func.module)
+        nonlinear = sp.expand(remove_test_function(nonlinear, test))
+        self.nonlinear_expr = nonlinear
 
         mass_operator, mass_diag = _assemble_mass_setup(
             V, sparse=self.sparse, sparse_tol=self.sparse_tol
@@ -251,8 +368,27 @@ class BaseIntegrator(ABC, nnx.Module):
         self.linear_forcing: Array | None = nnx.data(linear_forcing)
         self.linear_diag: Array | None = nnx.data(linear_diag)
 
-        points: Array = V.mesh()[:, None]
-        self.residual = Residual(self.nonlinear_expr, points)
+        self._nonlinear_jaxfunction: AppliedUndef | None = None
+        self._nonlinear_evaluator: Callable[[Array], Array] | None = None
+        if self.has_nonlinear:
+            base_jaxfunction = JAXFunction(
+                jnp.zeros((V.num_dofs,)), V, name=f"{trial.name}_jax"
+            )
+            jaxfunction = cast(AppliedUndef, base_jaxfunction.doit())
+            nonlinear_expr = replace_trial_with_jaxfunction(
+                nonlinear, trial, jaxfunction
+            )
+            self.nonlinear_expr = nonlinear_expr
+            x_ref = V.orthogonal.quad_points_and_weights()[0]
+            x_true = V.orthogonal.map_true_domain(x_ref)
+            self._nonlinear_jaxfunction = jaxfunction
+            self._nonlinear_evaluator = _compile_nonlinear_evaluator(
+                nonlinear_expr,
+                V,
+                x_ref,
+                x_true,
+                jaxfunction,
+            )
 
     def initial_coefficients(self, initial: sp.Expr | Array | None = None) -> Array:
         init = self.initial if initial is None else initial
@@ -293,12 +429,11 @@ class BaseIntegrator(ABC, nnx.Module):
         return _solve_operator(self.mass_operator, rhs)
 
     def nonlinear_rhs(self, uh: Array) -> Array:
-        # This method is impure as we are altering the kernel outside with wrong trace
-        # level. This is quite hacky, and should be improved.
-        self.module.set_kernel(uh.reshape(1, -1))
-        return self.functionspace.forward(self.residual.evaluate(self.module))
+        if not self.has_nonlinear:
+            return jnp.zeros_like(uh)
+        assert self._nonlinear_evaluator is not None
+        return self.functionspace.forward(self._nonlinear_evaluator(uh))
 
-    @nnx.jit
     def linear_rhs(self, uh: Array) -> Array:
         rhs = jnp.zeros_like(uh)
         if self.linear_operator is not None:
@@ -310,6 +445,7 @@ class BaseIntegrator(ABC, nnx.Module):
             rhs = rhs + jnp.asarray(self.linear_forcing)
         return self.apply_mass_inverse(rhs)
 
+    @jax.jit(static_argnums=0)
     def total_rhs(self, uh: Array) -> Array:
         return self.linear_rhs(uh) + self.nonlinear_rhs(uh)
 

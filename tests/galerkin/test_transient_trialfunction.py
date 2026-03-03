@@ -6,7 +6,6 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.operators import Constant
 from jaxfun.utils import (
-    drop_time_argument,
     split_linear_nonlinear_terms,
     split_time_derivative_terms,
 )
@@ -45,14 +44,14 @@ def test_trialfunction_splitting_kdv() -> None:
     assert any(a == t for a in lhs.atoms())
     assert not any(a == t for a in rhs.atoms())
 
-    u_ind = TrialFunction(F, name="u", transient=False)
+    u_ind = next(iter(rhs.atoms(TrialFunction)))
     exp_rhs = v * eta * u_ind * u_ind.diff(x) + v * mu**2 * u_ind.diff(x, 3)
     assert lhs - v * u.diff(t) == 0
     assert rhs - exp_rhs == 0
 
-    linear_rhs, nonlinear_rhs = split_linear_nonlinear_terms(rhs, u)
-    exp_linear_rhs = drop_time_argument(v * mu**2 * u.diff(x, 3), t)
-    exp_nonlinear_rhs = drop_time_argument(v * eta * u * u.diff(x), t)
+    linear_rhs, nonlinear_rhs = split_linear_nonlinear_terms(rhs, u_ind)
+    exp_linear_rhs = v * mu**2 * u_ind.diff(x, 3)
+    exp_nonlinear_rhs = v * eta * u_ind * u_ind.diff(x)
     assert linear_rhs - exp_linear_rhs == 0
     assert nonlinear_rhs - exp_nonlinear_rhs == 0
 
@@ -70,7 +69,6 @@ def test_trialfunction_splitting_zk() -> None:
     u_t = u.diff(t)
     nonlinear_u = u * u.diff(x)
     laplace_u = u.diff(x, 2) + u.diff(y, 2)
-    v_laplace_u = sp.expand(v * laplace_u.diff(x))
     zk = u_t + nonlinear_u + laplace_u.diff(x)
     eq = v * zk
     lhs, rhs = split_time_derivative_terms(eq, t)
@@ -79,12 +77,16 @@ def test_trialfunction_splitting_zk() -> None:
     assert not any(a == t for a in rhs.atoms())
 
     assert lhs - v * u_t == 0
-    exp_rhs = drop_time_argument(v * nonlinear_u + v_laplace_u, t)
+    u_ind = next(iter(rhs.atoms(TrialFunction)))
+    exp_nonlinear_u = u_ind * u_ind.diff(x)
+    exp_laplace_u = u_ind.diff(x, 2) + u_ind.diff(y, 2)
+    exp_v_laplace_u = sp.expand(v * exp_laplace_u.diff(x))
+    exp_rhs = exp_v_laplace_u + v * exp_nonlinear_u
     assert rhs - exp_rhs == 0
 
-    linear_rhs, nonlinear_rhs = split_linear_nonlinear_terms(rhs, u)
-    exp_linear_rhs = drop_time_argument(v_laplace_u, t)
-    exp_nonlinear_rhs = drop_time_argument(v * nonlinear_u, t)
+    linear_rhs, nonlinear_rhs = split_linear_nonlinear_terms(rhs, u_ind)
+    exp_linear_rhs = exp_v_laplace_u
+    exp_nonlinear_rhs = v * exp_nonlinear_u
 
     assert linear_rhs - exp_linear_rhs == 0
     assert nonlinear_rhs - exp_nonlinear_rhs == 0

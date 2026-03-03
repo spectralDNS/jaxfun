@@ -1,3 +1,5 @@
+import warnings
+
 import jax.numpy as jnp
 import pytest
 import sympy as sp
@@ -89,3 +91,57 @@ def test_etdrk4_kdv_short_run_is_finite(u0f, domain) -> None:
 
     assert integrator.has_nonlinear
     assert integrator.linear_operator is not None
+
+
+def test_etdrk4_kdv_soliton_tracks_exact_short_time() -> None:
+    N = 64
+    L = 20.0
+    domain = Domain(-L, L)
+    mu_val = 0.4
+    mu = Constant("mu", mu_val)
+    wave_speed = 0.5
+    x0 = -5.0
+    steps = 20
+    dt = 2.5e-4
+    T = steps * dt
+
+    V = FunctionSpace(N, FourierSpace, name="V", fun_str="E", domain=domain)
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    (x,) = V.system.base_scalars()
+    t = V.system.base_time()
+
+    u0 = 3 * wave_speed * sp.sech(0.5 * sp.sqrt(wave_speed) / mu_val * (x - x0)) ** 2
+    weak_form = v * (u.diff(t) + u * u.diff(x) + mu**2 * u.diff(x, 3))
+    integrator = ETDRK4(
+        V,
+        weak_form,
+        time=(0.0, T),
+        initial=u0,
+        sparse=True,
+        sparse_tol=1000,
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        uhat_t = integrator.solve(dt=dt, steps=steps, progress=False)
+
+    warning_messages = [str(w.message) for w in caught]
+    assert not any(
+        "scatter inputs have incompatible types" in msg for msg in warning_messages
+    )
+    assert not any(
+        "Casting complex values to real discards the imaginary part" in msg
+        for msg in warning_messages
+    )
+
+    xj = V.mesh()
+    u_num = V.backward(uhat_t).real
+    u_exact = (
+        3
+        * wave_speed
+        * jnp.cosh(0.5 * jnp.sqrt(wave_speed) / mu_val * (xj - wave_speed * T - x0))
+        ** -2
+    )
+    rel_error = jnp.linalg.norm(u_num - u_exact) / jnp.linalg.norm(u_exact)
+    assert float(rel_error) < 5e-3

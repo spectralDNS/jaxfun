@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import cast
 
 import jax
@@ -33,130 +34,281 @@ from jaxfun.utils import (
     split_time_derivative_terms,
 )
 
-
-def remove_test_function(expr: sp.Expr, test: TestFunction) -> sp.Expr:
-    "Replace test functions in expr with 1."
-    if expr.has(test):
-        return expr.subs(test, 1)
-    return expr
+IntegratorSpace = OrthogonalSpace | DirectSum | Composite
 
 
-def replace_trial_with_jaxfunction(
-    expr: sp.Expr, trial: TrialFunction, jax_func: AppliedUndef
-) -> sp.Expr:
-    "Replace trial function in expr with a JAXFunction."
-    if expr.has(trial):
-        return expr.replace(trial, jax_func)  # ty:ignore[invalid-return-type]
-    return expr
+@dataclass(frozen=True)
+class _NonlinearCompileContext:
+    x_symbol: sp.Symbol
+    orthogonal: OrthogonalSpace
+    x_ref: Array
+    x_true: Array
+    jaxfunction: AppliedUndef
 
 
-def _contains_jaxfunction(expr: sp.Basic) -> bool:
-    return any(
-        get_arg(node) is ArgumentTag.JAXFUNC
-        for node in sp.core.traversal.preorder_traversal(expr)
-    )
+NodeValueCache = dict[sp.Basic, Array]
+NodeEvaluator = Callable[[NodeValueCache], Array]
+
+_JAX_FUNCTION_BY_NAME: dict[str, Callable[..., Array]] = {
+    "Abs": jnp.abs,
+    "acos": jnp.arccos,
+    "acosh": jnp.arccosh,
+    "asin": jnp.arcsin,
+    "asinh": jnp.arcsinh,
+    "atan": jnp.arctan,
+    "atan2": jnp.arctan2,
+    "atanh": jnp.arctanh,
+    "cos": jnp.cos,
+    "cosh": jnp.cosh,
+    "exp": jnp.exp,
+    "log": jnp.log,
+    "sign": jnp.sign,
+    "sin": jnp.sin,
+    "sinh": jnp.sinh,
+    "sqrt": jnp.sqrt,
+    "tan": jnp.tan,
+    "tanh": jnp.tanh,
+}
 
 
-def _is_jaxfunction_primitive(expr: sp.Basic) -> bool:
-    if get_arg(expr) is ArgumentTag.JAXFUNC:
-        return True
-    if isinstance(expr, sp.Derivative):
-        return _contains_jaxfunction(expr)
-    if isinstance(expr, sp.Pow):
-        base = expr.base
-        if get_arg(base) is ArgumentTag.JAXFUNC:
-            return True
-        if isinstance(base, sp.Derivative):
-            return _contains_jaxfunction(base)
-    return False
+class _NonlinearCompiler:
+    """Compile nonlinear SymPy expressions into cached evaluators."""
 
+    def __init__(self, context: _NonlinearCompileContext) -> None:
+        self.context = context
+        self._compiled: dict[sp.Basic, NodeEvaluator] = {}
+        self._static: dict[sp.Basic, Array] = {}
 
-def _evaluate_jax_term(
-    expr: sp.Basic,
-    x_ref: Array,
-    x_true: Array,
-    jaxfunction: AppliedUndef,
-) -> Array:
-    if isinstance(expr, sp.Pow) and isinstance(expr.base, sp.Derivative):
-        base = evaluate_jaxfunction_expr(expr.base, x_true, jaxfunction)
-        exp = expr.exp
-        if bool(exp.is_integer):
-            return base ** int(exp)
-        return base ** float(exp)
-    if isinstance(expr, sp.Derivative):
-        return evaluate_jaxfunction_expr(expr, x_true, jaxfunction)
-    return evaluate_jaxfunction_expr(expr, x_ref, jaxfunction)
+    def compile(self, expr: sp.Expr) -> NodeEvaluator:
+        return self._compile_node(sp.expand(expr))
 
-
-def _compile_nonlinear_evaluator(
-    expr: sp.Expr,
-    functionspace: OrthogonalSpace | DirectSum | Composite,
-    x_ref: Array,
-    x_true: Array,
-    jaxfunction: AppliedUndef,
-) -> Callable[[Array], Array]:
-    x = functionspace.system.base_scalars()[0]
-    orthogonal = functionspace.orthogonal
-
-    def _compile_node(node: sp.Basic) -> Callable[[], Array]:
+    def _compile_node(self, node: sp.Basic) -> NodeEvaluator:
         node = sp.sympify(node)
+        cached = self._compiled.get(node)
+        if cached is not None:
+            return cached
 
-        if _is_jaxfunction_primitive(node):
-            return lambda: _evaluate_jax_term(node, x_ref, x_true, jaxfunction)
+        # Product/chain-rule derivatives must be expanded symbolically before
+        # evaluation; only direct d^k(u)/dx^k terms are primitive lookups.
+        if isinstance(node, sp.Derivative) and not _is_direct_jax_derivative(node):
+            expanded = sp.expand(node.doit())
+            evaluator = self._compile_node(expanded)
+        elif _is_jaxfunction_primitive(node):
+            evaluator = self._memoize(
+                node,
+                lambda _cache, node=node: evaluate_jaxfunction_expr(
+                    node,
+                    self.context.x_true,
+                    self.context.jaxfunction,
+                ),
+            )
+        elif not _contains_jaxfunction(node):
+            value = self._get_static_value(node)
+            evaluator = lambda _cache, value=value: value
+        else:
+            evaluator = self._compile_composite(node)
 
-        if not _contains_jaxfunction(node):
-            evaluated = sp.sympify(node).doit()
-            free_symbols = evaluated.free_symbols
-            if len(free_symbols) == 0:
-                value = float(evaluated) if evaluated.is_real else complex(evaluated)
-                return lambda value=value: jnp.asarray(value)
-            if free_symbols.issubset({x}):
-                mapped = orthogonal.map_expr_true_domain(evaluated)
-                sampled = jnp.asarray(lambdify(x, mapped, modules="jax")(x_ref))
-                return lambda sampled=sampled: sampled
+        self._compiled[node] = evaluator
+        return evaluator
+
+    def _compile_composite(self, node: sp.Basic) -> NodeEvaluator:
+        child_eval = tuple(self._compile_node(arg) for arg in node.args)
+
+        if isinstance(node, sp.Add):
+            return self._memoize(node, self._compile_add(child_eval))
+        if isinstance(node, sp.Mul):
+            return self._memoize(node, self._compile_mul(child_eval))
+        if isinstance(node, sp.Pow):
+            return self._memoize(node, self._compile_pow(node))
+        if isinstance(node, sp.Function):
+            return self._memoize(node, self._compile_function(node, child_eval))
+        return self._memoize(node, self._compile_lambdified(node, child_eval))
+
+    def _compile_add(self, child_eval: tuple[NodeEvaluator, ...]) -> NodeEvaluator:
+        def evaluate(cache: NodeValueCache) -> Array:
+            if len(child_eval) == 0:
+                return jnp.asarray(0.0)
+            total = jnp.asarray(child_eval[0](cache))
+            for child in child_eval[1:]:
+                total = total + jnp.asarray(child(cache))
+            return total
+
+        return evaluate
+
+    def _compile_mul(self, child_eval: tuple[NodeEvaluator, ...]) -> NodeEvaluator:
+        def evaluate(cache: NodeValueCache) -> Array:
+            if len(child_eval) == 0:
+                return jnp.asarray(1.0)
+            product = jnp.asarray(child_eval[0](cache))
+            for child in child_eval[1:]:
+                product = product * jnp.asarray(child(cache))
+            return product
+
+        return evaluate
+
+    def _compile_pow(self, node: sp.Pow) -> NodeEvaluator:
+        base_eval = self._compile_node(node.base)
+        exp_eval = self._compile_node(node.exp)
+        exp = node.exp
+
+        if isinstance(exp, sp.Number):
+            exponent = int(exp) if bool(exp.is_integer) else float(exp)
+            return lambda cache, exponent=exponent: (
+                jnp.asarray(base_eval(cache)) ** exponent
+            )
+
+        return lambda cache: jnp.power(
+            jnp.asarray(base_eval(cache)),
+            jnp.asarray(exp_eval(cache)),
+        )
+
+    def _compile_function(
+        self, node: sp.Function, child_eval: tuple[NodeEvaluator, ...]
+    ) -> NodeEvaluator:
+        if node.func.__name__ == "Heaviside":
+            return lambda cache: jnp.heaviside(
+                jnp.asarray(child_eval[0](cache)),
+                0.5,
+            )
+
+        jnp_function = _JAX_FUNCTION_BY_NAME.get(node.func.__name__)
+        if jnp_function is None:
+            return self._compile_lambdified(node, child_eval)
+
+        def evaluate(cache: NodeValueCache) -> Array:
+            values = tuple(jnp.asarray(child(cache)) for child in child_eval)
+            return jnp.asarray(jnp_function(*values))
+
+        return evaluate
+
+    def _compile_lambdified(
+        self, node: sp.Basic, child_eval: tuple[NodeEvaluator, ...]
+    ) -> NodeEvaluator:
+        if len(node.args) == 0:
+            raise ValueError(f"Unsupported nonlinear term node: {node}")
+
+        n_args = len(node.args)
+        dummies = sp.symbols(f"_z0:{n_args}", real=True)
+        expr_with_dummies = node.func(*(dummies if n_args > 1 else dummies[:1]))
+        composed = lambdify(
+            dummies if n_args > 1 else dummies[0], expr_with_dummies, modules="jax"
+        )
+
+        def evaluate(cache: NodeValueCache) -> Array:
+            values = tuple(jnp.asarray(child(cache)) for child in child_eval)
+            if len(values) == 1:
+                return jnp.asarray(composed(values[0]))
+            return jnp.asarray(composed(*values))
+
+        return evaluate
+
+    def _get_static_value(self, node: sp.Basic) -> Array:
+        cached = self._static.get(node)
+        if cached is not None:
+            return cached
+
+        evaluated = sp.sympify(node).doit()
+        free_symbols = evaluated.free_symbols
+        if len(free_symbols) == 0:
+            value = float(evaluated) if evaluated.is_real else complex(evaluated)
+            out = jnp.asarray(value)
+        elif free_symbols.issubset({self.context.x_symbol}):
+            mapped = self.context.orthogonal.map_expr_true_domain(evaluated)
+            sampled = lambdify(self.context.x_symbol, mapped, modules="jax")(
+                self.context.x_ref
+            )
+            out = jnp.asarray(sampled)
+        else:
             names = ", ".join(sorted(str(sym) for sym in free_symbols))
             raise ValueError(
                 f"Unsupported nonlinear term with unresolved symbols: {names}"
             )
 
-        if len(node.args) == 0:
-            raise ValueError(f"Unsupported nonlinear term node: {node}")
+        self._static[node] = out
+        return out
 
-        child_eval = tuple(_compile_node(arg) for arg in node.args)
-        dummies = sp.symbols(f"_z0:{len(node.args)}", real=True)
-        expr_with_dummies = node.func(*(dummies if len(node.args) > 1 else dummies[:1]))
-        composed = lambdify(
-            dummies if len(node.args) > 1 else dummies[0],
-            expr_with_dummies,
-            modules="jax",
+    def _memoize(self, node: sp.Basic, compute: NodeEvaluator) -> NodeEvaluator:
+        def evaluate(cache: NodeValueCache) -> Array:
+            if node in cache:
+                return cache[node]
+            value = jnp.asarray(compute(cache))
+            cache[node] = value
+            return value
+
+        return evaluate
+
+
+def remove_test_function(expr: sp.Expr, test: TestFunction) -> sp.Expr:
+    """Replace the test function with ``1`` in a weak-form expression."""
+    return expr.subs(test, 1) if expr.has(test) else expr
+
+
+def replace_trial_with_jaxfunction(
+    expr: sp.Expr, trial: TrialFunction, jax_func: AppliedUndef
+) -> sp.Expr:
+    """Replace the trial function in ``expr`` with the supplied JAXFunction."""
+    if not expr.has(trial):
+        return expr
+    return cast(sp.Expr, expr.replace(trial, jax_func))
+
+
+def _is_jaxfunction_leaf(expr: sp.Basic) -> bool:
+    return get_arg(expr) is ArgumentTag.JAXFUNC
+
+
+def _contains_jaxfunction(expr: sp.Basic) -> bool:
+    return any(
+        _is_jaxfunction_leaf(node)
+        for node in sp.core.traversal.preorder_traversal(expr)
+    )
+
+
+def _is_direct_jax_derivative(expr: sp.Basic) -> bool:
+    return isinstance(expr, sp.Derivative) and _is_jaxfunction_leaf(expr.expr)
+
+
+def _is_jaxfunction_primitive(expr: sp.Basic) -> bool:
+    return _is_jaxfunction_leaf(expr) or _is_direct_jax_derivative(expr)
+
+
+def _normalize_nonlinear_output(out: Array, expected_size: int) -> Array:
+    out = jnp.asarray(out)
+    if out.ndim == 0:
+        return jnp.broadcast_to(out, (expected_size,))
+    if out.ndim == 2 and out.shape[1] == 1:
+        out = jnp.squeeze(out, axis=1)
+    if out.ndim != 1:
+        out = out.reshape((-1,))
+    if out.shape[0] != expected_size:
+        expected_shape = (expected_size,)
+        message = (
+            f"Nonlinear evaluation returned shape {out.shape}; "
+            f"expected {expected_shape}"
         )
+        raise ValueError(message)
+    return out
 
-        if len(child_eval) == 1:
-            return lambda composed=composed, child_eval=child_eval: composed(
-                jnp.asarray(child_eval[0]())
-            )
-        return lambda composed=composed, child_eval=child_eval: composed(
-            *(jnp.asarray(child()) for child in child_eval)
-        )
 
-    compiled = _compile_node(sp.expand(expr))
+def _compile_nonlinear_evaluator(
+    expr: sp.Expr,
+    functionspace: IntegratorSpace,
+    x_ref: Array,
+    x_true: Array,
+    jaxfunction: AppliedUndef,
+) -> Callable[[Array], Array]:
+    context = _NonlinearCompileContext(
+        x_symbol=functionspace.system.base_scalars()[0],
+        orthogonal=functionspace.orthogonal,
+        x_ref=x_ref,
+        x_true=x_true,
+        jaxfunction=jaxfunction,
+    )
+    compiled = _NonlinearCompiler(context).compile(expr)
+    expected_size = x_ref.shape[0]
 
     def evaluate(uh: Array) -> Array:
         cast(JAXFunction, jaxfunction).array = uh
-        out = jnp.asarray(compiled())
-        if out.ndim == 0:
-            return jnp.broadcast_to(out, x_ref.shape)
-        if out.ndim == 2 and out.shape[1] == 1:
-            out = jnp.squeeze(out, axis=1)
-        if out.ndim != 1:
-            out = out.reshape((-1,))
-        if out.shape[0] != x_ref.shape[0]:
-            expected_shape = (x_ref.shape[0],)
-            raise ValueError(
-                f"Nonlinear evaluation returned shape {out.shape}; "
-                f"expected {expected_shape}"
-            )
-        return out
+        return _normalize_nonlinear_output(compiled({}), expected_size)
 
     return evaluate
 
@@ -173,36 +325,44 @@ def _bcoo_diagonal(mat: BCOO) -> Array | None:
     return diag.at[indices[:, 0]].add(mat.data)
 
 
+def _sum_diagonals(operators: list[GalerkinOperator]) -> Array | None:
+    diag_sum: Array | None = None
+    for operator in operators:
+        diag = _diag_from_matrix(operator)
+        if diag is None:
+            return None
+        diag_sum = diag if diag_sum is None else diag_sum + diag
+    return diag_sum
+
+
+def _tpmatrix_diagonal(op: TPMatrix) -> Array | None:
+    if len(op.mats) == 0:
+        return None
+
+    diagonals: list[Array] = []
+    for diag in (_diag_from_matrix(item) for item in op.mats):
+        if diag is None or diag.ndim != 1:
+            return None
+        diagonals.append(diag)
+
+    diagonal = diagonals[0]
+    for axis, diag in enumerate(diagonals[1:], start=1):
+        shape = (1,) * axis + (diag.shape[0],)
+        diagonal = diagonal[..., None] * diag.reshape(shape)
+    return diagonal
+
+
 def _diag_from_matrix(obj: GalerkinOperatorLike | None) -> Array | None:
     if obj is None:
         return None
     if isinstance(obj, list):
-        items = cast(list[GalerkinOperator], obj)
-        diag_sum = None
-        for item in items:
-            diag = _diag_from_matrix(item)
-            if diag is None:
-                return None
-            diag_sum = diag if diag_sum is None else diag_sum + diag
-        return diag_sum
+        return _sum_diagonals(cast(list[GalerkinOperator], obj))
     if isinstance(obj, BCOO):
         return _bcoo_diagonal(obj)
     if isinstance(obj, TPMatrices):
-        return _diag_from_matrix(cast(list[GalerkinOperator], list(obj.tpmats)))
+        return _sum_diagonals(cast(list[GalerkinOperator], list(obj.tpmats)))
     if isinstance(obj, TPMatrix):
-        mats = obj.mats
-        if len(mats) == 0:
-            return None
-        diagonals: list[Array] = []
-        for diag in (_diag_from_matrix(item) for item in mats):
-            if diag is None or diag.ndim != 1:
-                return None
-            diagonals.append(diag)
-        diagonal = diagonals[0]
-        for axis, diag in enumerate(diagonals[1:], start=1):
-            shape = (1,) * axis + (diag.shape[0],)
-            diagonal = diagonal[..., None] * diag.reshape(shape)
-        return diagonal
+        return _tpmatrix_diagonal(obj)
     if isinstance(obj, TensorMatrix):
         return _diag_from_matrix(obj.mat)
     arr = jnp.asarray(obj)
@@ -234,25 +394,31 @@ def _apply_operator(op: GalerkinOperatorLike | None, u: Array) -> Array:
     return arr @ u
 
 
+def _sum_dense_operators(operators: list[GalerkinOperator]) -> Array:
+    mats = [_operator_to_dense(op) for op in operators]
+    return sum(mats[1:], mats[0]) if len(mats) > 0 else jnp.array([])
+
+
+def _tpmatrix_to_dense(op: TPMatrix) -> Array:
+    mats = [_operator_to_dense(item) for item in op.mats]
+    if len(mats) == 0:
+        return jnp.array([])
+
+    dense: Array = mats[0]
+    for mat in mats[1:]:
+        dense = jnp.kron(dense, mat)
+    return cast(Array, dense * jnp.asarray(op.scale))
+
+
 def _operator_to_dense(op: GalerkinOperatorLike) -> Array:
     if isinstance(op, BCOO):
         return op.todense()
     if isinstance(op, list):
-        items = cast(list[GalerkinOperator], op)
-        mats = [_operator_to_dense(item) for item in items]
-        return sum(mats[1:], mats[0]) if len(mats) > 0 else jnp.array([])
+        return _sum_dense_operators(cast(list[GalerkinOperator], op))
     if isinstance(op, TPMatrices):
-        mats = [_operator_to_dense(item) for item in op.tpmats]
-        return sum(mats[1:], mats[0]) if len(mats) > 0 else jnp.array([])
+        return _sum_dense_operators(cast(list[GalerkinOperator], list(op.tpmats)))
     if isinstance(op, TPMatrix):
-        mats = [_operator_to_dense(item) for item in op.mats]
-        if len(mats) == 0:
-            return jnp.array([])
-        dense: Array = mats[0]
-        for mat in mats[1:]:
-            dense = jnp.kron(dense, mat)
-        scale = jnp.asarray(op.scale)
-        return cast(Array, dense * scale)
+        return _tpmatrix_to_dense(op)
     if isinstance(op, TensorMatrix):
         return _operator_to_dense(op.mat)
     return jnp.asarray(op)
@@ -299,7 +465,7 @@ def _assemble_linear_setup(
 
 
 def _assemble_mass_setup(
-    V: OrthogonalSpace | DirectSum | Composite, sparse: bool, sparse_tol: int
+    V: IntegratorSpace, sparse: bool, sparse_tol: int
 ) -> tuple[GalerkinOperatorLike | None, Array | None]:
     v = TestFunction(V)
     u = TrialFunction(V)
@@ -318,7 +484,7 @@ def _assemble_mass_setup(
 class BaseIntegrator(ABC, nnx.Module):
     def __init__(
         self,
-        V: OrthogonalSpace | DirectSum | Composite,
+        V: IntegratorSpace,
         equation: sp.Expr,
         u0: sp.Expr | Array | None = None,
         *,
@@ -447,7 +613,8 @@ class BaseIntegrator(ABC, nnx.Module):
 
     @jax.jit(static_argnums=0)
     def total_rhs(self, uh: Array) -> Array:
-        return self.linear_rhs(uh) + self.nonlinear_rhs(uh)
+        print(jax.make_jaxpr(self.linear_rhs)(uh))
+        return self.linear_rhs(uh)  # + self.nonlinear_rhs(uh)
 
     @abstractmethod
     def step(self, u_hat: Array, dt: float) -> Array: ...

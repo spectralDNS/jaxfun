@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
+import jaxfun.integrators.base as integrator_base
 from jaxfun import Domain
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev as Cheb
@@ -143,3 +144,48 @@ def test_rk4_nonlinear_rhs_uses_direct_jaxfunction_evaluation() -> None:
     expected = V.forward(-u_phys * ux_phys)
 
     assert jnp.allclose(nonlinear, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_rk4_nonlinear_rhs_caches_repeated_primitives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    N = 32
+    V = FunctionSpace(
+        N,
+        FourierSpace,
+        domain=Domain(0.0, 2.0 * float(sp.pi)),
+        name="V",
+        fun_str="E",
+    )
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    (x,) = V.system.base_scalars()
+    t = V.system.base_time()
+
+    # Contains repeated subterms of both u and u_x after expansion.
+    weak_form = v * (u.diff(t) + (u + u.diff(x)) ** 2)
+    integrator = RK4(V, weak_form, time=(0.0, 0.01), initial=sp.sin(x), sparse=True)
+    uhat = integrator.initial_coefficients()
+
+    calls: list[sp.Basic] = []
+    original_eval = integrator_base.evaluate_jaxfunction_expr
+
+    def count_eval(expr: sp.Expr, xj, jaxfunction=None):
+        calls.append(sp.sympify(expr))
+        return original_eval(expr, xj, jaxfunction)
+
+    monkeypatch.setattr(integrator_base, "evaluate_jaxfunction_expr", count_eval)
+
+    nonlinear = integrator.nonlinear_rhs(uhat)
+    u_phys = V.backward(uhat)
+    ux_phys = V.evaluate_derivative(V.mesh(), uhat, k=1)
+    expected = V.forward(-((u_phys + ux_phys) ** 2))
+
+    assert jnp.allclose(nonlinear, expected, atol=1e-6, rtol=1e-6)
+
+    primitive_terms = {
+        node
+        for node in sp.core.traversal.preorder_traversal(integrator.nonlinear_expr)
+        if integrator_base._is_jaxfunction_primitive(node)
+    }
+    assert len(calls) == len(primitive_terms)

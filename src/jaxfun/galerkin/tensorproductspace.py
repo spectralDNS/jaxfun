@@ -209,10 +209,7 @@ class TensorProductSpace:
                     axi: int = dim - 1 - ax
                     c = jax.vmap(
                         self.basespaces[i].evaluate, in_axes=(None, axi), out_axes=axi
-                    )(
-                        jnp.atleast_1d(xi.squeeze()),
-                        c,
-                    )
+                    )(jnp.atleast_1d(xi.squeeze()), c)
             else:
                 T0, T1 = self.basespaces
                 C0 = T0.eval_basis_functions(

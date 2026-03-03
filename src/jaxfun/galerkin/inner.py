@@ -302,12 +302,7 @@ def inner(
             assert _has_globalindex(v)
             global_index = v.global_index
             is_multivar = "multivar" in b0 or "jaxfunction" in b0
-            z = inner_linear(
-                bi,
-                vf,
-                sc,
-                is_multivar,
-            )
+            z = inner_linear(bi, vf, sc, is_multivar)
             sc = 1
             bs.append(z)
 

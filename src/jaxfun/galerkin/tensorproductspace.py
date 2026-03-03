@@ -298,7 +298,7 @@ class TensorProductSpace:
             )
             c = jnp.tensordot(Ci, c, axes=(1, i), precision=jax.lax.Precision.HIGHEST)
             c = jnp.moveaxis(c, 0, i)
-            df = df * (Ti.domain_factor ** k[i])
+            df = df * (float(Ti.domain_factor ** k[i]))
         return c * df
 
     def get_padded(self, N: tuple[int, ...]) -> TensorProductSpace:
@@ -746,6 +746,7 @@ class DirectSumTPS(TensorProductSpace):
         v = TestFunction(self)
         u = TrialFunction(self)
         A, b = inner(u * v)
+        assert not isinstance(v.functionspace, VectorTensorProductSpace)
         b += v.functionspace.scalar_product(c)
         return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.num_dofs)
 

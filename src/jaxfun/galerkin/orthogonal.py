@@ -133,7 +133,7 @@ class OrthogonalSpace(BaseSpace):
         """
         # return jacn(self.evaluate, k)(x)
         X = self.map_reference_domain(x)
-        df = self.domain_factor**k
+        df = float(self.domain_factor**k)
         return df * self.evaluate_basis_derivative(X, k)[..., : len(c)] @ c
 
     @jax.jit(static_argnums=0)

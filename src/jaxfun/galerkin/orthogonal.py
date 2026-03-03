@@ -79,7 +79,7 @@ class OrthogonalSpace(BaseSpace):
         super().__init__(system, name, fun_str)
 
     @abstractmethod
-    def norm_squared(self) -> Array:
+    def norm_squared(self, N: int = 0) -> Array:
         """Return norms squared"""
         pass
 
@@ -167,7 +167,7 @@ class OrthogonalSpace(BaseSpace):
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Implementation of backward (allows subclass override)."""
         xj = self.mesh(kind=kind, N=N)
-        return self.evaluate(self.map_reference_domain(xj), c)
+        return self.evaluate(xj, c)
 
     @jax.jit(static_argnums=0)
     def mass_matrix(self) -> BCOO:
@@ -180,17 +180,22 @@ class OrthogonalSpace(BaseSpace):
             shape=(self.N, self.N),
         )
 
-    @jax.jit(static_argnums=0)
-    def forward(self, u: Array) -> Array:
+    @jax.jit(static_argnums=(0, 2))
+    def forward(self, u: Array, N: int = 0) -> Array:
         """Forward projection (samples -> coefficients) using orthogonality."""
-        A = self.norm_squared() / self.domain_factor
+        # u should be a padded array of length >= self.N
+        N: int = self.N if N == 0 else N
         L = self.scalar_product(u)
+        if len(u) > N:
+            L = L[:N]
+        A = self.norm_squared() / self.domain_factor
         return L / A
 
     @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
         """Return vector of inner products <u, psi_i> (weighted)."""
-        xj, wj = self.quad_points_and_weights()
+        N: int = u.shape[0]  # u may be >= self.N for padding
+        xj, wj = self.quad_points_and_weights(N)
         Pi = self.vandermonde(xj)
         sg = self.system.sg / self.domain_factor
         if sp.sympify(sg).is_number:

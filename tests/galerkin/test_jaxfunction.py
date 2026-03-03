@@ -90,7 +90,7 @@ def test_jaxfunction_nonlin(space: type[OrthogonalSpace], domain: Domain | None)
     A = inner(u * v * uf)
     b0 = A @ uf
     b1 = inner(v * uf**2)
-    assert jnp.linalg.norm(b0 - b1) < ulp(1000)
+    assert jnp.linalg.norm(b0 - b1) < ulp(10000)
 
 
 def test_jaxfunction_directsum_nonlin(

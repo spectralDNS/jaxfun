@@ -380,13 +380,21 @@ class TensorProductSpace:
         dim: int = len(self)
         if dim == 2:
             for ax in range(dim):
+                forward = partial(
+                    self.basespaces[ax].forward,
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+                )
                 axi: int = dim - 1 - ax
-                u = jax.vmap(self.basespaces[ax].forward, in_axes=axi, out_axes=axi)(u)
+                u = jax.vmap(forward, in_axes=axi, out_axes=axi)(u)
         else:
             for ax in range(dim):
+                forward = partial(
+                    self.basespaces[ax].forward,
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+                )
                 ax0, ax1 = set(range(dim)) - set((ax,))
                 u = jax.vmap(
-                    jax.vmap(self.basespaces[ax].forward, in_axes=ax0, out_axes=ax0),
+                    jax.vmap(forward, in_axes=ax0, out_axes=ax0),
                     in_axes=ax1,
                     out_axes=ax1,
                 )(u)
@@ -495,19 +503,32 @@ class VectorTensorProductSpace:
             vals.append(vi)
         return jnp.stack(vals)
 
-    def forward(self, u: Array, N: tuple[int, ...] | None = None) -> Array:
+    def forward(self, u: Array, N: tuple[tuple[int, ...], ...] | None = None) -> Array:
         """Forward transform with optional truncation."""
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
-            ci = space.forward(u[i], N)
+            ci = space.forward(u[i], N[i] if N is not None else None)
             coeffs.append(ci)
         return jnp.stack(coeffs)
 
-    def scalar_product(self, u: Array, N: tuple[int, ...] | None = None) -> Array:
+    def scalar_product(self, u: Array) -> Array:
         """Scalar product with optional truncation."""
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
-            ci = space.scalar_product(u[i], N)
+            ci = space.scalar_product(u[i])
+            coeffs.append(ci)
+        return jnp.stack(coeffs)
+
+    def backward(
+        self,
+        u: Array,
+        kind: str = "quadrature",
+        N: tuple[tuple[int, ...], ...] | None = None,
+    ) -> Array:
+        """Backward transform with optional padding."""
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.backward(u[i], kind=kind, N=N[i] if N is not None else None)
             coeffs.append(ci)
         return jnp.stack(coeffs)
 

@@ -207,7 +207,7 @@ class _NonlinearCompiler:
         if cached is not None:
             return cached
 
-        evaluated = sp.sympify(node).doit()
+        evaluated = sp.sympify(sp.sympify(node).doit())
         free_symbols = evaluated.free_symbols
         if len(free_symbols) == 0:
             value = float(evaluated) if evaluated.is_real else complex(evaluated)

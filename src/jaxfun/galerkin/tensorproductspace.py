@@ -210,9 +210,7 @@ class TensorProductSpace:
                     c = jax.vmap(
                         self.basespaces[i].evaluate, in_axes=(None, axi), out_axes=axi
                     )(
-                        jnp.atleast_1d(
-                            self.basespaces[i].map_reference_domain(xi).squeeze()
-                        ),
+                        jnp.atleast_1d(xi.squeeze()),
                         c,
                     )
             else:
@@ -237,9 +235,7 @@ class TensorProductSpace:
                         in_axes=(None, ax1),
                         out_axes=ax1,
                     )(
-                        jnp.atleast_1d(
-                            self.basespaces[i].map_reference_domain(xi).squeeze()
-                        ),
+                        jnp.atleast_1d((xi).squeeze()),
                         c,
                     )
             else:
@@ -504,6 +500,14 @@ class VectorTensorProductSpace:
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
             ci = space.forward(u[i], N)
+            coeffs.append(ci)
+        return jnp.stack(coeffs)
+
+    def scalar_product(self, u: Array, N: tuple[int, ...] | None = None) -> Array:
+        """Scalar product with optional truncation."""
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.scalar_product(u[i], N)
             coeffs.append(ci)
         return jnp.stack(coeffs)
 

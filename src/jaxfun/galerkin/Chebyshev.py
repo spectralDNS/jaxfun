@@ -54,7 +54,7 @@ class Chebyshev(Jacobi):
         )
 
     @jit_vmap(in_axes=(0, None))
-    def evaluate2(self, X: float | Array, c: Array) -> Array:
+    def _evaluate2(self, X: float | Array, c: Array) -> Array:
         """Evaluate Chebyshev series using backward (Clenshaw-like) scheme.
 
         Uses a modified two-term recurrence sweeping coefficients from
@@ -89,7 +89,7 @@ class Chebyshev(Jacobi):
         return c0 + c1 * X
 
     @jit_vmap(in_axes=(0, None))
-    def evaluate3(self, X: float, c: Array) -> Array:
+    def _evaluate3(self, X: float, c: Array) -> Array:
         """Evaluate Chebyshev series via forward recurrence.
 
         Builds successive T_n(X) terms with a scan, accumulating

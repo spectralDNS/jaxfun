@@ -10,6 +10,7 @@ from jaxfun.galerkin.Fourier import Fourier as FourierSpace
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.integrators import RK4, BackwardEuler
 from jaxfun.operators import Constant, Div, Grad
+from jaxfun.typing import MeshKind
 from jaxfun.utils.common import lambdify, n
 
 
@@ -166,7 +167,12 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
     calls: list[int] = []
     original_eval = integrator.functionspace.evaluate_nonlinear_primitive
 
-    def count_eval(c, derivative_order: int = 0, kind: str = "quadrature", N: int = 0):
+    def count_eval(
+        c,
+        derivative_order: int = 0,
+        kind: MeshKind = MeshKind.QUADRATURE,
+        N: int = 0,
+    ):
         calls.append(int(derivative_order))
         return original_eval(c, derivative_order=derivative_order, kind=kind, N=N)
 

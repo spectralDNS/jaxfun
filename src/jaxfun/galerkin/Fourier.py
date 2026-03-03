@@ -5,6 +5,7 @@ from jax import Array
 from jax.experimental import sparse
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, jit_vmap
 
 from .orthogonal import OrthogonalSpace
@@ -119,7 +120,9 @@ class Fourier(OrthogonalSpace):
         return z
 
     @jax.jit(static_argnums=(0, 2, 3))
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+    def backward(
+        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int = 0
+    ) -> Array:
         """Inverse FFT (possible padding) to physical space.
 
         Args:
@@ -148,13 +151,14 @@ class Fourier(OrthogonalSpace):
         self,
         c: Array,
         derivative_order: int = 0,
-        kind: str = "quadrature",
+        kind: MeshKind = MeshKind.QUADRATURE,
         N: int = 0,
     ) -> Array:
         """Evaluate ``u``/``d^k u`` for nonlinear terms using FFT primitives."""
+        kind = MeshKind(kind)
         if derivative_order == 0:
             return self.backward(c, kind=kind, N=N)
-        if kind != "quadrature":
+        if kind is not MeshKind.QUADRATURE:
             return super().evaluate_nonlinear_primitive(
                 c, derivative_order=derivative_order, kind=kind, N=N
             )

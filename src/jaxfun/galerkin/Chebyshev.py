@@ -6,6 +6,7 @@ from jax.experimental import sparse
 from sympy import Expr, Symbol
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, jit_vmap
 
 from .Jacobi import Jacobi
@@ -189,7 +190,9 @@ class Chebyshev(Jacobi):
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
     @jax.jit(static_argnums=(0, 2, 3))
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+    def backward(
+        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int = 0
+    ) -> Array:
         """Return Chebyshev series evaluated at quadrature points.
 
         Args:
@@ -200,13 +203,14 @@ class Chebyshev(Jacobi):
         """
         n: int = self.N if N == 0 else N
 
-        if kind == "quadrature":
-            if n > len(c):
-                c = jnp.pad(c, (0, n - len(c)))
-            sign = (-1) ** jnp.arange(n)
-            uh = c * sign
-            return 0.5 * uh[0] + n * jax.scipy.fft.idct(uh, n=n)
-        return super().backward(c, kind=kind, N=n)  # Does not require padding of c
+        if MeshKind(kind) is not MeshKind.QUADRATURE:
+            return super().backward(c, kind=kind, N=n)  # Does not require padding of c
+
+        if n > len(c):
+            c = jnp.pad(c, (0, n - len(c)))
+        sign = (-1) ** jnp.arange(n)
+        uh = c * sign
+        return 0.5 * uh[0] + n * jax.scipy.fft.idct(uh, n=n)
 
     @jax.jit(static_argnums=0)
     def _differentiate_coefficients_once(self, c: Array) -> Array:
@@ -247,13 +251,14 @@ class Chebyshev(Jacobi):
         self,
         c: Array,
         derivative_order: int = 0,
-        kind: str = "quadrature",
+        kind: MeshKind = MeshKind.QUADRATURE,
         N: int = 0,
     ) -> Array:
         """Evaluate ``u``/``d^k u`` for nonlinear terms with DCT kernels."""
+        kind = MeshKind(kind)
         if derivative_order == 0:
             return self.backward(c, kind=kind, N=N)
-        if kind != "quadrature":
+        if kind is not MeshKind.QUADRATURE:
             return super().evaluate_nonlinear_primitive(
                 c, derivative_order=derivative_order, kind=kind, N=N
             )

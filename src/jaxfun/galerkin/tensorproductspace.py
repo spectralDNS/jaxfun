@@ -14,6 +14,7 @@ from jax import Array
 from scipy import sparse as scipy_sparse
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.typing import MeshKind
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
@@ -115,7 +116,7 @@ class TensorProductSpace:
 
     def mesh(
         self,
-        kind: str = "quadrature",
+        kind: MeshKind | str = MeshKind.QUADRATURE,
         N: tuple[int, ...] | None = None,
         broadcast: bool = True,
     ) -> tuple[Array, ...]:
@@ -138,9 +139,7 @@ class TensorProductSpace:
         return tuple(mesh)
 
     def flatmesh(
-        self,
-        kind: str = "quadrature",
-        N: tuple[int] | None = None,
+        self, kind: MeshKind = MeshKind.QUADRATURE, N: tuple[int] | None = None
     ) -> Array:
         """Return flattened list of all coordinate tuples.
 
@@ -157,7 +156,9 @@ class TensorProductSpace:
         )
 
     def cartesian_mesh(
-        self, kind: str = "quadrature", N: tuple[int, ...] | None = None
+        self,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
+        N: tuple[int, ...] | None = None,
     ) -> tuple[Array, ...]:
         """Return mapped Cartesian mesh (position vector evaluation)."""
         rv = self.system.position_vector(False)
@@ -313,7 +314,10 @@ class TensorProductSpace:
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
-        self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
+        self,
+        c: Array,
+        kind: MeshKind = MeshKind.QUADRATURE,
+        N: tuple[int] | None = None,
     ) -> Array:
         """Jitted backward transform with optional padding."""
         dim: int = len(self)
@@ -516,7 +520,7 @@ class VectorTensorProductSpace:
     def backward(
         self,
         u: Array,
-        kind: str = "quadrature",
+        kind: MeshKind = MeshKind.QUADRATURE,
         N: tuple[tuple[int, ...], ...] | None = None,
     ) -> Array:
         """Backward transform with optional padding."""
@@ -746,7 +750,10 @@ class DirectSumTPS(TensorProductSpace):
         return self.tpspaces[(a0, a1)]
 
     def backward(
-        self, c: Array, kind: str = "quadrature", N: tuple[int, ...] | None = None
+        self,
+        c: Array,
+        kind: MeshKind = MeshKind.QUADRATURE,
+        N: tuple[int, ...] | None = None,
     ) -> Array:
         """Evaluate total (homogeneous + lifting) backward transform."""
         a: list[Array] = []

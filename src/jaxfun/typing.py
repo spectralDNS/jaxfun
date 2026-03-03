@@ -70,6 +70,11 @@ class SampleMethod(StrEnum):
     RANDOM = "random"
 
 
+class MeshKind(StrEnum):
+    QUADRATURE = "quadrature"
+    UNIFORM = "uniform"
+
+
 type DomainType = Literal["inside", "boundary", "intersection", "all"]
 type InnerBilinearResult = Array | BCOO | TPMatrix | TensorMatrix
 type InnerBilinearResults = list[Array | TPMatrix | TensorMatrix]

@@ -128,7 +128,7 @@ def get_BasisFunction(
         argument=argument,
     )(arg)  # ty:ignore[call-non-callable]
 
-    b.__class__.__str__ = __str__
+    b.__class__.__str__ = __str__  # ty:ignore[invalid-assignment]
     b.__class__._pretty = _pretty
     b.__class__._sympystr = _sympystr
     b.__class__._latex = _latex
@@ -599,7 +599,7 @@ def get_JAXFunction(
         argument=argument,
     )(*args)  # ty:ignore[call-non-callable]
 
-    b.__class__.__str__ = __str__
+    b.__class__.__str__ = __str__  # ty:ignore[invalid-assignment]
     b.__class__._pretty = _pretty
     b.__class__._sympystr = _sympystr
     b.__class__._latex = _latex

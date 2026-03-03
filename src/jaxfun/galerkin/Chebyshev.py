@@ -229,7 +229,7 @@ class Chebyshev(Jacobi):
             uh = uh[:N]
         return uh
 
-    def norm_squared(self, N: int = 0) -> Array:
+    def norm_squared(self) -> Array:
         """Return L2 norms squared over [-1, 1] with Chebyshev weight.
 
         For T_0: integral = pi
@@ -238,8 +238,7 @@ class Chebyshev(Jacobi):
         Returns:
             Array of length N with norm^2 values.
         """
-        N: int = self.N if N == 0 else N
-        return jnp.hstack((jnp.array([jnp.pi]), jnp.full(N - 1, jnp.pi / 2)))
+        return jnp.hstack((jnp.array([jnp.pi]), jnp.full(self.N - 1, jnp.pi / 2)))
 
     # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
     def gn(self, n: Symbol | int) -> Expr:

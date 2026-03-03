@@ -79,7 +79,7 @@ class OrthogonalSpace(BaseSpace):
         super().__init__(system, name, fun_str)
 
     @abstractmethod
-    def norm_squared(self, N: int = 0) -> Array:
+    def norm_squared(self) -> Array:
         """Return norms squared"""
         pass
 

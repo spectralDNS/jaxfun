@@ -118,7 +118,7 @@ class OrthogonalSpace(BaseSpace):
             Array of shape like x containing series evaluation.
         """
         X = self.map_reference_domain(x)
-        df = self.domain_factor**k
+        df = float(self.domain_factor**k)
         return df * self.evaluate_basis_derivative(X, k)[..., : len(c)] @ c
 
     @jax.jit(static_argnums=0)

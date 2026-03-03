@@ -807,4 +807,4 @@ def evaluate_jaxfunction_expr(
         return V.evaluate_mesh(xj, jaxf.array, True)
 
     assert isinstance(xj, Array)
-    return V.evaluate(V.map_reference_domain(xj), jaxf.array)
+    return V.evaluate(xj, jaxf.array)

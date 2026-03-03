@@ -94,7 +94,21 @@ class OrthogonalSpace(BaseSpace):
         return self._num_quad_points
 
     @jit_vmap(in_axes=(0, None))
-    def evaluate(self, X: float | Array, c: Array) -> Array:
+    def evaluate(self, x: float | Array, c: Array) -> Array:
+        """Evaluate series sum_k c_k psi_k(x).
+
+        Args:
+            x: Evaluation point(s) in true coordinates.
+            c: Coefficient vector ( <= self.N).
+
+        Returns:
+            Array of shape like x containing series evaluation.
+        """
+        X = self.map_reference_domain(x)
+        return self._evaluate(X, c)
+
+    @jit_vmap(in_axes=(0, None))
+    def _evaluate(self, X: float | Array, c: Array) -> Array:
         """Evaluate series sum_k c_k psi_k(X).
 
         Args:
@@ -108,7 +122,7 @@ class OrthogonalSpace(BaseSpace):
 
     @jax.jit(static_argnums=(0, 3))
     def evaluate_derivative(self, x: Array, c: Array, k: int = 0) -> Array:
-        """Evaluate truncated series sum_k c_k psi_k(X).
+        """Evaluate truncated series sum_k c_k psi_k(x).
 
         Args:
             x: Evaluation point(s) in real coordinates.
@@ -117,6 +131,7 @@ class OrthogonalSpace(BaseSpace):
         Returns:
             Array of shape like x containing series evaluation.
         """
+        # return jacn(self.evaluate, k)(x)
         X = self.map_reference_domain(x)
         df = float(self.domain_factor**k)
         return df * self.evaluate_basis_derivative(X, k)[..., : len(c)] @ c
@@ -152,7 +167,7 @@ class OrthogonalSpace(BaseSpace):
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Implementation of backward (allows subclass override)."""
         xj = self.mesh(kind=kind, N=N)
-        return self.evaluate(self.map_reference_domain(xj), c)
+        return self.evaluate(xj, c)
 
     @jax.jit(static_argnums=0)
     def mass_matrix(self) -> BCOO:
@@ -165,17 +180,22 @@ class OrthogonalSpace(BaseSpace):
             shape=(self.N, self.N),
         )
 
-    @jax.jit(static_argnums=0)
-    def forward(self, u: Array) -> Array:
+    @jax.jit(static_argnums=(0, 2))
+    def forward(self, u: Array, N: int = 0) -> Array:
         """Forward projection (samples -> coefficients) using orthogonality."""
-        A = self.norm_squared() / self.domain_factor
+        # u should be a padded array of length >= self.N
+        N: int = self.N if N == 0 else N
         L = self.scalar_product(u)
+        if len(u) > N:
+            L = L[:N]
+        A = self.norm_squared() / self.domain_factor
         return L / A
 
     @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
         """Return vector of inner products <u, psi_i> (weighted)."""
-        xj, wj = self.quad_points_and_weights()
+        N: int = u.shape[0]  # u may be >= self.N for padding
+        xj, wj = self.quad_points_and_weights(N)
         Pi = self.vandermonde(xj)
         sg = self.system.sg / self.domain_factor
         if sp.sympify(sg).is_number:
@@ -288,7 +308,11 @@ class OrthogonalSpace(BaseSpace):
     def map_reference_domain(self, x: Array) -> Array: ...
     @overload
     def map_reference_domain(self, x: sp.Symbol) -> sp.Expr: ...
-    def map_reference_domain(self, x: sp.Symbol | Array) -> sp.Expr | Array:
+    @overload
+    def map_reference_domain(self, x: float) -> float: ...
+    def map_reference_domain(
+        self, x: sp.Symbol | Array | float
+    ) -> sp.Expr | Array | float:
         """Map true domain point x to reference coordinate X."""
         X = x
         if self.domain != self.reference_domain:
@@ -304,7 +328,9 @@ class OrthogonalSpace(BaseSpace):
     def map_true_domain(self, X: Array) -> Array: ...
     @overload
     def map_true_domain(self, X: sp.Symbol) -> sp.Expr: ...
-    def map_true_domain(self, X: sp.Symbol | Array) -> sp.Expr | Array:
+    @overload
+    def map_true_domain(self, X: float) -> float: ...
+    def map_true_domain(self, X: sp.Symbol | Array | float) -> sp.Expr | Array | float:
         """Map reference coordinate X to true domain point x."""
         x = X
         if self.domain != self.reference_domain:

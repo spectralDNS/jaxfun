@@ -39,7 +39,7 @@ class Legendre(Jacobi):
         )
 
     @jit_vmap(in_axes=(0, None))
-    def evaluate2(self, X: float | Array, c: Array) -> Array:
+    def _evaluate2(self, X: float | Array, c: Array) -> Array:
         """Evaluate Legendre series using backward two-term scheme.
 
         p(X) = sum_{k=0}^{N-1} c_k P_k(X)
@@ -71,7 +71,7 @@ class Legendre(Jacobi):
         return c0 + c1 * X
 
     @jit_vmap(in_axes=(0, None))
-    def evaluate3(self, X: float, c: Array) -> Array:
+    def _evaluate3(self, X: float | Array, c: Array) -> Array:
         """Evaluate Legendre series via forward recurrence accumulation.
 
         Args:
@@ -84,8 +84,8 @@ class Legendre(Jacobi):
         x0 = jnp.ones_like(X)
 
         def inner_loop(
-            carry: tuple[float, float], i: int
-        ) -> tuple[tuple[float, float], Array]:
+            carry: tuple[Array, Array], i: int
+        ) -> tuple[tuple[Array, Array], Array]:
             x0, x1 = carry
             x2 = (x1 * X * (2 * i - 1) - x0 * (i - 1)) / i
             return (x1, x2), x1 * c[i - 1]
@@ -130,7 +130,7 @@ class Legendre(Jacobi):
         return jax.lax.fori_loop(2, i + 1, body_fun, (x0, X))[-1]
 
     @jit_vmap(in_axes=0)
-    def eval_basis_functions(self, X: float) -> Array:
+    def eval_basis_functions(self, X: float | Array) -> Array:
         """Evaluate all Legendre polynomials P_0..P_{N-1} at X.
 
         Args:
@@ -142,8 +142,8 @@ class Legendre(Jacobi):
         x0 = X * 0 + 1
 
         def inner_loop(
-            carry: tuple[float, float], i: int
-        ) -> tuple[tuple[float, float], float]:
+            carry: tuple[Array, Array], i: int
+        ) -> tuple[tuple[Array, Array], Array]:
             x0, x1 = carry
             x2 = (x1 * X * (2 * i - 1) - x0 * (i - 1)) / i
             return (x1, x2), x1

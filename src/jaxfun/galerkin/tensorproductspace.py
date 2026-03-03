@@ -234,10 +234,7 @@ class TensorProductSpace:
                         ),
                         in_axes=(None, ax1),
                         out_axes=ax1,
-                    )(
-                        jnp.atleast_1d((xi).squeeze()),
-                        c,
-                    )
+                    )(jnp.atleast_1d((xi).squeeze()), c)
             else:
                 T0, T1, T2 = self.basespaces
                 C0 = T0.eval_basis_functions(

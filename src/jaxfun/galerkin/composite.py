@@ -467,6 +467,10 @@ class DirectSum:
         """Return mesh from homogeneous Composite summand."""
         return self[0].mesh(kind=kind, N=N)
 
+    def mesh_reference(self, kind: str = "quadrature", N: int = 0) -> Array:
+        """Return reference-domain mesh from homogeneous Composite summand."""
+        return self[0].mesh_reference(kind=kind, N=N)
+
     def bnd_vals(self) -> Array:
         """Return boundary lifting values (from BCGeneric)."""
         return self[1].bnd_vals()
@@ -502,11 +506,19 @@ class DirectSum:
         return jnp.linalg.solve(M, b)
 
     @jax.jit(static_argnums=(0, 3))
-    def evaluate_derivative(self, X: Array, c: Array, k: int = 0) -> float:
-        """Evaluate k-th derivative at X (composite + boundary)."""
+    def evaluate_derivative(self, x: Array, c: Array, k: int = 0) -> float:
+        """Evaluate k-th derivative at true-domain points (composite + boundary)."""
+        X = self.map_reference_domain(x)
+        return self.evaluate_derivative_reference(X, c, k)
+
+    @jax.jit(static_argnums=(0, 3))
+    def evaluate_derivative_reference(self, X: Array, c: Array, k: int = 0) -> float:
+        """Evaluate k-th derivative at reference-domain points."""
         a, b = self.basespaces
         bv = self.bnd_vals()
-        return a.evaluate_derivative(X, c, k) + b.evaluate_derivative(X, bv, k)
+        return a.evaluate_derivative_reference(
+            X, c, k
+        ) + b.evaluate_derivative_reference(X, bv, k)
 
 
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:

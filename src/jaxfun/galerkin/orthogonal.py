@@ -108,16 +108,21 @@ class OrthogonalSpace(BaseSpace):
 
     @jax.jit(static_argnums=(0, 3))
     def evaluate_derivative(self, x: Array, c: Array, k: int = 0) -> Array:
-        """Evaluate truncated series sum_k c_k psi_k(X).
+        """Evaluate k-th physical derivative at true-domain points.
 
         Args:
-            x: Evaluation point(s) in real coordinates.
+            x: Evaluation point(s) in true-domain coordinates.
             c: Coefficient vector ( <= self.N).
             k: Derivative order (default 0 -> function value).
         Returns:
             Array of shape like x containing series evaluation.
         """
         X = self.map_reference_domain(x)
+        return self.evaluate_derivative_reference(X, c, k)
+
+    @jax.jit(static_argnums=(0, 3))
+    def evaluate_derivative_reference(self, X: Array, c: Array, k: int = 0) -> Array:
+        """Evaluate k-th physical derivative at reference-domain points."""
         df = float(self.domain_factor**k)
         return df * self.evaluate_basis_derivative(X, k)[..., : len(c)] @ c
 
@@ -151,8 +156,8 @@ class OrthogonalSpace(BaseSpace):
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Implementation of backward (allows subclass override)."""
-        xj = self.mesh(kind=kind, N=N)
-        return self.evaluate(self.map_reference_domain(xj), c)
+        Xj = self.mesh_reference(kind=kind, N=N)
+        return self.evaluate(Xj, c)
 
     @jax.jit(static_argnums=0)
     def mass_matrix(self) -> BCOO:
@@ -324,10 +329,20 @@ class OrthogonalSpace(BaseSpace):
             kind: 'quadrature' (default) or 'uniform'.
             N: Number of uniform points (0 -> num_quad_points).
         """
+        return self.map_true_domain(self.mesh_reference(kind, N))
+
+    @jax.jit(static_argnums=(0, 1, 2))
+    def mesh_reference(self, kind: str = "quadrature", N: int = 0) -> Array:
+        """Return sampling mesh in reference domain.
+
+        Args:
+            kind: 'quadrature' (default) or 'uniform'.
+            N: Number of uniform points (0 -> num_quad_points).
+        """
         if kind == "quadrature":
-            return self.map_true_domain(self.quad_points_and_weights(N)[0])
+            return self.quad_points_and_weights(N)[0]
         assert kind == "uniform"
-        a, b = self.domain
+        a, b = self.reference_domain
         M = N if N != 0 else self.num_quad_points
         return jnp.linspace(float(a), float(b), M)
 

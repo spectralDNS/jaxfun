@@ -177,6 +177,20 @@ class Composite(OrthogonalSpace):
         """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
 
+    @jax.jit(static_argnums=(0, 2, 3, 4))
+    def evaluate_nonlinear_primitive(
+        self,
+        c: Array,
+        derivative_order: int = 0,
+        kind: str = "quadrature",
+        N: int = 0,
+    ) -> Array:
+        """Evaluate ``u``/``d^k u`` for nonlinear terms via orthogonal basis."""
+        coeffs = self.to_orthogonal(c)
+        return self.orthogonal.evaluate_nonlinear_primitive(
+            coeffs, derivative_order=derivative_order, kind=kind, N=N
+        )
+
     @jax.jit(static_argnums=(0, 2))
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
         """Return k-th derivative Vandermonde (constrained)."""
@@ -490,7 +504,25 @@ class DirectSum:
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Backward transform (composite + boundary contribution)."""
-        return self[0].backward(c, kind, N) + self[1].backward(self.bnd_vals(), kind, N)
+        n = self[0].num_quad_points if N == 0 else N
+        return self[0].backward(c, kind, n) + self[1].backward(self.bnd_vals(), kind, n)
+
+    @jax.jit(static_argnums=(0, 2, 3, 4))
+    def evaluate_nonlinear_primitive(
+        self,
+        c: Array,
+        derivative_order: int = 0,
+        kind: str = "quadrature",
+        N: int = 0,
+    ) -> Array:
+        """Evaluate ``u``/``d^k u`` including boundary lifting contribution."""
+        a, b = self.basespaces
+        n = a.num_quad_points if N == 0 else N
+        return a.evaluate_nonlinear_primitive(
+            c, derivative_order=derivative_order, kind=kind, N=n
+        ) + b.evaluate_nonlinear_primitive(
+            self.bnd_vals(), derivative_order=derivative_order, kind=kind, N=n
+        )
 
     @jax.jit(static_argnums=0)
     def forward(self, uj: Array) -> Array:

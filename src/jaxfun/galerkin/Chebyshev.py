@@ -208,6 +208,58 @@ class Chebyshev(Jacobi):
             return 0.5 * uh[0] + n * jax.scipy.fft.idct(uh, n=n)
         return super().backward(c, kind=kind, N=n)  # Does not require padding of c
 
+    @jax.jit(static_argnums=0)
+    def _differentiate_coefficients_once(self, c: Array) -> Array:
+        """Return Chebyshev coefficients for d/dX of ``sum c_n T_n(X)``."""
+        n = c.shape[0]
+        if n <= 1:
+            return jnp.zeros_like(c)
+
+        dc = jnp.zeros_like(c)
+        dc = dc.at[n - 2].set(2 * (n - 1) * c[n - 1])
+
+        if n > 2:
+
+            def body(i: int, acc: Array) -> Array:
+                k = n - 3 - i
+                value = acc[k + 2] + 2 * (k + 1) * c[k + 1]
+                return acc.at[k].set(value)
+
+            dc = jax.lax.fori_loop(0, n - 2, body, dc)
+
+        # T_0 normalization: c0 + 2 * sum_{n>0} c_n T_n in Clenshaw form.
+        dc = dc.at[0].set(0.5 * dc[0])
+        return dc
+
+    @jax.jit(static_argnums=(0, 2))
+    def derivative_coefficients(self, c: Array, derivative_order: int = 0) -> Array:
+        """Return coefficients for ``d^k/dx^k`` of a Chebyshev expansion."""
+
+        def body_fun(i: int, acc: Array) -> Array:
+            return self._differentiate_coefficients_once(acc)
+
+        scale = float(self.domain_factor) ** derivative_order
+        out = jax.lax.fori_loop(0, derivative_order, body_fun, c)
+        return out * scale
+
+    @jax.jit(static_argnums=(0, 2, 3, 4))
+    def evaluate_nonlinear_primitive(
+        self,
+        c: Array,
+        derivative_order: int = 0,
+        kind: str = "quadrature",
+        N: int = 0,
+    ) -> Array:
+        """Evaluate ``u``/``d^k u`` for nonlinear terms with DCT kernels."""
+        if derivative_order == 0:
+            return self.backward(c, kind=kind, N=N)
+        if kind != "quadrature":
+            return super().evaluate_nonlinear_primitive(
+                c, derivative_order=derivative_order, kind=kind, N=N
+            )
+        dc = self.derivative_coefficients(c, derivative_order=derivative_order)
+        return self.backward(dc, kind=kind, N=N)
+
     @jax.jit(static_argnums=(0, 2))
     def forward(self, u: Array, N: int = 0) -> Array:
         """Return Chebyshev coefficients for function values at quadrature points.

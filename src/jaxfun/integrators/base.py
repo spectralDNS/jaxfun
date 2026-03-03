@@ -15,11 +15,9 @@ from jaxfun.galerkin import Composite, DirectSum, TestFunction, TrialFunction
 from jaxfun.galerkin.arguments import (
     ArgumentTag,
     JAXFunction,
-    evaluate_jaxfunction_expr,
     get_arg,
 )
 from jaxfun.galerkin.forms import get_basisfunctions
-from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import inner, project1D
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
@@ -41,9 +39,9 @@ IntegratorSpace = OrthogonalSpace | DirectSum | Composite
 @dataclass(frozen=True)
 class _NonlinearCompileContext:
     x_symbol: sp.Symbol
+    functionspace: IntegratorSpace
     orthogonal: OrthogonalSpace
     x_ref: Array
-    x_true: Array
     jaxfunction: AppliedUndef
 
 
@@ -79,13 +77,6 @@ class _NonlinearCompiler:
         self.context = context
         self._compiled: dict[sp.Basic, NodeEvaluator] = {}
         self._static: dict[sp.Basic, Array] = {}
-        self._fourier = (
-            context.orthogonal
-            if isinstance(context.orthogonal, Fourier)
-            and context.x_true.shape[0] == context.orthogonal.N
-            else None
-        )
-        self._fourier_scales: dict[int, Array] = {}
 
     def compile(self, expr: sp.Expr) -> NodeEvaluator:
         return self._compile_node(sp.expand(expr))
@@ -126,55 +117,36 @@ class _NonlinearCompiler:
         return self._memoize(node, self._compile_lambdified(node, child_eval))
 
     def _compile_primitive(self, node: sp.Basic) -> NodeEvaluator:
-        if self._fourier is not None:
-            fourier_eval = self._compile_fourier_primitive(node)
-            if fourier_eval is not None:
-                return self._memoize(node, fourier_eval)
-        return self._memoize(
-            node,
-            lambda _cache, node=node: evaluate_jaxfunction_expr(
-                node,
-                self.context.x_true,
-                self.context.jaxfunction,
-            ),
-        )
-
-    def _compile_fourier_primitive(self, node: sp.Basic) -> NodeEvaluator | None:
-        V = self._fourier
-        if V is None:
-            return None
-
+        space = self.context.functionspace
         jaxf = cast(JAXFunction, self.context.jaxfunction)
         if _is_jaxfunction_leaf(node):
-            return lambda _cache, V=V, jaxf=jaxf: V.backward(jaxf.array)
 
-        if not _is_direct_jax_derivative(node):
-            return None
+            def evaluate_leaf(
+                _cache: NodeValueCache,
+                space: IntegratorSpace = space,
+                jaxf: JAXFunction = jaxf,
+            ) -> Array:
+                return space.evaluate_nonlinear_primitive(jaxf.array)
+
+            return self._memoize(node, evaluate_leaf)
+
+        assert _is_direct_jax_derivative(node)
         derivative = cast(sp.Derivative, node)
         if any(var != self.context.x_symbol for var in derivative.variables):
-            return None
+            msg = "Only derivatives in the primary spatial coordinate are supported"
+            raise ValueError(msg)
 
         k = int(derivative.derivative_count)
-        scale = self._fourier_scale(k)
-        return lambda _cache, V=V, jaxf=jaxf, scale=scale: V.backward(
-            scale * jaxf.array
-        )
 
-    def _fourier_scale(self, k: int) -> Array:
-        cached = self._fourier_scales.get(k)
-        if cached is not None:
-            return cached
+        def evaluate_derivative(
+            _cache: NodeValueCache,
+            space: IntegratorSpace = space,
+            jaxf: JAXFunction = jaxf,
+            k: int = k,
+        ) -> Array:
+            return space.evaluate_nonlinear_primitive(jaxf.array, derivative_order=k)
 
-        V = self._fourier
-        assert V is not None
-        if k == 0:
-            scale = jnp.ones(V.N, dtype=complex)
-        else:
-            eliminate = bool(k % 2 == 1 and V.N % 2 == 0)
-            waves = V.wavenumbers(eliminate_highest_freq=eliminate)
-            scale = (1j * waves * float(V.domain_factor)) ** k
-        self._fourier_scales[k] = scale
-        return scale
+        return self._memoize(node, evaluate_derivative)
 
     def _compile_add(self, child_eval: tuple[NodeEvaluator, ...]) -> NodeEvaluator:
         def evaluate(cache: NodeValueCache) -> Array:
@@ -210,18 +182,14 @@ class _NonlinearCompiler:
             )
 
         return lambda cache: jnp.power(
-            jnp.asarray(base_eval(cache)),
-            jnp.asarray(exp_eval(cache)),
+            jnp.asarray(base_eval(cache)), jnp.asarray(exp_eval(cache))
         )
 
     def _compile_function(
         self, node: sp.Function, child_eval: tuple[NodeEvaluator, ...]
     ) -> NodeEvaluator:
         if node.func.__name__ == "Heaviside":
-            return lambda cache: jnp.heaviside(
-                jnp.asarray(child_eval[0](cache)),
-                0.5,
-            )
+            return lambda cache: jnp.heaviside(jnp.asarray(child_eval[0](cache)), 0.5)
 
         jnp_function = _JAX_FUNCTION_BY_NAME.get(node.func.__name__)
         if jnp_function is None:
@@ -345,14 +313,13 @@ def _compile_nonlinear_evaluator(
     expr: sp.Expr,
     functionspace: IntegratorSpace,
     x_ref: Array,
-    x_true: Array,
     jaxfunction: AppliedUndef,
 ) -> Callable[[Array], Array]:
     context = _NonlinearCompileContext(
         x_symbol=functionspace.system.base_scalars()[0],
+        functionspace=functionspace,
         orthogonal=functionspace.orthogonal,
         x_ref=x_ref,
-        x_true=x_true,
         jaxfunction=jaxfunction,
     )
     compiled = _NonlinearCompiler(context).compile(expr)
@@ -598,14 +565,9 @@ class BaseIntegrator(ABC, nnx.Module):
             )
             self.nonlinear_expr = nonlinear_expr
             x_ref = V.orthogonal.quad_points_and_weights()[0]
-            x_true = V.orthogonal.map_true_domain(x_ref)
             self._nonlinear_jaxfunction = jaxfunction
             self._nonlinear_evaluator = _compile_nonlinear_evaluator(
-                nonlinear_expr,
-                V,
-                x_ref,
-                x_true,
-                jaxfunction,
+                nonlinear_expr, V, x_ref, jaxfunction
             )
 
     def initial_coefficients(self, initial: sp.Expr | Array | None = None) -> Array:

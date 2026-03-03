@@ -151,11 +151,7 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
 ) -> None:
     N = 32
     V = FunctionSpace(
-        N,
-        FourierSpace,
-        domain=Domain(0.0, 2.0 * float(sp.pi)),
-        name="V",
-        fun_str="E",
+        N, FourierSpace, domain=Domain(0.0, 2.0 * float(sp.pi)), name="V", fun_str="E"
     )
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
@@ -167,14 +163,16 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
     integrator = RK4(V, weak_form, time=(0.0, 0.01), initial=sp.sin(x), sparse=True)
     uhat = integrator.initial_coefficients()
 
-    calls: list[sp.Basic] = []
-    original_eval = integrator_base.evaluate_jaxfunction_expr
+    calls: list[int] = []
+    original_eval = integrator.functionspace.evaluate_nonlinear_primitive
 
-    def count_eval(expr: sp.Expr, xj, jaxfunction=None):
-        calls.append(sp.sympify(expr))
-        return original_eval(expr, xj, jaxfunction)
+    def count_eval(c, derivative_order: int = 0, kind: str = "quadrature", N: int = 0):
+        calls.append(int(derivative_order))
+        return original_eval(c, derivative_order=derivative_order, kind=kind, N=N)
 
-    monkeypatch.setattr(integrator_base, "evaluate_jaxfunction_expr", count_eval)
+    monkeypatch.setattr(
+        integrator.functionspace, "evaluate_nonlinear_primitive", count_eval
+    )
 
     nonlinear = integrator.nonlinear_rhs(uhat)
     u_phys = V.backward(uhat)
@@ -183,10 +181,14 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
 
     assert jnp.allclose(nonlinear, expected, atol=1e-6, rtol=1e-6)
 
-    primitive_terms = {
-        node
+    primitive_orders = {
+        0
+        if integrator_base._is_jaxfunction_leaf(node)
+        else int(sp.sympify(node).derivative_count)  # ty:ignore[unresolved-attribute]
         for node in sp.core.traversal.preorder_traversal(integrator.nonlinear_expr)
         if integrator_base._is_jaxfunction_primitive(node)
     }
-    # Fourier fast path bypasses evaluate_jaxfunction_expr entirely.
-    assert len(calls) in (0, len(primitive_terms))
+
+    # Primitive evaluations are cached per unique symbolic primitive node.
+    assert len(calls) == len(primitive_orders)
+    assert sorted(calls) == sorted(primitive_orders)

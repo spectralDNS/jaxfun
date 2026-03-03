@@ -154,6 +154,25 @@ class OrthogonalSpace(BaseSpace):
         xj = self.mesh(kind=kind, N=N)
         return self.evaluate(self.map_reference_domain(xj), c)
 
+    @jax.jit(static_argnums=(0, 2, 3, 4))
+    def evaluate_nonlinear_primitive(
+        self,
+        c: Array,
+        derivative_order: int = 0,
+        kind: str = "quadrature",
+        N: int = 0,
+    ) -> Array:
+        """Evaluate ``u`` or ``d^k u`` in physical space for nonlinear terms.
+
+        Subclasses can override this hook to use transform-specific fast paths.
+        The default implementation evaluates values with ``backward`` and
+        derivatives via ``evaluate_derivative`` on the requested mesh.
+        """
+        if derivative_order == 0:
+            return self.backward(c, kind=kind, N=N)
+        xj = self.mesh(kind=kind, N=N)
+        return self.evaluate_derivative(xj, c, k=derivative_order)
+
     @jax.jit(static_argnums=0)
     def mass_matrix(self) -> BCOO:
         """Return diagonal mass matrix (orthogonality) in sparse format."""

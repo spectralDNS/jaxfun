@@ -8,10 +8,12 @@ from jaxfun.galerkin import (
     Chebyshev,
     Fourier,
     FunctionSpace,
+    JAXFunction,
     Legendre,
     TensorProduct,
     TestFunction,
     TrialFunction,
+    VectorTensorProductSpace,
 )
 from jaxfun.galerkin.composite import DirectSum
 from jaxfun.galerkin.inner import inner
@@ -84,6 +86,43 @@ def test_tp_matrix_and_preconditioner():
     assert Z.shape == X.shape
     # Convert to scipy kron
     _ = tpmats_to_scipy_kron([tp])
+
+
+def test_vectortensorproductspace_forward_backward_roundtrip():
+    N = 8
+    C = Chebyshev.Chebyshev(N)
+    T = TensorProduct(C, C)
+    V: VectorTensorProductSpace = VectorTensorProductSpace(T, name="V")
+
+    key = jax.random.PRNGKey(0)
+    coeffs = jax.random.normal(key, shape=V.shape())
+    u = JAXFunction(coeffs, V)
+
+    ua = V.backward(u.array)
+    coeffs_rt = V.forward(ua)
+
+    assert jnp.linalg.norm(u.array - coeffs_rt) < ulp(1000)
+
+
+def test_vectortensorproductspace_padded_backward_forward_truncation_roundtrip():
+    N: int = 8
+    trunc: tuple[int, int] = (N, N)
+    pad: tuple[int, int] = (N + 4, N + 3)
+
+    C = Chebyshev.Chebyshev(N)
+    T = TensorProduct(C, C)
+    V = VectorTensorProductSpace(T, name="V")
+
+    key = jax.random.PRNGKey(1)
+    coeffs = jax.random.normal(key, shape=V.num_dofs)
+    u = JAXFunction(coeffs, V)
+
+    ua = V.backward(u.array, N=(pad, pad))
+    coeffs_rt = V.forward(ua, N=(trunc, trunc))
+
+    assert ua.shape == (2,) + pad
+    assert coeffs_rt.shape == V.num_dofs
+    assert jnp.linalg.norm(u.array - coeffs_rt) < ulp(1000)
 
 
 def test_inner_multivar_expression():

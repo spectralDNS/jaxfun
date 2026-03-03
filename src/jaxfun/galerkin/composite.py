@@ -168,9 +168,9 @@ class Composite(OrthogonalSpace):
         return self.orthogonal.quad_points_and_weights(N)
 
     @jax.jit(static_argnums=0)
-    def evaluate(self, X: Array, c: Array) -> Array:
+    def _evaluate(self, X: Array, c: Array) -> Array:
         """Evaluate constrained expansion at X with composite coeffs c."""
-        return self.orthogonal.evaluate(X, self.to_orthogonal(c))
+        return self.orthogonal._evaluate(X, self.to_orthogonal(c))
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> float:

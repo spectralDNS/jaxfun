@@ -57,7 +57,7 @@ class Jacobi(OrthogonalSpace):
         self.beta: sp.Number | float = beta
 
     @jit_vmap(in_axes=(0, None))
-    def evaluate2(self, X: float, c: Array) -> Array:
+    def _evaluate2(self, X: float | Array, c: Array) -> Array:
         """Evaluate Jacobi series sum_k c_k P_k^{(α,β)}(X) (backward scheme).
 
         Uses a stable backward recurrence accumulating two running
@@ -99,7 +99,7 @@ class Jacobi(OrthogonalSpace):
 
     @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
-        """Return Gauss–Jacobi quadrature nodes/weights.
+        """Return Gauss-Jacobi quadrature nodes/weights.
 
         Args:
             N: Number of points (0 -> self.num_quad_points).

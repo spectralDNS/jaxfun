@@ -47,7 +47,7 @@ class Fourier(OrthogonalSpace):
         self._k = {k: w[k].item() for k in range(N)}  # map index to wavenumber
 
     @jit_vmap(in_axes=(0, None))
-    def evaluate2(self, X: float | Array, c: Array) -> Array:
+    def _evaluate2(self, X: float | Array, c: Array) -> Array:
         r"""Evaluate Fourier series at arbitrary (not necessarily uniform) X.
 
         Uses an explicit loop (fori_loop) accumulating:

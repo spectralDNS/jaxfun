@@ -662,8 +662,7 @@ class SpectralModule(BaseModule):
             Values (N,) if d=1 else (N, rank+1).
         """
         if isinstance(self.space, OrthogonalSpace | DirectSum):
-            X = self.space.map_reference_domain(x)
-            return self.space.evaluate(X, self.kernel[0])
+            return self.space.evaluate(x, self.kernel[0])
 
         z = self.space.evaluate(x, self.kernel, True)
         if self.space.rank == 0:

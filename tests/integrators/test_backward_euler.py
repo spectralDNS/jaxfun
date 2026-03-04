@@ -4,11 +4,12 @@ import sympy as sp
 
 import jaxfun.integrators.nonlinear as integrator_nonlinear
 from jaxfun import Domain
+from jaxfun.galerkin import TensorProductSpace
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev as Cheb
 from jaxfun.galerkin.Fourier import Fourier as FourierSpace
 from jaxfun.galerkin.functionspace import FunctionSpace
-from jaxfun.integrators import RK4, BackwardEuler
+from jaxfun.integrators import ETDRK4, RK4, BackwardEuler
 from jaxfun.operators import Constant, Div, Grad
 from jaxfun.typing import MeshKind
 from jaxfun.utils.common import lambdify, n
@@ -198,3 +199,121 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
     # Primitive evaluations are cached per unique symbolic primitive node.
     assert len(calls) == len(primitive_orders)
     assert sorted(calls) == sorted(primitive_orders)
+
+
+def test_rk4_tensorproduct_projects_symbolic_initial_condition() -> None:
+    N = 16
+    dt = 1e-3
+    steps = 4
+
+    F = FourierSpace(N, domain=Domain(-1, 1))
+    V = TensorProductSpace((F, F), name="V")
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    t = V.system.base_time()
+    x, y = V.system.base_scalars()
+
+    u0 = sp.cos(sp.pi * x) * sp.cos(sp.pi * y)
+    weak_form = v * (u.diff(t) + u.diff(x) + u.diff(y))
+    integrator = RK4(V, weak_form, time=(0.0, dt * steps), initial=u0, sparse=True)
+
+    uhat0 = integrator.initial_coefficients()
+    assert uhat0.shape == V.num_dofs
+
+    uhat_t = integrator.solve(dt=dt, steps=steps, progress=False)
+    assert uhat_t.shape == V.num_dofs
+    assert bool(jnp.isfinite(V.backward(uhat_t)).all())
+
+
+def test_rk4_tensorproduct_projects_x_only_initial_condition() -> None:
+    N = 16
+    dt = 1e-3
+    steps = 2
+
+    F = FourierSpace(N, domain=Domain(-1, 1))
+    V = TensorProductSpace((F, F), name="V")
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    t = V.system.base_time()
+    x, y = V.system.base_scalars()
+
+    u0 = sp.cos(sp.pi * x)
+    weak_form = v * (u.diff(t) + u.diff(x) + u.diff(y))
+    integrator = RK4(V, weak_form, time=(0.0, dt * steps), initial=u0, sparse=True)
+
+    uhat0 = integrator.initial_coefficients()
+    assert uhat0.shape == V.num_dofs
+
+    u0_phys = V.backward(uhat0).real
+    xj, _yj = V.mesh()
+    expected = jnp.broadcast_to(jnp.cos(jnp.pi * xj), u0_phys.shape)
+    assert jnp.allclose(u0_phys, expected, atol=1e-6, rtol=1e-6)
+
+    uhat_t = integrator.solve(dt=dt, steps=steps, progress=False)
+    assert uhat_t.shape == V.num_dofs
+    assert bool(jnp.isfinite(V.backward(uhat_t)).all())
+
+
+def test_rk4_tensorproduct_nonlinear_rhs_uses_mixed_derivative_path() -> None:
+    N = 16
+    F = FourierSpace(N, domain=Domain(-1, 1))
+    V = TensorProductSpace((F, F), name="V")
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    t = V.system.base_time()
+    x, y = V.system.base_scalars()
+
+    u0 = sp.cos(sp.pi * x) * sp.cos(sp.pi * y)
+    weak_form = v * (u.diff(t) + u * u.diff(x) + u * u.diff(y))
+    integrator = RK4(V, weak_form, time=(0.0, 0.01), initial=u0, sparse=True)
+
+    uhat = integrator.initial_coefficients()
+    nonlinear = integrator.nonlinear_rhs(uhat)
+
+    xj = list(V.mesh())
+    u_phys = V.backward(uhat)
+    ux_phys = V.evaluate_derivative(xj, uhat, k=(1, 0))
+    uy_phys = V.evaluate_derivative(xj, uhat, k=(0, 1))
+    expected = V.forward(-(u_phys * ux_phys + u_phys * uy_phys))
+
+    assert jnp.allclose(nonlinear, expected, atol=2e-6, rtol=2e-6)
+
+
+def test_etdrk4_tensorproduct_nonlinear_short_run_is_finite() -> None:
+    N = 16
+    mu = Constant("mu", sp.Rational(3, 20))
+    dt = 2e-4
+    steps = 8
+
+    F = FourierSpace(N, domain=Domain(-1, 1))
+    V = TensorProductSpace((F, F), name="V")
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    t = V.system.base_time()
+    x, y = V.system.base_scalars()
+
+    u0 = sp.cos(sp.pi * x) * sp.cos(sp.pi * y)
+    laplace_u = u.diff(x, 2) + u.diff(y, 2)
+    weak_form = v * (u.diff(t) + (u * u).diff(x) / 2 + mu**2 * laplace_u.diff(x))
+    integrator = ETDRK4(
+        V,
+        weak_form,
+        time=(0.0, dt * steps),
+        initial=u0,
+        sparse=True,
+        sparse_tol=1000,
+    )
+
+    states = integrator.solve(
+        dt=dt,
+        steps=steps,
+        n_batches=4,
+        return_each_step=True,
+        progress=False,
+    )
+    assert states.shape == (5,) + V.num_dofs
+
+    u0_phys = V.backward(states[0]).real
+    uT_phys = V.backward(states[-1]).real
+    assert bool(jnp.isfinite(uT_phys).all())
+    assert float(jnp.linalg.norm(uT_phys - u0_phys)) > 1e-8

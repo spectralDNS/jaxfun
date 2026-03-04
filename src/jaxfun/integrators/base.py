@@ -10,10 +10,17 @@ from flax import nnx
 from jax.experimental.sparse import BCOO
 from sympy.core.function import AppliedUndef
 
-from jaxfun.galerkin import Composite, DirectSum, TestFunction, TrialFunction
+from jaxfun.galerkin import (
+    Composite,
+    DirectSum,
+    DirectSumTPS,
+    TensorProductSpace,
+    TestFunction,
+    TrialFunction,
+)
 from jaxfun.galerkin.arguments import JAXFunction
 from jaxfun.galerkin.forms import get_basisfunctions
-from jaxfun.galerkin.inner import inner, project1D
+from jaxfun.galerkin.inner import inner, project
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
 from jaxfun.typing import (
@@ -33,7 +40,9 @@ from .nonlinear import (
     replace_trial_with_jaxfunction,
 )
 
-type IntegratorSpace = OrthogonalSpace | DirectSum | Composite
+type IntegratorSpace = (
+    OrthogonalSpace | DirectSum | Composite | TensorProductSpace | DirectSumTPS
+)
 
 
 def _bcoo_diagonal(mat: BCOO) -> Array | None:
@@ -260,24 +269,25 @@ class BaseIntegrator(ABC, nnx.Module):
         self._nonlinear_jaxfunction: AppliedUndef | None = None
         self._nonlinear_evaluator: Callable[[Array], Array] | None = None
         if self.has_nonlinear:
+            dof_shape = V.num_dofs if V.dims > 1 else (V.num_dofs,)
             base_jaxfunction = JAXFunction(
-                jnp.zeros((V.num_dofs,)), V, name=f"{trial.name}_jax"
+                jnp.zeros(dof_shape), V, name=f"{trial.name}_jax"
             )
             jaxfunction = cast(AppliedUndef, base_jaxfunction.doit())
             nonlinear_expr = replace_trial_with_jaxfunction(
                 nonlinear, trial, jaxfunction
             )
             self.nonlinear_expr = nonlinear_expr
-            x_ref = V.orthogonal.quad_points_and_weights()[0]
+            quad_mesh = V.mesh()
             self._nonlinear_jaxfunction = jaxfunction
             self._nonlinear_evaluator = _compile_nonlinear_evaluator(
-                nonlinear_expr, V, x_ref, jaxfunction
+                nonlinear_expr, V, quad_mesh, jaxfunction
             )
 
     def initial_coefficients(self, initial: sp.Expr | Array | None = None) -> Array:
         init = self.initial if initial is None else initial
         if isinstance(init, sp.Expr):
-            return project1D(init, self.functionspace)
+            return project(init, self.functionspace)
         return jnp.asarray(init).reshape(self.functionspace.num_dofs)
 
     def resolve_time(

@@ -1,28 +1,38 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from math import prod
 from typing import cast
 
 import jax.numpy as jnp
 import sympy as sp
 from sympy.core.function import AppliedUndef
 
-from jaxfun.galerkin import Composite, DirectSum, TestFunction, TrialFunction
+from jaxfun.galerkin import (
+    Composite,
+    DirectSum,
+    DirectSumTPS,
+    TensorProductSpace,
+    TestFunction,
+    TrialFunction,
+)
 from jaxfun.galerkin.arguments import ArgumentTag, JAXFunction, get_arg
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.typing import Array
 from jaxfun.utils import lambdify
 
-type IntegratorSpace = OrthogonalSpace | DirectSum | Composite
+type IntegratorSpace = (
+    OrthogonalSpace | DirectSum | Composite | TensorProductSpace | DirectSumTPS
+)
 type NodeValueCache = dict[sp.Basic, Array]
 type NodeEvaluator = Callable[[NodeValueCache], Array]
 
 
 @dataclass(frozen=True)
 class _NonlinearCompileContext:
-    x_symbol: sp.Symbol
+    spatial_symbols: tuple[sp.Symbol, ...]
     functionspace: IntegratorSpace
-    orthogonal: OrthogonalSpace
-    x_ref: Array
+    mesh: tuple[Array, ...]
+    expected_shape: tuple[int, ...]
     jaxfunction: AppliedUndef
 
 
@@ -110,19 +120,32 @@ class _NonlinearCompiler:
 
         assert _is_direct_jax_derivative(node)
         derivative = cast(sp.Derivative, node)
-        if any(var != self.context.x_symbol for var in derivative.variables):
-            msg = "Only derivatives in the primary spatial coordinate are supported"
-            raise ValueError(msg)
+        known = set(self.context.spatial_symbols)
+        unknown = tuple(var for var in derivative.variables if var not in known)
+        if len(unknown) > 0:
+            names = ", ".join(sorted(str(sym) for sym in set(unknown)))
+            raise ValueError(f"Only spatial derivatives are supported, got: {names}")
 
-        k = int(derivative.derivative_count)
+        derivative_counts = tuple(
+            derivative.variables.count(sym) for sym in self.context.spatial_symbols
+        )
+        if sum(derivative_counts) == 0:
+            raise ValueError("Derivative order is zero in all spatial coordinates")
+        derivative_order: int | tuple[int, ...]
+        if self.context.functionspace.dims == 1:
+            derivative_order = int(derivative_counts[0])
+        else:
+            derivative_order = derivative_counts
 
         def evaluate_derivative(
             _cache: NodeValueCache,
             space: IntegratorSpace = space,
             jaxf: JAXFunction = jaxf,
-            k: int = k,
+            derivative_order: int | tuple[int, ...] = derivative_order,
         ) -> Array:
-            return space.evaluate_nonlinear_primitive(jaxf.array, derivative_order=k)
+            return space.evaluate_nonlinear_primitive(
+                jaxf.array, derivative_order=derivative_order
+            )
 
         return self._memoize(node, evaluate_derivative)
 
@@ -211,11 +234,16 @@ class _NonlinearCompiler:
         if len(free_symbols) == 0:
             value = float(evaluated) if evaluated.is_real else complex(evaluated)
             out = jnp.asarray(value)
-        elif free_symbols.issubset({self.context.x_symbol}):
-            mapped = self.context.orthogonal.map_expr_true_domain(evaluated)
-            sampled = lambdify(self.context.x_symbol, mapped, modules="jax")(
-                self.context.x_ref
-            )
+        elif free_symbols.issubset(set(self.context.spatial_symbols)):
+            symbols = self.context.spatial_symbols
+            if len(symbols) == 1:
+                sampled = lambdify(symbols[0], evaluated, modules="jax")(
+                    self.context.mesh[0]
+                )
+            else:
+                sampled = lambdify(symbols, evaluated, modules="jax")(
+                    *self.context.mesh
+                )
             out = jnp.asarray(sampled)
         else:
             names = ", ".join(sorted(str(sym) for sym in free_symbols))
@@ -270,42 +298,58 @@ def _is_jaxfunction_primitive(expr: sp.Basic) -> bool:
     return _is_jaxfunction_leaf(expr) or _is_direct_jax_derivative(expr)
 
 
-def _normalize_nonlinear_output(out: Array, expected_size: int) -> Array:
+def _normalize_nonlinear_output(out: Array, expected_shape: tuple[int, ...]) -> Array:
     out = jnp.asarray(out)
     if out.ndim == 0:
-        return jnp.broadcast_to(out, (expected_size,))
-    if out.ndim == 2 and out.shape[1] == 1:
-        out = jnp.squeeze(out, axis=1)
-    if out.ndim != 1:
-        out = out.reshape((-1,))
-    if out.shape[0] != expected_size:
-        expected_shape = (expected_size,)
+        return jnp.broadcast_to(out, expected_shape)
+
+    if (
+        out.ndim == len(expected_shape) + 1
+        and out.shape[-1] == 1
+        and out.shape[:-1] == expected_shape
+    ):
+        out = jnp.squeeze(out, axis=-1)
+
+    if out.shape == expected_shape:
+        return out
+
+    if out.size == prod(expected_shape):
+        out = out.reshape(expected_shape)
+    else:
         message = (
             f"Nonlinear evaluation returned shape {out.shape}; "
             f"expected {expected_shape}"
         )
         raise ValueError(message)
+
     return out
+
+
+def _as_mesh_tuple(mesh: Array | Sequence[Array]) -> tuple[Array, ...]:
+    if isinstance(mesh, tuple | list):
+        return tuple(jnp.asarray(m) for m in mesh)
+    return (jnp.asarray(mesh),)
 
 
 def _compile_nonlinear_evaluator(
     expr: sp.Expr,
     functionspace: IntegratorSpace,
-    x_ref: Array,
+    mesh: Array | tuple[Array, ...],
     jaxfunction: AppliedUndef,
 ) -> Callable[[Array], Array]:
+    mesh_tuple = _as_mesh_tuple(mesh)
+    expected_shape = jnp.broadcast_shapes(*(m.shape for m in mesh_tuple))
     context = _NonlinearCompileContext(
-        x_symbol=functionspace.system.base_scalars()[0],
+        spatial_symbols=tuple(functionspace.system.base_scalars()),
         functionspace=functionspace,
-        orthogonal=functionspace.orthogonal,
-        x_ref=x_ref,
+        mesh=mesh_tuple,
+        expected_shape=expected_shape,
         jaxfunction=jaxfunction,
     )
     compiled = _NonlinearCompiler(context).compile(expr)
-    expected_size = x_ref.shape[0]
 
     def evaluate(uh: Array) -> Array:
         cast(JAXFunction, jaxfunction).array = uh
-        return _normalize_nonlinear_output(compiled({}), expected_size)
+        return _normalize_nonlinear_output(compiled({}), expected_shape)
 
     return evaluate

@@ -346,6 +346,58 @@ class TensorProductSpace:
                 )(c)
         return c
 
+    @jax.jit(static_argnums=(0, 2, 3, 4))
+    def evaluate_nonlinear_primitive(
+        self,
+        c: Array,
+        derivative_order: int | tuple[int, ...] = 0,
+        kind: MeshKind = MeshKind.QUADRATURE,
+        N: tuple[int, ...] | None = None,
+    ) -> Array:
+        """Evaluate ``u`` or mixed derivatives for nonlinear terms.
+
+        Applies each factor space's nonlinear primitive evaluator axis-wise,
+        so underlying fast paths (e.g., Fourier FFT-based derivatives) are used.
+        """
+        if isinstance(derivative_order, int):
+            if derivative_order == 0:
+                return self.backward(c, kind=kind, N=N)
+            derivative_orders = (derivative_order,) + (0,) * (len(self) - 1)
+        else:
+            derivative_orders = derivative_order
+
+        if len(derivative_orders) != len(self):
+            raise ValueError(
+                "Derivative order tuple must match tensor-product dimensionality"
+            )
+
+        dim = len(self)
+        if dim == 2:
+            for ax in range(dim):
+                axi = dim - 1 - ax
+                primitive = partial(
+                    self.basespaces[ax].evaluate_nonlinear_primitive,
+                    derivative_order=derivative_orders[ax],
+                    kind=kind,
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+                )
+                c = jax.vmap(primitive, in_axes=axi, out_axes=axi)(c)
+        else:
+            for ax in range(dim):
+                primitive = partial(
+                    self.basespaces[ax].evaluate_nonlinear_primitive,
+                    derivative_order=derivative_orders[ax],
+                    kind=kind,
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+                )
+                ax0, ax1 = set(range(dim)) - set((ax,))
+                c = jax.vmap(
+                    jax.vmap(primitive, in_axes=ax0, out_axes=ax0),
+                    in_axes=ax1,
+                    out_axes=ax1,
+                )(c)
+        return c
+
     @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
         """Return tensor of inner products along each axis (separable)."""

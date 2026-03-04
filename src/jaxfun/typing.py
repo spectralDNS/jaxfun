@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, Protocol, cast, ove
 
 import sympy as sp
 from jax import Array as Array
+from jax.experimental.sparse import BCOO as BCOO
 from jax.typing import ArrayLike as ArrayLike
 from sympy.core.function import AppliedUndef
 from sympy.vector import (
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     )
     from jaxfun.galerkin.arguments import Jaxc
     from jaxfun.galerkin.orthogonal import OrthogonalSpace
+    from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
 
 
 type FloatLike = float | sp.Number
@@ -68,7 +70,20 @@ class SampleMethod(StrEnum):
     RANDOM = "random"
 
 
+class MeshKind(StrEnum):
+    QUADRATURE = "quadrature"
+    UNIFORM = "uniform"
+
+
 type DomainType = Literal["inside", "boundary", "intersection", "all"]
+type InnerBilinearResult = Array | BCOO | TPMatrix | TensorMatrix
+type InnerBilinearResults = list[Array | TPMatrix | TensorMatrix]
+type InnerLinearResults = list[Array]
+type GalerkinOperator = Array | BCOO | TPMatrix | TensorMatrix | TPMatrices
+type GalerkinOperatorLike = GalerkinOperator | list[GalerkinOperator]
+type GalerkinAssembledForm = (
+    GalerkinOperatorLike | tuple[GalerkinOperatorLike, Array | None] | None
+)
 
 
 @overload

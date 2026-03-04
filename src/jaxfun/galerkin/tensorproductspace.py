@@ -14,6 +14,7 @@ from jax import Array
 from scipy import sparse as scipy_sparse
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.typing import MeshKind
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
@@ -115,7 +116,7 @@ class TensorProductSpace:
 
     def mesh(
         self,
-        kind: str = "quadrature",
+        kind: MeshKind | str = MeshKind.QUADRATURE,
         N: tuple[int, ...] | None = None,
         broadcast: bool = True,
     ) -> tuple[Array, ...]:
@@ -138,9 +139,7 @@ class TensorProductSpace:
         return tuple(mesh)
 
     def flatmesh(
-        self,
-        kind: str = "quadrature",
-        N: tuple[int] | None = None,
+        self, kind: MeshKind = MeshKind.QUADRATURE, N: tuple[int] | None = None
     ) -> Array:
         """Return flattened list of all coordinate tuples.
 
@@ -157,7 +156,9 @@ class TensorProductSpace:
         )
 
     def cartesian_mesh(
-        self, kind: str = "quadrature", N: tuple[int, ...] | None = None
+        self,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
+        N: tuple[int, ...] | None = None,
     ) -> tuple[Array, ...]:
         """Return mapped Cartesian mesh (position vector evaluation)."""
         rv = self.system.position_vector(False)
@@ -209,10 +210,7 @@ class TensorProductSpace:
                     axi: int = dim - 1 - ax
                     c = jax.vmap(
                         self.basespaces[i].evaluate, in_axes=(None, axi), out_axes=axi
-                    )(
-                        jnp.atleast_1d(xi.squeeze()),
-                        c,
-                    )
+                    )(jnp.atleast_1d(xi.squeeze()), c)
             else:
                 T0, T1 = self.basespaces
                 C0 = T0.eval_basis_functions(
@@ -316,7 +314,10 @@ class TensorProductSpace:
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
-        self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
+        self,
+        c: Array,
+        kind: MeshKind = MeshKind.QUADRATURE,
+        N: tuple[int] | None = None,
     ) -> Array:
         """Jitted backward transform with optional padding."""
         dim: int = len(self)
@@ -340,6 +341,58 @@ class TensorProductSpace:
                 ax0, ax1 = set(range(dim)) - set((ax,))
                 c = jax.vmap(
                     jax.vmap(backward, in_axes=ax0, out_axes=ax0),
+                    in_axes=ax1,
+                    out_axes=ax1,
+                )(c)
+        return c
+
+    @jax.jit(static_argnums=(0, 2, 3, 4))
+    def evaluate_nonlinear_primitive(
+        self,
+        c: Array,
+        derivative_order: int | tuple[int, ...] = 0,
+        kind: MeshKind = MeshKind.QUADRATURE,
+        N: tuple[int, ...] | None = None,
+    ) -> Array:
+        """Evaluate ``u`` or mixed derivatives for nonlinear terms.
+
+        Applies each factor space's nonlinear primitive evaluator axis-wise,
+        so underlying fast paths (e.g., Fourier FFT-based derivatives) are used.
+        """
+        if isinstance(derivative_order, int):
+            if derivative_order == 0:
+                return self.backward(c, kind=kind, N=N)
+            derivative_orders = (derivative_order,) + (0,) * (len(self) - 1)
+        else:
+            derivative_orders = derivative_order
+
+        if len(derivative_orders) != len(self):
+            raise ValueError(
+                "Derivative order tuple must match tensor-product dimensionality"
+            )
+
+        dim = len(self)
+        if dim == 2:
+            for ax in range(dim):
+                axi = dim - 1 - ax
+                primitive = partial(
+                    self.basespaces[ax].evaluate_nonlinear_primitive,
+                    derivative_order=derivative_orders[ax],
+                    kind=kind,
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+                )
+                c = jax.vmap(primitive, in_axes=axi, out_axes=axi)(c)
+        else:
+            for ax in range(dim):
+                primitive = partial(
+                    self.basespaces[ax].evaluate_nonlinear_primitive,
+                    derivative_order=derivative_orders[ax],
+                    kind=kind,
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+                )
+                ax0, ax1 = set(range(dim)) - set((ax,))
+                c = jax.vmap(
+                    jax.vmap(primitive, in_axes=ax0, out_axes=ax0),
                     in_axes=ax1,
                     out_axes=ax1,
                 )(c)
@@ -519,7 +572,7 @@ class VectorTensorProductSpace:
     def backward(
         self,
         u: Array,
-        kind: str = "quadrature",
+        kind: MeshKind = MeshKind.QUADRATURE,
         N: tuple[tuple[int, ...], ...] | None = None,
     ) -> Array:
         """Backward transform with optional padding."""
@@ -749,7 +802,10 @@ class DirectSumTPS(TensorProductSpace):
         return self.tpspaces[(a0, a1)]
 
     def backward(
-        self, c: Array, kind: str = "quadrature", N: tuple[int, ...] | None = None
+        self,
+        c: Array,
+        kind: MeshKind = MeshKind.QUADRATURE,
+        N: tuple[int, ...] | None = None,
     ) -> Array:
         """Evaluate total (homogeneous + lifting) backward transform."""
         a: list[Array] = []
@@ -764,7 +820,9 @@ class DirectSumTPS(TensorProductSpace):
         v = TestFunction(self)
         u = TrialFunction(self)
         A, b = inner(u * v)
-        assert not isinstance(v.functionspace, VectorTensorProductSpace)
+        assert not isinstance(v.functionspace, VectorTensorProductSpace), (
+            "Forward transform not implemented for vector-valued spaces"
+        )
         b += v.functionspace.scalar_product(c)
         return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.num_dofs)
 

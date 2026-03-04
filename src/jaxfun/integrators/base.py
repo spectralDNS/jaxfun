@@ -33,7 +33,7 @@ from .nonlinear import (
     replace_trial_with_jaxfunction,
 )
 
-IntegratorSpace = OrthogonalSpace | DirectSum | Composite
+type IntegratorSpace = OrthogonalSpace | DirectSum | Composite
 
 
 def _bcoo_diagonal(mat: BCOO) -> Array | None:

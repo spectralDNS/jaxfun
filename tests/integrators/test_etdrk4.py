@@ -10,8 +10,53 @@ from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Fourier import Fourier as FourierSpace
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.integrators import ETDRK4
+from jaxfun.integrators.etdrk4 import _etdrk4_diag_coeffs
 from jaxfun.operators import Constant
 from jaxfun.utils.common import lambdify
+
+
+def test_etdrk4_zero_linear_coefficients_match_rk4_limit() -> None:
+    Ldiag = jnp.zeros(8)
+    E, E2, Q, f1, f2, f3 = _etdrk4_diag_coeffs(Ldiag, dt=0.1)
+    ones = jnp.ones_like(Ldiag)
+    sixth = ones / 6
+
+    assert jnp.allclose(E, ones)
+    assert jnp.allclose(E2, ones)
+    assert jnp.allclose(Q, 0.5 * ones)
+    assert jnp.allclose(f1, sixth)
+    assert jnp.allclose(f2, sixth)
+    assert jnp.allclose(f3, sixth)
+
+
+def test_etdrk4_setup_stage_coefficient_matches_coeff_builder() -> None:
+    N = 16
+    c = Constant("c", 1.0)
+    V = FunctionSpace(N, FourierSpace, name="V", fun_str="E")
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    (x,) = V.system.base_scalars()
+    t = V.system.base_time()
+
+    weak_form = v * (u.diff(t) + c * u.diff(x))
+    integrator = ETDRK4(
+        V,
+        weak_form,
+        time=(0.0, 0.1),
+        initial=sp.cos(x),
+        sparse=True,
+        sparse_tol=1000,
+    )
+    dt = 0.1
+    integrator.setup(dt=dt)
+
+    assert bool(integrator.is_diag)
+    assert integrator.mass_diag is not None
+    assert integrator.linear_diag is not None
+
+    Ldiag = integrator.linear_diag / integrator.mass_diag
+    _, _, expected_Q, _, _, _ = _etdrk4_diag_coeffs(Ldiag, dt)
+    assert jnp.allclose(jnp.asarray(integrator.Q), expected_Q)
 
 
 def test_etdrk4_solve_and_frames_interface() -> None:

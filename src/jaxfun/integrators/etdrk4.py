@@ -33,19 +33,33 @@ def _phi3(z: Array) -> Array:
     return jnp.where(small, series, (jnp.expm1(z) - z - z**2 / 2) / z**3)
 
 
+def _etdrk4_nonlinear_weights(
+    phi1: Array, phi2: Array, phi3: Array
+) -> tuple[Array, Array, Array]:
+    """Return ETDRK4 nonlinear combination weights.
+
+    Coeffs for N(u_n), N(a_n), N(b_n), N(c_n) in Kassam & Trefethen.
+    """
+    f1 = phi1 - 3 * phi2 + 4 * phi3
+    f2 = phi2 - 2 * phi3
+    f3 = 4 * phi3 - phi2
+    return f1, f2, f3
+
+
 def _etdrk4_diag_coeffs(
     L: Array, dt: float
 ) -> tuple[Array, Array, Array, Array, Array, Array]:
     z = dt * L
     E = jnp.exp(z)
     E2 = jnp.exp(z / 2)
-    Q = _phi1(z / 2)
+    # Stage coefficient:
+    #   L^{-1}(exp(hL/2)-I) = (h/2) * phi1(hL/2)
+    # and step uses h*Q, hence Q = 0.5 * phi1(hL/2).
+    Q = 0.5 * _phi1(z / 2)
     phi1 = _phi1(z)
     phi2 = _phi2(z)
     phi3 = _phi3(z)
-    f1 = phi1 - 3 * phi2 + 4 * phi3
-    f2 = phi2 - 2 * phi3
-    f3 = phi3
+    f1, f2, f3 = _etdrk4_nonlinear_weights(phi1, phi2, phi3)
     return E, E2, Q, f1, f2, f3
 
 
@@ -119,11 +133,10 @@ class ETDRK4(BaseIntegrator):
             z = dt * Lmat
             E = expm(z)
             E2 = expm(z / 2)
-            Q, _, _ = _phi_matrices(z / 2)
+            phi1_half, _, _ = _phi_matrices(z / 2)
+            Q = 0.5 * phi1_half
             phi1, phi2, phi3 = _phi_matrices(z)
-            f1 = phi1 - 3 * phi2 + 4 * phi3
-            f2 = phi2 - 2 * phi3
-            f3 = phi3
+            f1, f2, f3 = _etdrk4_nonlinear_weights(phi1, phi2, phi3)
 
         self.E = nnx.data(E)
         self.E2 = nnx.data(E2)

@@ -12,7 +12,9 @@ from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.typing import Array
 from jaxfun.utils import lambdify
 
-IntegratorSpace = OrthogonalSpace | DirectSum | Composite
+type IntegratorSpace = OrthogonalSpace | DirectSum | Composite
+type NodeValueCache = dict[sp.Basic, Array]
+type NodeEvaluator = Callable[[NodeValueCache], Array]
 
 
 @dataclass(frozen=True)
@@ -23,9 +25,6 @@ class _NonlinearCompileContext:
     x_ref: Array
     jaxfunction: AppliedUndef
 
-
-NodeValueCache = dict[sp.Basic, Array]
-NodeEvaluator = Callable[[NodeValueCache], Array]
 
 _JAX_FUNCTION_BY_NAME: dict[str, Callable[..., Array]] = {
     "Abs": jnp.abs,

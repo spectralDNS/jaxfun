@@ -749,8 +749,7 @@ class JAXFunction(ExpansionFunction):
             x: Coordinates (N, d). Created by calling self.functionspace.flatmesh().
         """
         if isinstance(self.functionspace, OrthogonalSpace | DirectSum):
-            X = self.functionspace.map_reference_domain(x)
-            return self.functionspace.evaluate(X, self.array)
+            return self.functionspace.evaluate(x, self.array)
         z = self.functionspace.evaluate(x, self.array, True)
         if self.functionspace.rank == 0:
             return jnp.expand_dims(z, -1)
@@ -768,8 +767,7 @@ class JAXFunction(ExpansionFunction):
         """
         if isinstance(self.functionspace, OrthogonalSpace | DirectSum):
             assert isinstance(x, Array)
-            X = self.functionspace.map_reference_domain(x)
-            return self.functionspace.evaluate(X, self.array)
+            return self.functionspace.evaluate(x, self.array)
 
         return self.functionspace.evaluate_mesh(x, self.array, True)
 

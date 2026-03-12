@@ -18,7 +18,7 @@ from jaxfun.typing import FloatLike
 if TYPE_CHECKING:
     from jaxfun.coordinates import BaseScalar
 
-Ynm = lambda n, m, x, y: sph_harm_y(n, m, x, y)
+Ynm = sph_harm_y
 n = Symbol("n", positive=True, integer=True)
 
 

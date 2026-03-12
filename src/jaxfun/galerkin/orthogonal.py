@@ -131,7 +131,9 @@ class OrthogonalSpace(BaseSpace):
         Returns:
             Array of shape like x containing series evaluation.
         """
-        # return jacn(self.evaluate, k)(x)
+        # X = self.map_reference_domain(x)
+        # ev = partial(self._evaluate, c=c)
+        # return float(self.domain_factor**k) * jacn(ev, k)(X)
         X = self.map_reference_domain(x)
         df = float(self.domain_factor**k)
         return df * self.evaluate_basis_derivative(X, k)[..., : len(c)] @ c

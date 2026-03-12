@@ -3,6 +3,7 @@ from . import (
     Fourier as Fourier,
     Jacobi as Jacobi,
     Legendre as Legendre,
+    Ultraspherical as Ultraspherical,
     orthogonal as orthogonal,
 )
 from .arguments import (

@@ -509,7 +509,6 @@ class VectorTensorProductSpace:
         return jnp.stack(coeffs)
 
     def scalar_product(self, u: Array) -> Array:
-        """Scalar product with optional truncation."""
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
             ci = space.scalar_product(u[i])

@@ -229,6 +229,50 @@ class Chebyshev(Jacobi):
             uh = uh[:N]
         return uh
 
+    @jax.jit(static_argnums=(0, 2))
+    def chebder(self, c: Array, derivative_order: int) -> Array:
+        """
+        Args:
+            c: Coefficients of Chebyshev series.
+
+        Returns:
+            Array (N,) of coefficients for the derivative of the series.
+        """
+        if derivative_order > 1:
+            return self.chebder(self.chebder(c, derivative_order - 1), 1)
+
+        N: int = c.shape[0] - 1
+        x0: Array = jnp.array(0.0)
+        x1: Array = c[-1] * N * 2
+
+        def inner_loop(
+            carry: tuple[Array, Array], n: int
+        ) -> tuple[tuple[Array, Array], Array]:
+            x0, x1 = carry
+            x2 = 2 * (n + 1) * c[n + 1] + x0
+            return (x1, x2), x2
+
+        _, xs = jax.lax.scan(inner_loop, (x0, x1), jnp.arange(N - 2, -1, -1))
+        return jnp.concatenate(
+            (jnp.array([xs[-1] / 2]), xs[-2::-1], jnp.array([x1, x0]))
+        )
+
+    @jax.jit(static_argnums=(0, 2, 3, 4))
+    def evaluate_nonlinear_primitive(
+        self,
+        c: Array,
+        derivative_order: int = 0,
+        kind: str = "quadrature",
+        N: int = 0,
+    ) -> Array:
+        """Evaluate ``u`` or ``d^k u`` in physical space for nonlinear terms.
+
+        Subclasses can override this hook to use transform-specific fast paths.
+        The default implementation evaluates values with ``backward`` and
+        derivatives via ``evaluate_derivative`` on the requested mesh.
+        """
+        return self.backward(self.chebder(c, derivative_order), kind=kind, N=N)
+
     def norm_squared(self) -> Array:
         """Return L2 norms squared over [-1, 1] with Chebyshev weight.
 

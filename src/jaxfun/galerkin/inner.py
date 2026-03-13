@@ -302,12 +302,7 @@ def inner(
             assert _has_globalindex(v)
             global_index = v.global_index
             is_multivar = "multivar" in b0 or "jaxfunction" in b0
-            z = inner_linear(
-                bi,
-                vf,
-                sc,
-                is_multivar,
-            )
+            z = inner_linear(bi, vf, sc, is_multivar)
             sc = 1
             bs.append(z)
 
@@ -387,7 +382,11 @@ def process_results(
     sparse: bool,
     sparse_tol: int,
 ) -> (
-    Array | list[Array] | BCOO | tuple[list[Array] | Array | BCOO, list[Array] | Array]
+    Array
+    | list[Array]
+    | BCOO
+    | list[TPMatrix]
+    | tuple[list[Array] | Array | BCOO | list[TPMatrix], list[Array] | Array]
 ):
     """Finalize assembly results (sum terms, optional sparsify).
 
@@ -411,6 +410,7 @@ def process_results(
             aresults: BCOO = tosparse(aresults, tol=sparse_tol)
 
     if len(aresults) > 0 and dims > 1 and sparse:
+        aresults: list[TPMatrix] = cast(list[TPMatrix], aresults)
         for a0 in aresults:
             if isinstance(a0, TPMatrix):
                 a0.mats: list[BCOO] = [
@@ -687,7 +687,19 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
         return project1D(ue, V)
 
     if V.is_orthogonal:
-        uj = lambdify(V.system.base_scalars(), ue, modules="jax")(*V.mesh())
+        uj = jnp.asarray(
+            lambdify(V.system.base_scalars(), ue, modules="jax")(*V.mesh())
+        )
+        expected_shape = V.shape()
+        if uj.shape != expected_shape:
+            try:
+                uj = jnp.broadcast_to(uj, expected_shape)
+            except ValueError as err:
+                msg = (
+                    f"Projected expression sampled shape {uj.shape} is not "
+                    f"broadcastable to tensor-product shape {expected_shape}"
+                )
+                raise ValueError(msg) from err
         return V.forward(uj)
 
     u = TrialFunction(V)

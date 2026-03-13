@@ -15,6 +15,7 @@ from scipy import sparse as scipy_sparse
 from sympy import Number
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, matmat, n
 
 from .Chebyshev import Chebyshev
@@ -173,9 +174,25 @@ class Composite(OrthogonalSpace):
         return self.orthogonal._evaluate(X, self.to_orthogonal(c))
 
     @jax.jit(static_argnums=(0, 2, 3))
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> float:
+    def backward(
+        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int = 0
+    ) -> float:
         """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
+
+    @jax.jit(static_argnums=(0, 2, 3, 4))
+    def evaluate_nonlinear_primitive(
+        self,
+        c: Array,
+        derivative_order: int = 0,
+        kind: MeshKind = MeshKind.QUADRATURE,
+        N: int = 0,
+    ) -> Array:
+        """Evaluate ``u``/``d^k u`` for nonlinear terms via orthogonal basis."""
+        coeffs = self.to_orthogonal(c)
+        return self.orthogonal.evaluate_nonlinear_primitive(
+            coeffs, derivative_order=derivative_order, kind=kind, N=N
+        )
 
     @jax.jit(static_argnums=(0, 2))
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
@@ -427,6 +444,7 @@ class DirectSum:
         num_dofs: Free DOFs (from Composite part).
     """
 
+    is_transient = False
     is_orthogonal = False
 
     def __init__(self, a: OrthogonalSpace, b: BCGeneric) -> None:
@@ -439,8 +457,8 @@ class DirectSum:
         self._num_quad_points = a._num_quad_points
         self.map_reference_domain = a.map_reference_domain
         self.map_true_domain = a.map_true_domain
-        self.dims = a.dims
-        self.rank = a.rank
+        self.dims: int = a.dims
+        self.rank: int = a.rank
 
     @overload
     def __getitem__(self, i: Literal[0]) -> OrthogonalSpace: ...
@@ -463,7 +481,11 @@ class DirectSum:
         """Return underlying orthogonal basis (from homogeneous component)."""
         return self[0].orthogonal
 
-    def mesh(self, kind: str = "quadrature", N: int = 0) -> Array:
+    def mesh(
+        self,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
+        N: int = 0,
+    ) -> Array:
         """Return mesh from homogeneous Composite summand."""
         return self[0].mesh(kind=kind, N=N)
 
@@ -487,9 +509,29 @@ class DirectSum:
         return self[0].evaluate(X, c) + self[1].evaluate(X, self.bnd_vals())
 
     @jax.jit(static_argnums=(0, 2, 3))
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+    def backward(
+        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int = 0
+    ) -> Array:
         """Backward transform (composite + boundary contribution)."""
-        return self[0].backward(c, kind, N) + self[1].backward(self.bnd_vals(), kind, N)
+        n = self[0].num_quad_points if N == 0 else N
+        return self[0].backward(c, kind, n) + self[1].backward(self.bnd_vals(), kind, n)
+
+    @jax.jit(static_argnums=(0, 2, 3, 4))
+    def evaluate_nonlinear_primitive(
+        self,
+        c: Array,
+        derivative_order: int = 0,
+        kind: MeshKind = MeshKind.QUADRATURE,
+        N: int = 0,
+    ) -> Array:
+        """Evaluate ``u``/``d^k u`` including boundary lifting contribution."""
+        a, b = self.basespaces
+        n = a.num_quad_points if N == 0 else N
+        return a.evaluate_nonlinear_primitive(
+            c, derivative_order=derivative_order, kind=kind, N=n
+        ) + b.evaluate_nonlinear_primitive(
+            self.bnd_vals(), derivative_order=derivative_order, kind=kind, N=n
+        )
 
     @jax.jit(static_argnums=0)
     def forward(self, uj: Array) -> Array:

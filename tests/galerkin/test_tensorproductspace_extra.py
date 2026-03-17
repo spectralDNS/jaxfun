@@ -54,7 +54,7 @@ def test_tensorproduct_get_homogeneous_and_tpmatrices_precond():
     A = inner(v * u)
     assert isinstance(A, list)
     mats_list = [m for m in cast(list[TPMatrix], A) if hasattr(m, "M")]
-    mats = TPMatrices(cast(list[TPMatrix], mats_list))
+    mats = TPMatrices(mats_list)
     X = jax.random.normal(jax.random.PRNGKey(0), shape=T.num_dofs)
     Z = mats.precond(X)
     assert Z.shape == X.shape

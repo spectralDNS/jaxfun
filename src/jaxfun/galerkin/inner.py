@@ -5,7 +5,6 @@ import jax.numpy as jnp
 import sympy as sp
 from jax import Array
 from jax.experimental.sparse import BCOO
-from sympy.core.function import AppliedUndef
 
 from jaxfun.typing import TrialSpaceType
 from jaxfun.utils.common import lambdify, matmat, tosparse
@@ -14,7 +13,7 @@ from .arguments import (
     ArgumentTag,
     TestFunction,
     TrialFunction,
-    evaluate_jaxfunction_expr,
+    evaluate_jaxfunction_expr_quad,
     get_arg,
 )
 from .composite import BCGeneric, Composite, DirectSum
@@ -23,6 +22,7 @@ from .forms import (
     _has_globalindex,
     _has_testspace,
     get_basisfunctions,
+    get_jaxfunctions,
     split,
     split_coeff,
 )
@@ -176,9 +176,7 @@ def inner(
             if "multivar" in a0:
                 scales.append(a0["multivar"])
             if "jaxfunction" in a0:
-                scales.append(
-                    evaluate_jaxfunction_expr(a0["jaxfunction"], test_space.mesh())
-                )
+                scales.append(evaluate_jaxfunction_expr_quad(a0["jaxfunction"]))
 
             Am = assemble_multivar(mats_, scales, test_space)
             if has_bcs:
@@ -323,7 +321,7 @@ def inner(
                     s = test_space.system.base_scalars()
                     uj = lambdify(s, b0["multivar"], modules="jax")(*test_space.mesh())
                 elif "jaxfunction" in b0:
-                    uj = evaluate_jaxfunction_expr(b0["jaxfunction"], test_space.mesh())
+                    uj = evaluate_jaxfunction_expr_quad(b0["jaxfunction"])
                 else:
                     raise ValueError("Expected multivar or jaxfunction key in b0")
                 res = bs[0][0].T @ uj @ bs[1][0]
@@ -343,7 +341,7 @@ def inner(
                     s = test_space.system.base_scalars()
                     uj = lambdify(s, b0["multivar"], modules="jax")(*test_space.mesh())
                 elif "jaxfunction" in b0:
-                    uj = evaluate_jaxfunction_expr(b0["jaxfunction"], test_space.mesh())
+                    uj = evaluate_jaxfunction_expr_quad(b0["jaxfunction"])
                 else:
                     raise ValueError("Expected multivar or jaxfunction key in b0")
                 res = jnp.einsum("il,jm,kn,ijk->lmn", bs[0][0], bs[1][0], bs[2][0], uj)
@@ -495,13 +493,14 @@ def inner_bilinear(
                     assert j == 0
                     j = int(aii.derivative_count)
             continue
-        jaxfunction = None
-        for p in sp.core.traversal.preorder_traversal(aii):
-            if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
-                jaxfunction = cast(AppliedUndef, p)
-                break
-        if jaxfunction:
-            scale *= evaluate_jaxfunction_expr(aii, vo.map_true_domain(xj), jaxfunction)
+        # jaxfunction = None
+        # for p in sp.core.traversal.preorder_traversal(aii):
+        #    if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
+        #        jaxfunction = cast(AppliedUndef, p)
+        #        break
+        jaxfunction = get_jaxfunctions(aii)
+        if len(jaxfunction) == 1:
+            scale *= evaluate_jaxfunction_expr_quad(aii, jaxfunction.pop())
             continue
         if len(aii.free_symbols) > 0:
             s = aii.free_symbols.pop()
@@ -586,15 +585,14 @@ def inner_linear(
                     i = int(bii.derivative_count)
                 continue
 
-            jaxfunction = None
-            for p in sp.core.traversal.preorder_traversal(bii):
-                if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
-                    jaxfunction = cast(AppliedUndef, p)
-                    break
-            if jaxfunction:
-                uj *= evaluate_jaxfunction_expr(
-                    bii, vo.map_true_domain(xj), jaxfunction
-                )
+            # jaxfunction = None
+            # for p in sp.core.traversal.preorder_traversal(bii):
+            #    if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
+            #        jaxfunction = cast(AppliedUndef, p)
+            #        break
+            jaxfunction = get_jaxfunctions(bii)
+            if len(jaxfunction) == 1:
+                uj *= evaluate_jaxfunction_expr_quad(bii, jaxfunction.pop())
                 continue
             # bii contains coordinates in the domain of v, e.g., (r, theta) for polar
             # Need to compute bii as bii(x(X)), since we use quadrature points

@@ -26,8 +26,6 @@ class Fourier(OrthogonalSpace):
         name: Space name (default "Fourier").
         fun_str: Symbol stem for basis functions (default "E").
 
-    Attributes:
-        _k: Mapping from coefficient index to integer wavenumber.
     """
 
     def __init__(
@@ -43,8 +41,6 @@ class Fourier(OrthogonalSpace):
         OrthogonalSpace.__init__(
             self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
-        w = self.wavenumbers()
-        self._k = {k: w[k].item() for k in range(N)}  # map index to wavenumber
 
     @jit_vmap(in_axes=(0, None))
     def _evaluate2(self, X: float | Array, c: Array) -> Array:
@@ -93,7 +89,7 @@ class Fourier(OrthogonalSpace):
         Returns:
             exp( i * k_i * X ).
         """
-        return jax.lax.exp(1j * self._k[i] * X)
+        return jax.lax.exp(1j * self.wavenumbers()[i] * X)
 
     @jit_vmap(in_axes=0)
     def eval_basis_functions(self, X: float) -> Array:
@@ -196,6 +192,21 @@ class Fourier(OrthogonalSpace):
         """Return L2 norm squared of each basis function over [0, 2π]."""
         return jnp.ones(self.N) * 2 * jnp.pi
 
+    def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
+        """
+        Args:
+            c: Coefficients of orthogonal series.
+            k: Order of derivative to compute.
+
+        Returns:
+            Array (N,) of coefficients for the k'th derivative of the series.
+        """
+        if k == 0:
+            return c
+
+        m = self.wavenumbers(eliminate_highest_freq=k % 2 == 1)
+        return (1j * m) ** k * c
+
 
 def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> sparse.BCOO:
     """Return sparse operator matrix for Fourier test/trial derivatives.
@@ -214,7 +225,7 @@ def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> sparse.BC
     v, i = test
     u, j = trial
     k = (1j * v.wavenumbers()) ** j * (-1j * u.wavenumbers()) ** i
-    if i + j % 2 == 0:
+    if (i + j) % 2 == 0:
         return sparse.BCOO(
             (k.real * v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
             shape=(v.N, u.N),

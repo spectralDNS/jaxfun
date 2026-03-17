@@ -46,7 +46,7 @@ u = TrialFunction(T, name="u")
 
 # Method of manufactured solution
 theta, phi = C.base_scalars()
-sph = sp.functions.special.spherical_harmonics.Ynm
+sph = sp.functions.special.spherical_harmonics.Ynm  # ty:ignore[possibly-missing-submodule]
 ue = sph(6, 3, theta, phi)
 
 # Assemble linear system of equations

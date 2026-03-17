@@ -1,9 +1,13 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import sympy as sp
 
+from jaxfun.galerkin import JAXFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev
+from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.Legendre import Legendre
+from jaxfun.galerkin.Ultraspherical import Ultraspherical
 from jaxfun.utils import ulp
 
 
@@ -63,3 +67,16 @@ def test_evaluate_basis_derivative(
     jax_res = V.evaluate_basis_derivative(x, k=k)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
     assert diff < ulp(10 ** (k + 2))
+
+
+@pytest.mark.parametrize("space", (Legendre, Chebyshev, Ultraspherical, Fourier))
+def test_backward_primitive(space):
+    N = 16
+    space = space(N)
+    x = space.system.x
+    f = sp.sin(x)
+    uf = JAXFunction(f, space)
+    du = JAXFunction(sp.diff(f, x), space)
+    df = space.backward_primitive(uf.array, 1)
+    error = jnp.linalg.norm(df - du.backward())
+    assert error < ulp(10000)

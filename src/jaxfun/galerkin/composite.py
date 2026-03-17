@@ -173,9 +173,16 @@ class Composite(OrthogonalSpace):
         return self.orthogonal._evaluate(X, self.to_orthogonal(c))
 
     @jax.jit(static_argnums=(0, 2, 3))
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> float:
+    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
         """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
+
+    @jax.jit(static_argnums=(0, 2, 3))
+    def backward_primitive(
+        self, c: Array, k: int = 0, kind: str = "quadrature", N: int = 0
+    ) -> Array:
+        """Inverse transform (physical -> coefficients) via underlying basis."""
+        return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, kind, N)
 
     @jax.jit(static_argnums=(0, 2))
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
@@ -320,6 +327,10 @@ class Composite(OrthogonalSpace):
         """Return underlying orthogonal basis instance."""
         return self.orthogonal
 
+    def __add__(self, b: BCGeneric) -> DirectSum:
+        """Direct sum self ⊕ b."""
+        return DirectSum(self, b)
+
 
 class BCGeneric(Composite):
     """Basis spanning only boundary-constraint enforcing functions.
@@ -429,9 +440,9 @@ class DirectSum:
 
     is_orthogonal = False
 
-    def __init__(self, a: OrthogonalSpace, b: BCGeneric) -> None:
+    def __init__(self, a: Composite, b: BCGeneric) -> None:
         assert isinstance(b, BCGeneric)
-        self.basespaces: tuple[OrthogonalSpace, BCGeneric] = (a, b)
+        self.basespaces: tuple[Composite, BCGeneric] = (a, b)
         self.bcs = b.bcs
         self.name = direct_sum_symbol.join([i.name for i in [a, b]])
         self.system: CoordSys = a.system
@@ -443,19 +454,16 @@ class DirectSum:
         self.rank = a.rank
 
     @overload
-    def __getitem__(self, i: Literal[0]) -> OrthogonalSpace: ...
+    def __getitem__(self, i: Literal[0]) -> Composite: ...
     @overload
     def __getitem__(self, i: Literal[1]) -> BCGeneric: ...
-    def __getitem__(self, i: int) -> OrthogonalSpace | BCGeneric:
-        """Return i-th summand."""
+    def __getitem__(self, i: int) -> Composite | BCGeneric:
         return self.basespaces[i]
 
     def __len__(self) -> int:
-        """Return number of summands (always 2)."""
         return len(self.basespaces)
 
-    def __iter__(self) -> Iterator[OrthogonalSpace | BCGeneric]:
-        """Iterate over summands."""
+    def __iter__(self) -> Iterator[Composite | BCGeneric]:
         return iter(self.basespaces)
 
     @property
@@ -481,19 +489,32 @@ class DirectSum:
         """Return free degrees of freedom (Composite part)."""
         return self[0].num_dofs
 
+    def to_orthogonal(self, c: Array) -> Array:
+        """Map direct-sum coefficients -> underlying orthogonal coefficients."""
+        c_a = self[0].to_orthogonal(c)
+        c_b = self[1].to_orthogonal(self[1].bnd_vals())
+        Nd = c_b.shape[0]
+        return jnp.concatenate((c_a[:Nd] + c_b, c_a[Nd:]))
+
     @jax.jit(static_argnums=0)
-    def evaluate(self, X: Array, c: Array) -> Array:
-        """Evaluate direct-sum function at X with composite coeffs c."""
-        return self[0].evaluate(X, c) + self[1].evaluate(X, self.bnd_vals())
+    def evaluate(self, x: Array, c: Array) -> Array:
+        """Evaluate direct-sum expansion at points x."""
+        return self.orthogonal.evaluate(x, self.to_orthogonal(c))
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
-        """Backward transform (composite + boundary contribution)."""
-        return self[0].backward(c, kind, N) + self[1].backward(self.bnd_vals(), kind, N)
+        """Return backward transform."""
+        return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
+
+    @jax.jit(static_argnums=(0, 2, 3))
+    def backward_primitive(
+        self, c: Array, k: int = 0, kind: str = "quadrature", N: int = 0
+    ) -> Array:
+        """Return backward transform for k-th derivative."""
+        return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, kind, N)
 
     @jax.jit(static_argnums=0)
     def forward(self, uj: Array) -> Array:
-        """Project physical samples u -> direct-sum coefficients."""
         from .arguments import TestFunction, TrialFunction
 
         u = TrialFunction(self)
@@ -502,11 +523,10 @@ class DirectSum:
         return jnp.linalg.solve(M, b)
 
     @jax.jit(static_argnums=(0, 3))
-    def evaluate_derivative(self, X: Array, c: Array, k: int = 0) -> float:
+    def evaluate_derivative(self, x: Array, c: Array, k: int = 0) -> float:
         """Evaluate k-th derivative at X (composite + boundary)."""
-        a, b = self.basespaces
-        bv = self.bnd_vals()
-        return a.evaluate_derivative(X, c, k) + b.evaluate_derivative(X, bv, k)
+        c0 = self.to_orthogonal(c)
+        return self.orthogonal.evaluate_derivative(x, c0, k)
 
 
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:

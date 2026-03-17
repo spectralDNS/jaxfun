@@ -4,7 +4,7 @@ import copy
 import itertools
 from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
-from typing import TYPE_CHECKING, NoReturn, TypeGuard, overload
+from typing import TYPE_CHECKING, NoReturn, TypeGuard, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -316,7 +316,7 @@ class TensorProductSpace:
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
-        self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
+        self, c: Array, kind: str = "quadrature", N: tuple[int, ...] | None = None
     ) -> Array:
         """Jitted backward transform with optional padding."""
         dim: int = len(self)
@@ -396,6 +396,43 @@ class TensorProductSpace:
                     out_axes=ax1,
                 )(u)
         return u
+
+    @jax.jit(static_argnums=(0, 2, 3, 4))
+    def backward_primitive(
+        self,
+        c: Array,
+        k: tuple[int, ...],
+        kind: str = "quadrature",
+        N: tuple[int, ...] | None = None,
+    ) -> Array:
+        """Jitted backward transform with optional padding."""
+        dim: int = len(self)
+        if dim == 2:
+            for ax in range(dim):
+                axi: int = dim - 1 - ax
+                backward_p = partial(
+                    self.basespaces[ax].backward_primitive,
+                    k=k[ax],
+                    kind=kind,
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+                )
+                c = jax.vmap(backward_p, in_axes=axi, out_axes=axi)(c)
+
+        else:
+            for ax in range(dim):
+                backward_p = partial(
+                    self.basespaces[ax].backward_primitive,
+                    k=k[ax],
+                    kind=kind,
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+                )
+                ax0, ax1 = set(range(dim)) - set((ax,))
+                c = jax.vmap(
+                    jax.vmap(backward_p, in_axes=ax0, out_axes=ax0),
+                    in_axes=ax1,
+                    out_axes=ax1,
+                )(c)
+        return c
 
 
 class VectorTensorProductSpace:
@@ -525,6 +562,21 @@ class VectorTensorProductSpace:
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
             ci = space.backward(u[i], kind=kind, N=N[i] if N is not None else None)
+            coeffs.append(ci)
+        return jnp.stack(coeffs)
+
+    def backward_primitive(
+        self,
+        u: Array,
+        k: tuple[int, ...],
+        kind: str = "quadrature",
+        N: tuple[tuple[int, ...], ...] | None = None,
+    ) -> Array:
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.backward_primitive(
+                u[i], k=k, kind=kind, N=N[i] if N is not None else None
+            )
             coeffs.append(ci)
         return jnp.stack(coeffs)
 
@@ -710,7 +762,7 @@ class DirectSumTPS(TensorProductSpace):
                             two_inhomogeneous[(bcsindex[0] + 1) % 2]
                         )
                         bco.bcs = bcall[bcsindex[0]][j]
-                        otherspace: DirectSum = otherspace + bco
+                        otherspace: DirectSum = cast(Composite, otherspace) + bco
                     uh.append(project1D(bc, otherspace))
                 if bcsindex[0] == 0:
                     self.bndvals[tensorspace] = jnp.array(uh)
@@ -780,7 +832,7 @@ class DirectSumTPS(TensorProductSpace):
             a.append(v.evaluate(x, self.coeff(c, f, v), use_einsum))
         return jnp.sum(jnp.array(a), axis=0)
 
-    def evaluate_derivative(self, x: Array, c: Array, k: int) -> Array:
+    def evaluate_derivative(self, x: Array, c: Array, k: tuple[int, ...]) -> Array:
         """Evaluate direct sum tensor product expansion at scattered points."""
         a: list[Array] = []
         for f, v in self.tpspaces.items():
@@ -794,6 +846,19 @@ class DirectSumTPS(TensorProductSpace):
         a: list[Array] = []
         for f, v in self.tpspaces.items():
             a.append(v.evaluate_mesh(x, self.coeff(c, f, v), use_einsum))
+        return jnp.sum(jnp.array(a), axis=0)
+
+    def backward_primitive(
+        self,
+        c: Array,
+        k: tuple[int, ...],
+        kind: str = "quadrature",
+        N: tuple[int, ...] | None = None,
+    ) -> Array:
+        """Evaluate total (homogeneous + lifting) backward transform."""
+        a: list[Array] = []
+        for f, v in self.tpspaces.items():
+            a.append(v.backward_primitive(self.coeff(c, f, v), k=k, kind=kind, N=N))
         return jnp.sum(jnp.array(a), axis=0)
 
     def coeff(

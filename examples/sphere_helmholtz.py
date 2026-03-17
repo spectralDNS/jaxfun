@@ -65,7 +65,7 @@ xc, yc, zc = T.cartesian_mesh(N=(100, 100))
 uj = T.backward(un, N=(100, 100))
 uej = lambdify((theta, phi), ue)(rj, tj)
 
-error = jnp.linalg.norm(uj - uej) / N
+error = jnp.linalg.norm(uj - uej) / 100
 if "PYTEST" in os.environ:
     assert error < ulp(1) * 1000, error
     sys.exit(1)

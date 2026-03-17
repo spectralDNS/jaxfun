@@ -60,9 +60,9 @@ A, b = inner(
 A0 = tpmats_to_scipy_kron(A)
 un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
 
-rj, tj = T.mesh(N=(100, 00))
-xc, yc, zc = T.cartesian_mesh(N=(100, 00))
-uj = T.backward(un, N=(100, 00))
+rj, tj = T.mesh(N=(100, 100))
+xc, yc, zc = T.cartesian_mesh(N=(100, 100))
+uj = T.backward(un, N=(100, 100))
 uej = lambdify((theta, phi), ue)(rj, tj)
 
 error = jnp.linalg.norm(uj - uej) / N

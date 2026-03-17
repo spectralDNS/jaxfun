@@ -493,11 +493,7 @@ def inner_bilinear(
                     assert j == 0
                     j = int(aii.derivative_count)
             continue
-        # jaxfunction = None
-        # for p in sp.core.traversal.preorder_traversal(aii):
-        #    if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
-        #        jaxfunction = cast(AppliedUndef, p)
-        #        break
+
         jaxfunction = get_jaxfunctions(aii)
         if len(jaxfunction) == 1:
             scale *= evaluate_jaxfunction_expr_quad(aii, jaxfunction.pop())
@@ -585,11 +581,6 @@ def inner_linear(
                     i = int(bii.derivative_count)
                 continue
 
-            # jaxfunction = None
-            # for p in sp.core.traversal.preorder_traversal(bii):
-            #    if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
-            #        jaxfunction = cast(AppliedUndef, p)
-            #        break
             jaxfunction = get_jaxfunctions(bii)
             if len(jaxfunction) == 1:
                 uj *= evaluate_jaxfunction_expr_quad(bii, jaxfunction.pop())

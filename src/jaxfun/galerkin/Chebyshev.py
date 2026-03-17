@@ -116,7 +116,7 @@ class Chebyshev(Jacobi):
         return jnp.sum(xs, axis=0) + c[0]
 
     @jax.jit(static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
+    def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return Gauss-Chebyshev (first kind) nodes and weights.
 
         Nodes:
@@ -132,7 +132,7 @@ class Chebyshev(Jacobi):
         Returns:
             Tuple (x, w) of nodes and weights.
         """
-        N = self.num_quad_points if N == 0 else N
+        N = self.num_quad_points if N is None else N
         return (
             jnp.cos(jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)),
             jnp.ones(N) * jnp.pi / N,
@@ -190,7 +190,9 @@ class Chebyshev(Jacobi):
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
     @jax.jit(static_argnums=(0, 2, 3))
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+    def backward(
+        self, c: Array, kind: str = "quadrature", N: int | None = None
+    ) -> Array:
         """Return Chebyshev series evaluated at quadrature points.
 
         Args:
@@ -199,7 +201,7 @@ class Chebyshev(Jacobi):
         Returns:
             Reversed coefficient array.
         """
-        n: int = self.N if N == 0 else N
+        n: int = self.N if N is None else N
 
         if kind == "quadrature":
             if n > len(c):
@@ -210,17 +212,17 @@ class Chebyshev(Jacobi):
         return super().backward(c, kind=kind, N=n)  # Does not require padding of c
 
     @jax.jit(static_argnums=(0, 2))
-    def forward(self, u: Array, N: int = 0) -> Array:
+    def forward(self, u: Array, N: int | None = None) -> Array:
         """Return Chebyshev coefficients for function values at quadrature points.
 
         Args:
             u: Function values at quadrature points.
-            N: Number of modes to return (defaults self.N if 0).
+            N: Number of modes to return (defaults self.N if None).
 
         Returns:
             Coefficient array of length N.
         """
-        N: int = self.N if N == 0 else N
+        N: int = self.N if N is None else N
         n: int = len(u)
         assert len(u) >= N, "Only truncation supported for forward transform"
         sign = (-1) ** jnp.arange(n)

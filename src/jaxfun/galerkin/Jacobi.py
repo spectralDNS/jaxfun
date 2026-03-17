@@ -105,16 +105,16 @@ class Jacobi(OrthogonalSpace):
         return jnp.sum(xs, axis=0) + c[0] + c[1] * x1
 
     @jax.jit(static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
+    def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return Gauss-Jacobi quadrature nodes/weights.
 
         Args:
-            N: Number of points (0 -> self.num_quad_points).
+            N: Number of points (None -> self.num_quad_points).
 
         Returns:
             Tuple (x, w) of nodes and weights.
         """
-        N = self.num_quad_points if N == 0 else N
+        N = self.num_quad_points if N is None else N
         x, w = roots_jacobi(N, float(self.alpha), float(self.beta))
         return jnp.array(x), jnp.array(w)
 

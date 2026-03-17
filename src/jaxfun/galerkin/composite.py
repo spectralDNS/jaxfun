@@ -173,13 +173,15 @@ class Composite(OrthogonalSpace):
         return self.orthogonal._evaluate(X, self.to_orthogonal(c))
 
     @jax.jit(static_argnums=(0, 2, 3))
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+    def backward(
+        self, c: Array, kind: str = "quadrature", N: int | None = None
+    ) -> Array:
         """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward_primitive(
-        self, c: Array, k: int = 0, kind: str = "quadrature", N: int = 0
+        self, c: Array, k: int = 0, kind: str = "quadrature", N: int | None = None
     ) -> Array:
         """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, kind, N)
@@ -502,13 +504,15 @@ class DirectSum:
         return self.orthogonal.evaluate(x, self.to_orthogonal(c))
 
     @jax.jit(static_argnums=(0, 2, 3))
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+    def backward(
+        self, c: Array, kind: str = "quadrature", N: int | None = None
+    ) -> Array:
         """Return backward transform."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward_primitive(
-        self, c: Array, k: int = 0, kind: str = "quadrature", N: int = 0
+        self, c: Array, k: int = 0, kind: str = "quadrature", N: int | None = None
     ) -> Array:
         """Return backward transform for k-th derivative."""
         return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, kind, N)

@@ -491,7 +491,7 @@ class DirectSum:
         """Return backward transform."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
 
-    @jax.jit(static_argnums=(0, 2, 3))
+    @jax.jit(static_argnums=(0, 2, 3, 4))
     def backward_primitive(
         self, c: Array, k: int = 0, kind: str = "quadrature", N: int | None = None
     ) -> Array:

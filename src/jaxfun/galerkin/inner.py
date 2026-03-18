@@ -41,6 +41,7 @@ def inner(
     sparse: bool = False,
     sparse_tol: int = 1000,
     return_all_items: bool = False,
+    pad_linear: bool = False,
 ):
     r"""Assemble Galerkin inner products (bilinear / linear forms).
 
@@ -65,6 +66,11 @@ def inner(
         sparse_tol: Zero tolerance (integer multiple of ulp) for sparsify.
         return_all_items: If True return raw list(s) of matrices / vectors
             before summation (always for >1D tensor product).
+        pad_linear: If True, pad linear form vectors in real space when
+            computing the inner products. That is, use 1.5 times the number
+            of quadrature points when evaluating the inner products. The
+            padding is truncated away in the final result, which is obtained
+            in spectral space.
 
     Returns:
         Depending on content:
@@ -300,12 +306,7 @@ def inner(
             assert _has_globalindex(v)
             global_index = v.global_index
             is_multivar = "multivar" in b0 or "jaxfunction" in b0
-            z = inner_linear(
-                bi,
-                vf,
-                sc,
-                is_multivar,
-            )
+            z = inner_linear(bi, vf, sc, is_multivar, pad_linear)
             sc = 1
             bs.append(z)
 
@@ -317,11 +318,16 @@ def inner(
         ):
             if isinstance(bs[0], tuple):
                 # multivar or JAXFunction
+                N = (
+                    test_space.num_quad_points
+                    if not pad_linear
+                    else tuple(int(1.5 * n) for n in test_space.num_quad_points)
+                )
                 if "multivar" in b0:
                     s = test_space.system.base_scalars()
                     uj = lambdify(s, b0["multivar"], modules="jax")(*test_space.mesh())
                 elif "jaxfunction" in b0:
-                    uj = evaluate_jaxfunction_expr_quad(b0["jaxfunction"])
+                    uj = evaluate_jaxfunction_expr_quad(b0["jaxfunction"], N=N)
                 else:
                     raise ValueError("Expected multivar or jaxfunction key in b0")
                 res = bs[0][0].T @ uj @ bs[1][0]
@@ -336,12 +342,19 @@ def inner(
             and len(test_space) == 3
         ):
             if isinstance(bs[0], tuple):
+                N = (
+                    test_space.num_quad_points
+                    if not pad_linear
+                    else tuple(int(1.5 * n) for n in test_space.num_quad_points)
+                )
                 # multivar or JAXFunction
                 if "multivar" in b0:
                     s = test_space.system.base_scalars()
-                    uj = lambdify(s, b0["multivar"], modules="jax")(*test_space.mesh())
+                    uj = lambdify(s, b0["multivar"], modules="jax")(
+                        *test_space.mesh(N=N)
+                    )
                 elif "jaxfunction" in b0:
-                    uj = evaluate_jaxfunction_expr_quad(b0["jaxfunction"])
+                    uj = evaluate_jaxfunction_expr_quad(b0["jaxfunction"], N=N)
                 else:
                     raise ValueError("Expected multivar or jaxfunction key in b0")
                 res = jnp.einsum("il,jm,kn,ijk->lmn", bs[0][0], bs[1][0], bs[2][0], uj)
@@ -546,6 +559,7 @@ def inner_linear(
     v: OrthogonalSpace,
     sc: float | complex,
     multivar: bool,
+    pad_linear: bool,
 ) -> Array | tuple[Array]:
     """Assemble single linear form contribution.
 
@@ -555,15 +569,19 @@ def inner_linear(
         sc: Scalar coefficient (sign-adjusted if from a(u,v)-L(v)).
         global_index: Global index for vector-valued spaces.
         multivar: True if non-separable scaling (return tuple form).
+        pad_linear: If True, pad linear form vectors in real space
+        when computing the inner products.
 
     Returns:
         Vector (1D), tuple (Pi,) for multivar, or projected result.
     """
     vo = v.orthogonal
-    xj, wj = vo.quad_points_and_weights()
+    N = vo.num_quad_points if not pad_linear else int(1.5 * vo.num_quad_points)
+    xj, wj = vo.quad_points_and_weights(N=N)
     df = float(vo.domain_factor)
     i = 0
     uj = jnp.array([sc])  # incorporate scalar coefficient into first vector
+
     if get_arg(bi) is ArgumentTag.TEST:
         pass
     elif isinstance(bi, sp.Derivative):
@@ -583,7 +601,11 @@ def inner_linear(
 
             jaxfunction = get_jaxfunctions(bii)
             if len(jaxfunction) == 1:
-                uj *= evaluate_jaxfunction_expr_quad(bii, jaxfunction.pop())
+                jaxf = jaxfunction.pop()
+                assert jaxf.functionspace.orthogonal.__class__ == vo.__class__, (
+                    "JAXFunction space must match test function space"
+                )
+                uj *= evaluate_jaxfunction_expr_quad(bii, jaxf, N=N)
                 continue
             # bii contains coordinates in the domain of v, e.g., (r, theta) for polar
             # Need to compute bii as bii(x(X)), since we use quadrature points

@@ -113,6 +113,11 @@ class TensorProductSpace:
         """Return tuple of active degrees of freedom per axis."""
         return tuple(space.num_dofs for space in self.basespaces)
 
+    @property
+    def num_quad_points(self) -> tuple[int, ...]:
+        """Return tuple of quadrature points per axis."""
+        return tuple(space.num_quad_points for space in self.basespaces)
+
     def mesh(
         self,
         kind: str = "quadrature",
@@ -449,6 +454,7 @@ class VectorTensorProductSpace:
         self.tensorname = multiplication_sign.join([b.name for b in self.tensorspaces])
         self.mesh = self.tensorspaces[0].mesh
         self.evaluate_mesh = self.tensorspaces[0].evaluate_mesh
+        self.num_quad_points = self.tensorspaces[0].num_quad_points
 
     def __len__(self) -> int:
         """Return number of vector components."""

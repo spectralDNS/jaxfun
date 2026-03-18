@@ -217,23 +217,20 @@ class OrthogonalSpace(BaseSpace):
             shape=(self.N, self.N),
         )
 
-    @jax.jit(static_argnums=(0, 2))
-    def forward(self, u: Array, N: int = 0) -> Array:
+    @jax.jit(static_argnums=0)
+    def forward(self, u: Array) -> Array:
         """Forward projection (samples -> coefficients) using orthogonality."""
         # u should be a padded array of length >= self.N
-        N: int = self.N if N == 0 else N
         L = self.scalar_product(u)
-        if len(u) > N:
-            L = L[:N]
         A = self.norm_squared() / self.domain_factor
         return L / A
 
     @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
         """Return vector of inner products <u, psi_i> (weighted)."""
-        N: int = u.shape[0]  # u may be >= self.N for padding
+        N: int = u.shape[0]
         xj, wj = self.quad_points_and_weights(N)
-        Pi = self.vandermonde(xj)
+        Pi = self.vandermonde(xj)  # shape (N, self.N)
         sg = self.system.sg / self.domain_factor
         if sp.sympify(sg).is_number:
             wj = wj * float(sg)
@@ -241,7 +238,7 @@ class OrthogonalSpace(BaseSpace):
             x = self.system.base_scalars()[0]
             sg = lambdify(x, self.map_expr_true_domain(sg))(xj)
             wj = wj * sg
-        return (u * wj) @ jnp.conj(Pi)
+        return (u * wj) @ jnp.conj(Pi)  # Truncated to (self.N,)
 
     @jax.jit(static_argnums=0)
     def apply_stencil_galerkin(self, b: Array) -> Array:

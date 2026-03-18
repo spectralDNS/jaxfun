@@ -523,8 +523,14 @@ class DirectSum:
 
         u = TrialFunction(self)
         v = TestFunction(self)
-        M, b = inner(v * (u - uj))
+        M, b = inner(v * u)
+        b += self[0].scalar_product(uj)
         return jnp.linalg.solve(M, b)
+
+    @jax.jit(static_argnums=0)
+    def scalar_product(self, uj: Array) -> Array:
+        """Return scalar product <u, φ_i> for direct-sum basis."""
+        return self[0].scalar_product(uj)  # No BC part in test functions
 
     @jax.jit(static_argnums=(0, 3))
     def evaluate_derivative(self, x: Array, c: Array, k: int = 0) -> float:

@@ -148,10 +148,13 @@ class Fourier(OrthogonalSpace):
         Returns:
             Coefficients scaled by 2π / domain_factor.
         """
-        return jnp.fft.fft(c, norm="forward") * 2 * jnp.pi / self.domain_factor
+        out = jnp.fft.fft(c, norm="forward") * 2 * jnp.pi / self.domain_factor
+        if len(c) > self.N:
+            return out[self.wavenumbers()]
+        return out
 
-    @jax.jit(static_argnums=(0, 2))
-    def forward(self, c: Array, N: int | None = None) -> Array:
+    @jax.jit(static_argnums=0)
+    def forward(self, c: Array) -> Array:
         """Forward FFT (physical -> spectral coefficients).
 
         Args:
@@ -159,11 +162,12 @@ class Fourier(OrthogonalSpace):
             N: Target number of modes for transform length. If N < len(c) then
                 the output is truncated.
         """
-        n: int = self.N if N is None else N
-        assert n <= len(c), "Forward transform only supports truncation, not padding"
+        assert len(c) >= self.N, (
+            "Forward transform only supports truncation, not padding"
+        )
         out = jnp.fft.fft(c, norm="forward")
-        if len(c) > n:
-            return out[self.wavenumbers(n)]
+        if len(c) > self.N:
+            return out[self.wavenumbers()]
         return out
 
     @property

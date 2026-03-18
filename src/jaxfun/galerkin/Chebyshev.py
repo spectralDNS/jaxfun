@@ -196,7 +196,7 @@ class Chebyshev(Jacobi):
         """Return Chebyshev series evaluated at quadrature points.
 
         Args:
-            c: Coefficient array of length N.
+            c: Coefficient array of length self.N.
 
         Returns:
             Reversed coefficient array.
@@ -211,25 +211,42 @@ class Chebyshev(Jacobi):
             return 0.5 * uh[0] + n * jax.scipy.fft.idct(uh, n=n)
         return super().backward(c, kind=kind, N=n)  # Does not require padding of c
 
-    @jax.jit(static_argnums=(0, 2))
-    def forward(self, u: Array, N: int | None = None) -> Array:
+    @jax.jit(static_argnums=0)
+    def forward(self, u: Array) -> Array:
         """Return Chebyshev coefficients for function values at quadrature points.
 
         Args:
             u: Function values at quadrature points.
-            N: Number of modes to return (defaults self.N if None).
 
         Returns:
-            Coefficient array of length N.
+            Coefficient array of length self.N.
         """
-        N: int = self.N if N is None else N
         n: int = len(u)
-        assert len(u) >= N, "Only truncation supported for forward transform"
+        assert len(u) >= self.N, "Only truncation supported for forward transform"
         sign = (-1) ** jnp.arange(n)
         uh = jax.scipy.fft.dct(u, n=n)
         uh = uh.at[0].set(uh[0] / 2) * sign / n
-        if len(u) > N:
-            uh = uh[:N]
+        if len(u) > self.N:
+            uh = uh[: self.N]
+        return uh
+
+    @jax.jit(static_argnums=0)
+    def scalar_product(self, u: Array) -> Array:
+        """Return scalar product for function u.
+
+        Args:
+            u: Function values at quadrature points.
+
+        Returns:
+            Coefficient array of length self.N.
+        """
+        n: int = len(u)
+        assert len(u) >= self.N, "Only truncation supported for forward transform"
+        sign = (-1) ** jnp.arange(n)
+        uh = jax.scipy.fft.dct(u, n=n)
+        uh = uh * jnp.pi * sign / n / 2 / self.domain_factor
+        if len(u) > self.N:
+            uh = uh[: self.N]
         return uh
 
     @jax.jit(static_argnums=(0, 2))

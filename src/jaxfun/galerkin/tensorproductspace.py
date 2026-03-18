@@ -371,27 +371,19 @@ class TensorProductSpace:
                 )(u)
         return u
 
-    @jax.jit(static_argnums=(0, 2))
-    def forward(self, u: Array, N: tuple[int, ...] | None = None) -> Array:
+    @jax.jit(static_argnums=0)
+    def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation."""
         dim: int = len(self)
         if dim == 2:
             for ax in range(dim):
-                forward = partial(
-                    self.basespaces[ax].forward,
-                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
-                )
                 axi: int = dim - 1 - ax
-                u = jax.vmap(forward, in_axes=axi, out_axes=axi)(u)
+                u = jax.vmap(self.basespaces[ax].forward, in_axes=axi, out_axes=axi)(u)
         else:
             for ax in range(dim):
-                forward = partial(
-                    self.basespaces[ax].forward,
-                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
-                )
                 ax0, ax1 = set(range(dim)) - set((ax,))
                 u = jax.vmap(
-                    jax.vmap(forward, in_axes=ax0, out_axes=ax0),
+                    jax.vmap(self.basespaces[ax].forward, in_axes=ax0, out_axes=ax0),
                     in_axes=ax1,
                     out_axes=ax1,
                 )(u)
@@ -537,11 +529,11 @@ class VectorTensorProductSpace:
             vals.append(vi)
         return jnp.stack(vals)
 
-    def forward(self, u: Array, N: tuple[tuple[int, ...], ...] | None = None) -> Array:
+    def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation."""
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
-            ci = space.forward(u[i], N[i] if N is not None else None)
+            ci = space.forward(u[i])
             coeffs.append(ci)
         return jnp.stack(coeffs)
 

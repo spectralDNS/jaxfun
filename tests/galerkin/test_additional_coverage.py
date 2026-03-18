@@ -160,9 +160,6 @@ def test_tensorproductspace_3d_paths_and_mapping():
     val = T3.evaluate_mesh(mesh, c)
     # evaluation returns broadcasted shape (dim interleaved); collapse via squeeze
     assert jnp.squeeze(val).shape == u.shape
-    # Padded path
-    Tp = T3.get_padded((4, 3, 3))
-    assert Tp.shape()[0] == 4
     # Mapping of expression through composed map_expr_true_domain
     x, y, z = T3.system.base_scalars()
     expr = x + y + z

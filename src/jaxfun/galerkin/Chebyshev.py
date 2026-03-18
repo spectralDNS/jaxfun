@@ -201,7 +201,7 @@ class Chebyshev(Jacobi):
         Returns:
             Reversed coefficient array.
         """
-        n: int = self.N if N is None else N
+        n: int = self.num_quad_points if N is None else N
 
         if kind == "quadrature":
             if n > len(c):

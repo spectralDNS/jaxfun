@@ -298,15 +298,6 @@ class TensorProductSpace:
             df = df * (float(Ti.domain_factor ** k[i]))
         return c * df
 
-    def get_padded(self, N: tuple[int, ...]) -> TensorProductSpace:
-        """Return new tensor space with each axis padded/truncated to N."""
-        paddedspaces = [
-            s.get_padded(n) for s, n in zip(self.basespaces, N, strict=False)
-        ]
-        return TensorProductSpace(
-            paddedspaces, system=self.system, name=self.name + "p"
-        )
-
     def get_orthogonal(self) -> TensorProductSpace:
         """Return underlying orthogonal basis instance."""
         orthogonal_spaces = [space.get_orthogonal() for space in self.basespaces]

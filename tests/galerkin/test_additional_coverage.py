@@ -185,3 +185,7 @@ def test_scalar_vector_function_pretty_and_sympy():
     v = VectorFunction("g", C.system)
     # exercise pretty and sympy str methods
     _ = s._pretty(), s._sympystr(None), v._pretty(), v._sympystr(None)
+
+
+if __name__ == "__main__":
+    test_directsum_tps_two_inhomogeneous()

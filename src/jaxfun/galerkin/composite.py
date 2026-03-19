@@ -179,7 +179,7 @@ class Composite(OrthogonalSpace):
         """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
 
-    @jax.jit(static_argnums=(0, 2, 3))
+    @jax.jit(static_argnums=(0, 2, 3, 4))
     def backward_primitive(
         self, c: Array, k: int = 0, kind: str = "quadrature", N: int | None = None
     ) -> Array:
@@ -498,9 +498,9 @@ class DirectSum:
         """Return backward transform for k-th derivative."""
         return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, kind, N)
 
-    @jax.jit(static_argnums=0)
     def forward(self, uj: Array) -> Array:
         from .arguments import TestFunction, TrialFunction
+        from .inner import inner
 
         u = TrialFunction(self)
         v = TestFunction(self)

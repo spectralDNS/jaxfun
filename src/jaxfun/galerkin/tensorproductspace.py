@@ -708,17 +708,20 @@ class DirectSumTPS(TensorProductSpace):
                         z = lr(zother, lr_other)
                         for key in bco:
                             if key == "D":
-                                expr0 = system.expr_base_scalar_to_psi(bcval)
-                                assert isinstance(expr0, sp.Expr)
-                                bco[key] = float(expr0.subs(zother.system._psi[0], z))
-                            elif key[0] == "N":
-                                var = zother.system._psi[0]
-                                nd = 1 if len(key) == 1 else int(key[1])
-                                expr1 = system.expr_base_scalar_to_psi(bcval)
-                                assert isinstance(expr1, sp.Expr)
                                 bco[key] = float(
-                                    (expr1.diff(var, nd) / df**nd).subs(var, z)
+                                    sp.sympify(bcval).subs(
+                                        zother.system.base_scalars()[0], z
+                                    )
                                 )
+                            elif key[0] == "N":
+                                nd = 1 if len(key) == 1 else int(key[1])
+                                var = zother.system.base_scalars()[0]
+                                bco[key] = float(
+                                    (sp.sympify(bcval).diff(var, nd) / df**nd).subs(
+                                        var, z
+                                    )
+                                )
+
                     bcall[-1].append(bcs)
             self.bndvals[bcspaces] = jnp.array([z.orderedvals() for z in bcall[0]])
 

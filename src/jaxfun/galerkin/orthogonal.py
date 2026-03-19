@@ -84,7 +84,7 @@ class OrthogonalSpace(BaseSpace):
         pass
 
     @abstractmethod
-    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
+    def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return (points, weights) for orthogonality measure (abstract)."""
         pass
 
@@ -179,7 +179,9 @@ class OrthogonalSpace(BaseSpace):
         pass
 
     @jax.jit(static_argnums=(0, 2, 3))
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+    def backward(
+        self, c: Array, kind: str = "quadrature", N: int | None = None
+    ) -> Array:
         """Implementation of backward transform."""
         xj = self.mesh(kind=kind, N=N)
         return self.evaluate(xj, c)
@@ -190,7 +192,7 @@ class OrthogonalSpace(BaseSpace):
         c: Array,
         k: int = 0,
         kind: str = "quadrature",
-        N: int = 0,
+        N: int | None = None,
     ) -> Array:
         r"""Evaluate ``u(x_i)`` or ``\frac{d^k u}{dx^k}`` in physical space.
 
@@ -200,6 +202,7 @@ class OrthogonalSpace(BaseSpace):
             kind: Mesh type for backward evaluation ('quadrature' or 'uniform').
             N: Number of points. Must be >= self._num_quad_points.
         """
+        N = self.num_quad_points if N is None else N
         df = float(self.domain_factor**k)
         return df * self.backward(self.derivative_coeffs(c, k), kind=kind, N=N)
 
@@ -214,23 +217,20 @@ class OrthogonalSpace(BaseSpace):
             shape=(self.N, self.N),
         )
 
-    @jax.jit(static_argnums=(0, 2))
-    def forward(self, u: Array, N: int = 0) -> Array:
+    @jax.jit(static_argnums=0)
+    def forward(self, u: Array) -> Array:
         """Forward projection (samples -> coefficients) using orthogonality."""
         # u should be a padded array of length >= self.N
-        N: int = self.N if N == 0 else N
         L = self.scalar_product(u)
-        if len(u) > N:
-            L = L[:N]
         A = self.norm_squared() / self.domain_factor
         return L / A
 
     @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
         """Return vector of inner products <u, psi_i> (weighted)."""
-        N: int = u.shape[0]  # u may be >= self.N for padding
+        N: int = u.shape[0]
         xj, wj = self.quad_points_and_weights(N)
-        Pi = self.vandermonde(xj)
+        Pi = self.vandermonde(xj)  # shape (N, self.N)
         sg = self.system.sg / self.domain_factor
         if sp.sympify(sg).is_number:
             wj = wj * float(sg)
@@ -238,7 +238,7 @@ class OrthogonalSpace(BaseSpace):
             x = self.system.base_scalars()[0]
             sg = lambdify(x, self.map_expr_true_domain(sg))(xj)
             wj = wj * sg
-        return (u * wj) @ jnp.conj(Pi)
+        return (u * wj) @ jnp.conj(Pi)  # Truncated to (self.N,)
 
     @jax.jit(static_argnums=0)
     def apply_stencil_galerkin(self, b: Array) -> Array:
@@ -377,7 +377,7 @@ class OrthogonalSpace(BaseSpace):
         return x
 
     @jax.jit(static_argnums=(0, 1, 2))
-    def mesh(self, kind: str = "quadrature", N: int = 0) -> Array:
+    def mesh(self, kind: str = "quadrature", N: int | None = None) -> Array:
         """Return sampling mesh in true domain.
 
         Args:
@@ -388,7 +388,7 @@ class OrthogonalSpace(BaseSpace):
             return self.map_true_domain(self.quad_points_and_weights(N)[0])
         assert kind == "uniform"
         a, b = self.domain
-        M = N if N != 0 else self.num_quad_points
+        M = N if N is not None else self.num_quad_points
         return jnp.linspace(float(a), float(b), M)
 
     def cartesian_mesh(self, kind: str = "quadrature", N: int = 0) -> tuple[Array, ...]:

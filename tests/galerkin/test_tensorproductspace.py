@@ -106,7 +106,6 @@ def test_vectortensorproductspace_forward_backward_roundtrip():
 
 def test_vectortensorproductspace_padded_backward_forward_truncation_roundtrip():
     N: int = 8
-    trunc: tuple[int, int] = (N, N)
     pad: tuple[int, int] = (N + 4, N + 3)
 
     C = Chebyshev.Chebyshev(N)
@@ -118,7 +117,7 @@ def test_vectortensorproductspace_padded_backward_forward_truncation_roundtrip()
     u = JAXFunction(coeffs, V)
 
     ua = V.backward(u.array, N=(pad, pad))
-    coeffs_rt = V.forward(ua, N=(trunc, trunc))
+    coeffs_rt = V.forward(ua)
 
     assert ua.shape == (2,) + pad
     assert coeffs_rt.shape == V.num_dofs

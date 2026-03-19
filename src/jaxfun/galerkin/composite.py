@@ -163,7 +163,7 @@ class Composite(OrthogonalSpace):
         self.S = BCOO.from_scipy_sparse(self.stencil_to_scipy_sparse())
 
     @jax.jit(static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
+    def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return quadrature nodes/weights (delegated to underlying basis)."""
         return self.orthogonal.quad_points_and_weights(N)
 
@@ -173,13 +173,15 @@ class Composite(OrthogonalSpace):
         return self.orthogonal._evaluate(X, self.to_orthogonal(c))
 
     @jax.jit(static_argnums=(0, 2, 3))
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+    def backward(
+        self, c: Array, kind: str = "quadrature", N: int | None = None
+    ) -> Array:
         """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
 
-    @jax.jit(static_argnums=(0, 2, 3))
+    @jax.jit(static_argnums=(0, 2, 3, 4))
     def backward_primitive(
-        self, c: Array, k: int = 0, kind: str = "quadrature", N: int = 0
+        self, c: Array, k: int = 0, kind: str = "quadrature", N: int | None = None
     ) -> Array:
         """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, kind, N)
@@ -308,21 +310,6 @@ class Composite(OrthogonalSpace):
             beta=self.orthogonal.beta,
         )
 
-    def get_padded(self, N: int) -> Composite:
-        """Return Composite enlarged (padded) to size N (same stencil)."""
-        return Composite(
-            N=N,
-            orthogonal=self.orthogonal.__class__,
-            bcs=self.bcs,
-            domain=self.domain,
-            name=self.name + "p",
-            fun_str=self.fun_str + "p",
-            system=self.system,
-            stencil=self.stencil,
-            alpha=self.orthogonal.alpha,
-            beta=self.orthogonal.beta,
-        )
-
     def get_orthogonal(self) -> OrthogonalSpace:
         """Return underlying orthogonal basis instance."""
         return self.orthogonal
@@ -388,18 +375,13 @@ class BCGeneric(Composite):
         return jnp.array(self.bcs.orderedvals())
 
     @jax.jit(static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int = 0) -> Array:
+    def quad_points_and_weights(self, N: int | None = None) -> Array:
         """Quadrature nodes/weights (override to enforce num_quad_points)."""
-        N = self.num_quad_points if N == 0 else N
         return self.orthogonal.quad_points_and_weights(N)
 
     def get_homogeneous(self) -> Composite:
         """Return new Composite with homogeneous boundary values."""
         raise NotImplementedError("BCGeneric does not support get_homogeneous()")
-
-    def get_padded(self, N: int) -> Composite:
-        """Return new BCGeneric enlarged (padded) to size N (same stencil)."""
-        raise NotImplementedError("BCGeneric does not support get_padded()")
 
     def to_composite_like(self) -> Composite:
         """Return a Composite instance with BCGeneric state copied in.
@@ -450,6 +432,7 @@ class DirectSum:
         self._num_quad_points = a._num_quad_points
         self.map_reference_domain = a.map_reference_domain
         self.map_true_domain = a.map_true_domain
+        self.quad_points_and_weights = a.quad_points_and_weights
         self.dims = a.dims
         self.rank = a.rank
 
@@ -471,7 +454,7 @@ class DirectSum:
         """Return underlying orthogonal basis (from homogeneous component)."""
         return self[0].orthogonal
 
-    def mesh(self, kind: str = "quadrature", N: int = 0) -> Array:
+    def mesh(self, kind: str = "quadrature", N: int | None = None) -> Array:
         """Return mesh from homogeneous Composite summand."""
         return self[0].mesh(kind=kind, N=N)
 
@@ -502,25 +485,33 @@ class DirectSum:
         return self.orthogonal.evaluate(x, self.to_orthogonal(c))
 
     @jax.jit(static_argnums=(0, 2, 3))
-    def backward(self, c: Array, kind: str = "quadrature", N: int = 0) -> Array:
+    def backward(
+        self, c: Array, kind: str = "quadrature", N: int | None = None
+    ) -> Array:
         """Return backward transform."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
 
-    @jax.jit(static_argnums=(0, 2, 3))
+    @jax.jit(static_argnums=(0, 2, 3, 4))
     def backward_primitive(
-        self, c: Array, k: int = 0, kind: str = "quadrature", N: int = 0
+        self, c: Array, k: int = 0, kind: str = "quadrature", N: int | None = None
     ) -> Array:
         """Return backward transform for k-th derivative."""
         return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, kind, N)
 
-    @jax.jit(static_argnums=0)
     def forward(self, uj: Array) -> Array:
         from .arguments import TestFunction, TrialFunction
+        from .inner import inner
 
         u = TrialFunction(self)
         v = TestFunction(self)
-        M, b = inner(v * (u - uj))
+        M, b = inner(v * u)
+        b += self[0].scalar_product(uj)
         return jnp.linalg.solve(M, b)
+
+    @jax.jit(static_argnums=0)
+    def scalar_product(self, uj: Array) -> Array:
+        """Return scalar product <u, φ_i> for direct-sum basis."""
+        return self[0].scalar_product(uj)  # No BC part in test functions
 
     @jax.jit(static_argnums=(0, 3))
     def evaluate_derivative(self, x: Array, c: Array, k: int = 0) -> float:

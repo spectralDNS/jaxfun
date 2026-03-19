@@ -44,7 +44,7 @@ class Ultraspherical(Jacobi):
         system: CoordSys | None = None,
         name: str = "Ultraspherical",
         fun_str: str = "C",
-        lambda_: Number | float = 0,
+        lambda_: Number | float = 1,
         **kw,
     ) -> None:
         Jacobi.__init__(

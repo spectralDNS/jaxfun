@@ -113,6 +113,11 @@ class TensorProductSpace:
         """Return tuple of active degrees of freedom per axis."""
         return tuple(space.num_dofs for space in self.basespaces)
 
+    @property
+    def num_quad_points(self) -> tuple[int, ...]:
+        """Return tuple of quadrature points per axis."""
+        return tuple(space.num_quad_points for space in self.basespaces)
+
     def mesh(
         self,
         kind: str = "quadrature",
@@ -298,15 +303,6 @@ class TensorProductSpace:
             df = df * (float(Ti.domain_factor ** k[i]))
         return c * df
 
-    def get_padded(self, N: tuple[int, ...]) -> TensorProductSpace:
-        """Return new tensor space with each axis padded/truncated to N."""
-        paddedspaces = [
-            s.get_padded(n) for s, n in zip(self.basespaces, N, strict=False)
-        ]
-        return TensorProductSpace(
-            paddedspaces, system=self.system, name=self.name + "p"
-        )
-
     def get_orthogonal(self) -> TensorProductSpace:
         """Return underlying orthogonal basis instance."""
         orthogonal_spaces = [space.get_orthogonal() for space in self.basespaces]
@@ -371,27 +367,19 @@ class TensorProductSpace:
                 )(u)
         return u
 
-    @jax.jit(static_argnums=(0, 2))
-    def forward(self, u: Array, N: tuple[int, ...] | None = None) -> Array:
+    @jax.jit(static_argnums=0)
+    def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation."""
         dim: int = len(self)
         if dim == 2:
             for ax in range(dim):
-                forward = partial(
-                    self.basespaces[ax].forward,
-                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
-                )
                 axi: int = dim - 1 - ax
-                u = jax.vmap(forward, in_axes=axi, out_axes=axi)(u)
+                u = jax.vmap(self.basespaces[ax].forward, in_axes=axi, out_axes=axi)(u)
         else:
             for ax in range(dim):
-                forward = partial(
-                    self.basespaces[ax].forward,
-                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
-                )
                 ax0, ax1 = set(range(dim)) - set((ax,))
                 u = jax.vmap(
-                    jax.vmap(forward, in_axes=ax0, out_axes=ax0),
+                    jax.vmap(self.basespaces[ax].forward, in_axes=ax0, out_axes=ax0),
                     in_axes=ax1,
                     out_axes=ax1,
                 )(u)
@@ -466,6 +454,7 @@ class VectorTensorProductSpace:
         self.tensorname = multiplication_sign.join([b.name for b in self.tensorspaces])
         self.mesh = self.tensorspaces[0].mesh
         self.evaluate_mesh = self.tensorspaces[0].evaluate_mesh
+        self.num_quad_points = self.tensorspaces[0].num_quad_points
 
     def __len__(self) -> int:
         """Return number of vector components."""
@@ -537,11 +526,11 @@ class VectorTensorProductSpace:
             vals.append(vi)
         return jnp.stack(vals)
 
-    def forward(self, u: Array, N: tuple[tuple[int, ...], ...] | None = None) -> Array:
+    def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation."""
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
-            ci = space.forward(u[i], N[i] if N is not None else None)
+            ci = space.forward(u[i])
             coeffs.append(ci)
         return jnp.stack(coeffs)
 
@@ -719,17 +708,20 @@ class DirectSumTPS(TensorProductSpace):
                         z = lr(zother, lr_other)
                         for key in bco:
                             if key == "D":
-                                expr0 = system.expr_base_scalar_to_psi(bcval)
-                                assert isinstance(expr0, sp.Expr)
-                                bco[key] = float(expr0.subs(zother.system._psi[0], z))
-                            elif key[0] == "N":
-                                var = zother.system._psi[0]
-                                nd = 1 if len(key) == 1 else int(key[1])
-                                expr1 = system.expr_base_scalar_to_psi(bcval)
-                                assert isinstance(expr1, sp.Expr)
                                 bco[key] = float(
-                                    (expr1.diff(var, nd) / df**nd).subs(var, z)
+                                    sp.sympify(bcval).subs(
+                                        zother.system.base_scalars()[0], z
+                                    )
                                 )
+                            elif key[0] == "N":
+                                nd = 1 if len(key) == 1 else int(key[1])
+                                var = zother.system.base_scalars()[0]
+                                bco[key] = float(
+                                    (sp.sympify(bcval).diff(var, nd) / df**nd).subs(
+                                        var, z
+                                    )
+                                )
+
                     bcall[-1].append(bcs)
             self.bndvals[bcspaces] = jnp.array([z.orderedvals() for z in bcall[0]])
 

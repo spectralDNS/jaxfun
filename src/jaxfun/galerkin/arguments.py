@@ -813,7 +813,9 @@ def evaluate_jaxfunction_expr(
     return V.evaluate(xj, jaxf.array)
 
 
-def evaluate_jaxfunction_expr_quad(a: Basic, jaxf: JAXFunction | None = None) -> Array:
+def evaluate_jaxfunction_expr_quad(
+    a: Basic, jaxf: JAXFunction | None = None, N: int | tuple[int, ...] | None = None
+) -> Array:
     """Evaluate a symbolic JAXFunction expression on the quadrature mesh."""
 
     if jaxf is None:
@@ -830,13 +832,13 @@ def evaluate_jaxfunction_expr_quad(a: Basic, jaxf: JAXFunction | None = None) ->
         variables = getattr(wa, "variables", ())
         var = tuple(int(variables.count(s)) for s in V.system.base_scalars())
         var = var[0] if V.dims == 1 else var
-        h = V.backward_primitive(jaxf.array, k=var)
+        h = V.backward_primitive(jaxf.array, k=var, N=N)
         return h ** int(a.exp)
 
     if isinstance(a, sp.Derivative):
         variables = getattr(a, "variables", ())
         var = tuple(int(variables.count(s)) for s in V.system.base_scalars())
         var = var[0] if V.dims == 1 else var
-        return V.backward_primitive(jaxf.array, k=var)
+        return V.backward_primitive(jaxf.array, k=var, N=N)
 
-    return V.backward(jaxf.array)
+    return V.backward(jaxf.array, N=N)

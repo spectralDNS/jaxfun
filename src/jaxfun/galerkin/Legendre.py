@@ -169,6 +169,12 @@ class Legendre(Jacobi):
         x0: Array = jnp.array(0.0)
         x1: Array = c[-1] * (2 * N - 1)
 
+        if N == 0:
+            return x0
+
+        if N == 1:
+            return jnp.array([x1, x0])
+
         def inner_loop(
             carry: tuple[Array, Array], n: int
         ) -> tuple[tuple[Array, Array], Array]:

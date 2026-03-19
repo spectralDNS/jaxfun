@@ -223,7 +223,11 @@ class Jacobi(OrthogonalSpace):
             bb = sp.lambdify(n, self.b(n + 1, n + 1), modules="jax")(jnp.arange(N))
 
         x0: Array = jnp.array(0.0)
+        if N == 0:
+            return x0
         x1: Array = c[-1] / bm[-1]
+        if N == 1:
+            return jnp.array([x1, x0])
 
         def inner_loop(
             carry: tuple[Array, Array], n: int

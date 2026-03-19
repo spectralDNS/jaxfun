@@ -433,6 +433,7 @@ class DirectSum:
         self.map_reference_domain = a.map_reference_domain
         self.map_true_domain = a.map_true_domain
         self.quad_points_and_weights = a.quad_points_and_weights
+        self.get_orthogonal = a.get_orthogonal
         self.dims = a.dims
         self.rank = a.rank
 

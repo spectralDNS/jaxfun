@@ -266,8 +266,14 @@ class Chebyshev(Jacobi):
             return self.derivative_coeffs(self.derivative_coeffs(c, k - 1), 1)
 
         N: int = c.shape[0] - 1
-        x0: Array = jnp.array(0.0)
+        x0: Array = jnp.array(0.0, dtype=float)
         x1: Array = c[-1] * N * 2
+
+        if N == 0:
+            return x0
+
+        if N == 1:
+            return jnp.array([x1, x0])
 
         def inner_loop(
             carry: tuple[Array, Array], n: int

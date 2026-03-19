@@ -859,9 +859,7 @@ class DirectSumTPS(TensorProductSpace):
         f: tuple[OrthogonalSpace, ...],
         v: TensorProductSpace,
     ) -> Array:
-        if jnp.any(jnp.array([isinstance(s, BCGeneric) for s in v.basespaces])):
-            return self.bndvals[f]
-        return c
+        return self.bndvals.get(f, c)
 
 
 class TPMatrices:

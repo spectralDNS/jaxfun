@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from jaxfun.coordinates import BaseScalar
 
 Ynm = sph_harm_y
-n = Symbol("n", positive=True, integer=True)
+n = Symbol("n", integer=True)
 
 
 __all__ = (
@@ -165,7 +165,7 @@ def lambdify(
     doctring_limit: int = 1000,
 ) -> ArrayFn:
     modules_default = ["jax", {"Ynm": Ynm}]
-    modules = modules_default if modules is None else [modules] + modules_default
+    modules = modules_default if modules is None else [modules] + modules_default  # ty:ignore[invalid-assignment]
     return sp.lambdify(
         args,
         expr,

@@ -1,11 +1,10 @@
 import jax
 import jax.numpy as jnp
-import sympy as sp
 from jax import Array
 from jax.experimental import sparse
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.utils.common import Domain, jit_vmap, n
+from jaxfun.utils.common import Domain, jit_vmap
 from jaxfun.utils.fastgl import leggauss
 
 from .Jacobi import Jacobi
@@ -94,16 +93,16 @@ class Legendre(Jacobi):
         return jnp.sum(xs, axis=0) + c[0]
 
     @jax.jit(static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
-        """Return Gauss–Legendre quadrature nodes and weights.
+    def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
+        """Return Gauss-Legendre quadrature nodes and weights.
 
         Args:
-            N: Number of points (0 => self.num_quad_points).
+            N: Number of points (None => self.num_quad_points).
 
         Returns:
-            (2, N) array: first row nodes, second row weights.
+            Tuple (x, w) of nodes and weights.
         """
-        N = self.num_quad_points if N == 0 else N
+        N = self.num_quad_points if N is None else N
         x, w = leggauss(N)
         return x, w
 
@@ -151,9 +150,36 @@ class Legendre(Jacobi):
         _, xs = jax.lax.scan(inner_loop, (x0, X), jnp.arange(2, self.N + 1))
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
-    def norm_squared(self) -> Array:
-        """Return L2 norm squared of P_n over [-1,1]: 2/(2n+1)."""
-        return sp.lambdify(n, 2 / (2 * n + 1), modules="jax")(jnp.arange(self.N))
+    @jax.jit(static_argnums=(0, 2))
+    def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
+        """
+        Args:
+            c: Coefficients of Legendre series.
+            k: Order of derivative to compute.
+        Returns:
+            Array (N,) of coefficients for the derivative of the series.
+        """
+        if k == 0:
+            return c
+
+        if k > 1:
+            return self.derivative_coeffs(self.derivative_coeffs(c, k - 1), 1)
+
+        N: int = c.shape[0] - 1
+        x0: Array = jnp.array(0.0)
+        x1: Array = c[-1] * (2 * N - 1)
+
+        def inner_loop(
+            carry: tuple[Array, Array], n: int
+        ) -> tuple[tuple[Array, Array], Array]:
+            x0, x1 = carry
+            x2 = (2 * n + 1) * c[n + 1] + (2 * n + 1) / (2 * n + 5) * x0
+            return (x1, x2), x2
+
+        _, xs = jax.lax.scan(inner_loop, (x0, x1), jnp.arange(N - 2, -1, -1))
+        return jnp.concatenate((xs[::-1], jnp.array([x1, x0])))
+
+    legder = derivative_coeffs
 
 
 def matrices(

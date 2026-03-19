@@ -115,7 +115,7 @@ def get_basisfunctions(
 
 
 def get_jaxfunctions(
-    a: sp.Expr | float,
+    a: sp.Basic | float,
 ) -> set[JAXFunction]:
     """Return set of JAXFunction symbolic wrappers inside expression.
 
@@ -135,7 +135,7 @@ def get_jaxfunctions(
     return jaxfunctions
 
 
-def check_if_nonlinear_in_jaxfunction(a: sp.Expr) -> bool:
+def check_if_nonlinear_in_jaxfunction(a: sp.Basic) -> bool:
     """Check if expression is nonlinear in any JAXFunction.
 
     Args:

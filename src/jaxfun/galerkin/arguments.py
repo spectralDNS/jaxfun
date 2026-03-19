@@ -607,7 +607,7 @@ def get_JAXFunction(
     return b
 
 
-class JAXFunction(ExpansionFunction):
+class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
     r"""A Galerkin function with explicit expansion coefficients.
 
     A JAXFunction represents a complete function in a given function space,
@@ -646,12 +646,12 @@ class JAXFunction(ExpansionFunction):
 
     array: Array
     argument: Literal[ArgumentTag.JAXFUNC]
-    functionspace: FunctionSpaceType
+    functionspace: SpaceT
 
     def __new__(
         cls,
         array: Array | sp.Expr,
-        V: FunctionSpaceType,
+        V: SpaceT,
         name: str | None = None,
     ) -> Self:
         coors: CoordSys = V.system
@@ -672,9 +672,12 @@ class JAXFunction(ExpansionFunction):
         obj.own_name = "JAXFunction"
         return obj
 
-    def backward(self):
-        assert not isinstance(self.functionspace, VectorTensorProductSpace)
-        return self.functionspace.backward(self.array)
+    def backward(
+        self,
+        kind: str = "quadrature",
+        N: int | tuple[int, ...] | tuple[tuple[int, ...], ...] | None = None,
+    ) -> Array:
+        return self.functionspace.backward(self.array, kind=kind, N=N)
 
     def doit(self, **hints: Any) -> Expr | AppliedUndef:
         hints["linear"] = hints.get("linear", False)
@@ -773,31 +776,33 @@ class JAXFunction(ExpansionFunction):
 
 
 def evaluate_jaxfunction_expr(
-    a: Basic, xj: Array | tuple[Array, ...], jaxf: AppliedUndef | None = None
+    a: Basic, xj: Array | tuple[Array, ...], jaxf: JAXFunction | None = None
 ) -> Array:
     """Evaluate a symbolic JAXFunction expression on a mesh.
 
     Input coordinates ``xj`` are always given in the physical (true) domain.
     """
+
     if jaxf is None:
-        for p in sp.core.traversal.preorder_traversal(a):
-            if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
-                jaxf = cast(AppliedUndef, p)
-                break
-    assert hasattr(jaxf, "functionspace") and hasattr(jaxf, "array")
-    V = cast(FunctionSpaceType, jaxf.functionspace)
+        from .forms import get_jaxfunctions
+
+        jaxf: set[JAXFunction] = get_jaxfunctions(a)
+        assert len(jaxf) == 1, "Single JAXFunction not found in expression."
+        jaxf: JAXFunction = jaxf.pop()
+
+    V = jaxf.functionspace
 
     if isinstance(a, sp.Pow):
         wa = a.args[0]
         variables = getattr(wa, "variables", ())
-        var = tuple(variables.count(s) for s in V.system.base_scalars())
+        var = tuple(int(variables.count(s)) for s in V.system.base_scalars())
         var = var[0] if V.dims == 1 else var
         h = V.evaluate_derivative(xj, jaxf.array, k=var)
         return h ** int(a.exp)
 
     if isinstance(a, sp.Derivative):
         variables = getattr(a, "variables", ())
-        var = tuple(variables.count(s) for s in V.system.base_scalars())
+        var = tuple(int(variables.count(s)) for s in V.system.base_scalars())
         var = var[0] if V.dims == 1 else var
         return V.evaluate_derivative(xj, jaxf.array, k=var)
 
@@ -806,3 +811,34 @@ def evaluate_jaxfunction_expr(
 
     assert isinstance(xj, Array)
     return V.evaluate(xj, jaxf.array)
+
+
+def evaluate_jaxfunction_expr_quad(
+    a: Basic, jaxf: JAXFunction | None = None, N: int | tuple[int, ...] | None = None
+) -> Array:
+    """Evaluate a symbolic JAXFunction expression on the quadrature mesh."""
+
+    if jaxf is None:
+        from .forms import get_jaxfunctions
+
+        jaxf: set[JAXFunction] = get_jaxfunctions(a)
+        assert len(jaxf) == 1, "Single JAXFunction not found in expression."
+        jaxf: JAXFunction = jaxf.pop()
+
+    V = jaxf.functionspace
+
+    if isinstance(a, sp.Pow):
+        wa = a.args[0]
+        variables = getattr(wa, "variables", ())
+        var = tuple(int(variables.count(s)) for s in V.system.base_scalars())
+        var = var[0] if V.dims == 1 else var
+        h = V.backward_primitive(jaxf.array, k=var, N=N)
+        return h ** int(a.exp)
+
+    if isinstance(a, sp.Derivative):
+        variables = getattr(a, "variables", ())
+        var = tuple(int(variables.count(s)) for s in V.system.base_scalars())
+        var = var[0] if V.dims == 1 else var
+        return V.backward_primitive(jaxf.array, k=var, N=N)
+
+    return V.backward(jaxf.array, N=N)

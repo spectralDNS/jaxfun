@@ -4,7 +4,7 @@ import copy
 import itertools
 from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
-from typing import TYPE_CHECKING, NoReturn, TypeGuard, overload
+from typing import TYPE_CHECKING, NoReturn, TypeGuard, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -112,6 +112,11 @@ class TensorProductSpace:
     def num_dofs(self) -> tuple[int, ...]:
         """Return tuple of active degrees of freedom per axis."""
         return tuple(space.num_dofs for space in self.basespaces)
+
+    @property
+    def num_quad_points(self) -> tuple[int, ...]:
+        """Return tuple of quadrature points per axis."""
+        return tuple(space.num_quad_points for space in self.basespaces)
 
     def mesh(
         self,
@@ -298,15 +303,6 @@ class TensorProductSpace:
             df = df * (float(Ti.domain_factor ** k[i]))
         return c * df
 
-    def get_padded(self, N: tuple[int, ...]) -> TensorProductSpace:
-        """Return new tensor space with each axis padded/truncated to N."""
-        paddedspaces = [
-            s.get_padded(n) for s, n in zip(self.basespaces, N, strict=False)
-        ]
-        return TensorProductSpace(
-            paddedspaces, system=self.system, name=self.name + "p"
-        )
-
     def get_orthogonal(self) -> TensorProductSpace:
         """Return underlying orthogonal basis instance."""
         orthogonal_spaces = [space.get_orthogonal() for space in self.basespaces]
@@ -316,7 +312,7 @@ class TensorProductSpace:
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
-        self, c: Array, kind: str = "quadrature", N: tuple[int] | None = None
+        self, c: Array, kind: str = "quadrature", N: tuple[int, ...] | None = None
     ) -> Array:
         """Jitted backward transform with optional padding."""
         dim: int = len(self)
@@ -371,31 +367,60 @@ class TensorProductSpace:
                 )(u)
         return u
 
-    @jax.jit(static_argnums=(0, 2))
-    def forward(self, u: Array, N: tuple[int, ...] | None = None) -> Array:
+    @jax.jit(static_argnums=0)
+    def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation."""
         dim: int = len(self)
         if dim == 2:
             for ax in range(dim):
-                forward = partial(
-                    self.basespaces[ax].forward,
-                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
-                )
                 axi: int = dim - 1 - ax
-                u = jax.vmap(forward, in_axes=axi, out_axes=axi)(u)
+                u = jax.vmap(self.basespaces[ax].forward, in_axes=axi, out_axes=axi)(u)
         else:
             for ax in range(dim):
-                forward = partial(
-                    self.basespaces[ax].forward,
-                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
-                )
                 ax0, ax1 = set(range(dim)) - set((ax,))
                 u = jax.vmap(
-                    jax.vmap(forward, in_axes=ax0, out_axes=ax0),
+                    jax.vmap(self.basespaces[ax].forward, in_axes=ax0, out_axes=ax0),
                     in_axes=ax1,
                     out_axes=ax1,
                 )(u)
         return u
+
+    @jax.jit(static_argnums=(0, 2, 3, 4))
+    def backward_primitive(
+        self,
+        c: Array,
+        k: tuple[int, ...],
+        kind: str = "quadrature",
+        N: tuple[int, ...] | None = None,
+    ) -> Array:
+        """Jitted backward transform with optional padding."""
+        dim: int = len(self)
+        if dim == 2:
+            for ax in range(dim):
+                axi: int = dim - 1 - ax
+                backward_p = partial(
+                    self.basespaces[ax].backward_primitive,
+                    k=k[ax],
+                    kind=kind,
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+                )
+                c = jax.vmap(backward_p, in_axes=axi, out_axes=axi)(c)
+
+        else:
+            for ax in range(dim):
+                backward_p = partial(
+                    self.basespaces[ax].backward_primitive,
+                    k=k[ax],
+                    kind=kind,
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+                )
+                ax0, ax1 = set(range(dim)) - set((ax,))
+                c = jax.vmap(
+                    jax.vmap(backward_p, in_axes=ax0, out_axes=ax0),
+                    in_axes=ax1,
+                    out_axes=ax1,
+                )(c)
+        return c
 
 
 class VectorTensorProductSpace:
@@ -429,6 +454,7 @@ class VectorTensorProductSpace:
         self.tensorname = multiplication_sign.join([b.name for b in self.tensorspaces])
         self.mesh = self.tensorspaces[0].mesh
         self.evaluate_mesh = self.tensorspaces[0].evaluate_mesh
+        self.num_quad_points = self.tensorspaces[0].num_quad_points
 
     def __len__(self) -> int:
         """Return number of vector components."""
@@ -500,11 +526,11 @@ class VectorTensorProductSpace:
             vals.append(vi)
         return jnp.stack(vals)
 
-    def forward(self, u: Array, N: tuple[tuple[int, ...], ...] | None = None) -> Array:
+    def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation."""
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
-            ci = space.forward(u[i], N[i] if N is not None else None)
+            ci = space.forward(u[i])
             coeffs.append(ci)
         return jnp.stack(coeffs)
 
@@ -525,6 +551,21 @@ class VectorTensorProductSpace:
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
             ci = space.backward(u[i], kind=kind, N=N[i] if N is not None else None)
+            coeffs.append(ci)
+        return jnp.stack(coeffs)
+
+    def backward_primitive(
+        self,
+        u: Array,
+        k: tuple[int, ...],
+        kind: str = "quadrature",
+        N: tuple[tuple[int, ...], ...] | None = None,
+    ) -> Array:
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.backward_primitive(
+                u[i], k=k, kind=kind, N=N[i] if N is not None else None
+            )
             coeffs.append(ci)
         return jnp.stack(coeffs)
 
@@ -667,17 +708,20 @@ class DirectSumTPS(TensorProductSpace):
                         z = lr(zother, lr_other)
                         for key in bco:
                             if key == "D":
-                                expr0 = system.expr_base_scalar_to_psi(bcval)
-                                assert isinstance(expr0, sp.Expr)
-                                bco[key] = float(expr0.subs(zother.system._psi[0], z))
-                            elif key[0] == "N":
-                                var = zother.system._psi[0]
-                                nd = 1 if len(key) == 1 else int(key[1])
-                                expr1 = system.expr_base_scalar_to_psi(bcval)
-                                assert isinstance(expr1, sp.Expr)
                                 bco[key] = float(
-                                    (expr1.diff(var, nd) / df**nd).subs(var, z)
+                                    sp.sympify(bcval).subs(
+                                        zother.system.base_scalars()[0], z
+                                    )
                                 )
+                            elif key[0] == "N":
+                                nd = 1 if len(key) == 1 else int(key[1])
+                                var = zother.system.base_scalars()[0]
+                                bco[key] = float(
+                                    (sp.sympify(bcval).diff(var, nd) / df**nd).subs(
+                                        var, z
+                                    )
+                                )
+
                     bcall[-1].append(bcs)
             self.bndvals[bcspaces] = jnp.array([z.orderedvals() for z in bcall[0]])
 
@@ -710,7 +754,7 @@ class DirectSumTPS(TensorProductSpace):
                             two_inhomogeneous[(bcsindex[0] + 1) % 2]
                         )
                         bco.bcs = bcall[bcsindex[0]][j]
-                        otherspace: DirectSum = otherspace + bco
+                        otherspace: DirectSum = cast(Composite, otherspace) + bco
                     uh.append(project1D(bc, otherspace))
                 if bcsindex[0] == 0:
                     self.bndvals[tensorspace] = jnp.array(uh)
@@ -780,7 +824,7 @@ class DirectSumTPS(TensorProductSpace):
             a.append(v.evaluate(x, self.coeff(c, f, v), use_einsum))
         return jnp.sum(jnp.array(a), axis=0)
 
-    def evaluate_derivative(self, x: Array, c: Array, k: int) -> Array:
+    def evaluate_derivative(self, x: Array, c: Array, k: tuple[int, ...]) -> Array:
         """Evaluate direct sum tensor product expansion at scattered points."""
         a: list[Array] = []
         for f, v in self.tpspaces.items():
@@ -794,6 +838,19 @@ class DirectSumTPS(TensorProductSpace):
         a: list[Array] = []
         for f, v in self.tpspaces.items():
             a.append(v.evaluate_mesh(x, self.coeff(c, f, v), use_einsum))
+        return jnp.sum(jnp.array(a), axis=0)
+
+    def backward_primitive(
+        self,
+        c: Array,
+        k: tuple[int, ...],
+        kind: str = "quadrature",
+        N: tuple[int, ...] | None = None,
+    ) -> Array:
+        """Evaluate total (homogeneous + lifting) backward transform."""
+        a: list[Array] = []
+        for f, v in self.tpspaces.items():
+            a.append(v.backward_primitive(self.coeff(c, f, v), k=k, kind=kind, N=N))
         return jnp.sum(jnp.array(a), axis=0)
 
     def coeff(

@@ -145,7 +145,7 @@ class TensorProductSpace:
     def flatmesh(
         self,
         kind: str = "quadrature",
-        N: tuple[int] | None = None,
+        N: tuple[int, ...] | None = None,
     ) -> Array:
         """Return flattened list of all coordinate tuples.
 
@@ -422,6 +422,15 @@ class TensorProductSpace:
                 )(c)
         return c
 
+    @jax.jit(static_argnums=0)
+    def to_orthogonal(self, c: Array) -> Array:
+        """Return coefficients c mapped to underlying orthogonal basis."""
+        S = [s.S.todense() for s in self.basespaces]
+        dim = len(self)
+        if dim == 2:
+            return S[0].T @ c @ S[1]
+        return jnp.einsum("is,jp,kl,ijk->spl", *S, c)
+
 
 class VectorTensorProductSpace:
     """Vector-valued tensor product space.
@@ -526,6 +535,7 @@ class VectorTensorProductSpace:
             vals.append(vi)
         return jnp.stack(vals)
 
+    @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation."""
         coeffs = []
@@ -534,6 +544,7 @@ class VectorTensorProductSpace:
             coeffs.append(ci)
         return jnp.stack(coeffs)
 
+    @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
@@ -541,6 +552,7 @@ class VectorTensorProductSpace:
             coeffs.append(ci)
         return jnp.stack(coeffs)
 
+    @jax.jit(static_argnums=(0, 2, 3))
     def backward(
         self,
         u: Array,
@@ -554,6 +566,7 @@ class VectorTensorProductSpace:
             coeffs.append(ci)
         return jnp.stack(coeffs)
 
+    @jax.jit(static_argnums=(0, 2, 3, 4))
     def backward_primitive(
         self,
         u: Array,
@@ -569,12 +582,24 @@ class VectorTensorProductSpace:
             coeffs.append(ci)
         return jnp.stack(coeffs)
 
+    @jax.jit(static_argnums=0)
+    def to_orthogonal(self, c: Array) -> Array:
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.to_orthogonal(c[i])
+            coeffs.append(ci)
+        return jnp.stack(coeffs)
+
+    def get_orthogonal(self) -> VectorTensorProductSpace:
+        orthogonal_spaces = [space.get_orthogonal() for space in self.tensorspaces]
+        return VectorTensorProductSpace(tuple(orthogonal_spaces), name=self.name + "o")
+
 
 def TensorProduct(
     *basespaces: OrthogonalSpace | DirectSum,
     system: CoordSys | None = None,
     name: str = "T",
-) -> TensorProductSpace:
+) -> TensorProductSpace | DirectSumTPS:
     """Factory returning TensorProductSpace or DirectSumTPS.
 
     Handles:
@@ -760,6 +785,7 @@ class DirectSumTPS(TensorProductSpace):
                     self.bndvals[tensorspace] = jnp.array(uh)
                 else:
                     self.bndvals[tensorspace] = jnp.array(uh).T
+        self.orthogonal = self.get_orthogonal()
 
     def split(
         self, spaces: list[OrthogonalSpace | DirectSum]
@@ -791,14 +817,12 @@ class DirectSumTPS(TensorProductSpace):
         )
         return self.tpspaces[(a0, a1)]
 
+    @jax.jit(static_argnums=(0, 2, 3))
     def backward(
         self, c: Array, kind: str = "quadrature", N: tuple[int, ...] | None = None
     ) -> Array:
         """Evaluate total (homogeneous + lifting) backward transform."""
-        a: list[Array] = []
-        for f, v in self.tpspaces.items():
-            a.append(v.backward(self.coeff(c, f, v), kind=kind, N=N))
-        return jnp.sum(jnp.array(a), axis=0)
+        return self.orthogonal.backward(self.to_orthogonal(c), kind=kind, N=N)
 
     def forward(self, c: Array) -> Array:
         """Solve projection for homogeneous coefficients (lifting removed)."""
@@ -817,29 +841,24 @@ class DirectSumTPS(TensorProductSpace):
             "Scalar product requires homogeneous test space (call on get_homogeneous())"
         )
 
+    @jax.jit(static_argnums=(0, 3))
     def evaluate(self, x: Array, c: Array, use_einsum: bool = False) -> Array:
         """Evaluate direct sum tensor product expansion at scattered points."""
-        a: list[Array] = []
-        for f, v in self.tpspaces.items():
-            a.append(v.evaluate(x, self.coeff(c, f, v), use_einsum))
-        return jnp.sum(jnp.array(a), axis=0)
+        return self.orthogonal.evaluate(x, self.to_orthogonal(c), use_einsum)
 
+    @jax.jit(static_argnums=(0, 3))
     def evaluate_derivative(self, x: Array, c: Array, k: tuple[int, ...]) -> Array:
         """Evaluate direct sum tensor product expansion at scattered points."""
-        a: list[Array] = []
-        for f, v in self.tpspaces.items():
-            a.append(v.evaluate_derivative(x, self.coeff(c, f, v), k))
-        return jnp.sum(jnp.array(a), axis=0)
+        return self.orthogonal.evaluate_derivative(x, self.to_orthogonal(c), k)
 
+    @jax.jit(static_argnums=(0, 3))
     def evaluate_mesh(
         self, x: list[Array], c: Array, use_einsum: bool = False
     ) -> Array:
         """Evaluate expansion on tensor mesh (summing lifting parts)."""
-        a: list[Array] = []
-        for f, v in self.tpspaces.items():
-            a.append(v.evaluate_mesh(x, self.coeff(c, f, v), use_einsum))
-        return jnp.sum(jnp.array(a), axis=0)
+        return self.orthogonal.evaluate_mesh(x, self.to_orthogonal(c), use_einsum)
 
+    @jax.jit(static_argnums=(0, 2, 3, 4))
     def backward_primitive(
         self,
         c: Array,
@@ -848,18 +867,28 @@ class DirectSumTPS(TensorProductSpace):
         N: tuple[int, ...] | None = None,
     ) -> Array:
         """Evaluate total (homogeneous + lifting) backward transform."""
+        return self.orthogonal.backward_primitive(
+            self.to_orthogonal(c), k=k, kind=kind, N=N
+        )
+
+    @jax.jit(static_argnums=0)
+    def to_orthogonal(self, c: Array) -> Array:
+        """Return coefficients c mapped to underlying orthogonal basis."""
         a: list[Array] = []
         for f, v in self.tpspaces.items():
-            a.append(v.backward_primitive(self.coeff(c, f, v), k=k, kind=kind, N=N))
-        return jnp.sum(jnp.array(a), axis=0)
-
-    def coeff(
-        self,
-        c: Array,
-        f: tuple[OrthogonalSpace, ...],
-        v: TensorProductSpace,
-    ) -> Array:
-        return self.bndvals.get(f, c)
+            a.append(v.to_orthogonal(self.bndvals.get(f, c)))
+        z = [a[0]]
+        for ai in a[1:]:
+            z.append(
+                jnp.pad(
+                    ai,
+                    [
+                        (0, z[0].shape[0] - ai.shape[0]),
+                        (0, z[0].shape[1] - ai.shape[1]),
+                    ],
+                )
+            )
+        return jnp.array(z).sum(axis=0)
 
 
 class TPMatrices:

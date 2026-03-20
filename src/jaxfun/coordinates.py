@@ -1112,8 +1112,8 @@ class CoordSys(Basic):
         if self._gt is not None:
             return self._gt
         g = self.get_covariant_metric_tensor()
-        gt = sp.Matrix(g).inv()
-        gt = sp.factor(self.simplify(gt))
+        gt = self.expr_base_scalar_to_psi(sp.Matrix(g)).inv()  # ty:ignore[invalid-argument-type]
+        gt = sp.factor(self.simplify(self.expr_psi_to_base_scalar(gt)))
         gt = np.array(gt)
         self._gt = gt
         return gt

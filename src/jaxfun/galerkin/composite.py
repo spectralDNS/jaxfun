@@ -473,6 +473,7 @@ class DirectSum:
         """Return free degrees of freedom (Composite part)."""
         return self[0].num_dofs
 
+    @jax.jit(static_argnums=0)
     def to_orthogonal(self, c: Array) -> Array:
         """Map direct-sum coefficients -> underlying orthogonal coefficients."""
         c_a = self[0].to_orthogonal(c)
@@ -519,6 +520,10 @@ class DirectSum:
         """Evaluate k-th derivative at X (composite + boundary)."""
         c0 = self.to_orthogonal(c)
         return self.orthogonal.evaluate_derivative(x, c0, k)
+
+    def get_homogeneous(self) -> Composite:
+        """Return homogeneous Composite part of the direct sum."""
+        return self[0]
 
 
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
@@ -649,79 +654,3 @@ def get_bc_basis(bcs: BoundaryConditions, orthogonal: Jacobi) -> sp.Matrix:
     sol = sp.Matrix(np.zeros((bcs.num_bcs(), first + bcs.num_bcs())))
     sol[:, first:] = s
     return sol
-
-
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-
-    from jaxfun.galerkin.arguments import TestFunction, TrialFunction
-    from jaxfun.galerkin.Chebyshev import Chebyshev
-    from jaxfun.galerkin.inner import inner
-    from jaxfun.galerkin.Legendre import Legendre
-
-    n = sp.Symbol("n", positive=True, integer=True)
-    N = 50
-    biharmonic = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
-    dirichlet = {"left": {"D": 0}, "right": {"D": 0}}
-    C = Composite(N, Chebyshev, dirichlet, name="C")
-
-    v = jax.random.normal(jax.random.PRNGKey(1), shape=(N, N))
-    g = C.S @ v @ C.S.T
-    g1 = C.apply_stencil_galerkin(v)
-
-    D = C.stencil_to_scipy_sparse()
-    vn = v.__array__()
-    gn = D @ vn @ D.T  # ty:ignore[unresolved-attribute]
-
-    assert jnp.linalg.norm(gn - g) < 1e-7
-    assert jnp.linalg.norm(gn - g1) < 1e-7
-
-    # Galerkin (dense)
-    u = TrialFunction(C, name="u")
-    v = TestFunction(C, name="v")
-    x = C.system.x
-    D = inner(v * sp.diff(u, x, 2), sparse=True, sparse_tol=1000)
-
-    # Petrov-Galerkin method (https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
-    G = Composite(N, Chebyshev, dirichlet, scaling=n + 1, name="G")
-    PG = Composite(
-        N + 2,
-        Chebyshev,
-        biharmonic,
-        stencil={
-            0: 1 / (2 * sp.pi * (n + 1) * (n + 2)),
-            2: -1 / (sp.pi * (n**2 + 4 * n + 3)),
-            4: 1 / (2 * sp.pi * (n + 2) * (n + 3)),
-        },
-        name="PG",
-    )
-    L = Composite(N, Legendre, dirichlet, scaling=n + 1, name="L")
-    LG = Composite(
-        N + 2,
-        Legendre,
-        biharmonic,
-        stencil={
-            0: 1 / (2 * (2 * n + 3)),
-            2: -(2 * n + 5) / (2 * n + 7) / (2 * n + 3),
-            4: 1 / (2 * (2 * n + 7)),
-        },
-        name="LG",
-    )
-    A0 = inner(
-        TestFunction(PG) * sp.diff(TrialFunction(G), x, 2),
-        sparse=True,
-        sparse_tol=1000,
-    )  # bidiagonal
-    A1 = inner(
-        TestFunction(LG) * sp.diff(TrialFunction(L), x, 2),
-        sparse=True,
-        sparse_tol=1000,
-    )  # bidiagonal
-    fig, (ax0, ax1, ax2) = plt.subplots(1, 3, sharey=True)
-    ax0.spy(D.todense())
-    ax0.set_title("Galerkin Cheb")
-    ax1.spy(A0.todense())
-    ax1.set_title("PG Chebyshev")
-    ax2.spy(A1.todense())
-    ax2.set_title("PG Legendre")
-    plt.show()

@@ -267,11 +267,9 @@ class Chebyshev(Jacobi):
 
         N: int = c.shape[0] - 1
         x0: Array = jnp.array(0.0, dtype=float)
-        x1: Array = c[-1] * N * 2
-
         if N == 0:
             return x0
-
+        x1: Array = c[-1] * N * 2
         if N == 1:
             return jnp.array([x1, x0])
 

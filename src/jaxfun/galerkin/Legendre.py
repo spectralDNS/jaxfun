@@ -167,11 +167,9 @@ class Legendre(Jacobi):
 
         N: int = c.shape[0] - 1
         x0: Array = jnp.array(0.0)
-        x1: Array = c[-1] * (2 * N - 1)
-
         if N == 0:
             return x0
-
+        x1: Array = c[-1] * (2 * N - 1)
         if N == 1:
             return jnp.array([x1, x0])
 

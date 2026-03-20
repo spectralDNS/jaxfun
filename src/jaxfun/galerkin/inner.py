@@ -506,13 +506,13 @@ def inner_bilinear(
         u: Trial function space.
         sc: Scalar bilinear coefficient (after linear split).
         multivar: True if coefficient not separable (handled upstream).
-        num_quad_points: Number of quadrature points .
+        num_quad_points: Number of quadrature points.
     Returns:
         Dense matrix, or (Pi, Pj) tuple for multivar separation.
     """
     vo = v.orthogonal
     uo = u.orthogonal
-    N: int = num_quad_points
+    N = num_quad_points
     xj, wj = vo.quad_points_and_weights(N=N)
     df = float(vo.domain_factor)
     i, j = 0, 0
@@ -538,6 +538,9 @@ def inner_bilinear(
         if len(jaxfunction) == 1:
             scale *= evaluate_jaxfunction_expr_quad(aii, jaxfunction.pop(), N=N)
             continue
+        elif len(jaxfunction) > 1:
+            raise ValueError("Multiple JAXFunctions found in single bilinear form")
+
         if len(aii.free_symbols) > 0:
             s = aii.free_symbols.pop()
             scale *= lambdify(s, uo.map_expr_true_domain(aii), modules="jax")(xj)

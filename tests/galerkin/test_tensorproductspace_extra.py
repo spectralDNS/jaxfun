@@ -2,15 +2,19 @@ from typing import cast
 
 import jax
 import jax.numpy as jnp
+import pytest
 import sympy as sp
 
 from jaxfun.galerkin import (
     Chebyshev,
+    DirectSum,
     FunctionSpace,
     Legendre,
     TensorProduct,
     TestFunction,
     TrialFunction,
+    Ultraspherical,
+    VectorTensorProductSpace,
 )
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.tensorproductspace import (
@@ -19,6 +23,7 @@ from jaxfun.galerkin.tensorproductspace import (
     TPMatrix,
     tpmats_to_scipy_sparse,
 )
+from jaxfun.utils.common import ulp
 
 
 def test_directsum_two_inhomogeneous_bnd_assembly_and_backward():
@@ -91,3 +96,102 @@ def test_tpmats_to_scipy_sparse():
     A_tp = cast(list[TPMatrix], A)
     S = tpmats_to_scipy_sparse(A_tp)
     assert len(S) == len(A_tp)
+
+
+@pytest.mark.parametrize(
+    "space",
+    (
+        Legendre.Legendre,
+        Chebyshev.Chebyshev,
+        Ultraspherical.Ultraspherical,
+    ),
+)
+def test_tensorproductspace_to_orthogonal(space):
+    N1, N2 = 5, 6
+    F1 = FunctionSpace(N1, space, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    F2 = FunctionSpace(N2, space, bcs={"left": {"N": 0}, "right": {"N": 0}})
+    T = TensorProduct(F1, F2)
+    O = T.get_orthogonal()
+    c = jax.random.normal(jax.random.PRNGKey(0), shape=T.num_dofs)
+    c0 = T.to_orthogonal(c)
+    y0 = T.backward(c)
+    y1 = O.backward(c0)
+    assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
+
+
+def test_directsumtps_to_orthogonal():
+    bcs1 = {"left": {"D": 1}, "right": {"D": 2}}
+    bcs2 = {"left": {"D": 3}, "right": {"D": 4}}
+    F1 = FunctionSpace(5, Legendre.Legendre, bcs=bcs1)
+    F2 = FunctionSpace(6, Legendre.Legendre, bcs=bcs2)
+    assert isinstance(F1, DirectSum) and isinstance(F2, DirectSum)
+    T = TensorProduct(F1, F2)
+    O = T.get_orthogonal()
+    assert isinstance(T, DirectSumTPS)
+    c = jax.random.normal(jax.random.PRNGKey(0), shape=T.num_dofs)
+    c0 = T.to_orthogonal(c)
+    y0 = T.backward(c)
+    y1 = O.backward(c0)
+    assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
+
+
+def test_vectortensorproductspace_to_orthogonal():
+    N1, N2 = 5, 6
+    F1 = FunctionSpace(N1, Legendre.Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    F2 = FunctionSpace(N2, Legendre.Legendre, bcs={"left": {"N": 0}, "right": {"N": 0}})
+    T = TensorProduct(F1, F2)
+    V = VectorTensorProductSpace(T, name="V")
+    O = V.get_orthogonal()
+    c = jax.random.normal(jax.random.PRNGKey(0), shape=V.num_dofs)
+    c0 = V.to_orthogonal(c)
+    y0 = V.backward(c)
+    y1 = O.backward(c0)
+    assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
+
+
+def test_directsumtps():
+    bcs1 = {"left": {"D": 1}, "right": {"D": 2}}
+    bcs2 = {"left": {"D": 3}, "right": {"D": 4}}
+    N = (5, 6)
+    F1 = FunctionSpace(N[0], Legendre.Legendre, bcs=bcs1)
+    F2 = FunctionSpace(N[1], Legendre.Legendre, bcs=bcs2)
+    assert isinstance(F1, DirectSum) and isinstance(F2, DirectSum)
+    T: DirectSumTPS = cast(DirectSumTPS, TensorProduct(F1, F2))
+
+    c = jax.random.normal(jax.random.PRNGKey(0), shape=T.num_dofs)
+    a = []
+    for f, v in T.tpspaces.items():
+        a.append(v.backward_primitive(T.bndvals.get(f, c), k=(1, 1), N=N))
+    z0 = jnp.sum(jnp.array(a), axis=0)
+    z1 = T.backward_primitive(c, k=(1, 1), N=N)
+    assert jnp.linalg.norm(z0 - z1) < jnp.sqrt(ulp(100))
+
+    a = []
+    for f, v in T.tpspaces.items():
+        a.append(v.backward(T.bndvals.get(f, c), N=N))
+    z0 = jnp.sum(jnp.array(a), axis=0)
+    z1 = T.backward(c, N=N)
+    assert jnp.linalg.norm(z0 - z1) < jnp.sqrt(ulp(100))
+
+    xj = T.flatmesh(kind="uniform", N=N)
+    a = []
+    for f, v in T.tpspaces.items():
+        a.append(v.evaluate(xj, T.bndvals.get(f, c), True))
+    z0 = jnp.sum(jnp.array(a), axis=0)
+    z1 = T.evaluate(xj, c, True)
+    assert jnp.linalg.norm(z0 - z1) < jnp.sqrt(ulp(100))
+
+    a = []
+    for f, v in T.tpspaces.items():
+        a.append(v.evaluate_derivative(xj, T.bndvals.get(f, c), (1, 1)))
+    z0 = jnp.sum(jnp.array(a), axis=0)
+    z1 = T.evaluate_derivative(xj, c, (1, 1))
+    assert jnp.linalg.norm(z0 - z1) < jnp.sqrt(ulp(100))
+
+    a = []
+    xj = T.mesh(kind="uniform", N=N)
+    for f, v in T.tpspaces.items():
+        a.append(v.evaluate_mesh(xj, T.bndvals.get(f, c), True))
+    z0 = jnp.sum(jnp.array(a), axis=0)
+    z1 = T.evaluate_mesh(xj, c, True)
+    assert jnp.linalg.norm(z0 - z1) < jnp.sqrt(ulp(100))

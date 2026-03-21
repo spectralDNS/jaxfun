@@ -1,3 +1,5 @@
+"""Classical explicit Runge-Kutta time integration."""
+
 from flax import nnx
 
 from jaxfun.typing import Array
@@ -10,6 +12,7 @@ class RK4(BaseIntegrator):
 
     @nnx.jit
     def step(self, u_hat: Array, dt: float) -> Array:
+        """Advance one classical RK4 step in coefficient space."""
         k1 = self.total_rhs(u_hat)
         k2 = self.total_rhs(u_hat + 0.5 * dt * k1)
         k3 = self.total_rhs(u_hat + 0.5 * dt * k2)

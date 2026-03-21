@@ -1,3 +1,5 @@
+"""Exponential time differencing Runge-Kutta integrators."""
+
 from collections.abc import Callable
 from typing import cast
 
@@ -15,18 +17,21 @@ expm = cast(Callable[[Array], Array], _expm)
 
 
 def _phi1(z: Array) -> Array:
+    """Return ``phi_1(z) = (exp(z) - 1) / z`` with a small-argument expansion."""
     small = jnp.abs(z) < 1e-7
     series = 1 + z / 2 + z**2 / 6 + z**3 / 24 + z**4 / 120
     return jnp.where(small, series, jnp.expm1(z) / z)
 
 
 def _phi2(z: Array) -> Array:
+    """Return ``phi_2(z) = (exp(z) - 1 - z) / z^2`` with series stabilization."""
     small = jnp.abs(z) < 1e-6
     series = 0.5 + z / 6 + z**2 / 24 + z**3 / 120 + z**4 / 720
     return jnp.where(small, series, (jnp.expm1(z) - z) / z**2)
 
 
 def _phi3(z: Array) -> Array:
+    """Return ``phi_3(z) = (exp(z) - 1 - z - z^2 / 2) / z^3`` safely."""
     small = jnp.abs(z) < 1e-5
     series = 1 / 6 + z / 24 + z**2 / 120 + z**3 / 720 + z**4 / 5040
     return jnp.where(small, series, (jnp.expm1(z) - z - z**2 / 2) / z**3)
@@ -48,6 +53,7 @@ def _etdrk4_nonlinear_weights(
 def _etdrk4_diag_coeffs(
     L: Array, dt: float
 ) -> tuple[Array, Array, Array, Array, Array, Array]:
+    """Return ETDRK4 coefficients for a diagonal linear operator."""
     z = dt * L
     E = jnp.exp(z)
     E2 = jnp.exp(z / 2)
@@ -63,6 +69,7 @@ def _etdrk4_diag_coeffs(
 
 
 def _phi_matrices(z: Array) -> tuple[Array, Array, Array]:
+    """Return dense matrix versions of ``phi_1``, ``phi_2``, and ``phi_3``."""
     n = z.shape[0]
     I = jnp.eye(n, dtype=z.dtype)
     expz = expm(z)
@@ -74,6 +81,7 @@ def _phi_matrices(z: Array) -> tuple[Array, Array, Array]:
 
 
 def _apply_etd_operator(op: Array, u: Array, is_diag: bool) -> Array:
+    """Apply a diagonal or dense ETD operator to a state vector."""
     return op * u if is_diag else op @ u
 
 
@@ -89,6 +97,7 @@ class ETDRK4(BaseIntegrator):
         time: tuple[float, float] | None = None,
         **params,
     ):
+        """Construct an ETDRK4 integrator for a semilinear weak form."""
         super().__init__(V, equation, initial=initial, time=time, **params)
         zero = jnp.zeros(self.functionspace.num_dofs)
         forcing_rhs = (
@@ -99,6 +108,7 @@ class ETDRK4(BaseIntegrator):
         self._forcing_rhs = nnx.data(forcing_rhs)
 
     def setup(self, dt: float) -> None:
+        """Precompute ETD propagators and nonlinear stage coefficients."""
         is_diag = self.mass_diag is not None and (
             self.linear_operator is None or self.linear_diag is not None
         )
@@ -144,14 +154,15 @@ class ETDRK4(BaseIntegrator):
         self.f3 = nnx.data(f3)
 
     def _N(self, u_hat: Array) -> Array:
+        """Return the nonlinear-plus-forcing contribution used in ETDRK4 stages."""
         nval = (
             self.nonlinear_rhs(u_hat) if self.has_nonlinear else jnp.zeros_like(u_hat)
         )
         return nval + self._forcing_rhs
 
-    # @nnx.jit
     @jax.jit(static_argnums=0)
     def step(self, u_hat: Array, dt: float) -> Array:
+        """Advance one ETDRK4 step in coefficient space."""
         shape = u_hat.shape
         is_diag = bool(self.is_diag)
 

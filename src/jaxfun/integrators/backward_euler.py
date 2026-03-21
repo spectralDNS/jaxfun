@@ -1,3 +1,5 @@
+"""Backward Euler integrator for semi-discrete Galerkin systems."""
+
 import jax.numpy as jnp
 from flax import nnx
 
@@ -13,6 +15,7 @@ class BackwardEuler(BaseIntegrator):
     _system_matrix: Array | None = nnx.data(None)
 
     def setup(self, dt: float) -> None:
+        """Precompute the implicit system matrix for the given step size."""
         if self.linear_operator is None:
             return
 
@@ -25,6 +28,7 @@ class BackwardEuler(BaseIntegrator):
         self._system_matrix = nnx.data(mass_mat - dt * linear_mat)
 
     def step(self, u_hat: Array, dt: float) -> Array:
+        """Advance one backward-Euler step in coefficient space."""
         rhs = self.apply_mass(u_hat)
         if self.linear_forcing is not None:
             rhs = rhs + dt * jnp.asarray(self.linear_forcing)

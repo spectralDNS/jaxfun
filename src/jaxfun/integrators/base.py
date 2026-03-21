@@ -1,3 +1,5 @@
+"""Base abstractions for time integrators on Galerkin coefficient spaces."""
+
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from math import prod
@@ -29,13 +31,21 @@ from jaxfun.utils.operator_tools import (
 from jaxfun.utils.sympy_factoring import time_derivative_as_operator
 
 from .nonlinear import (
-    _compile_nonlinear_evaluator,
+    compile_nonlinear_evaluator,
     remove_test_function,
     replace_trial_with_jaxfunction,
 )
 
 
 class BaseIntegrator(ABC, nnx.Module):
+    """Base class for time integration of semi-discrete Galerkin systems.
+
+    The input weak form is split into a time-derivative operator, linear
+    right-hand-side terms, and nonlinear terms. The latter are compiled into a
+    cached physical-space evaluator, while the linear and mass terms are
+    assembled once in coefficient space.
+    """
+
     def __init__(
         self,
         V: FunctionSpaceType,
@@ -46,6 +56,18 @@ class BaseIntegrator(ABC, nnx.Module):
         sparse: bool = False,
         sparse_tol: int = 1000,
     ):
+        """Build an integrator from a weak form and an initial condition.
+
+        Args:
+            V: Function space used for the semi-discrete state.
+            equation: Weak-form expression containing a first-order time
+                derivative of a transient TrialFunction.
+            initial: Initial condition, either symbolically in physical space or
+                directly as coefficients.
+            time: Optional default integration interval.
+            sparse: Assemble sparse operators when possible.
+            sparse_tol: Sparsification tolerance passed to Galerkin assembly.
+        """
         if initial is None:
             raise ValueError("Initial condition must be provided via `initial`")
 
@@ -89,12 +111,14 @@ class BaseIntegrator(ABC, nnx.Module):
 
     @staticmethod
     def _coefficient_shape(V: FunctionSpaceType) -> tuple[int, ...]:
+        """Return the coefficient-array shape for the given space."""
         num_dofs = V.num_dofs
         return num_dofs if isinstance(num_dofs, tuple) else (num_dofs,)
 
     def _extract_equation_terms(
         self, equation: sp.Expr
     ) -> tuple[TrialFunction, sp.Expr, sp.Expr, sp.Expr]:
+        """Split a weak form into mass, linear, and nonlinear components."""
         t = self.functionspace.system.base_time()
         lhs, rhs = split_time_derivative_terms(equation, t)
         if sp.sympify(lhs) == 0:
@@ -127,6 +151,7 @@ class BaseIntegrator(ABC, nnx.Module):
         return trial, mass_expr, linear, nonlinear
 
     def _setup_nonlinear_evaluator(self, trial: TrialFunction) -> None:
+        """Compile the nonlinear physical-space evaluator for the trial field."""
         base_jaxfunction = JAXFunction(
             jnp.zeros(self._state_shape), self.functionspace, name=f"{trial.name}_jax"
         )
@@ -137,7 +162,7 @@ class BaseIntegrator(ABC, nnx.Module):
         self.nonlinear_expr = nonlinear_expr
         quad_mesh = self.functionspace.mesh()
         self._nonlinear_jaxfunction = jaxfunction
-        self._nonlinear_evaluator = _compile_nonlinear_evaluator(
+        self._nonlinear_evaluator = compile_nonlinear_evaluator(
             nonlinear_expr, self.functionspace, quad_mesh, jaxfunction
         )
 
@@ -146,6 +171,7 @@ class BaseIntegrator(ABC, nnx.Module):
         operator: GalerkinOperatorLike | None,
         diagonal: Array | None,
     ) -> Array:
+        """Return a dense matrix representation of a linear operator."""
         if diagonal is not None:
             return jnp.diag(diagonal.reshape((-1,)))
         if operator is None:
@@ -153,12 +179,15 @@ class BaseIntegrator(ABC, nnx.Module):
         return operator_to_dense(operator)
 
     def mass_matrix_dense(self) -> Array:
+        """Return the assembled mass operator as a dense matrix."""
         return self._dense_matrix(self.mass_operator, self.mass_diag)
 
     def linear_matrix_dense(self) -> Array:
+        """Return the assembled linear operator as a dense matrix."""
         return self._dense_matrix(self.linear_operator, self.linear_diag)
 
     def initial_coefficients(self, initial: sp.Expr | Array | None = None) -> Array:
+        """Return coefficient-space data for an initial condition."""
         init = self.initial_condition if initial is None else initial
         if isinstance(init, sp.Expr):
             return project(init, self.functionspace)
@@ -170,6 +199,7 @@ class BaseIntegrator(ABC, nnx.Module):
         steps: int | None = None,
         trange: tuple[float, float] | None = None,
     ) -> tuple[float, float, int]:
+        """Resolve the effective time interval and number of time steps."""
         interval = self.time if trange is None else trange
         if interval is None:
             if steps is None:
@@ -183,6 +213,7 @@ class BaseIntegrator(ABC, nnx.Module):
         return t0, t1, int(steps)
 
     def apply_mass(self, uh: Array) -> Array:
+        """Apply the assembled mass operator to a coefficient state."""
         if self.mass_diag is not None:
             return self.mass_diag * uh
         if self.mass_operator is None:
@@ -190,6 +221,7 @@ class BaseIntegrator(ABC, nnx.Module):
         return apply_operator(self.mass_operator, uh)
 
     def apply_mass_inverse(self, rhs: Array) -> Array:
+        """Apply the inverse mass operator to a coefficient-space right-hand side."""
         if self.mass_diag is not None:
             return rhs / self.mass_diag
         if self.mass_operator is None:
@@ -197,12 +229,14 @@ class BaseIntegrator(ABC, nnx.Module):
         return solve_operator(self.mass_operator, rhs)
 
     def nonlinear_rhs(self, uh: Array) -> Array:
+        """Return the nonlinear contribution in coefficient space."""
         if not self.has_nonlinear:
             return jnp.zeros_like(uh)
         assert self._nonlinear_evaluator is not None
         return self.functionspace.forward(self._nonlinear_evaluator(uh))
 
     def linear_rhs(self, uh: Array) -> Array:
+        """Return the linear contribution after applying the inverse mass matrix."""
         rhs = jnp.zeros_like(uh)
         if self.linear_operator is not None:
             if self.linear_diag is not None:
@@ -215,12 +249,15 @@ class BaseIntegrator(ABC, nnx.Module):
 
     @jax.jit(static_argnums=0)
     def total_rhs(self, uh: Array) -> Array:
+        """Return the full semi-discrete right-hand side."""
         return self.linear_rhs(uh) + self.nonlinear_rhs(uh)
 
     @abstractmethod
     def step(self, u_hat: Array, dt: float) -> Array: ...
 
-    def setup(self, dt: float) -> None: ...
+    def setup(self, dt: float) -> None:
+        """Precompute step-size-dependent coefficients before time stepping."""
+        ...
 
     def solve(
         self,

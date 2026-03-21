@@ -1,3 +1,5 @@
+"""Helpers for assembling, inspecting, and applying Galerkin operators."""
+
 from dataclasses import dataclass
 from typing import cast
 
@@ -19,12 +21,15 @@ from jaxfun.typing import (
 
 @dataclass(frozen=True)
 class AssembledTerm:
+    """Container for an assembled operator, forcing term, and diagonal shortcut."""
+
     operator: GalerkinOperatorLike | None = None
     forcing: Array | None = None
     diagonal: Array | None = None
 
 
 def bcoo_diagonal(mat: BCOO) -> Array | None:
+    """Return the diagonal of a sparse BCOO matrix when it is purely diagonal."""
     if mat.ndim != 2 or mat.shape[0] != mat.shape[1]:
         return None
     indices = mat.indices
@@ -37,6 +42,7 @@ def bcoo_diagonal(mat: BCOO) -> Array | None:
 
 
 def _sum_diagonals(operators: list[GalerkinOperator]) -> Array | None:
+    """Return the summed diagonal of several operators, if all are diagonal."""
     diag_sum: Array | None = None
     for operator in operators:
         diag = operator_diagonal(operator)
@@ -47,6 +53,7 @@ def _sum_diagonals(operators: list[GalerkinOperator]) -> Array | None:
 
 
 def _tpmatrix_diagonal(op: TPMatrix) -> Array | None:
+    """Return the tensor-product diagonal implied by a TPMatrix."""
     if len(op.mats) == 0:
         return None
 
@@ -64,6 +71,7 @@ def _tpmatrix_diagonal(op: TPMatrix) -> Array | None:
 
 
 def operator_diagonal(obj: GalerkinOperatorLike | None) -> Array | None:
+    """Return a diagonal representation when an operator acts diagonally."""
     if obj is None:
         return None
     if isinstance(obj, list):
@@ -85,6 +93,7 @@ def operator_diagonal(obj: GalerkinOperatorLike | None) -> Array | None:
 
 
 def apply_operator(op: GalerkinOperatorLike | None, u: Array) -> Array:
+    """Apply a Galerkin operator-like object to a coefficient array."""
     if op is None:
         return jnp.zeros_like(u)
     if isinstance(op, list):
@@ -106,11 +115,13 @@ def apply_operator(op: GalerkinOperatorLike | None, u: Array) -> Array:
 
 
 def _sum_dense_operators(operators: list[GalerkinOperator]) -> Array:
+    """Convert and sum a list of operators in dense form."""
     mats = [operator_to_dense(op) for op in operators]
     return sum(mats[1:], mats[0]) if len(mats) > 0 else jnp.array([])
 
 
 def _tpmatrix_to_dense(op: TPMatrix) -> Array:
+    """Convert a TPMatrix into an explicit dense Kronecker product."""
     mats = [operator_to_dense(item) for item in op.mats]
     if len(mats) == 0:
         return jnp.array([])
@@ -122,6 +133,7 @@ def _tpmatrix_to_dense(op: TPMatrix) -> Array:
 
 
 def operator_to_dense(op: GalerkinOperatorLike) -> Array:
+    """Convert a supported Galerkin operator representation to a dense array."""
     if isinstance(op, BCOO):
         return op.todense()
     if isinstance(op, list):
@@ -136,6 +148,7 @@ def operator_to_dense(op: GalerkinOperatorLike) -> Array:
 
 
 def solve_operator(op: GalerkinOperatorLike, rhs: Array) -> Array:
+    """Solve a dense linear system represented by ``op`` against ``rhs``."""
     mat = operator_to_dense(op)
     if mat.ndim != 2:
         raise ValueError("Can only solve systems with rank-2 operators")
@@ -147,6 +160,7 @@ def solve_operator(op: GalerkinOperatorLike, rhs: Array) -> Array:
 def split_operator_and_forcing(
     form: GalerkinAssembledForm,
 ) -> tuple[GalerkinOperatorLike | None, Array | None]:
+    """Split an assembled Galerkin form into operator and forcing pieces."""
     if form is None:
         return None, None
     if isinstance(form, tuple):
@@ -164,6 +178,7 @@ def split_operator_and_forcing(
 def assemble_linear_term(
     expr: sp.Expr, *, sparse: bool, sparse_tol: int
 ) -> AssembledTerm:
+    """Assemble a linear weak-form expression into reusable operator data."""
     if sp.sympify(expr) == 0:
         return AssembledTerm()
 
@@ -181,6 +196,7 @@ def assemble_linear_term(
 def assemble_mass_term(
     V: FunctionSpaceType, *, sparse: bool, sparse_tol: int
 ) -> AssembledTerm:
+    """Assemble the canonical mass term ``<v, u>`` for a function space."""
     v = TestFunction(V)
     u = TrialFunction(V)
     mass_form = cast(

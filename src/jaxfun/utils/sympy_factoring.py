@@ -1,3 +1,5 @@
+"""Symbolic utilities for splitting transient weak forms."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
@@ -14,6 +16,7 @@ _TIME_INDEPENDENT_TRIALS: dict[TrialFunction, TrialFunction] = {}
 
 
 def get_time_independent(u: TrialFunction) -> TrialFunction:
+    """Return the cached time-independent counterpart of a transient trial field."""
     if not u.transient:
         return u
     cached = _TIME_INDEPENDENT_TRIALS.get(u)
@@ -27,6 +30,7 @@ def get_time_independent(u: TrialFunction) -> TrialFunction:
 
 
 def drop_time_argument(expr: sp.Expr, t: sp.Symbol) -> sp.Expr:
+    """Replace transient TrialFunctions in ``expr`` by time-independent ones."""
     from jaxfun.galerkin.arguments import TrialFunction
 
     expr = sp.sympify(expr)
@@ -84,7 +88,13 @@ def time_derivative_as_operator(
 def split_time_derivative_terms(
     expr: sp.Expr, time_symbol: sp.Symbol
 ) -> tuple[sp.Expr, sp.Expr]:
-    """Split an expression into time-derivative terms and the remainder."""
+    """Split an expression into time-derivative terms and the remainder.
+
+    Returns:
+        A tuple ``(lhs, rhs)`` where ``lhs`` contains all additive terms with a
+        derivative in ``time_symbol`` and ``rhs`` contains the remaining terms
+        with transient TrialFunctions replaced by their time-independent forms.
+    """
     expr = sp.expand(expr)
 
     time_terms: list[sp.Expr] = []
@@ -131,10 +141,12 @@ def split_linear_nonlinear_terms(
 
 
 def is_linear_add(node: sp.Add, dependent: TrialFunction | sp.Function) -> bool:
+    """Return True when every additive term is linear in ``dependent``."""
     return all(is_linear_in_dependent(arg, dependent) for arg in node.args)
 
 
 def is_linear_mul(node: sp.Mul, dependent: TrialFunction | sp.Function) -> bool:
+    """Return True when a product contains at most one dependent factor."""
     dependent_factors = [a for a in node.args if a.has(dependent)]
     if len(dependent_factors) == 1:
         return is_linear_in_dependent(dependent_factors[0], dependent)
@@ -142,6 +154,7 @@ def is_linear_mul(node: sp.Mul, dependent: TrialFunction | sp.Function) -> bool:
 
 
 def is_linear_pow(node: sp.Pow, dependent: TrialFunction | sp.Function) -> bool:
+    """Return True when a power node preserves linearity in ``dependent``."""
     base, exp = node.as_base_exp()
     if not base.has(dependent):
         return True
@@ -156,6 +169,7 @@ def is_linear_pow(node: sp.Pow, dependent: TrialFunction | sp.Function) -> bool:
 def is_linear_in_dependent(
     node: sp.Basic, dependent: TrialFunction | sp.Function
 ) -> bool:
+    """Return True when ``node`` is linear in the supplied dependent field."""
     node = sp.sympify(node)
 
     if not node.has(dependent) or node == dependent:

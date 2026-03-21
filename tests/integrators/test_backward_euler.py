@@ -84,7 +84,7 @@ def test_rk4_solve_uses_initial_and_time_api() -> None:
     assert float(error) < 2e-1
 
 
-def test_solve_n_batches_and_return_each_step() -> None:
+def test_solve_n_batches_and_return_batch_snapshots() -> None:
     N = 16
     dt = 0.01
     steps = 23
@@ -103,17 +103,28 @@ def test_solve_n_batches_and_return_each_step() -> None:
         dt=dt,
         steps=steps,
         n_batches=5,
-        return_each_step=True,
+        return_batch_snapshots=True,
         progress=False,
     )
     integrator_final = RK4(
         V, weak_form, time=(0.0, dt * steps), initial=u0, sparse=True
     )
     final = integrator_final.solve(dt=dt, steps=steps, n_batches=5, progress=False)
+    integrator_restart = RK4(
+        V, weak_form, time=(0.0, dt * steps), initial=u0, sparse=True
+    )
+    restarted = integrator_restart.solve(
+        dt=dt,
+        steps=steps,
+        n_batches=5,
+        state0=integrator_final.initial_coefficients(),
+        progress=False,
+    )
 
     # 23 steps in 5 batches => 1 initial + 5 snapshots + 1 remainder snapshot.
     assert states.shape == (7, V.num_dofs)
     assert jnp.allclose(states[-1], final)
+    assert jnp.allclose(restarted, final)
 
     with pytest.raises(ValueError, match="n_batches must be a positive integer"):
         _ = integrator.solve(dt=dt, steps=steps, n_batches=0, progress=False)
@@ -306,7 +317,7 @@ def test_etdrk4_tensorproduct_nonlinear_short_run_is_finite() -> None:
         dt=dt,
         steps=steps,
         n_batches=4,
-        return_each_step=True,
+        return_batch_snapshots=True,
         progress=False,
     )
     assert states.shape == (5,) + V.num_dofs

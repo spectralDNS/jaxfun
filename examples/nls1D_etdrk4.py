@@ -87,7 +87,7 @@ states = integrator.solve(
     dt=dt,
     steps=steps,
     n_batches=n_states,
-    return_each_step=True,
+    return_batch_snapshots=True,
     progress=False,
 )
 times = jnp.linspace(0.0, T, states.shape[0])

@@ -54,7 +54,12 @@ integrator = ETDRK4(
 )
 
 n_states = 200
-states = integrator.solve(dt=dt, steps=steps, n_batches=n_states, return_each_step=True)
+states = integrator.solve(
+    dt=dt,
+    steps=steps,
+    n_batches=n_states,
+    return_batch_snapshots=True,
+)
 times = jnp.linspace(0.0, T, n_states + 1)
 
 xj = V.mesh()

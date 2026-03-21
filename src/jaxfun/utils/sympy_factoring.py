@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import sympy as sp
 
@@ -10,14 +10,20 @@ if TYPE_CHECKING:
 # Operators treated as linear in the dependent field.
 _LINEAR_UNARY = {"Grad", "Div", "Curl", "Derivative"}
 _LINEAR_BINARY = {"Dot", "Cross", "Outer"}
+_TIME_INDEPENDENT_TRIALS: dict[TrialFunction, TrialFunction] = {}
 
 
 def get_time_independent(u: TrialFunction) -> TrialFunction:
     if not u.transient:
         return u
+    cached = _TIME_INDEPENDENT_TRIALS.get(u)
+    if cached is not None:
+        return cached
     V = u.functionspace
     name = u.name
-    return u.func(V, name, transient=False)
+    out = u.func(V, name, transient=False)
+    _TIME_INDEPENDENT_TRIALS[u] = out
+    return out
 
 
 def drop_time_argument(expr: sp.Expr, t: sp.Symbol) -> sp.Expr:
@@ -30,6 +36,49 @@ def drop_time_argument(expr: sp.Expr, t: sp.Symbol) -> sp.Expr:
         if t in fapp.args
     }
     return expr.xreplace(repl)
+
+
+def time_derivative_as_operator(
+    expr: sp.Expr, dependent: TrialFunction, time_symbol: sp.Symbol
+) -> sp.Expr:
+    """Convert first-order time derivatives into a linear operator on ``dependent``.
+
+    For example ``a(x) * v * d/dt(u(x, t))`` becomes ``a(x) * v * u(x)`` and
+    ``v * d/dt(du/dx)`` becomes ``v * du/dx``.
+    """
+    dependent_ind = get_time_independent(dependent)
+
+    def replace_time_derivative(node: sp.Basic) -> sp.Basic:
+        assert isinstance(node, sp.Derivative)
+
+        time_count = node.variables.count(time_symbol)
+        if time_count != 1:
+            raise ValueError(
+                "Integrators only support first-order time derivatives in the weak form"
+            )
+        if not node.expr.has(dependent):
+            raise ValueError(
+                "Time-derivative terms must act on the transient trial function"
+            )
+
+        expr_without_time = drop_time_argument(node.expr, time_symbol)
+        remaining_variables = tuple(var for var in node.variables if var != time_symbol)
+        if len(remaining_variables) == 0:
+            return expr_without_time
+        return sp.Derivative(expr_without_time, *remaining_variables)
+
+    transformed = sp.sympify(expr).replace(
+        lambda node: isinstance(node, sp.Derivative) and time_symbol in node.variables,
+        replace_time_derivative,
+    )
+    transformed_expr = cast(sp.Expr, transformed)
+    transformed = sp.expand(drop_time_argument(transformed_expr, time_symbol))
+    linear, nonlinear = split_linear_nonlinear_terms(transformed, dependent_ind)
+    if sp.sympify(nonlinear) != 0:
+        raise ValueError(
+            "Time-derivative terms must be linear in the transient trial function"
+        )
+    return linear
 
 
 def split_time_derivative_terms(

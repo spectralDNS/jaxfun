@@ -84,13 +84,12 @@ class ETDRK4(BaseIntegrator):
         self,
         V: FunctionSpaceType,
         equation: sp.Expr,
-        u0: sp.Expr | Array | None = None,
         *,
+        initial: sp.Expr | Array,
         time: tuple[float, float] | None = None,
-        initial: sp.Expr | Array | None = None,
         **params,
     ):
-        super().__init__(V, equation, u0, time=time, initial=initial, **params)
+        super().__init__(V, equation, initial=initial, time=time, **params)
         zero = jnp.zeros(self.functionspace.num_dofs)
         forcing_rhs = (
             self.apply_mass_inverse(jnp.asarray(self.linear_forcing))

@@ -140,7 +140,7 @@ def test_etdrk4_kdv_short_run_is_finite(u0f, domain) -> None:
         dt=dt,
         steps=steps,
         n_batches=4,
-        return_each_step=True,
+        return_batch_snapshots=True,
         progress=False,
     )
 

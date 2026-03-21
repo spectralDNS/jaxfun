@@ -23,10 +23,10 @@ from jaxfun.utils import split_linear_nonlinear_terms, split_time_derivative_ter
 from jaxfun.utils.operator_tools import (
     apply_operator,
     assemble_linear_term,
-    assemble_mass_term,
     operator_to_dense,
     solve_operator,
 )
+from jaxfun.utils.sympy_factoring import time_derivative_as_operator
 
 from .nonlinear import (
     _compile_nonlinear_evaluator,
@@ -40,34 +40,36 @@ class BaseIntegrator(ABC, nnx.Module):
         self,
         V: FunctionSpaceType,
         equation: sp.Expr,
-        u0: sp.Expr | Array | None = None,
         *,
+        initial: sp.Expr | Array,
         time: tuple[float, float] | None = None,
-        initial: sp.Expr | Array | None = None,
         sparse: bool = False,
         sparse_tol: int = 1000,
     ):
         if initial is None:
-            initial = u0
-        if initial is None:
-            raise ValueError("Initial condition must be provided via `u0` or `initial`")
+            raise ValueError("Initial condition must be provided via `initial`")
 
         self.sparse = sparse
         self.sparse_tol = sparse_tol
         self.time = time
-        self.initial = initial
+        self.initial_condition = initial
         self.functionspace = V
         self._state_shape = self._coefficient_shape(V)
         self._state_size = int(prod(self._state_shape))
 
-        trial, linear_expr, nonlinear_expr = self._extract_equation_terms(equation)
+        trial, mass_expr, linear_expr, nonlinear_expr = self._extract_equation_terms(
+            equation
+        )
+        self.mass_expr = mass_expr
         self.linear_expr = linear_expr
         self.nonlinear_expr = nonlinear_expr
         self.has_nonlinear = bool(sp.sympify(nonlinear_expr) != 0)
 
-        mass_term = assemble_mass_term(
-            V, sparse=self.sparse, sparse_tol=self.sparse_tol
+        mass_term = assemble_linear_term(
+            self.mass_expr, sparse=self.sparse, sparse_tol=self.sparse_tol
         )
+        if mass_term.forcing is not None:
+            raise ValueError("Time-derivative operator assembly produced forcing")
         self.mass_operator: GalerkinOperatorLike | None = nnx.data(mass_term.operator)
         self.mass_diag: Array | None = nnx.data(mass_term.diagonal)
 
@@ -92,11 +94,27 @@ class BaseIntegrator(ABC, nnx.Module):
 
     def _extract_equation_terms(
         self, equation: sp.Expr
-    ) -> tuple[TrialFunction, sp.Expr, sp.Expr]:
+    ) -> tuple[TrialFunction, sp.Expr, sp.Expr, sp.Expr]:
         t = self.functionspace.system.base_time()
-        _lhs, rhs = split_time_derivative_terms(equation, t)
+        lhs, rhs = split_time_derivative_terms(equation, t)
+        if sp.sympify(lhs) == 0:
+            raise ValueError(
+                "Time integrators require a first-order time derivative "
+                "in the weak form"
+            )
 
-        test, trial = get_basisfunctions(rhs)
+        lhs_test, lhs_trial = get_basisfunctions(lhs)
+        assert isinstance(lhs_test, TestFunction), (
+            "Currently only supports TestFunction in weak form"
+        )
+        assert isinstance(lhs_trial, TrialFunction), (
+            "Currently only supports TrialFunction in weak form"
+        )
+
+        mass_expr = time_derivative_as_operator(lhs, lhs_trial, t)
+
+        basis_expr = rhs if sp.sympify(rhs) != 0 else mass_expr
+        test, trial = get_basisfunctions(basis_expr)
         assert isinstance(test, TestFunction), (
             "Currently only supports TestFunction in weak form"
         )
@@ -106,7 +124,7 @@ class BaseIntegrator(ABC, nnx.Module):
 
         linear, nonlinear = split_linear_nonlinear_terms(-rhs, trial)
         nonlinear = sp.expand(remove_test_function(nonlinear, test))
-        return trial, linear, nonlinear
+        return trial, mass_expr, linear, nonlinear
 
     def _setup_nonlinear_evaluator(self, trial: TrialFunction) -> None:
         base_jaxfunction = JAXFunction(
@@ -141,7 +159,7 @@ class BaseIntegrator(ABC, nnx.Module):
         return self._dense_matrix(self.linear_operator, self.linear_diag)
 
     def initial_coefficients(self, initial: sp.Expr | Array | None = None) -> Array:
-        init = self.initial if initial is None else initial
+        init = self.initial_condition if initial is None else initial
         if isinstance(init, sp.Expr):
             return project(init, self.functionspace)
         return jnp.asarray(init).reshape(self.functionspace.num_dofs)
@@ -208,24 +226,40 @@ class BaseIntegrator(ABC, nnx.Module):
         self,
         dt: float,
         steps: int | None = None,
-        u_hat: Array | None = None,
+        state0: Array | None = None,
         trange: tuple[float, float] | None = None,
         progress: bool = True,
         n_batches: int = 100,
-        return_each_step: bool = False,
+        return_batch_snapshots: bool = False,
     ) -> Array:
+        """Advance the coefficient state in time.
+
+        Args:
+            dt: Time-step size.
+            steps: Number of steps to take.
+            state0: Optional coefficient-space restart state. If omitted, use the
+                projected constructor `initial`.
+            trange: Optional `(t0, t1)` override for `self.time`.
+            progress: Show a progress bar when True.
+            n_batches: Number of batched integration chunks.
+            return_batch_snapshots: When True, return the initial state plus one
+                state per completed batch/remainder chunk instead of only the final
+                state.
+        """
         if n_batches <= 0:
             raise ValueError("n_batches must be a positive integer")
 
         self.setup(dt)
         _, _, n_steps = self.resolve_time(dt, steps=steps, trange=trange)
 
-        if u_hat is None:
+        if state0 is None:
             u_hat = self.initial_coefficients()
+        else:
+            u_hat = jnp.asarray(state0).reshape(self.functionspace.num_dofs)
         if n_steps <= 0:
-            if not return_each_step:
+            if not return_batch_snapshots:
                 return u_hat
-            return jnp.empty((0,) + u_hat.shape, dtype=u_hat.dtype)
+            return jnp.expand_dims(u_hat, axis=0)
 
         def inner_n_steps(i: int, u_hat: Array) -> Array:
             u_hat = self.step(u_hat, dt)
@@ -246,7 +280,7 @@ class BaseIntegrator(ABC, nnx.Module):
         )
         for _ in iterator:
             u_hat: Array = jax.lax.fori_loop(0, batch_len, inner_n_steps, u_hat)
-            if return_each_step:
+            if return_batch_snapshots:
                 states.append(u_hat)
             if jnp.isnan(u_hat).any() or jnp.isinf(u_hat).any():
                 diverged = True
@@ -254,12 +288,10 @@ class BaseIntegrator(ABC, nnx.Module):
 
         if remainder and not diverged:
             u_hat: Array = jax.lax.fori_loop(0, remainder, inner_n_steps, u_hat)
-            if return_each_step:
+            if return_batch_snapshots:
                 states.append(u_hat)
 
-        if return_each_step:
-            if len(states) == 0:
-                return jnp.empty((0,) + u_hat.shape, dtype=u_hat.dtype)
+        if return_batch_snapshots:
             return jnp.stack(states)
 
         return u_hat

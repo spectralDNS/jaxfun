@@ -26,9 +26,9 @@ from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.integrators import ETDRK4
 from jaxfun.operators import Constant
 
-N = 64
+N = 128
 mu = Constant("mu", sp.Rational(3, 20))
-T = 0.3
+T = 0.6
 steps = 12000
 n_states = 120
 
@@ -69,6 +69,13 @@ states = integrator.solve(
 )
 times = jnp.linspace(0.0, T, states.shape[0])
 
+
+@jax.jit
+def backward_saved_states(coefficients):
+    # Batch the spectral->physical transforms to avoid Python dispatch per frame.
+    return jax.vmap(lambda uhat: V.backward(uhat).real)(coefficients)
+
+
 if "PYTEST" in os.environ:
     u0_phys = V.backward(states[0]).real
     uT_phys = V.backward(states[-1]).real
@@ -76,7 +83,7 @@ if "PYTEST" in os.environ:
     assert float(jnp.linalg.norm(uT_phys - u0_phys)) > 1e-8
     sys.exit(1)
 
-states_phys = jnp.array([V.backward(uhat).real for uhat in states])
+states_phys = backward_saved_states(states)
 x_plot, y_plot = V.mesh(broadcast=False)
 
 fig, axes = plt.subplots(1, 3, figsize=(14, 4), constrained_layout=True)

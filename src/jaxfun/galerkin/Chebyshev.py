@@ -236,36 +236,6 @@ class Chebyshev(Jacobi):
         dc = dc.at[0].set(0.5 * dc[0])
         return dc
 
-    @jax.jit(static_argnums=(0, 2))
-    def derivative_coefficients(self, c: Array, derivative_order: int = 0) -> Array:
-        """Return coefficients for ``d^k/dx^k`` of a Chebyshev expansion."""
-
-        def body_fun(i: int, acc: Array) -> Array:
-            return self._differentiate_coefficients_once(acc)
-
-        scale = float(self.domain_factor) ** derivative_order
-        out = jax.lax.fori_loop(0, derivative_order, body_fun, c)
-        return out * scale
-
-    @jax.jit(static_argnums=(0, 2, 3, 4))
-    def evaluate_nonlinear_primitive(
-        self,
-        c: Array,
-        derivative_order: int = 0,
-        kind: MeshKind = MeshKind.QUADRATURE,
-        N: int = 0,
-    ) -> Array:
-        """Evaluate ``u``/``d^k u`` for nonlinear terms with DCT kernels."""
-        kind = MeshKind(kind)
-        if derivative_order == 0:
-            return self.backward(c, kind=kind, N=N)
-        if kind is not MeshKind.QUADRATURE:
-            return super().evaluate_nonlinear_primitive(
-                c, derivative_order=derivative_order, kind=kind, N=N
-            )
-        dc = self.derivative_coefficients(c, derivative_order=derivative_order)
-        return self.backward(dc, kind=kind, N=N)
-
     @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
         """Return Chebyshev coefficients for function values at quadrature points.

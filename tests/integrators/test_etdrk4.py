@@ -5,7 +5,8 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
-from jaxfun import Domain
+from jaxfun import Div, Domain, Grad
+from jaxfun.galerkin import TensorProductSpace
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Fourier import Fourier as FourierSpace
 from jaxfun.galerkin.functionspace import FunctionSpace
@@ -13,6 +14,21 @@ from jaxfun.integrators import ETDRK4
 from jaxfun.integrators.etdrk4 import _etdrk4_diag_coeffs
 from jaxfun.operators import Constant
 from jaxfun.utils.common import lambdify
+
+
+def _count_primitive(jpr, primitive: str) -> int:
+    total = 0
+    for eqn in jpr.eqns:
+        if str(eqn.primitive) == primitive:
+            total += 1
+        for val in eqn.params.values():
+            if hasattr(val, "jaxpr") and hasattr(val, "consts"):
+                total += _count_primitive(val.jaxpr, primitive)
+            elif isinstance(val, tuple | list):
+                for item in val:
+                    if hasattr(item, "jaxpr") and hasattr(item, "consts"):
+                        total += _count_primitive(item.jaxpr, primitive)
+    return total
 
 
 def test_etdrk4_zero_linear_coefficients_match_rk4_limit() -> None:
@@ -214,20 +230,43 @@ def test_etdrk4_kdv_nonlinear_jaxpr_uses_fft_path() -> None:
     uhat0 = integrator.initial_coefficients()
     jaxpr = jax.make_jaxpr(integrator._N)(uhat0).jaxpr
 
-    def count_primitive(jpr, primitive: str) -> int:
-        total = 0
-        for eqn in jpr.eqns:
-            if str(eqn.primitive) == primitive:
-                total += 1
-            for val in eqn.params.values():
-                if hasattr(val, "jaxpr") and hasattr(val, "consts"):
-                    total += count_primitive(val.jaxpr, primitive)
-                elif isinstance(val, tuple | list):
-                    for item in val:
-                        if hasattr(item, "jaxpr") and hasattr(item, "consts"):
-                            total += count_primitive(item.jaxpr, primitive)
-        return total
-
     # Fast Fourier path should stay spectral (FFT), not dense basis matmuls.
-    assert count_primitive(jaxpr, "fft") >= 3
-    assert count_primitive(jaxpr, "dot_general") == 0
+    assert _count_primitive(jaxpr, "fft") >= 3
+    assert _count_primitive(jaxpr, "dot_general") == 0
+
+
+def test_etdrk4_zk_step_jaxpr_uses_diagonal_fft_path() -> None:
+    N = 24
+    T = 0.01
+    steps = 24
+    dt = T / steps
+    mu = Constant("mu", sp.Rational(3, 20))
+
+    F = FourierSpace(N, Domain(-1, 1))
+    V = TensorProductSpace((F, F), name="V")
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    x, _y = V.system.base_scalars()
+    t = V.system.base_time()
+
+    weak_form = v * (u.diff(t) + (u * u).diff(x) / 2 + mu**2 * Div(Grad(u)).diff(x))
+    integrator = ETDRK4(
+        V,
+        weak_form,
+        time=(0.0, T),
+        initial=sp.cos(sp.pi * x),
+        sparse=True,
+        sparse_tol=1000,
+    )
+    integrator.setup(dt=dt)
+
+    assert bool(integrator.is_diag)
+    assert integrator.mass_diag is not None
+    assert integrator.linear_diag is not None
+
+    uhat0 = integrator.initial_coefficients()
+    jaxpr = jax.make_jaxpr(integrator.step)(uhat0, dt).jaxpr
+
+    # The 2D ZK timestep should stay on the diagonal ETD + FFT pseudospectral path.
+    assert _count_primitive(jaxpr, "fft") >= 24
+    assert _count_primitive(jaxpr, "dot_general") == 0

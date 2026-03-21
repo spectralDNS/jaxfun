@@ -139,28 +139,6 @@ class Fourier(OrthogonalSpace):
             )
         return jnp.fft.ifft(c, norm="forward")
 
-    @jax.jit(static_argnums=(0, 2, 3, 4))
-    def evaluate_nonlinear_primitive(
-        self,
-        c: Array,
-        derivative_order: int = 0,
-        kind: MeshKind = MeshKind.QUADRATURE,
-        N: int = 0,
-    ) -> Array:
-        """Evaluate ``u``/``d^k u`` for nonlinear terms using FFT primitives."""
-        kind = MeshKind(kind)
-        if derivative_order == 0:
-            return self.backward(c, kind=kind, N=N)
-        if kind is not MeshKind.QUADRATURE:
-            return super().evaluate_nonlinear_primitive(
-                c, derivative_order=derivative_order, kind=kind, N=N
-            )
-        n_modes = c.shape[0]
-        eliminate = bool(derivative_order % 2 == 1 and n_modes % 2 == 0)
-        waves = self.wavenumbers(n_modes, eliminate_highest_freq=eliminate)
-        scale = (1j * waves * float(self.domain_factor)) ** derivative_order
-        return self.backward(scale * c, kind=kind, N=N)
-
     @jax.jit(static_argnums=0)
     def scalar_product(self, c: Array) -> Array:
         """Return inner products <c, E_k> via forward FFT.

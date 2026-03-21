@@ -114,7 +114,7 @@ class _NonlinearCompiler:
                 space: IntegratorSpace = space,
                 jaxf: JAXFunction = jaxf,
             ) -> Array:
-                return space.evaluate_nonlinear_primitive(jaxf.array)
+                return space.backward_primitive(jaxf.array, k=0)
 
             return self._memoize(node, evaluate_leaf)
 
@@ -143,9 +143,7 @@ class _NonlinearCompiler:
             jaxf: JAXFunction = jaxf,
             derivative_order: int | tuple[int, ...] = derivative_order,
         ) -> Array:
-            return space.evaluate_nonlinear_primitive(
-                jaxf.array, derivative_order=derivative_order
-            )
+            return space.backward_primitive(jaxf.array, k=derivative_order)
 
         return self._memoize(node, evaluate_derivative)
 

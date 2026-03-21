@@ -166,20 +166,18 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
     uhat = integrator.initial_coefficients()
 
     calls: list[int] = []
-    original_eval = integrator.functionspace.evaluate_nonlinear_primitive
+    original_eval = integrator.functionspace.backward_primitive
 
     def count_eval(
         c,
-        derivative_order: int = 0,
+        k: int = 0,
         kind: MeshKind = MeshKind.QUADRATURE,
-        N: int = 0,
+        N: int | None = None,
     ):
-        calls.append(int(derivative_order))
-        return original_eval(c, derivative_order=derivative_order, kind=kind, N=N)
+        calls.append(int(k))
+        return original_eval(c, k=k, kind=kind, N=N)
 
-    monkeypatch.setattr(
-        integrator.functionspace, "evaluate_nonlinear_primitive", count_eval
-    )
+    monkeypatch.setattr(integrator.functionspace, "backward_primitive", count_eval)
 
     nonlinear = integrator.nonlinear_rhs(uhat)
     u_phys = V.backward(uhat)

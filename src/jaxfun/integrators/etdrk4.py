@@ -7,8 +7,7 @@ import sympy as sp
 from flax import nnx
 from jax.scipy.linalg import expm as _expm
 
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
-from jaxfun.typing import Array
+from jaxfun.typing import Array, FunctionSpaceType
 
 from .base import BaseIntegrator, _operator_to_dense
 
@@ -83,7 +82,7 @@ class ETDRK4(BaseIntegrator):
 
     def __init__(
         self,
-        V: OrthogonalSpace,
+        V: FunctionSpaceType,
         equation: sp.Expr,
         u0: sp.Expr | Array | None = None,
         *,

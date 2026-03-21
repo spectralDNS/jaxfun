@@ -7,22 +7,11 @@ import jax.numpy as jnp
 import sympy as sp
 from sympy.core.function import AppliedUndef
 
-from jaxfun.galerkin import (
-    Composite,
-    DirectSum,
-    DirectSumTPS,
-    TensorProductSpace,
-    TestFunction,
-    TrialFunction,
-)
+from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.arguments import ArgumentTag, JAXFunction, get_arg
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
-from jaxfun.typing import Array
+from jaxfun.typing import Array, FunctionSpaceType
 from jaxfun.utils import lambdify
 
-type IntegratorSpace = (
-    OrthogonalSpace | DirectSum | Composite | TensorProductSpace | DirectSumTPS
-)
 type NodeValueCache = dict[sp.Basic, Array]
 type NodeEvaluator = Callable[[NodeValueCache], Array]
 
@@ -30,7 +19,7 @@ type NodeEvaluator = Callable[[NodeValueCache], Array]
 @dataclass(frozen=True)
 class _NonlinearCompileContext:
     spatial_symbols: tuple[sp.Symbol, ...]
-    functionspace: IntegratorSpace
+    functionspace: FunctionSpaceType
     mesh: tuple[Array, ...]
     expected_shape: tuple[int, ...]
     jaxfunction: AppliedUndef
@@ -111,7 +100,7 @@ class _NonlinearCompiler:
 
             def evaluate_leaf(
                 _cache: NodeValueCache,
-                space: IntegratorSpace = space,
+                space: FunctionSpaceType = space,
                 jaxf: JAXFunction = jaxf,
             ) -> Array:
                 return space.backward_primitive(jaxf.array, k=0)
@@ -139,7 +128,7 @@ class _NonlinearCompiler:
 
         def evaluate_derivative(
             _cache: NodeValueCache,
-            space: IntegratorSpace = space,
+            space: FunctionSpaceType = space,
             jaxf: JAXFunction = jaxf,
             derivative_order: int | tuple[int, ...] = derivative_order,
         ) -> Array:
@@ -331,7 +320,7 @@ def _as_mesh_tuple(mesh: Array | Sequence[Array]) -> tuple[Array, ...]:
 
 def _compile_nonlinear_evaluator(
     expr: sp.Expr,
-    functionspace: IntegratorSpace,
+    functionspace: FunctionSpaceType,
     mesh: Array | tuple[Array, ...],
     jaxfunction: AppliedUndef,
 ) -> Callable[[Array], Array]:

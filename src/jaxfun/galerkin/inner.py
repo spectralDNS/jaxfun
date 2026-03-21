@@ -733,6 +733,7 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
         return project1D(ue, V)
 
     if V.is_orthogonal:
+        assert not isinstance(V, OrthogonalSpace | Composite | DirectSum)
         uj = jnp.asarray(
             lambdify(V.system.base_scalars(), ue, modules="jax")(*V.mesh())
         )

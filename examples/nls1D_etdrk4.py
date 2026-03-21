@@ -63,7 +63,7 @@ t = V.system.base_time()
 
 
 def bright_soliton(
-    alpha: float, shift: float, velocity: float, phase: sp.Expr
+    alpha: float, shift: float, velocity: float, phase: sp.Expr | float
 ) -> sp.Expr:
     envelope = sp.sqrt(2) * alpha * sp.sech(alpha * (x - shift))
     carrier = sp.exp(sp.I * (velocity * (x - shift) / 2 + phase))

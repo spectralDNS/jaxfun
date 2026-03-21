@@ -144,7 +144,9 @@ class TensorProductSpace:
         return tuple(mesh)
 
     def flatmesh(
-        self, kind: MeshKind = MeshKind.QUADRATURE, N: tuple[int, ...] | None = None
+        self,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
+        N: tuple[int, ...] | None = None,
     ) -> Array:
         """Return flattened list of all coordinate tuples.
 

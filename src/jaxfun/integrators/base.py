@@ -10,38 +10,24 @@ from flax import nnx
 from jax.experimental.sparse import BCOO
 from sympy.core.function import AppliedUndef
 
-from jaxfun.galerkin import (
-    Composite,
-    DirectSum,
-    DirectSumTPS,
-    TensorProductSpace,
-    TestFunction,
-    TrialFunction,
-)
+from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.arguments import JAXFunction
 from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import inner, project
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
 from jaxfun.typing import (
     Array,
+    FunctionSpaceType,
     GalerkinAssembledForm,
     GalerkinOperator,
     GalerkinOperatorLike,
 )
-from jaxfun.utils import (
-    split_linear_nonlinear_terms,
-    split_time_derivative_terms,
-)
+from jaxfun.utils import split_linear_nonlinear_terms, split_time_derivative_terms
 
 from .nonlinear import (
     _compile_nonlinear_evaluator,
     remove_test_function,
     replace_trial_with_jaxfunction,
-)
-
-type IntegratorSpace = (
-    OrthogonalSpace | DirectSum | Composite | TensorProductSpace | DirectSumTPS
 )
 
 
@@ -139,7 +125,7 @@ def _tpmatrix_to_dense(op: TPMatrix) -> Array:
     dense: Array = mats[0]
     for mat in mats[1:]:
         dense = jnp.kron(dense, mat)
-    return cast(Array, dense * jnp.asarray(op.scale))
+    return dense * jnp.asarray(op.scale)
 
 
 def _operator_to_dense(op: GalerkinOperatorLike) -> Array:
@@ -197,7 +183,7 @@ def _assemble_linear_setup(
 
 
 def _assemble_mass_setup(
-    V: IntegratorSpace, sparse: bool, sparse_tol: int
+    V: FunctionSpaceType, sparse: bool, sparse_tol: int
 ) -> tuple[GalerkinOperatorLike | None, Array | None]:
     v = TestFunction(V)
     u = TrialFunction(V)
@@ -216,7 +202,7 @@ def _assemble_mass_setup(
 class BaseIntegrator(ABC, nnx.Module):
     def __init__(
         self,
-        V: IntegratorSpace,
+        V: FunctionSpaceType,
         equation: sp.Expr,
         u0: sp.Expr | Array | None = None,
         *,

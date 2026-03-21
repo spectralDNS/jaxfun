@@ -3,7 +3,7 @@ from flax import nnx
 
 from jaxfun.typing import Array
 
-from .base import BaseIntegrator, _operator_to_dense
+from .base import BaseIntegrator
 
 
 class BackwardEuler(BaseIntegrator):
@@ -20,12 +20,8 @@ class BackwardEuler(BaseIntegrator):
             self._system_diag = nnx.data(self.mass_diag - dt * self.linear_diag)
             return
 
-        if self.mass_operator is not None:
-            mass_mat = _operator_to_dense(self.mass_operator)
-        else:
-            assert self.mass_diag is not None
-            mass_mat = jnp.diag(self.mass_diag.reshape((-1,)))
-        linear_mat = _operator_to_dense(self.linear_operator)
+        mass_mat = self.mass_matrix_dense()
+        linear_mat = self.linear_matrix_dense()
         self._system_matrix = nnx.data(mass_mat - dt * linear_mat)
 
     def step(self, u_hat: Array, dt: float) -> Array:

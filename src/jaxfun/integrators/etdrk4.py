@@ -9,7 +9,7 @@ from jax.scipy.linalg import expm as _expm
 
 from jaxfun.typing import Array, FunctionSpaceType
 
-from .base import BaseIntegrator, _operator_to_dense
+from .base import BaseIntegrator
 
 expm = cast(Callable[[Array], Array], _expm)
 
@@ -119,12 +119,12 @@ class ETDRK4(BaseIntegrator):
             if self.linear_operator is None:
                 Lmat = jnp.zeros((zero.size, zero.size), dtype=zero.dtype)
             else:
-                A = _operator_to_dense(self.linear_operator)
+                A = self.linear_matrix_dense()
                 if self.mass_diag is not None:
                     m = self.mass_diag.reshape((-1,))
                     Lmat = A / m[:, None]
                 elif self.mass_operator is not None:
-                    M = _operator_to_dense(self.mass_operator)
+                    M = self.mass_matrix_dense()
                     Lmat = cast(Array, jnp.linalg.solve(M, A))
                 else:
                     Lmat = A

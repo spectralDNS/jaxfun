@@ -117,11 +117,12 @@ class Chebyshev(Jacobi):
         return jnp.sum(xs, axis=0) + c[0]
 
     @jax.jit(static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
+    def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return Gauss-Chebyshev (first kind) nodes and weights.
 
         Nodes:
             x_k = cos(pi*(2k+1)/(2N)), k=0..N-1
+
         Weights:
             w_k = pi / N
 
@@ -130,9 +131,9 @@ class Chebyshev(Jacobi):
                if 0).
 
         Returns:
-            Array((2, N)) with first row nodes, second row weights.
+            Tuple (x, w) of nodes and weights.
         """
-        N = self.num_quad_points if N == 0 else N
+        N = self.num_quad_points if N is None else N
         return (
             jnp.cos(jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)),
             jnp.ones(N) * jnp.pi / N,
@@ -191,17 +192,17 @@ class Chebyshev(Jacobi):
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
-        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int = 0
+        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int | None = None
     ) -> Array:
         """Return Chebyshev series evaluated at quadrature points.
 
         Args:
-            c: Coefficient array of length N.
+            c: Coefficient array of length self.N.
 
         Returns:
             Reversed coefficient array.
         """
-        n: int = self.N if N == 0 else N
+        n: int = self.num_quad_points if N is None else N
 
         if MeshKind(kind) is not MeshKind.QUADRATURE:
             return super().backward(c, kind=kind, N=n)  # Does not require padding of c
@@ -265,37 +266,81 @@ class Chebyshev(Jacobi):
         dc = self.derivative_coefficients(c, derivative_order=derivative_order)
         return self.backward(dc, kind=kind, N=N)
 
-    @jax.jit(static_argnums=(0, 2))
-    def forward(self, u: Array, N: int = 0) -> Array:
+    @jax.jit(static_argnums=0)
+    def forward(self, u: Array) -> Array:
         """Return Chebyshev coefficients for function values at quadrature points.
 
         Args:
             u: Function values at quadrature points.
-            N: Number of modes to return (defaults self.N if 0).
 
         Returns:
-            Coefficient array of length N.
+            Coefficient array of length self.N.
         """
-        N: int = self.N if N == 0 else N
         n: int = len(u)
-        assert len(u) >= N, "Only truncation supported for forward transform"
+        assert len(u) >= self.N, "Only truncation supported for forward transform"
         sign = (-1) ** jnp.arange(n)
         uh = jax.scipy.fft.dct(u, n=n)
         uh = uh.at[0].set(uh[0] / 2) * sign / n
-        if len(u) > N:
-            uh = uh[:N]
+        if len(u) > self.N:
+            uh = uh[: self.N]
         return uh
 
-    def norm_squared(self) -> Array:
-        """Return L2 norms squared over [-1, 1] with Chebyshev weight.
+    @jax.jit(static_argnums=0)
+    def scalar_product(self, u: Array) -> Array:
+        """Return scalar product for function u.
 
-        For T_0: integral = pi
-        For T_n (n>0): integral = pi/2
+        Args:
+            u: Function values at quadrature points.
 
         Returns:
-            Array of length N with norm^2 values.
+            Coefficient array of length self.N.
         """
-        return jnp.hstack((jnp.array([jnp.pi]), jnp.full(self.N - 1, jnp.pi / 2)))
+        n: int = len(u)
+        assert len(u) >= self.N, "Only truncation supported for forward transform"
+        sign = (-1) ** jnp.arange(n)
+        uh = jax.scipy.fft.dct(u, n=n)
+        uh = uh * jnp.pi * sign / n / 2 / self.domain_factor
+        if len(u) > self.N:
+            uh = uh[: self.N]
+        return uh
+
+    @jax.jit(static_argnums=(0, 2))
+    def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
+        """
+        Args:
+            c: Coefficients of Chebyshev series.
+            k: Order of derivative to compute.
+
+        Returns:
+            Array (N,) of coefficients for the k'th derivative of the series.
+        """
+        if k == 0:
+            return c
+
+        if k > 1:
+            return self.derivative_coeffs(self.derivative_coeffs(c, k - 1), 1)
+
+        N: int = c.shape[0] - 1
+        x0: Array = jnp.array(0.0, dtype=float)
+        if N == 0:
+            return x0
+        x1: Array = c[-1] * N * 2
+        if N == 1:
+            return jnp.array([x1, x0])
+
+        def inner_loop(
+            carry: tuple[Array, Array], n: int
+        ) -> tuple[tuple[Array, Array], Array]:
+            x0, x1 = carry
+            x2 = 2 * (n + 1) * c[n + 1] + x0
+            return (x1, x2), x2
+
+        _, xs = jax.lax.scan(inner_loop, (x0, x1), jnp.arange(N - 2, -1, -1))
+        return jnp.concatenate(
+            (jnp.array([xs[-1] / 2]), xs[-2::-1], jnp.array([x1, x0]))
+        )
+
+    chebder = derivative_coeffs
 
     # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
     def gn(self, n: Symbol | int) -> Expr:
@@ -309,6 +354,15 @@ class Chebyshev(Jacobi):
         """
         return sp.S.One / sp.jacobi(n, self.alpha, self.beta, 1)
 
+    def h(self, n: Symbol | int, k: int) -> Expr:
+        # Chebyshev has a weird limit behaviour for h that can only be reached
+        # by substituting n=0 before fixing alpha, beta to -1/2. The resulting
+        # piecewise implemented here is consistent with this limit of the general
+        # formula for h.
+        if k > 0:
+            return sp.simplify(sp.pi * n * sp.gamma(n + k) / (2 * sp.factorial(n - k)))
+        return sp.Piecewise((sp.pi, sp.Eq(n, 0)), (sp.pi / 2, True))
+
     def sympy_basis_function(self, i: int, X: Symbol) -> Expr:
         """Return symbolic Chebyshev polynomial T_i(X).
 
@@ -320,6 +374,40 @@ class Chebyshev(Jacobi):
             SymPy expression for T_i(X).
         """
         return sp.cos(i * sp.acos(X))
+
+    def a(self, i: Symbol | int, j: Symbol | int) -> Expr | float:
+        r"""Return Jacobi recurrence coefficient a_{i,j} for Chebyshev.
+
+        Args:
+            i: Row index symbol.
+            j: Column index symbol.
+
+        Returns:
+            SymPy expression for b_{i,j}.
+        """
+        if (i - j) == 1:
+            return sp.Piecewise((1, sp.Eq(j, 0)), (sp.S.Half, True))
+        if (j - i) == 1:
+            return sp.S.Half
+        return 0
+
+    def b(self, i: Symbol | int, j: Symbol | int) -> Expr | float:
+        r"""Return Jacobi recurrence coefficient b_{i,j} for Chebyshev.
+
+        For Chebyshev (alpha=beta=-1/2), b_{n,n} = 0 for all n.
+
+        Args:
+            i: Row index symbol.
+            j: Column index symbol.
+
+        Returns:
+            SymPy expression for b_{i,j}.
+        """
+        if (i - j) == 1:
+            return sp.Piecewise((1, sp.Eq(j, 0)), (1 / (2 * i), True))
+        if (j - i) == 1:
+            return -1 / (2 * i)
+        return 0
 
 
 def matrices(

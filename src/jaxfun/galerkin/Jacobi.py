@@ -14,13 +14,14 @@ from jaxfun.utils.common import Domain, jit_vmap, n
 from .orthogonal import OrthogonalSpace
 
 alf, bet = sp.symbols("a,b", real=True)
+delta = sp.KroneckerDelta
 
 
 class Jacobi(OrthogonalSpace):
     """Jacobi polynomial space P_n^{(α,β)} for orders 0..N-1.
 
     Provides:
-      * Series evaluation (Clenshaw-like backward recurrence)
+      * Series evaluation via recursion.
       * Single / all basis function evaluation
       * Quadrature nodes/weights (Gauss-Jacobi)
       * Norm / derivative normalization factors
@@ -53,15 +54,14 @@ class Jacobi(OrthogonalSpace):
         OrthogonalSpace.__init__(
             self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
-        self.alpha: sp.Number | float = alpha
-        self.beta: sp.Number | float = beta
+        self.alpha: Number | float = alpha
+        self.beta: Number | float = beta
 
     @jit_vmap(in_axes=(0, None))
-    def _evaluate2(self, X: float | Array, c: Array) -> Array:
-        """Evaluate Jacobi series sum_k c_k P_k^{(α,β)}(X) (backward scheme).
+    def _evaluate(self, X: float | Array, c: Array) -> Array:
+        """Evaluate Jacobi series sum_k c_k P_k^{(α,β)}(X)
 
-        Uses a stable backward recurrence accumulating two running
-        quantities (c0, c1) similar to Clenshaw. Handles small len(c)
+        Uses a regular forward recursion. Handles small len(c)
         explicitly for speed.
 
         Args:
@@ -71,82 +71,94 @@ class Jacobi(OrthogonalSpace):
         Returns:
             Array of series values p(X) with shape like X.
         """
-        a, b = float(self.alpha), float(self.beta)
+        N: int = c.shape[0]
 
-        if len(c) == 1:
-            return c[0] + 0 * X
-        if len(c) == 2:
-            return c[0] + c[1] * ((a + 1) + (a + b + 2) * (X - 1) / 2)
+        am = sp.lambdify(n, self.a(n + 1, n), modules="jax")(jnp.arange(N))
+        ap = sp.lambdify(n, self.a(n, n + 1), modules="jax")(jnp.arange(N))
+        if isinstance(ap, float | int):
+            ap = jnp.full(N, ap)
+        if isinstance(am, float | int):
+            am = jnp.full(N, am)
+        aa = jnp.zeros_like(am)
+        if self.alpha != self.beta:
+            aa = sp.lambdify(n, self.a(n, n), modules="jax")(jnp.arange(N))
 
-        def body_fun(i: int, val: tuple[int, Array, Array]) -> tuple[int, Array, Array]:
-            n, c0, c1 = val
-            tmp = c0
-            n = n - 1
-            alf = (2 * n + a + b - 1) * (
-                (2 * n + a + b) * (2 * n + a + b - 2) * X + a**2 - b**2
-            )
-            bet = 2 * (n + a - 1) * (n + b - 1) * (2 * n + a + b)
-            cn = 2 * n * (n + a + b) * (2 * n + a + b - 2)
-            c0 = c[-i] - c1 * bet / cn
-            c1 = tmp + c1 * alf / cn
-            return n, c0, c1
+        x0 = jnp.ones_like(X)
 
-        n = len(c)
-        c0 = jnp.ones_like(X) * c[-2]
-        c1 = jnp.ones_like(X) * c[-1]
-        _, c0, c1 = jax.lax.fori_loop(3, len(c) + 1, body_fun, (n, c0, c1))
-        return c0 + c1 * ((a + 1) + (a + b + 2) * (X - 1) / 2)
+        if N == 1:
+            return c[0] * x0
+
+        x1 = (X - aa[0]) / am[0] * x0
+
+        if N == 2:
+            return c[0] * x0 + c[1] * x1
+
+        def inner_loop(
+            carry: tuple[Array, Array], i: int
+        ) -> tuple[tuple[Array, Array], Array]:
+            x0, x1 = carry
+            x2 = ((X - aa[i - 1]) * x1 - ap[i - 2] * x0) / am[i - 1]
+            return (x1, x2), x2 * c[i]
+
+        _, xs = jax.lax.scan(inner_loop, (x0, x1), jnp.arange(2, N))
+
+        return jnp.sum(xs, axis=0) + c[0] + c[1] * x1
 
     @jax.jit(static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
+    def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return Gauss-Jacobi quadrature nodes/weights.
 
         Args:
-            N: Number of points (0 -> self.num_quad_points).
+            N: Number of points (None -> self.num_quad_points).
 
         Returns:
-            jnp.array((2, N)) first row nodes, second row weights.
+            Tuple (x, w) of nodes and weights.
         """
-        N = self.num_quad_points if N == 0 else N
+        N = self.num_quad_points if N is None else N
         x, w = roots_jacobi(N, float(self.alpha), float(self.beta))
         return jnp.array(x), jnp.array(w)
 
     @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
     def eval_basis_function(self, X: Array, i: int) -> Array:
-        """Evaluate single Jacobi polynomial P_i^{(α,β)}(X).
+        """Evaluate single (possibly scaled) Jacobi polynomial
 
-        Iterative two-term recurrence:
-            P_0 = 1, P_1 = ((α+1)+(α+β+2)(X-1)/2)
-            P_{n+1} derived via standard Jacobi recurrence.
+        .. math::
+            Q_i(X) = g_i^{(α,β)} * P_i^{(α,β)}(X)
+
+        The scale defaults to 1 for regular Jacobi polynomials
+        but can be overridden by defining gn(i) for the space.
 
         Args:
             X: Points in [-1, 1].
             i: Basis index.
 
         Returns:
-            Array of P_i^{(α,β)}(X).
+            Array of Q_i(X) = g_i^{(α,β)} * P_i^{(α,β)}(X).
         """
         x0 = X * 0 + 1
         if i == 0:
             return x0
 
-        a, b = float(self.alpha), float(self.beta)
+        am = sp.lambdify(n, self.a(n + 1, n), modules="jax")(jnp.arange(i))
+        ap = sp.lambdify(n, self.a(n, n + 1), modules="jax")(jnp.arange(i))
+        if isinstance(ap, float | int):
+            ap = jnp.full(i, ap)
+        if isinstance(am, float | int):
+            am = jnp.full(i, am)
+        aa = jnp.zeros_like(am)
+        if self.alpha != self.beta:
+            aa = sp.lambdify(n, self.a(n, n), modules="jax")(jnp.arange(i))
 
         def body_fun(n: int, val: tuple[Array, Array]) -> tuple[Array, Array]:
             x0, x1 = val
-            alf = (2 * n + a + b - 1) * (
-                (2 * n + a + b) * (2 * n + a + b - 2) * X + a**2 - b**2
-            )
-            bet = 2 * (n + a - 1) * (n + b - 1) * (2 * n + a + b)
-            cn = 2 * n * (n + a + b) * (2 * n + a + b - 2)
-            x2 = (x1 * alf - x0 * bet) / cn
+            x2 = ((X - aa[n - 1]) * x1 - ap[n - 2] * x0) / am[n - 1]
             return x1, x2
 
         return jax.lax.fori_loop(2, i + 1, body_fun, (x0, X))[-1]
 
     @jit_vmap(in_axes=0)
     def eval_basis_functions(self, X: Array) -> Array:
-        """Evaluate all Jacobi polynomials P_0..P_{N-1} at X.
+        """Evaluate all (possibly scaled) Jacobi polynomials P_0..P_{N-1} at X.
 
         Args:
             X: Points in [-1, 1].
@@ -155,26 +167,77 @@ class Jacobi(OrthogonalSpace):
             Array (N,) per X containing stacked basis values.
         """
         x0 = X * 0 + 1
-        a, b = float(self.alpha), float(self.beta)
+
+        am = sp.lambdify(n, self.a(n + 1, n), modules="jax")(jnp.arange(self.N))
+        ap = sp.lambdify(n, self.a(n, n + 1), modules="jax")(jnp.arange(self.N))
+        if isinstance(ap, float | int):
+            ap = jnp.full(self.N, ap)
+        if isinstance(am, float | int):
+            am = jnp.full(self.N, am)
+        aa = jnp.zeros_like(am)
+        if self.alpha != self.beta:
+            aa = sp.lambdify(n, self.a(n, n), modules="jax")(jnp.arange(self.N))
+
+        x1 = (X - aa[0]) / am[0] * x0
 
         def inner_loop(
             carry: tuple[Array, Array], n: int
         ) -> tuple[tuple[Array, Array], Array]:
-            x0_, x1_ = carry
-            alf = (2 * n + a + b - 1) * (
-                (2 * n + a + b) * (2 * n + a + b - 2) * X + a**2 - b**2
-            )
-            bet = 2 * (n + a - 1) * (n + b - 1) * (2 * n + a + b)
-            cn = 2 * n * (n + a + b) * (2 * n + a + b - 2)
-            x2 = (x1_ * alf - x0_ * bet) / cn
-            return (x1_, x2), x1_
+            x0, x1 = carry
+            x2 = ((X - aa[n - 1]) * x1 - ap[n - 2] * x0) / am[n - 1]
+            return (x1, x2), x1
 
         _, xs = jax.lax.scan(
             inner_loop,
-            (x0, a + 1 + (a + b + 2) * (X - 1) / 2),
+            (x0, x1),
             jnp.arange(2, self.N + 1),
         )
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
+
+    @jax.jit(static_argnums=(0, 2))
+    def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
+        """
+        Args:
+            c: Coefficients of Jacobi series.
+            k: Order of derivative to compute.
+
+        Returns:
+            Array (N,) of coefficients for the k'th derivative of the series.
+        """
+        if k == 0:
+            return c
+
+        if k > 1:
+            return self.derivative_coeffs(self.derivative_coeffs(c, k - 1), 1)
+
+        N: int = c.shape[0] - 1
+
+        bm = sp.lambdify(n, self.b(n + 1, n), modules="jax")(jnp.arange(N))
+        bp = sp.lambdify(n, self.b(n + 1, n + 2), modules="jax")(jnp.arange(N))
+        if isinstance(bp, float | int):
+            bp = jnp.full(N, bp)
+        if isinstance(bm, float | int):
+            bm = jnp.full(N, bm)
+        bb = jnp.zeros_like(bm)
+        if self.alpha != self.beta:
+            bb = sp.lambdify(n, self.b(n + 1, n + 1), modules="jax")(jnp.arange(N))
+
+        x0: Array = jnp.array(0.0)
+        if N == 0:
+            return x0
+        x1: Array = c[-1] / bm[-1]
+        if N == 1:
+            return jnp.array([x1, x0])
+
+        def inner_loop(
+            carry: tuple[Array, Array], n: int
+        ) -> tuple[tuple[Array, Array], Array]:
+            x0, x1 = carry
+            x2 = (c[n + 1] - bb[n] * x1 - bp[n] * x0) / bm[n]
+            return (x1, x2), x2
+
+        _, xs = jax.lax.scan(inner_loop, (x0, x1), jnp.arange(N - 2, -1, -1))
+        return jnp.concatenate((xs[::-1], jnp.array([x1, x0])))
 
     def norm_squared(self) -> Array:
         """Return L2 norms squared h_n^{(0)} for n=0..N-1."""
@@ -182,7 +245,6 @@ class Jacobi(OrthogonalSpace):
 
     @property
     def reference_domain(self) -> Domain:
-        """Return reference domain [-1, 1]."""
         return Domain(-1, 1)
 
     def bnd_values(
@@ -235,7 +297,7 @@ class Jacobi(OrthogonalSpace):
         return sp.rf(n + self.alpha + self.beta + 1, k) * sp.Rational(1, 2**k)
 
     @staticmethod
-    def gamma(alpha: Expr | float, beta: Expr | float, n: int) -> Expr:
+    def h0(alpha: Expr | float, beta: Expr | float, n: int) -> Expr:
         r"""Return h_n (norm squared) for P_n^{(α,β)} under weight ω^{(α,β)}.
 
         h_n = (P_n^{(α,β)}, P_n^{(α,β)})_{ω^{(α,β)}}.
@@ -257,7 +319,7 @@ class Jacobi(OrthogonalSpace):
         return sp.simplify(f.subs([(alf, alpha), (bet, beta)]))
 
     def h(self, n: Symbol | int, k: int) -> Expr:
-        r"""Return h_n^{(k)} norm for k-th derivative of scaled polynomials.
+        r"""Return h_n^{(k)} norm for k-th derivative of normalized polynomials.
 
         Using Q_n = g_n P_n^{(α,β)}:
             h_n^{(k)} = (∂^k Q_n, ∂^k Q_n)_{ω^{(α+k,β+k)}}.
@@ -267,14 +329,115 @@ class Jacobi(OrthogonalSpace):
             k: Derivative order.
 
         Returns:
-            SymPy expression h_n^{(k)}.
+            SymPy expression h_n^{(k,α,β)}.
         """
-        f = self.gamma(self.alpha + k, self.beta + k, n - k) * (self.psi(n, k)) ** 2
+        f = self.h0(self.alpha + k, self.beta + k, n - k) * (self.psi(n, k)) ** 2
         return sp.simplify(self.gn(n) ** 2 * f)
 
-    def gn(self, n: Symbol | int) -> sp.Expr:
-        """Scaling g_n used in alternative normalizations (default 1)."""
+    def gn(self, n: Symbol | int) -> Expr:
+        """Return scaling g_n used for normalized Jacobi polynomials.
+
+        The scaling is used for polynomials defined as
+
+        .. math::
+            Q_n^{(α,β)}(X) = g_n^{(α,β)} P_n^{(α,β)}(X)
+
+        where P^{(α,β)}_n is the standard Jacobi polynomial.
+
+        Args:
+            n: Polynomial index symbol.
+        """
         return sp.S.One
+
+    def _a(self, i: Symbol | int, j: Symbol | int) -> Expr | float:
+        """Matrix A for non-normalized Jacobi polynomials"""
+        a, b = self.alpha, self.beta
+        return (
+            2
+            * (j + a)
+            * (j + b)
+            / ((2 * j + a + b + 1) * (2 * j + a + b))
+            * delta(i + 1, j)
+            - (a**2 - b**2) / ((2 * j + a + b + 2) * (2 * j + a + b)) * delta(i, j)
+            + 2
+            * (j + 1)
+            * (j + a + b + 1)
+            / ((2 * j + a + b + 2) * (2 * j + a + b + 1))
+            * delta(i - 1, j)
+        )
+
+    def _b(self, i: Symbol | int, j: Symbol | int) -> Expr | float:
+        """Matrix B for non-normalized Jacobi polynomials"""
+        a, b = self.alpha, self.beta
+        delta = lambda m, n: int(m == n)
+
+        f = (2 * (i + a + b) / ((2 * i + a + b) * (2 * i + a + b - 1))) * delta(
+            i, j + 1
+        ) - (
+            (2 * (i + a + 1) * (i + b + 1))
+            / ((2 * i + a + b + 3) * (2 * i + a + b + 2) * (i + a + b + 1))
+        ) * delta(i, j - 1)
+        if a != b:
+            f += (
+                (2 * (a**2 - b**2)) / ((a + b) * (2 * i + a + b + 2) * (2 * i + a + b))
+            ) * delta(i, j)
+        return f
+
+    def b(self, i: Symbol | int, j: Symbol | int) -> Expr | float:
+        r"""Recursion matrix :math:`B` for normalized Jacobi polynomials
+
+        The recursion is
+
+        .. math::
+
+            \boldsymbol{Q} = {B}^T \partial \boldsymbol{Q}
+
+        where :math:`\partial` represents the derivative and
+
+        .. math::
+
+            Q_n(x) = g_n^{(\alpha,\beta)} P^{(\alpha,\beta)}_n(x) \\
+            \boldsymbol{Q} = (Q_0, Q_1, \ldots, Q_{N})^T
+
+        Parameters
+        ----------
+        i, j : int
+            Indices for row and column
+
+        """
+        f = self._b(i, j)
+        factor = self.gn(j) / self.gn(i)
+        if isinstance(i, sp.Basic) or isinstance(j, sp.Basic):
+            return sp.simplify(factor * f)
+        return factor * f
+
+    def a(self, i: Symbol | int, j: Symbol | int) -> Expr | float:
+        r"""Recursion matrix :math:`A` for normalized Jacobi polynomials
+
+        The recursion is
+
+        .. math::
+
+            x \boldsymbol{Q} = {A}^T \boldsymbol{Q}
+
+        where
+
+        .. math::
+
+            Q_n(x) = g_n^{(\alpha,\beta)} P^{(\alpha,\beta)}_n(x) \\
+            \boldsymbol{Q} = (Q_0, Q_1, \ldots, Q_{N})^T
+
+        Parameters
+        ----------
+        i, j : int
+            Indices for row and column
+        """
+
+        f = self._a(i, j)
+        factor = self.gn(j) / self.gn(i)
+        if isinstance(i, sp.Basic) or isinstance(j, sp.Basic):
+            return sp.simplify(factor * f)
+        return factor * f
 
 
 def matrices(test: tuple[Jacobi, int], trial: tuple[Jacobi, int]) -> sparse.BCOO | None:

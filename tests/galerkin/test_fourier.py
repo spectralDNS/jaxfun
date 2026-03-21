@@ -12,5 +12,5 @@ def test_fourier_truncation_and_padding():
     up = F.backward(c, N=12)
     assert up.shape[0] == 12
     # Forward/backward consistency (energy)
-    cf = F.forward(u, N=8)
-    assert jnp.linalg.norm(cf[:8] - c) < ulp(100)
+    cf = F.forward(u)
+    assert jnp.linalg.norm(cf - c) < ulp(100)

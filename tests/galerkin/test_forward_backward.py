@@ -9,6 +9,7 @@ from jaxfun.galerkin import (
     Jacobi,
     Legendre,
     TensorProduct,
+    Ultraspherical,
 )
 from jaxfun.galerkin.composite import Composite
 from jaxfun.galerkin.inner import project, project1D
@@ -16,11 +17,22 @@ from jaxfun.utils.common import ulp
 
 
 @pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi)
+    "space",
+    (
+        Legendre.Legendre,
+        Chebyshev.Chebyshev,
+        Fourier.Fourier,
+        Jacobi.Jacobi,
+        Ultraspherical.Ultraspherical,
+    ),
 )
 def test_forward_backward(
     space: type[
-        Legendre.Legendre | Chebyshev.Chebyshev | Fourier.Fourier | Chebyshev.Jacobi
+        Legendre.Legendre
+        | Chebyshev.Chebyshev
+        | Fourier.Fourier
+        | Jacobi.Jacobi
+        | Ultraspherical.Ultraspherical
     ],
 ) -> None:
     D = space(8)
@@ -32,10 +44,21 @@ def test_forward_backward(
 
 
 @pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Jacobi.Jacobi)
+    "space",
+    (
+        Legendre.Legendre,
+        Chebyshev.Chebyshev,
+        Jacobi.Jacobi,
+        Ultraspherical.Ultraspherical,
+    ),
 )
 def test_forward_backward_composite(
-    space: type[Legendre.Legendre | Chebyshev.Chebyshev | Chebyshev.Jacobi],
+    space: type[
+        Legendre.Legendre
+        | Chebyshev.Chebyshev
+        | Jacobi.Jacobi
+        | Ultraspherical.Ultraspherical
+    ],
 ) -> None:
     D = FunctionSpace(8, space, bcs={"left": {"D": 0}, "right": {"D": 0}})
     assert isinstance(D, Composite)
@@ -47,11 +70,22 @@ def test_forward_backward_composite(
 
 
 @pytest.mark.parametrize(
-    "space", (Legendre.Legendre, Chebyshev.Chebyshev, Fourier.Fourier, Jacobi.Jacobi)
+    "space",
+    (
+        Legendre.Legendre,
+        Chebyshev.Chebyshev,
+        Fourier.Fourier,
+        Jacobi.Jacobi,
+        Ultraspherical.Ultraspherical,
+    ),
 )
 def test_forward_backward_2d(
     space: type[
-        Legendre.Legendre | Chebyshev.Chebyshev | Fourier.Fourier | Chebyshev.Jacobi
+        Legendre.Legendre
+        | Chebyshev.Chebyshev
+        | Fourier.Fourier
+        | Jacobi.Jacobi
+        | Ultraspherical.Ultraspherical
     ],
 ) -> None:
     D = space(8)

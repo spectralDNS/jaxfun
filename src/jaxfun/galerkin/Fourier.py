@@ -27,8 +27,6 @@ class Fourier(OrthogonalSpace):
         name: Space name (default "Fourier").
         fun_str: Symbol stem for basis functions (default "E").
 
-    Attributes:
-        _k: Mapping from coefficient index to integer wavenumber.
     """
 
     def __init__(
@@ -44,8 +42,6 @@ class Fourier(OrthogonalSpace):
         OrthogonalSpace.__init__(
             self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
-        w = self.wavenumbers()
-        self._k = {k: w[k].item() for k in range(N)}  # map index to wavenumber
 
     @jit_vmap(in_axes=(0, None))
     def _evaluate2(self, X: float | Array, c: Array) -> Array:
@@ -70,16 +66,16 @@ class Fourier(OrthogonalSpace):
         return jax.lax.fori_loop(1, len(c), body_fun, c0)
 
     @jax.jit(static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
+    def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return equispaced quadrature points and uniform weights.
 
         Args:
-            N: Number of points (defaults to self.num_quad_points if 0).
+            N: Number of points (defaults to self.num_quad_points if None).
 
         Returns:
             (points, weights) where points.shape == (N,) and weights == 2π/N.
         """
-        N = self.num_quad_points if N == 0 else N
+        N = self.num_quad_points if N is None else N
         points = jnp.arange(N, dtype=float) * 2 * jnp.pi / N
         return points, jnp.full(N, 2 * jnp.pi / N)
 
@@ -94,7 +90,7 @@ class Fourier(OrthogonalSpace):
         Returns:
             exp( i * k_i * X ).
         """
-        return jax.lax.exp(1j * self._k[i] * X)
+        return jax.lax.exp(1j * self.wavenumbers()[i] * X)
 
     @jit_vmap(in_axes=0)
     def eval_basis_functions(self, X: float) -> Array:
@@ -114,14 +110,11 @@ class Fourier(OrthogonalSpace):
         v = self.wavenumbers(eliminate_highest_freq=k % 2 and self.N % 2 == 0)
         y = self.eval_basis_functions(X)
         z = (1j * v) ** k * y
-        # z = jacn(self.eval_basis_functions, k)(X)
-        # if k % 2 == 1 and self.N % 2 == 0:
-        #   z = z.at[:, X.shape[0] // 2].set(0)
         return z
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
-        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int = 0
+        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int | None = None
     ) -> Array:
         """Inverse FFT (possible padding) to physical space.
 
@@ -134,7 +127,7 @@ class Fourier(OrthogonalSpace):
         Returns:
             Inverse FFT samples (complex), norm="forward".
         """
-        n: int = self.N if N == 0 else N
+        n: int = self.N if N is None else N
         assert n >= len(c), "Backward transform only supports padding, not truncation"
         if n > len(c):
             c = jnp.hstack(
@@ -178,22 +171,26 @@ class Fourier(OrthogonalSpace):
         Returns:
             Coefficients scaled by 2π / domain_factor.
         """
-        return jnp.fft.fft(c, norm="forward") * 2 * jnp.pi / self.domain_factor
+        out = jnp.fft.fft(c, norm="forward") * 2 * jnp.pi / self.domain_factor
+        if len(c) > self.N:
+            return out[self.wavenumbers()]
+        return out
 
-    @jax.jit(static_argnums=(0, 2))
-    def forward(self, c: Array, N: int = 0) -> Array:
+    @jax.jit(static_argnums=0)
+    def forward(self, c: Array) -> Array:
         """Forward FFT (physical -> spectral coefficients).
 
         Args:
             c: Physical array.
-            N: Target number of modes for transform length If N < len(c) then
+            N: Target number of modes for transform length. If N < len(c) then
                 the output is truncated.
         """
-        n: int = self.N if N == 0 else N
-        assert n <= len(c), "Forward transform only supports truncation, not padding"
+        assert len(c) >= self.N, (
+            "Forward transform only supports truncation, not padding"
+        )
         out = jnp.fft.fft(c, norm="forward")
-        if len(c) > n:
-            return out[self.wavenumbers(n)]
+        if len(c) > self.N:
+            return out[self.wavenumbers()]
         return out
 
     @property
@@ -202,16 +199,18 @@ class Fourier(OrthogonalSpace):
         return Domain(0, 2 * sp.pi)
 
     @jax.jit(static_argnums=(0, 1, 2))
-    def wavenumbers(self, N: int = 0, eliminate_highest_freq: bool = False) -> Array:
+    def wavenumbers(
+        self, N: int | None = None, eliminate_highest_freq: bool = False
+    ) -> Array:
         """Return ordered integer wavenumbers matching FFT layout.
 
         Args:
-            N: Number of modes (0 -> self.N).
+            N: Number of modes (None -> self.N).
 
         Returns:
             Integer array of length N with ordering from fftfreq.
         """
-        N = self.N if N == 0 else N
+        N = self.N if N is None else N
         k = jnp.fft.fftfreq(N, 1 / N).astype(int)
         if eliminate_highest_freq and N % 2 == 0:
             k = k.at[N // 2].set(0)
@@ -220,6 +219,21 @@ class Fourier(OrthogonalSpace):
     def norm_squared(self) -> Array:
         """Return L2 norm squared of each basis function over [0, 2π]."""
         return jnp.ones(self.N) * 2 * jnp.pi
+
+    def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
+        """
+        Args:
+            c: Coefficients of orthogonal series.
+            k: Order of derivative to compute.
+
+        Returns:
+            Array (N,) of coefficients for the k'th derivative of the series.
+        """
+        if k == 0:
+            return c
+
+        m = self.wavenumbers(eliminate_highest_freq=k % 2 == 1)
+        return (1j * m) ** k * c
 
 
 def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> sparse.BCOO:
@@ -239,7 +253,7 @@ def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> sparse.BC
     v, i = test
     u, j = trial
     k = (1j * v.wavenumbers()) ** j * (-1j * u.wavenumbers()) ** i
-    if i + j % 2 == 0:
+    if (i + j) % 2 == 0:
         return sparse.BCOO(
             (k.real * v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
             shape=(v.N, u.N),

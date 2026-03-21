@@ -31,7 +31,7 @@ from jaxfun.typing import Array, MeshKind
 from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
 
 if TYPE_CHECKING:
-    from jaxfun.galerkin.composite import BCGeneric, BoundaryConditions, DirectSum
+    from jaxfun.galerkin.composite import BoundaryConditions
 
 
 class OrthogonalSpace(BaseSpace):
@@ -84,7 +84,7 @@ class OrthogonalSpace(BaseSpace):
         pass
 
     @abstractmethod
-    def quad_points_and_weights(self, N: int = 0) -> tuple[Array, Array]:
+    def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return (points, weights) for orthogonality measure (abstract)."""
         pass
 
@@ -104,6 +104,7 @@ class OrthogonalSpace(BaseSpace):
         Returns:
             Array of shape like x containing series evaluation.
         """
+        assert len(c) <= self.N, f"Coefficient length {len(c)} exceeds N={self.N}"
         X = self.map_reference_domain(x)
         return self._evaluate(X, c)
 
@@ -118,6 +119,7 @@ class OrthogonalSpace(BaseSpace):
         Returns:
             Array of shape like X containing series evaluation.
         """
+        assert len(c) <= self.N, f"Coefficient length {len(c)} exceeds N={self.N}"
         return self.eval_basis_functions(X)[..., : len(c)] @ c
 
     @jax.jit(static_argnums=(0, 3))
@@ -131,7 +133,7 @@ class OrthogonalSpace(BaseSpace):
         Returns:
             Array of shape like x containing series evaluation.
         """
-        # return jacn(self.evaluate, k)(x)
+        assert len(c) <= self.N, f"Coefficient length {len(c)} exceeds N={self.N}"
         X = self.map_reference_domain(x)
         df = float(self.domain_factor**k)
         return df * self.evaluate_basis_derivative(X, k)[..., : len(c)] @ c
@@ -150,45 +152,59 @@ class OrthogonalSpace(BaseSpace):
 
     @abstractmethod
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
-        """Evaluate single basis function psi_i at point X (abstract)."""
+        """Evaluate single basis function psi_i at point X."""
         pass
 
     @abstractmethod
     def eval_basis_functions(self, X: float | Array) -> Array:
-        """Evaluate all basis functions psi_0..psi_{N-1} at X (abstract)."""
+        """Evaluate all basis functions psi_0..psi_{N-1} at X."""
         pass
 
     @jax.jit(static_argnums=(0, 2))
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
-        """Return k-th derivative Vandermonde (automatic Jacobian stack)."""
+        """Return k-th derivative Vandermonde."""
         return jacn(self.eval_basis_functions, k)(X)
+
+    @abstractmethod
+    def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
+        """Return coefficients of k-th derivative series given c for original series.
+
+        Args:
+            c: Coefficients of orthogonal series.
+            k: Order of derivative to compute.
+
+        Returns:
+            Array (N,) of coefficients for the k'th derivative of the series.
+        """
+        pass
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
-        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int = 0
+        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int | None = None
     ) -> Array:
-        """Implementation of backward (allows subclass override)."""
+        """Implementation of backward transform."""
         xj = self.mesh(kind=kind, N=N)
         return self.evaluate(xj, c)
 
     @jax.jit(static_argnums=(0, 2, 3, 4))
-    def evaluate_nonlinear_primitive(
+    def backward_primitive(
         self,
         c: Array,
-        derivative_order: int = 0,
-        kind: MeshKind = MeshKind.QUADRATURE,
-        N: int = 0,
+        k: int = 0,
+        kind: str = "quadrature",
+        N: int | None = None,
     ) -> Array:
-        """Evaluate ``u`` or ``d^k u`` in physical space for nonlinear terms.
+        r"""Evaluate ``u(x_i)`` or ``\frac{d^k u}{dx^k}`` in physical space.
 
-        Subclasses can override this hook to use transform-specific fast paths.
-        The default implementation evaluates values with ``backward`` and
-        derivatives via ``evaluate_derivative`` on the requested mesh.
+        Args:
+            c: Coefficients of orthogonal series (length <= self.N).
+            k: Derivative order (default 0 -> function value).
+            kind: Mesh type for backward evaluation ('quadrature' or 'uniform').
+            N: Number of points. Must be >= self._num_quad_points.
         """
-        if derivative_order == 0:
-            return self.backward(c, kind=kind, N=N)
-        xj = self.mesh(kind=kind, N=N)
-        return self.evaluate_derivative(xj, c, k=derivative_order)
+        N = self.num_quad_points if N is None else N
+        df = float(self.domain_factor**k)
+        return df * self.backward(self.derivative_coeffs(c, k), kind=kind, N=N)
 
     @jax.jit(static_argnums=0)
     def mass_matrix(self) -> BCOO:
@@ -201,23 +217,20 @@ class OrthogonalSpace(BaseSpace):
             shape=(self.N, self.N),
         )
 
-    @jax.jit(static_argnums=(0, 2))
-    def forward(self, u: Array, N: int = 0) -> Array:
+    @jax.jit(static_argnums=0)
+    def forward(self, u: Array) -> Array:
         """Forward projection (samples -> coefficients) using orthogonality."""
         # u should be a padded array of length >= self.N
-        N: int = self.N if N == 0 else N
         L = self.scalar_product(u)
-        if len(u) > N:
-            L = L[:N]
         A = self.norm_squared() / self.domain_factor
         return L / A
 
     @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
         """Return vector of inner products <u, psi_i> (weighted)."""
-        N: int = u.shape[0]  # u may be >= self.N for padding
+        N: int = u.shape[0]
         xj, wj = self.quad_points_and_weights(N)
-        Pi = self.vandermonde(xj)
+        Pi = self.vandermonde(xj)  # shape (N, self.N)
         sg = self.system.sg / self.domain_factor
         if sp.sympify(sg).is_number:
             wj = wj * float(sg)
@@ -225,7 +238,7 @@ class OrthogonalSpace(BaseSpace):
             x = self.system.base_scalars()[0]
             sg = lambdify(x, self.map_expr_true_domain(sg))(xj)
             wj = wj * sg
-        return (u * wj) @ jnp.conj(Pi)
+        return (u * wj) @ jnp.conj(Pi)  # Truncated to (self.N,)
 
     @jax.jit(static_argnums=0)
     def apply_stencil_galerkin(self, b: Array) -> Array:
@@ -364,18 +377,20 @@ class OrthogonalSpace(BaseSpace):
         return x
 
     @jax.jit(static_argnums=(0, 1, 2))
-    def mesh(self, kind: MeshKind | str = MeshKind.QUADRATURE, N: int = 0) -> Array:
+    def mesh(
+        self, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
+    ) -> Array:
         """Return sampling mesh in true domain.
 
         Args:
             kind: 'quadrature' (default) or 'uniform'.
-            N: Number of uniform points (0 -> num_quad_points).
+            N: Number of points (defaults to self.num_quad_points).
         """
         kind = MeshKind(kind)
         if kind is MeshKind.QUADRATURE:
             return self.map_true_domain(self.quad_points_and_weights(N)[0])
         a, b = self.domain
-        M = N if N != 0 else self.num_quad_points
+        M = N if N is not None else self.num_quad_points
         return jnp.linspace(float(a), float(b), M)
 
     def cartesian_mesh(
@@ -393,12 +408,6 @@ class OrthogonalSpace(BaseSpace):
     def __len__(self) -> int:
         """Return number of spatial dimensions (always 1)."""
         return 1
-
-    def __add__(self, b: BCGeneric) -> DirectSum:
-        """Direct sum self ⊕ b (delegated to composite.DirectSum)."""
-        from jaxfun.galerkin.composite import DirectSum
-
-        return DirectSum(self, b)
 
     def get_padded(self, N: int) -> Self:
         """Return new instance with padded/truncated number of modes N."""

@@ -224,7 +224,7 @@ class KANMLPSpace(NNSpace):
         self.act_fun = act_fun
         self.basespace = basespace
         self.weight_factorization = weight_factorization
-        self.domains = (
+        self.domains: list[Domain] | None = (
             [Domain(l, u) for l, u in domains] if domains is not None else None
         )
         if hidden_size == 1 and self.dims != 1:
@@ -272,7 +272,7 @@ class sPIKANSpace(NNSpace):
         transient: bool = False,
         act_fun: Activation = nnx.tanh,
         basespace: type[OrthogonalSpace] = Chebyshev.Chebyshev,
-        domains: list[Domain | tuple[float, float]] | None = None,
+        domains: list[Domain] | None = None,
     ) -> None:
         """Initialize sPIKANSpace metadata."""
         NNSpace.__init__(self, dims, rank, transient, system, name)
@@ -280,7 +280,9 @@ class sPIKANSpace(NNSpace):
         self.hidden_size = hidden_size
         self.act_fun = act_fun
         self.basespace = basespace
-        self.domains = domains
+        self.domains: list[Domain] | None = (
+            [Domain(l, u) for l, u in domains] if domains is not None else None
+        )
         if hidden_size == 1 and self.dims != 1:
             raise ValueError(
                 "hidden_size=1 only allowed for dims=1. Consider using a "

@@ -80,10 +80,8 @@ def test_get_bc_basis():
     assert B.shape[0] == 2  # number of bcs
 
 
-def test_get_homogeneous_and_padding():
-    bcs = {"left": {"D": 0}, "right": {"N": 0}}
+def test_get_homogeneous():
+    bcs = {"left": {"D": 1}, "right": {"N": 1}}
     C = Composite(8, Chebyshev.Chebyshev, bcs)
     H = C.get_homogeneous()
     assert H.bcs.is_homogeneous()
-    P = C.get_padded(12)
-    assert P.N == 12

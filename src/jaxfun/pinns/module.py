@@ -209,7 +209,7 @@ class KANLayer(nnx.Module):
         *,
         hidden: bool = False,
         basespace: type[OrthogonalSpace] = Chebyshev.Chebyshev,
-        domains: list[Domain | tuple[float, float]] | None = None,
+        domains: list[Domain] | None = None,
         system: CoordSys | None = None,
         dtype: Dtype | None = None,
         param_dtype: Dtype = jnp.float32,

@@ -1112,8 +1112,8 @@ class CoordSys(Basic):
         if self._gt is not None:
             return self._gt
         g = self.get_covariant_metric_tensor()
-        gt = sp.Matrix(g).inv()
-        gt = sp.factor(self.simplify(gt))
+        gt = self.expr_base_scalar_to_psi(sp.Matrix(g)).inv()  # ty:ignore[invalid-argument-type]
+        gt = sp.factor(self.simplify(self.expr_psi_to_base_scalar(gt)))
         gt = np.array(gt)
         self._gt = gt
         return gt
@@ -1349,18 +1349,18 @@ def get_CoordSys(
     )
 
 
-sp.vector.BaseDyadic = BaseDyadic  # ty:ignore[possibly-missing-attribute]
-sp.vector.BaseVector = BaseVector  # ty:ignore[possibly-missing-attribute]
-sp.vector.BaseScalar = BaseScalar  # ty:ignore[possibly-missing-attribute]
-sp.vector.vector.BaseDyadic = BaseDyadic  # ty:ignore[possibly-missing-attribute]
-sp.vector.vector.BaseVector = BaseVector  # ty:ignore[possibly-missing-attribute]
-sp.vector.vector.BaseScalar = BaseScalar  # ty:ignore[possibly-missing-attribute]
-sp.vector.dyadic.BaseVector = BaseVector  # ty:ignore[possibly-missing-attribute]
-sp.vector.dyadic.BaseScalar = BaseScalar  # ty:ignore[possibly-missing-attribute]
-sp.vector.dyadic.BaseDyadic = BaseDyadic  # ty:ignore[possibly-missing-attribute]
+sp.vector.BaseDyadic = BaseDyadic  # ty:ignore[possibly-missing-submodule]
+sp.vector.BaseVector = BaseVector  # ty:ignore[possibly-missing-submodule]
+sp.vector.BaseScalar = BaseScalar  # ty:ignore[possibly-missing-submodule]
+sp.vector.vector.BaseDyadic = BaseDyadic  # ty:ignore[possibly-missing-submodule]
+sp.vector.vector.BaseVector = BaseVector  # ty:ignore[possibly-missing-submodule]
+sp.vector.vector.BaseScalar = BaseScalar  # ty:ignore[possibly-missing-submodule]
+sp.vector.dyadic.BaseVector = BaseVector  # ty:ignore[possibly-missing-submodule]
+sp.vector.dyadic.BaseScalar = BaseScalar  # ty:ignore[possibly-missing-submodule]
+sp.vector.dyadic.BaseDyadic = BaseDyadic  # ty:ignore[possibly-missing-submodule]
 # sp.vector.Vector._base_func = BaseVector
-sp.vector.vector.VectorMul._base_func = BaseVector  # ty:ignore[possibly-missing-attribute]
-sp.vector.dyadic.DyadicMul._base_func = BaseDyadic  # ty:ignore[possibly-missing-attribute]
+sp.vector.vector.VectorMul._base_func = BaseVector  # ty:ignore[possibly-missing-submodule]
+sp.vector.dyadic.DyadicMul._base_func = BaseDyadic  # ty:ignore[possibly-missing-submodule]
 # sp.vector.vector.VectorMul._base_instance = BaseVector
 # sp.vector.functions.BaseVector = BaseVector
 # sp.vector.functions.BaseScalar = BaseScalar

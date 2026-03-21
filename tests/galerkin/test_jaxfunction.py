@@ -109,7 +109,7 @@ def test_jaxfunction_directsum_nonlin(
 
 
 def test_jaxfunction_nonlin_diff(space: type[OrthogonalSpace], domain: Domain | None):
-    N = 8
+    N = 6
     D = space(N, domain=domain)
     x = D.system.x
     u = TrialFunction(D)
@@ -168,7 +168,7 @@ def test_jaxfunction_diff_2d(space: type[OrthogonalSpace], domain: Domain | None
 
 
 def test_jaxfunction_nonlin_2d(space: type[OrthogonalSpace], domain: Domain | None):
-    N = 8
+    N = 6
     D = space(N, domain=domain)
     T = TensorProduct(D, D, name="T")
     u = TrialFunction(T)

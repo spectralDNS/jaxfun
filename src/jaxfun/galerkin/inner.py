@@ -5,7 +5,6 @@ import jax.numpy as jnp
 import sympy as sp
 from jax import Array
 from jax.experimental.sparse import BCOO
-from sympy.core.function import AppliedUndef
 
 from jaxfun.typing import TrialSpaceType
 from jaxfun.utils.common import lambdify, matmat, tosparse
@@ -14,7 +13,7 @@ from .arguments import (
     ArgumentTag,
     TestFunction,
     TrialFunction,
-    evaluate_jaxfunction_expr,
+    evaluate_jaxfunction_expr_quad,
     get_arg,
 )
 from .composite import BCGeneric, Composite, DirectSum
@@ -23,6 +22,7 @@ from .forms import (
     _has_globalindex,
     _has_testspace,
     get_basisfunctions,
+    get_jaxfunctions,
     split,
     split_coeff,
 )
@@ -41,6 +41,7 @@ def inner(
     sparse: bool = False,
     sparse_tol: int = 1000,
     return_all_items: bool = False,
+    num_quad_points: int | tuple[int, ...] | None = None,
 ):
     r"""Assemble Galerkin inner products (bilinear / linear forms).
 
@@ -65,6 +66,17 @@ def inner(
         sparse_tol: Zero tolerance (integer multiple of ulp) for sparsify.
         return_all_items: If True return raw list(s) of matrices / vectors
             before summation (always for >1D tensor product).
+        num_quad_points: Number of quadrature points to use for evaluating
+            the inner products. Can be an integer (1D) or a tuple of integers
+            for each dimension. If None, the default number of quadrature
+            points is used. This is sufficient for bilinear forms with
+            constant coefficients, but for nonlinear forms or forms with
+            non-constant coefficients, the number of quadrature points may need
+            to be increased for exact integration.
+            Note that this offers the possibility to use de-aliasing for
+            nonlinear terms, but the user is responsible for ensuring that
+            the number of quadrature points is sufficient. For the 3/2 rule,
+            use tuple(int(1.5 * n) for n in test_space.num_quad_points).
 
     Returns:
         Depending on content:
@@ -88,6 +100,9 @@ def inner(
         and jnp.any(
             jnp.array(["bilinear" in split_coeff(c0["coeff"]) for c0 in a_forms])
         )
+    )
+    num_quad_points = (
+        num_quad_points if num_quad_points is not None else test_space.num_quad_points
     )
 
     for a0 in a_forms:  # Bilinear form
@@ -135,7 +150,13 @@ def inner(
                 has_bcs = True
 
             is_multivar = "multivar" in a0 or "jaxfunction" in a0
-            z = inner_bilinear(ai, vf, uf, sc, is_multivar)
+            N = (
+                num_quad_points
+                if isinstance(num_quad_points, int)
+                else num_quad_points[vf.system.base_scalars()[0]._id[0]]
+            )
+
+            z = inner_bilinear(ai, vf, uf, sc, is_multivar, N)
 
             if isinstance(z, tuple):  # multivar
                 mats.append((z, global_indices))
@@ -177,7 +198,7 @@ def inner(
                 scales.append(a0["multivar"])
             if "jaxfunction" in a0:
                 scales.append(
-                    evaluate_jaxfunction_expr(a0["jaxfunction"], test_space.mesh())
+                    evaluate_jaxfunction_expr_quad(a0["jaxfunction"], N=num_quad_points)
                 )
 
             Am = assemble_multivar(mats_, scales, test_space)
@@ -302,7 +323,15 @@ def inner(
             assert _has_globalindex(v)
             global_index = v.global_index
             is_multivar = "multivar" in b0 or "jaxfunction" in b0
-            z = inner_linear(bi, vf, sc, is_multivar)
+            z = inner_linear(
+                bi,
+                vf,
+                sc,
+                is_multivar,
+                num_quad_points
+                if isinstance(num_quad_points, int)
+                else num_quad_points[vf.system.base_scalars()[0]._id[0]],
+            )
             sc = 1
             bs.append(z)
 
@@ -313,12 +342,17 @@ def inner(
             and len(test_space) == 2
         ):
             if isinstance(bs[0], tuple):
+                assert isinstance(num_quad_points, tuple)
                 # multivar or JAXFunction
                 if "multivar" in b0:
                     s = test_space.system.base_scalars()
-                    uj = lambdify(s, b0["multivar"], modules="jax")(*test_space.mesh())
+                    uj = lambdify(s, b0["multivar"], modules="jax")(
+                        *test_space.mesh(N=num_quad_points)
+                    )
                 elif "jaxfunction" in b0:
-                    uj = evaluate_jaxfunction_expr(b0["jaxfunction"], test_space.mesh())
+                    uj = evaluate_jaxfunction_expr_quad(
+                        b0["jaxfunction"], N=num_quad_points
+                    )
                 else:
                     raise ValueError("Expected multivar or jaxfunction key in b0")
                 res = bs[0][0].T @ uj @ bs[1][0]
@@ -333,12 +367,17 @@ def inner(
             and len(test_space) == 3
         ):
             if isinstance(bs[0], tuple):
+                assert isinstance(num_quad_points, tuple)
                 # multivar or JAXFunction
                 if "multivar" in b0:
                     s = test_space.system.base_scalars()
-                    uj = lambdify(s, b0["multivar"], modules="jax")(*test_space.mesh())
+                    uj = lambdify(s, b0["multivar"], modules="jax")(
+                        *test_space.mesh(N=num_quad_points)
+                    )
                 elif "jaxfunction" in b0:
-                    uj = evaluate_jaxfunction_expr(b0["jaxfunction"], test_space.mesh())
+                    uj = evaluate_jaxfunction_expr_quad(
+                        b0["jaxfunction"], N=num_quad_points
+                    )
                 else:
                     raise ValueError("Expected multivar or jaxfunction key in b0")
                 res = jnp.einsum("il,jm,kn,ijk->lmn", bs[0][0], bs[1][0], bs[2][0], uj)
@@ -441,6 +480,7 @@ def inner_bilinear(
     u: OrthogonalSpace,
     sc: float | complex,
     multivar: Literal[False],
+    num_quad_points: int,
 ) -> Array: ...
 @overload
 def inner_bilinear(
@@ -449,6 +489,7 @@ def inner_bilinear(
     u: OrthogonalSpace,
     sc: float | complex,
     multivar: Literal[True],
+    num_quad_points: int,
 ) -> tuple[Array, Array]: ...
 def inner_bilinear(
     ai: sp.Expr,
@@ -456,6 +497,7 @@ def inner_bilinear(
     u: OrthogonalSpace,
     sc: float | complex,
     multivar: bool,
+    num_quad_points: int,
 ) -> Array | tuple[Array, Array]:
     """Assemble single bilinear form contribution term.
 
@@ -469,13 +511,14 @@ def inner_bilinear(
         u: Trial function space.
         sc: Scalar bilinear coefficient (after linear split).
         multivar: True if coefficient not separable (handled upstream).
-
+        num_quad_points: Number of quadrature points.
     Returns:
         Dense matrix, or (Pi, Pj) tuple for multivar separation.
     """
     vo = v.orthogonal
     uo = u.orthogonal
-    xj, wj = vo.quad_points_and_weights()
+    N = num_quad_points
+    xj, wj = vo.quad_points_and_weights(N=N)
     df = float(vo.domain_factor)
     i, j = 0, 0
     scale = jnp.array([sc])
@@ -495,14 +538,14 @@ def inner_bilinear(
                     assert j == 0
                     j = int(aii.derivative_count)
             continue
-        jaxfunction = None
-        for p in sp.core.traversal.preorder_traversal(aii):
-            if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
-                jaxfunction = cast(AppliedUndef, p)
-                break
-        if jaxfunction:
-            scale *= evaluate_jaxfunction_expr(aii, vo.map_true_domain(xj), jaxfunction)
+
+        jaxfunction = get_jaxfunctions(aii)
+        if len(jaxfunction) == 1:
+            scale *= evaluate_jaxfunction_expr_quad(aii, jaxfunction.pop(), N=N)
             continue
+        elif len(jaxfunction) > 1:
+            raise ValueError("Multiple JAXFunctions found in single bilinear form")
+
         if len(aii.free_symbols) > 0:
             s = aii.free_symbols.pop()
             scale *= lambdify(s, uo.map_expr_true_domain(aii), modules="jax")(xj)
@@ -551,6 +594,7 @@ def inner_linear(
     v: OrthogonalSpace,
     sc: float | complex,
     multivar: bool,
+    num_quad_points: int,
 ) -> Array | tuple[Array]:
     """Assemble single linear form contribution.
 
@@ -560,15 +604,19 @@ def inner_linear(
         sc: Scalar coefficient (sign-adjusted if from a(u,v)-L(v)).
         global_index: Global index for vector-valued spaces.
         multivar: True if non-separable scaling (return tuple form).
+        num_quad_points: Number of quadrature points to use
+            (de-aliasing for nonlinear / non-constant coeffs).
 
     Returns:
         Vector (1D), tuple (Pi,) for multivar, or projected result.
     """
     vo = v.orthogonal
-    xj, wj = vo.quad_points_and_weights()
+    N = num_quad_points
+    xj, wj = vo.quad_points_and_weights(N=N)
     df = float(vo.domain_factor)
     i = 0
     uj = jnp.array([sc])  # incorporate scalar coefficient into first vector
+
     if get_arg(bi) is ArgumentTag.TEST:
         pass
     elif isinstance(bi, sp.Derivative):
@@ -586,15 +634,13 @@ def inner_linear(
                     i = int(bii.derivative_count)
                 continue
 
-            jaxfunction = None
-            for p in sp.core.traversal.preorder_traversal(bii):
-                if get_arg(p) is ArgumentTag.JAXFUNC:  # JAXFunction->AppliedUndef
-                    jaxfunction = cast(AppliedUndef, p)
-                    break
-            if jaxfunction:
-                uj *= evaluate_jaxfunction_expr(
-                    bii, vo.map_true_domain(xj), jaxfunction
+            jaxfunction = get_jaxfunctions(bii)
+            if len(jaxfunction) == 1:
+                jaxf = jaxfunction.pop()
+                assert jaxf.functionspace.orthogonal.__class__ == vo.__class__, (
+                    "JAXFunction space must match test function space"
                 )
+                uj *= evaluate_jaxfunction_expr_quad(bii, jaxf, N=N)
                 continue
             # bii contains coordinates in the domain of v, e.g., (r, theta) for polar
             # Need to compute bii as bii(x(X)), since we use quadrature points
@@ -643,7 +689,7 @@ def assemble_multivar(
     for sc in scale if isinstance(scale, list) else [scale]:
         if not isinstance(sc, Array) and contains_sympy_symbols(sc):
             s = test_space.system.base_scalars()
-            xj = test_space.mesh()
+            xj = test_space.mesh(N=(P0.shape[0], P1.shape[0]))
             sc = lambdify(s, sc, modules="jax")(*xj)
         elif isinstance(sc, float | complex):
             sc = jnp.ones((P0.shape[0], P1.shape[0])) * sc

@@ -19,7 +19,7 @@ type NodeEvaluator = Callable[[NodeValueCache], Array]
 
 
 @dataclass(frozen=True)
-class _NonlinearCompileContext:
+class NonlinearCompileContext:
     """Static data required to compile nonlinear SymPy expressions."""
 
     spatial_symbols: tuple[sp.Symbol, ...]
@@ -51,10 +51,10 @@ _JAX_FUNCTION_BY_NAME: dict[str, Callable[..., Array]] = {
 }
 
 
-class _NonlinearCompiler:
+class NonlinearCompiler:
     """Compile nonlinear SymPy expressions into cached evaluators."""
 
-    def __init__(self, context: _NonlinearCompileContext) -> None:
+    def __init__(self, context: NonlinearCompileContext) -> None:
         """Store compile-time context and initialize evaluator caches."""
         self.context = context
         self._compiled: dict[sp.Basic, NodeEvaluator] = {}
@@ -62,9 +62,12 @@ class _NonlinearCompiler:
 
     def compile(self, expr: sp.Expr) -> NodeEvaluator:
         """Compile a nonlinear SymPy expression into a cached evaluator."""
-        return self._compile_node(sp.expand(expr))
+        # Resolve custom operator wrappers like Div(Grad(...)) before the
+        # fallback lambdify path, since SymPy's JAX printer cannot emit them.
+        evaluated = sp.sympify(expr).doit()
+        return self.compile_node(sp.expand(evaluated))
 
-    def _compile_node(self, node: sp.Basic) -> NodeEvaluator:
+    def compile_node(self, node: sp.Basic) -> NodeEvaluator:
         """Compile a single SymPy node, reusing cached evaluators when possible."""
         node = sp.sympify(node)
         cached = self._compiled.get(node)
@@ -75,33 +78,33 @@ class _NonlinearCompiler:
         # evaluation; only direct d^k(u)/dx^k terms are primitive lookups.
         if isinstance(node, sp.Derivative) and not _is_direct_jax_derivative(node):
             expanded = sp.expand(node.doit())
-            evaluator = self._compile_node(expanded)
+            evaluator = self.compile_node(expanded)
         elif _is_jaxfunction_primitive(node):
-            evaluator = self._compile_primitive(node)
+            evaluator = self.compile_primitive(node)
         elif not _contains_jaxfunction(node):
-            value = self._get_static_value(node)
+            value = self.get_static_value(node)
             evaluator = lambda _cache, value=value: value
         else:
-            evaluator = self._compile_composite(node)
+            evaluator = self.compile_composite(node)
 
         self._compiled[node] = evaluator
         return evaluator
 
-    def _compile_composite(self, node: sp.Basic) -> NodeEvaluator:
+    def compile_composite(self, node: sp.Basic) -> NodeEvaluator:
         """Compile a non-primitive node from its recursively compiled children."""
-        child_eval = tuple(self._compile_node(arg) for arg in node.args)
+        child_eval = tuple(self.compile_node(arg) for arg in node.args)
 
         if isinstance(node, sp.Add):
-            return self._memoize(node, self._compile_add(child_eval))
+            return self.memoize(node, self.compile_add(child_eval))
         if isinstance(node, sp.Mul):
-            return self._memoize(node, self._compile_mul(child_eval))
+            return self.memoize(node, self.compile_mul(child_eval))
         if isinstance(node, sp.Pow):
-            return self._memoize(node, self._compile_pow(node))
+            return self.memoize(node, self.compile_pow(node))
         if isinstance(node, sp.Function):
-            return self._memoize(node, self._compile_function(node, child_eval))
-        return self._memoize(node, self._compile_lambdified(node, child_eval))
+            return self.memoize(node, self.compile_function(node, child_eval))
+        return self.memoize(node, self.compile_lambdified(node, child_eval))
 
-    def _compile_primitive(self, node: sp.Basic) -> NodeEvaluator:
+    def compile_primitive(self, node: sp.Basic) -> NodeEvaluator:
         """Compile a primitive field or spatial derivative evaluation."""
         space = self.context.functionspace
         jaxf = cast(JAXFunction, self.context.jaxfunction)
@@ -114,7 +117,7 @@ class _NonlinearCompiler:
             ) -> Array:
                 return space.backward_primitive(jaxf.array, k=0)
 
-            return self._memoize(node, evaluate_leaf)
+            return self.memoize(node, evaluate_leaf)
 
         assert _is_direct_jax_derivative(node)
         derivative = cast(sp.Derivative, node)
@@ -143,9 +146,9 @@ class _NonlinearCompiler:
         ) -> Array:
             return space.backward_primitive(jaxf.array, k=derivative_order)
 
-        return self._memoize(node, evaluate_derivative)
+        return self.memoize(node, evaluate_derivative)
 
-    def _compile_add(self, child_eval: tuple[NodeEvaluator, ...]) -> NodeEvaluator:
+    def compile_add(self, child_eval: tuple[NodeEvaluator, ...]) -> NodeEvaluator:
         """Compile an additive node."""
 
         def evaluate(cache: NodeValueCache) -> Array:
@@ -158,7 +161,7 @@ class _NonlinearCompiler:
 
         return evaluate
 
-    def _compile_mul(self, child_eval: tuple[NodeEvaluator, ...]) -> NodeEvaluator:
+    def compile_mul(self, child_eval: tuple[NodeEvaluator, ...]) -> NodeEvaluator:
         """Compile a multiplicative node."""
 
         def evaluate(cache: NodeValueCache) -> Array:
@@ -171,10 +174,10 @@ class _NonlinearCompiler:
 
         return evaluate
 
-    def _compile_pow(self, node: sp.Pow) -> NodeEvaluator:
+    def compile_pow(self, node: sp.Pow) -> NodeEvaluator:
         """Compile an exponentiation node."""
-        base_eval = self._compile_node(node.base)
-        exp_eval = self._compile_node(node.exp)
+        base_eval = self.compile_node(node.base)
+        exp_eval = self.compile_node(node.exp)
         exp = node.exp
 
         if isinstance(exp, sp.Number):
@@ -188,7 +191,7 @@ class _NonlinearCompiler:
             jnp.asarray(exp_eval(cache)),
         )
 
-    def _compile_function(
+    def compile_function(
         self, node: sp.Function, child_eval: tuple[NodeEvaluator, ...]
     ) -> NodeEvaluator:
         """Compile a SymPy function node using JAX primitives when available."""
@@ -197,7 +200,7 @@ class _NonlinearCompiler:
 
         jnp_function = _JAX_FUNCTION_BY_NAME.get(node.func.__name__)
         if jnp_function is None:
-            return self._compile_lambdified(node, child_eval)
+            return self.compile_lambdified(node, child_eval)
 
         def evaluate(cache: NodeValueCache) -> Array:
             values = tuple(jnp.asarray(child(cache)) for child in child_eval)
@@ -205,7 +208,7 @@ class _NonlinearCompiler:
 
         return evaluate
 
-    def _compile_lambdified(
+    def compile_lambdified(
         self, node: sp.Basic, child_eval: tuple[NodeEvaluator, ...]
     ) -> NodeEvaluator:
         """Compile a fallback node by lambdifying it against dummy symbols."""
@@ -227,7 +230,7 @@ class _NonlinearCompiler:
 
         return evaluate
 
-    def _get_static_value(self, node: sp.Basic) -> Array:
+    def get_static_value(self, node: sp.Basic) -> Array:
         """Evaluate a static symbolic node once on the quadrature mesh."""
         cached = self._static.get(node)
         if cached is not None:
@@ -258,7 +261,7 @@ class _NonlinearCompiler:
         self._static[node] = out
         return out
 
-    def _memoize(self, node: sp.Basic, compute: NodeEvaluator) -> NodeEvaluator:
+    def memoize(self, node: sp.Basic, compute: NodeEvaluator) -> NodeEvaluator:
         """Wrap an evaluator so repeated subexpressions are computed once."""
 
         def evaluate(cache: NodeValueCache) -> Array:
@@ -352,14 +355,14 @@ def compile_nonlinear_evaluator(
     """Compile a nonlinear physical-space evaluator for coefficient states."""
     mesh_tuple = _as_mesh_tuple(mesh)
     expected_shape = jnp.broadcast_shapes(*(m.shape for m in mesh_tuple))
-    context = _NonlinearCompileContext(
+    context = NonlinearCompileContext(
         spatial_symbols=tuple(functionspace.system.base_scalars()),
         functionspace=functionspace,
         mesh=mesh_tuple,
         expected_shape=expected_shape,
         jaxfunction=jaxfunction,
     )
-    compiled = _NonlinearCompiler(context).compile(expr)
+    compiled = NonlinearCompiler(context).compile(expr)
 
     def evaluate(uh: Array) -> Array:
         cast(JAXFunction, jaxfunction).array = uh

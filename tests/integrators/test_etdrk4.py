@@ -270,3 +270,61 @@ def test_etdrk4_zk_step_jaxpr_uses_diagonal_fft_path() -> None:
     # The 2D ZK timestep should stay on the diagonal ETD + FFT pseudospectral path.
     assert _count_primitive(jaxpr, "fft") >= 24
     assert _count_primitive(jaxpr, "dot_general") == 0
+
+
+def test_etdrk4_2d_cahn_hilliard_compact_form_matches_expanded_form() -> None:
+    N = 16
+    dt = 1e-4
+
+    F = FourierSpace(N, Domain(0, 1))
+    V = TensorProductSpace((F, F), name="V")
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    x, y = V.system.base_scalars()
+    t = V.system.base_time()
+
+    nu = Constant("nu", -1.0)
+    alpha = Constant("alpha", 1.0)
+    mu = Constant("mu", -1.5e-2)
+    Laplace = lambda expr: Div(Grad(expr))
+    laplace_u = u.diff(x, 2) + u.diff(y, 2)
+    laplace_u_cubed = 6 * u * (u.diff(x) ** 2 + u.diff(y) ** 2) + 3 * u**2 * laplace_u
+
+    compact = v * (u.diff(t) - Laplace(nu * u + alpha * u**3 + mu * Laplace(u)))
+    expanded = v * (
+        u.diff(t) - nu * Laplace(u) - alpha * laplace_u_cubed - mu * Laplace(Laplace(u))
+    )
+
+    compact_integrator = ETDRK4(
+        V,
+        compact,
+        time=(0.0, dt),
+        initial=jnp.zeros(V.num_dofs),
+        sparse=True,
+        sparse_tol=1000,
+    )
+    expanded_integrator = ETDRK4(
+        V,
+        expanded,
+        time=(0.0, dt),
+        initial=jnp.zeros(V.num_dofs),
+        sparse=True,
+        sparse_tol=1000,
+    )
+
+    key_re, key_im = jax.random.split(jax.random.PRNGKey(0))
+    uhat = 1e-2 * (
+        jax.random.normal(key_re, V.num_dofs)
+        + 1j * jax.random.normal(key_im, V.num_dofs)
+    )
+
+    compact_integrator.setup(dt)
+    expanded_integrator.setup(dt)
+
+    compact_step = compact_integrator.step(uhat, dt)
+    expanded_step = expanded_integrator.step(uhat, dt)
+
+    assert compact_integrator.linear_diag is not None
+    assert expanded_integrator.linear_diag is not None
+    assert jnp.allclose(compact_integrator.linear_diag, expanded_integrator.linear_diag)
+    assert jnp.allclose(compact_step, expanded_step, atol=1e-6, rtol=1e-6)

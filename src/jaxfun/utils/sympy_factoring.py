@@ -15,6 +15,11 @@ _LINEAR_BINARY = {"Dot", "Cross", "Outer"}
 _TIME_INDEPENDENT_TRIALS: dict[TrialFunction, TrialFunction] = {}
 
 
+def _as_expr(node: sp.Basic | sp.Expr) -> sp.Expr:
+    """Coerce a SymPy node to ``Expr`` for typed expression helpers."""
+    return cast(sp.Expr, sp.sympify(node))
+
+
 def get_time_independent(u: TrialFunction) -> TrialFunction:
     """Return the cached time-independent counterpart of a transient trial field."""
     if not u.transient:
@@ -132,12 +137,131 @@ def split_linear_nonlinear_terms(
     nonlinear_terms: list[sp.Expr] = []
 
     for term in sp.Add.make_args(expr):
-        if is_linear_in_dependent(term, dependent):
-            linear_terms.append(term)
-        else:
-            nonlinear_terms.append(term)
+        linear, nonlinear = split_linear_nonlinear_node(term, dependent)
+        if sp.sympify(linear) != 0:
+            linear_terms.append(linear)
+        if sp.sympify(nonlinear) != 0:
+            nonlinear_terms.append(nonlinear)
 
-    return sp.Add(*linear_terms), sp.Add(*nonlinear_terms)
+    return sp.expand(sp.Add(*linear_terms)), sp.expand(sp.Add(*nonlinear_terms))
+
+
+def split_linear_nonlinear_node(
+    node: sp.Basic, dependent: TrialFunction | sp.Function
+) -> tuple[sp.Expr, sp.Expr]:
+    """Split a single node into parts linear and nonlinear in ``dependent``."""
+    node = sp.sympify(node)
+    node_expr = _as_expr(node)
+
+    if not node.has(dependent):
+        return node_expr, sp.Integer(0)
+    if is_linear_in_dependent(node, dependent):
+        return node_expr, sp.Integer(0)
+
+    if isinstance(node, sp.Add):
+        linear_terms: list[sp.Expr] = []
+        nonlinear_terms: list[sp.Expr] = []
+        for arg in node.args:
+            linear, nonlinear = split_linear_nonlinear_node(arg, dependent)
+            if sp.sympify(linear) != 0:
+                linear_terms.append(linear)
+            if sp.sympify(nonlinear) != 0:
+                nonlinear_terms.append(nonlinear)
+        return sp.Add(*linear_terms), sp.Add(*nonlinear_terms)
+
+    if isinstance(node, sp.Derivative):
+        linear, nonlinear = split_linear_nonlinear_node(sp.expand(node.expr), dependent)
+        return _apply_linear_unary_operator(node, linear), _apply_linear_unary_operator(
+            node, nonlinear
+        )
+
+    if isinstance(node, sp.Mul):
+        dependent_factors = [arg for arg in node.args if arg.has(dependent)]
+        if len(dependent_factors) == 1:
+            dependent_factor = _as_expr(dependent_factors[0])
+            static_factor = _as_expr(
+                sp.Mul(*(arg for arg in node.args if arg is not dependent_factor))
+            )
+            linear, nonlinear = split_linear_nonlinear_node(
+                sp.expand(dependent_factor), dependent
+            )
+            return (
+                sp.expand(static_factor * linear),
+                sp.expand(static_factor * nonlinear),
+            )
+        return sp.Integer(0), sp.sympify(node)
+
+    if len(node.args) == 1 and node.func.__name__ in _LINEAR_UNARY:
+        linear, nonlinear = split_linear_nonlinear_node(
+            sp.expand(node.args[0]), dependent
+        )
+        return _apply_linear_unary_operator(node, linear), _apply_linear_unary_operator(
+            node, nonlinear
+        )
+
+    if len(node.args) == 2 and node.func.__name__ in _LINEAR_BINARY:
+        a0, a1 = (_as_expr(arg) for arg in node.args)
+        has0 = a0.has(dependent)
+        has1 = a1.has(dependent)
+        if has0 and has1:
+            return sp.Integer(0), node_expr
+        if has0:
+            linear, nonlinear = split_linear_nonlinear_node(sp.expand(a0), dependent)
+            return _apply_linear_binary_operator(
+                node, linear, a1
+            ), _apply_linear_binary_operator(node, nonlinear, a1)
+        if has1:
+            linear, nonlinear = split_linear_nonlinear_node(sp.expand(a1), dependent)
+            return _apply_linear_binary_operator(
+                node, a0, linear
+            ), _apply_linear_binary_operator(node, a0, nonlinear)
+
+    return sp.Integer(0), node_expr
+
+
+def _apply_linear_unary_operator(node: sp.Basic, arg: sp.Expr) -> sp.Expr:
+    """Apply a linear unary operator to a split subexpression."""
+    arg = sp.sympify(arg)
+    if arg == 0:
+        return sp.Integer(0)
+    if isinstance(arg, sp.Add):
+        return sp.expand(
+            sp.Add(*(_apply_linear_unary_operator(node, term) for term in arg.args))
+        )
+    if isinstance(node, sp.Derivative):
+        return sp.expand(node.func(arg, *node.variables))
+    if node.func.__name__ == "Grad":
+        return sp.expand(node.func(arg, transpose=getattr(node, "_transpose", False)))
+    return sp.expand(node.func(arg))
+
+
+def _apply_linear_binary_operator(
+    node: sp.Basic, left: sp.Expr, right: sp.Expr
+) -> sp.Expr:
+    """Apply a linear binary operator to a split subexpression."""
+    left = sp.sympify(left)
+    right = sp.sympify(right)
+    if left == 0 or right == 0:
+        return sp.Integer(0)
+    if isinstance(left, sp.Add):
+        return sp.expand(
+            sp.Add(
+                *(
+                    _apply_linear_binary_operator(node, term, right)
+                    for term in left.args
+                )
+            )
+        )
+    if isinstance(right, sp.Add):
+        return sp.expand(
+            sp.Add(
+                *(
+                    _apply_linear_binary_operator(node, left, term)
+                    for term in right.args
+                )
+            )
+        )
+    return sp.expand(node.func(left, right))
 
 
 def is_linear_add(node: sp.Add, dependent: TrialFunction | sp.Function) -> bool:

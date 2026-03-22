@@ -93,6 +93,18 @@ def test_split_linear_nonlinear_div_grad_is_linear() -> None:
     assert sp.simplify(nonlin - u * u.diff(x)) == 0
 
 
+def test_split_linear_nonlinear_distributes_linear_operators() -> None:
+    x = sp.Symbol("x")
+    nu, mu = sp.symbols("nu mu")
+    u = sp.Function("u")(x)  # ty:ignore[call-non-callable]
+
+    expr = -Div(Grad(nu * u + u**3 + mu * Div(Grad(u))))
+    lin, nonlin = split_linear_nonlinear_terms(expr, u)
+
+    assert sp.simplify(lin + nu * Div(Grad(u)) + mu * Div(Grad(Div(Grad(u))))) == 0
+    assert sp.simplify(nonlin + Div(Grad(u**3))) == 0
+
+
 def test_split_linear_nonlinear_sin_is_nonlinear() -> None:
     x = sp.Symbol("x")
     u = sp.Function("u")(x)  # ty:ignore[call-non-callable]

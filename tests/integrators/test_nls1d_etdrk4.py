@@ -55,5 +55,7 @@ def test_etdrk4_focusing_nls_soliton_tracks_exact_short_time() -> None:
     mass_final = jnp.trapezoid(jnp.abs(psi_num) ** 2, xj)
 
     assert integrator.has_nonlinear
-    assert float(rel_error) < 2e-3
-    assert float(jnp.abs(mass_final - mass_init)) < 1e-4
+    # rel error doesn't scale with precision
+    assert float(rel_error) < 0.002
+    # abs error is 0 with float32, around 1e-9 with float64
+    assert float(jnp.abs(mass_final - mass_init)) < 1e-8

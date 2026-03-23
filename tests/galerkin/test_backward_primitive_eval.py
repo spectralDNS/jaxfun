@@ -6,6 +6,7 @@ from jaxfun.galerkin import TensorProductSpace
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
+from jaxfun.utils.common import ulp
 
 
 def _complex_coeffs(key: jax.Array, n: int) -> jax.Array:
@@ -23,7 +24,7 @@ def test_fourier_backward_primitive_matches_evaluate_derivative() -> None:
         got = V.backward_primitive(c, k=k)
         expected = V.evaluate_derivative(xj, c, k=k)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
-        assert float(rel) < 1e-5
+        assert float(rel) < 20 * ulp(1.0)
 
 
 def test_chebyshev_backward_primitive_matches_evaluate_derivative() -> None:
@@ -36,7 +37,7 @@ def test_chebyshev_backward_primitive_matches_evaluate_derivative() -> None:
         got = V.backward_primitive(c, k=k)
         expected = V.evaluate_derivative(xj, c, k=k)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
-        assert float(rel) < 2e-5
+        assert float(rel) < 70 * ulp(1.0)
 
 
 def test_directsum_backward_primitive_includes_boundary_lift() -> None:
@@ -54,7 +55,7 @@ def test_directsum_backward_primitive_includes_boundary_lift() -> None:
         got = V.backward_primitive(c, k=k)
         expected = V.evaluate_derivative(xj, c, k=k)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
-        assert float(rel) < 2e-5
+        assert float(rel) < 70 * ulp(1.0)
 
 
 def test_tensorproduct_fourier_backward_primitive_matches_derivative() -> None:
@@ -69,7 +70,7 @@ def test_tensorproduct_fourier_backward_primitive_matches_derivative() -> None:
         got = V.backward_primitive(c, k=k)
         expected = V.evaluate_derivative(xj, c, k=k)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
-        assert float(rel) < 2e-5
+        assert float(rel) < 30 * ulp(1.0)
 
 
 def test_tensorproduct_fourier_backward_primitive_uses_fft_fast_path() -> None:

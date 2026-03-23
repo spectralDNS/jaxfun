@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 
 from jaxfun.galerkin import Jacobi, Legendre
-from jaxfun.utils.common import Domain
+from jaxfun.utils.common import Domain, ulp
 
 
 def test_legendre_short_series_and_matrices_branches():
@@ -12,7 +12,8 @@ def test_legendre_short_series_and_matrices_branches():
     assert v1 == c1[0]
     c2 = jnp.array([1.0, 0.5])
     v2 = L.evaluate(0.3, c2)
-    assert jnp.isclose(v2, c2[0] + c2[1] * 0.3)
+    expected = c2[0] + c2[1] * 0.3
+    assert jnp.isclose(v2, expected, atol=ulp(2.0))
     # matrices lookup branches
     from jaxfun.galerkin import Legendre as Lmod
 

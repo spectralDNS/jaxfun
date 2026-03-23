@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 
 from jaxfun.galerkin import Chebyshev, Legendre, MeshKind
-from jaxfun.utils.common import Domain
+from jaxfun.utils.common import Domain, ulp
 
 
 def test_orthogonal_mapping_and_uniform_mesh():
@@ -16,7 +16,7 @@ def test_orthogonal_mapping_and_uniform_mesh():
     for p in pts:
         val_orig = p**3 + 2 * p + 1
         val_mapped = tru.subs(symx, p)
-        assert abs(float(val_mapped) - val_orig) < 1e-8
+        assert abs(float(val_mapped) - val_orig) < ulp(100.0)
     # numeric mapping arrays
     pts = jnp.linspace(-2.0, 3.0, 6)
     Xref = jnp.array([L.map_reference_domain(p) for p in pts])

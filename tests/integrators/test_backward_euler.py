@@ -12,7 +12,7 @@ from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.integrators import ETDRK4, RK4, BackwardEuler
 from jaxfun.operators import Constant, Div, Grad
 from jaxfun.typing import MeshKind
-from jaxfun.utils.common import lambdify, n
+from jaxfun.utils.common import lambdify, n, ulp
 
 
 def test_backward_euler_linear_advection_fourier() -> None:
@@ -156,7 +156,7 @@ def test_rk4_nonlinear_rhs_uses_direct_jaxfunction_evaluation() -> None:
     ux_phys = V.evaluate_derivative(xj, uhat, k=1)
     expected = V.forward(-u_phys * ux_phys)
 
-    assert jnp.allclose(nonlinear, expected, atol=1e-6, rtol=1e-6)
+    assert jnp.allclose(nonlinear, expected, atol=5 * ulp(2.0))
 
 
 def test_rk4_nonlinear_rhs_caches_repeated_primitives(
@@ -205,7 +205,7 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
 
     nonlinear = integrator.nonlinear_rhs(uhat)
 
-    assert jnp.allclose(nonlinear, expected, atol=1e-6, rtol=1e-6)
+    assert jnp.allclose(nonlinear, expected, atol=5 * ulp(4.0))
 
     primitive_orders = {
         0
@@ -307,7 +307,7 @@ def test_rk4_tensorproduct_projects_x_only_initial_condition() -> None:
     u0_phys = V.backward(uhat0).real
     xj, _yj = V.mesh()
     expected = jnp.broadcast_to(jnp.cos(jnp.pi * xj), u0_phys.shape)
-    assert jnp.allclose(u0_phys, expected, atol=1e-6, rtol=1e-6)
+    assert jnp.allclose(u0_phys, expected, atol=5 * ulp(1.0))
 
     uhat_t = integrator.solve(dt=dt, steps=steps, progress=False)
     assert uhat_t.shape == V.num_dofs
@@ -336,7 +336,7 @@ def test_rk4_tensorproduct_nonlinear_rhs_uses_mixed_derivative_path() -> None:
     uy_phys = V.evaluate_derivative(xj, uhat, k=(0, 1))
     expected = V.forward(-(u_phys * ux_phys + u_phys * uy_phys))
 
-    assert jnp.allclose(nonlinear, expected, atol=2e-6, rtol=2e-6)
+    assert jnp.allclose(nonlinear, expected, atol=5 * ulp(0.5))
 
 
 def test_etdrk4_tensorproduct_nonlinear_short_run_is_finite() -> None:

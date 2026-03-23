@@ -13,6 +13,7 @@ from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.integrators import ETDRK4
 from jaxfun.integrators.etdrk4 import _etdrk4_diag_coeffs
 from jaxfun.operators import Constant
+from jaxfun.utils import ulp
 from jaxfun.utils.common import lambdify
 
 
@@ -105,7 +106,7 @@ def test_etdrk4_solve_and_frames_interface() -> None:
     u_num = V.backward(uhat_t).real
     u_ex = lambdify(x, sp.sin(x - c.val * T))(xj)
     rel_error = jnp.linalg.norm(u_num - u_ex) / jnp.linalg.norm(u_ex)
-    assert float(rel_error) < 1e-4
+    assert float(rel_error) < ulp(100)
 
 
 @pytest.mark.parametrize(
@@ -327,7 +328,7 @@ def test_etdrk4_2d_cahn_hilliard_compact_form_matches_expanded_form() -> None:
     assert compact_integrator.linear_diag is not None
     assert expanded_integrator.linear_diag is not None
     assert jnp.allclose(compact_integrator.linear_diag, expanded_integrator.linear_diag)
-    assert jnp.allclose(compact_step, expanded_step, atol=1e-6, rtol=1e-6)
+    assert jnp.allclose(compact_step, expanded_step)
 
 
 def test_etdrk4_tensorproduct_solve_passes_padding_through(

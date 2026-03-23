@@ -734,19 +734,8 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
 
     if V.is_orthogonal:
         assert not isinstance(V, OrthogonalSpace | Composite | DirectSum)
-        uj = jnp.asarray(
-            lambdify(V.system.base_scalars(), ue, modules="jax")(*V.mesh())
-        )
-        expected_shape = V.shape()
-        if uj.shape != expected_shape:
-            try:
-                uj = jnp.broadcast_to(uj, expected_shape)
-            except ValueError as err:
-                msg = (
-                    f"Projected expression sampled shape {uj.shape} is not "
-                    f"broadcastable to tensor-product shape {expected_shape}"
-                )
-                raise ValueError(msg) from err
+        uj = lambdify(V.system.base_scalars(), ue, modules="jax")(*V.mesh())
+        uj = jnp.broadcast_to(uj, V.num_dofs)
         return V.forward(uj)
 
     u = TrialFunction(V)

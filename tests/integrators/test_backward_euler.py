@@ -175,9 +175,21 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
     weak_form = v * (u.diff(t) + (u + u.diff(x)) ** 2)
     integrator = RK4(V, weak_form, time=(0.0, 0.01), initial=sp.sin(x), sparse=True)
     uhat = integrator.initial_coefficients()
+    u_phys = V.backward(uhat)
+    ux_phys = V.evaluate_derivative(V.mesh(), uhat, k=1)
+    expected = V.forward(-((u_phys + ux_phys) ** 2))
 
     calls: list[int] = []
+    original_backward = integrator.functionspace.backward
     original_eval = integrator.functionspace.backward_primitive
+
+    def count_backward(
+        c,
+        kind: MeshKind = MeshKind.QUADRATURE,
+        N: int | None = None,
+    ):
+        calls.append(0)
+        return original_backward(c, kind=kind, N=N)
 
     def count_eval(
         c,
@@ -188,12 +200,10 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
         calls.append(int(k))
         return original_eval(c, k=k, kind=kind, N=N)
 
+    monkeypatch.setattr(integrator.functionspace, "backward", count_backward)
     monkeypatch.setattr(integrator.functionspace, "backward_primitive", count_eval)
 
     nonlinear = integrator.nonlinear_rhs(uhat)
-    u_phys = V.backward(uhat)
-    ux_phys = V.evaluate_derivative(V.mesh(), uhat, k=1)
-    expected = V.forward(-((u_phys + ux_phys) ** 2))
 
     assert jnp.allclose(nonlinear, expected, atol=1e-6, rtol=1e-6)
 
@@ -205,9 +215,50 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
         if integrator_nonlinear._is_jaxfunction_primitive(node)
     }
 
-    # Primitive evaluations are cached per unique symbolic primitive node.
-    assert len(calls) == len(primitive_orders)
-    assert sorted(calls) == sorted(primitive_orders)
+    # The derivative primitive should be evaluated once even though it appears
+    # repeatedly after expansion; the base field now uses `backward(...)`.
+    assert primitive_orders == {0, 1}
+    assert calls.count(1) == 1
+    assert calls.count(0) >= 1
+
+
+def test_rk4_solve_passes_padding_to_nonlinear_backward_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    N = 32
+    pad = 48
+    dt = 1e-3
+    steps = 2
+
+    V = FunctionSpace(
+        N, FourierSpace, domain=Domain(0.0, 2.0 * float(sp.pi)), name="V", fun_str="E"
+    )
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    (x,) = V.system.base_scalars()
+    t = V.system.base_time()
+
+    weak_form = v * (u.diff(t) + u * u.diff(x))
+    integrator = RK4(V, weak_form, time=(0.0, dt * steps), initial=sp.sin(x))
+
+    calls: list[int | None] = []
+    original_eval = integrator.functionspace.backward_primitive
+
+    def count_eval(
+        c,
+        k: int = 0,
+        kind: MeshKind = MeshKind.QUADRATURE,
+        N: int | None = None,
+    ):
+        calls.append(N)
+        return original_eval(c, k=k, kind=kind, N=N)
+
+    monkeypatch.setattr(integrator.functionspace, "backward_primitive", count_eval)
+
+    _ = integrator.solve(dt=dt, steps=steps, N=pad, progress=False)
+
+    assert calls
+    assert set(calls) == {pad}
 
 
 def test_rk4_tensorproduct_projects_symbolic_initial_condition() -> None:

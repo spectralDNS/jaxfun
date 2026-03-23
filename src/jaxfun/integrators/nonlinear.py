@@ -1,8 +1,7 @@
 """Compilation helpers for nonlinear physical-space integrator terms."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
-from math import prod
 from typing import cast
 
 import jax.numpy as jnp
@@ -11,11 +10,11 @@ from sympy.core.function import AppliedUndef
 
 from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.arguments import ArgumentTag, JAXFunction, get_arg
-from jaxfun.typing import Array, FunctionSpaceType
+from jaxfun.typing import Array, FunctionSpaceType, Padding
 from jaxfun.utils import lambdify
 
 type NodeValueCache = dict[sp.Basic, Array]
-type NodeEvaluator = Callable[[NodeValueCache], Array]
+type NodeEvaluator = Callable[[NodeValueCache, Padding], Array]
 
 
 @dataclass(frozen=True)
@@ -24,8 +23,6 @@ class NonlinearCompileContext:
 
     spatial_symbols: tuple[sp.Symbol, ...]
     functionspace: FunctionSpaceType
-    mesh: tuple[Array, ...]
-    expected_shape: tuple[int, ...]
     jaxfunction: AppliedUndef
 
 
@@ -58,7 +55,7 @@ class NonlinearCompiler:
         """Store compile-time context and initialize evaluator caches."""
         self.context = context
         self._compiled: dict[sp.Basic, NodeEvaluator] = {}
-        self._static: dict[sp.Basic, Array] = {}
+        self._static: dict[tuple[sp.Basic, Padding], Array] = {}
 
     def compile(self, expr: sp.Expr) -> NodeEvaluator:
         """Compile a nonlinear SymPy expression into a cached evaluator."""
@@ -82,8 +79,10 @@ class NonlinearCompiler:
         elif _is_jaxfunction_primitive(node):
             evaluator = self.compile_primitive(node)
         elif not _contains_jaxfunction(node):
-            value = self.get_static_value(node)
-            evaluator = lambda _cache, value=value: value
+            evaluator = self.memoize(
+                node,
+                lambda _cache, N=None, node=node: self.get_static_value(node, N),
+            )
         else:
             evaluator = self.compile_composite(node)
 
@@ -112,10 +111,11 @@ class NonlinearCompiler:
 
             def evaluate_leaf(
                 _cache: NodeValueCache,
+                N: Padding = None,
                 space: FunctionSpaceType = space,
                 jaxf: JAXFunction = jaxf,
             ) -> Array:
-                return space.backward_primitive(jaxf.array, k=0)
+                return space.backward(jaxf.array, N=N)
 
             return self.memoize(node, evaluate_leaf)
 
@@ -140,23 +140,24 @@ class NonlinearCompiler:
 
         def evaluate_derivative(
             _cache: NodeValueCache,
+            N: Padding = None,
             space: FunctionSpaceType = space,
             jaxf: JAXFunction = jaxf,
             derivative_order: int | tuple[int, ...] = derivative_order,
         ) -> Array:
-            return space.backward_primitive(jaxf.array, k=derivative_order)
+            return space.backward_primitive(jaxf.array, k=derivative_order, N=N)
 
         return self.memoize(node, evaluate_derivative)
 
     def compile_add(self, child_eval: tuple[NodeEvaluator, ...]) -> NodeEvaluator:
         """Compile an additive node."""
 
-        def evaluate(cache: NodeValueCache) -> Array:
+        def evaluate(cache: NodeValueCache, N: Padding = None) -> Array:
             if len(child_eval) == 0:
                 return jnp.asarray(0.0)
-            total = jnp.asarray(child_eval[0](cache))
+            total = jnp.asarray(child_eval[0](cache, N))
             for child in child_eval[1:]:
-                total = total + jnp.asarray(child(cache))
+                total = total + jnp.asarray(child(cache, N))
             return total
 
         return evaluate
@@ -164,12 +165,12 @@ class NonlinearCompiler:
     def compile_mul(self, child_eval: tuple[NodeEvaluator, ...]) -> NodeEvaluator:
         """Compile a multiplicative node."""
 
-        def evaluate(cache: NodeValueCache) -> Array:
+        def evaluate(cache: NodeValueCache, N: Padding = None) -> Array:
             if len(child_eval) == 0:
                 return jnp.asarray(1.0)
-            product = jnp.asarray(child_eval[0](cache))
+            product = jnp.asarray(child_eval[0](cache, N))
             for child in child_eval[1:]:
-                product = product * jnp.asarray(child(cache))
+                product = product * jnp.asarray(child(cache, N))
             return product
 
         return evaluate
@@ -182,13 +183,13 @@ class NonlinearCompiler:
 
         if isinstance(exp, sp.Number):
             exponent = int(exp) if bool(exp.is_integer) else float(exp)
-            return lambda cache, exponent=exponent: (
-                jnp.asarray(base_eval(cache)) ** exponent
+            return lambda cache, N=None, exponent=exponent: (
+                jnp.asarray(base_eval(cache, N)) ** exponent
             )
 
-        return lambda cache: jnp.power(
-            jnp.asarray(base_eval(cache)),
-            jnp.asarray(exp_eval(cache)),
+        return lambda cache, N=None: jnp.power(
+            jnp.asarray(base_eval(cache, N)),
+            jnp.asarray(exp_eval(cache, N)),
         )
 
     def compile_function(
@@ -196,14 +197,16 @@ class NonlinearCompiler:
     ) -> NodeEvaluator:
         """Compile a SymPy function node using JAX primitives when available."""
         if node.func.__name__ == "Heaviside":
-            return lambda cache: jnp.heaviside(jnp.asarray(child_eval[0](cache)), 0.5)
+            return lambda cache, N=None: jnp.heaviside(
+                jnp.asarray(child_eval[0](cache, N)), 0.5
+            )
 
         jnp_function = _JAX_FUNCTION_BY_NAME.get(node.func.__name__)
         if jnp_function is None:
             return self.compile_lambdified(node, child_eval)
 
-        def evaluate(cache: NodeValueCache) -> Array:
-            values = tuple(jnp.asarray(child(cache)) for child in child_eval)
+        def evaluate(cache: NodeValueCache, N: Padding = None) -> Array:
+            values = tuple(jnp.asarray(child(cache, N)) for child in child_eval)
             return jnp.asarray(jnp_function(*values))
 
         return evaluate
@@ -222,52 +225,46 @@ class NonlinearCompiler:
             dummies if n_args > 1 else dummies[0], expr_with_dummies, modules="jax"
         )
 
-        def evaluate(cache: NodeValueCache) -> Array:
-            values = tuple(jnp.asarray(child(cache)) for child in child_eval)
+        def evaluate(cache: NodeValueCache, N: Padding = None) -> Array:
+            values = tuple(jnp.asarray(child(cache, N)) for child in child_eval)
             if len(values) == 1:
                 return jnp.asarray(composed(values[0]))
             return jnp.asarray(composed(*values))
 
         return evaluate
 
-    def get_static_value(self, node: sp.Basic) -> Array:
+    def get_static_value(self, node: sp.Basic, N: Padding = None) -> Array:
         """Evaluate a static symbolic node once on the quadrature mesh."""
-        cached = self._static.get(node)
+        cached = self._static.get((node, N))
         if cached is not None:
             return cached
 
         evaluated = sp.sympify(sp.sympify(node).doit())
         free_symbols = evaluated.free_symbols
+        spatial_symbols = self.context.spatial_symbols
+        V = self.context.functionspace
         if len(free_symbols) == 0:
             value = float(evaluated) if evaluated.is_real else complex(evaluated)
             out = jnp.asarray(value)
-        elif free_symbols.issubset(set(self.context.spatial_symbols)):
-            symbols = self.context.spatial_symbols
-            if len(symbols) == 1:
-                sampled = lambdify(symbols[0], evaluated, modules="jax")(
-                    self.context.mesh[0]
-                )
-            else:
-                sampled = lambdify(symbols, evaluated, modules="jax")(
-                    *self.context.mesh
-                )
-            out = jnp.asarray(sampled)
+        elif free_symbols.issubset(set(spatial_symbols)):
+            # `N` has a lot of different shapes, trust the correct one is passed...
+            out = lambdify(spatial_symbols, evaluated, modules="jax")(*V.mesh(N=N))  # ty:ignore[invalid-argument-type]
         else:
             names = ", ".join(sorted(str(sym) for sym in free_symbols))
             raise ValueError(
                 f"Unsupported nonlinear term with unresolved symbols: {names}"
             )
 
-        self._static[node] = out
+        self._static[(node, N)] = out
         return out
 
     def memoize(self, node: sp.Basic, compute: NodeEvaluator) -> NodeEvaluator:
         """Wrap an evaluator so repeated subexpressions are computed once."""
 
-        def evaluate(cache: NodeValueCache) -> Array:
+        def evaluate(cache: NodeValueCache, N: Padding = None) -> Array:
             if node in cache:
                 return cache[node]
-            value = jnp.asarray(compute(cache))
+            value = jnp.asarray(compute(cache, N))
             cache[node] = value
             return value
 
@@ -311,61 +308,22 @@ def _is_jaxfunction_primitive(expr: sp.Basic) -> bool:
     return _is_jaxfunction_leaf(expr) or _is_direct_jax_derivative(expr)
 
 
-def _normalize_nonlinear_output(out: Array, expected_shape: tuple[int, ...]) -> Array:
-    """Coerce nonlinear output to the mesh shape expected by the function space."""
-    out = jnp.asarray(out)
-    if out.ndim == 0:
-        return jnp.broadcast_to(out, expected_shape)
-
-    if (
-        out.ndim == len(expected_shape) + 1
-        and out.shape[-1] == 1
-        and out.shape[:-1] == expected_shape
-    ):
-        out = jnp.squeeze(out, axis=-1)
-
-    if out.shape == expected_shape:
-        return out
-
-    if out.size == prod(expected_shape):
-        out = out.reshape(expected_shape)
-    else:
-        message = (
-            f"Nonlinear evaluation returned shape {out.shape}; "
-            f"expected {expected_shape}"
-        )
-        raise ValueError(message)
-
-    return out
-
-
-def _as_mesh_tuple(mesh: Array | Sequence[Array]) -> tuple[Array, ...]:
-    """Normalize mesh inputs to a tuple of JAX arrays."""
-    if isinstance(mesh, tuple | list):
-        return tuple(jnp.asarray(m) for m in mesh)
-    return (jnp.asarray(mesh),)
-
-
 def compile_nonlinear_evaluator(
     expr: sp.Expr,
     functionspace: FunctionSpaceType,
-    mesh: Array | tuple[Array, ...],
     jaxfunction: AppliedUndef,
-) -> Callable[[Array], Array]:
+) -> Callable[[Array, Padding], Array]:
     """Compile a nonlinear physical-space evaluator for coefficient states."""
-    mesh_tuple = _as_mesh_tuple(mesh)
-    expected_shape = jnp.broadcast_shapes(*(m.shape for m in mesh_tuple))
     context = NonlinearCompileContext(
         spatial_symbols=tuple(functionspace.system.base_scalars()),
         functionspace=functionspace,
-        mesh=mesh_tuple,
-        expected_shape=expected_shape,
         jaxfunction=jaxfunction,
     )
     compiled = NonlinearCompiler(context).compile(expr)
+    jaxfunction: JAXFunction = cast(JAXFunction, jaxfunction)
 
-    def evaluate(uh: Array) -> Array:
-        cast(JAXFunction, jaxfunction).array = uh
-        return _normalize_nonlinear_output(compiled({}), expected_shape)
+    def evaluate(uh: Array, N: Padding = None) -> Array:
+        jaxfunction.array = uh
+        return compiled({}, N)
 
     return evaluate

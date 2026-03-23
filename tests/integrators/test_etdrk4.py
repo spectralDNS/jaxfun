@@ -328,3 +328,47 @@ def test_etdrk4_2d_cahn_hilliard_compact_form_matches_expanded_form() -> None:
     assert expanded_integrator.linear_diag is not None
     assert jnp.allclose(compact_integrator.linear_diag, expanded_integrator.linear_diag)
     assert jnp.allclose(compact_step, expanded_step, atol=1e-6, rtol=1e-6)
+
+
+def test_etdrk4_tensorproduct_solve_passes_padding_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    N = 16
+    pad = 24
+    dt = 1e-3
+    steps = 2
+
+    F = FourierSpace(N, Domain(-1, 1))
+    V = TensorProductSpace((F, F), name="V")
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    x, _y = V.system.base_scalars()
+    t = V.system.base_time()
+
+    weak_form = v * (u.diff(t) + (u * u).diff(x) / 2)
+    integrator = ETDRK4(
+        V,
+        weak_form,
+        time=(0.0, dt * steps),
+        initial=sp.cos(sp.pi * x),
+        sparse=True,
+        sparse_tol=1000,
+    )
+
+    calls: list[tuple[int, ...] | None] = []
+    original_eval = integrator.functionspace.backward_primitive
+
+    def count_eval(
+        c,
+        k: int | tuple[int, ...] = 0,
+        kind: str = "quadrature",
+        N: tuple[int, ...] | None = None,
+    ):
+        calls.append(N)
+        return original_eval(c, k=k, kind=kind, N=N)
+
+    monkeypatch.setattr(integrator.functionspace, "backward_primitive", count_eval)
+    _ = integrator.solve(dt=dt, steps=steps, N=(pad, pad), progress=False)
+
+    assert calls
+    assert set(calls) == {(pad, pad)}

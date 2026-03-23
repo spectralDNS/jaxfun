@@ -16,11 +16,7 @@ from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.arguments import JAXFunction
 from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import project
-from jaxfun.typing import (
-    Array,
-    FunctionSpaceType,
-    GalerkinOperatorLike,
-)
+from jaxfun.typing import Array, FunctionSpaceType, GalerkinOperatorLike, Padding
 from jaxfun.utils import split_linear_nonlinear_terms, split_time_derivative_terms
 from jaxfun.utils.operator_tools import (
     apply_operator,
@@ -105,7 +101,7 @@ class BaseIntegrator(ABC, nnx.Module):
         self.linear_diag: Array | None = nnx.data(linear_term.diagonal)
 
         self._nonlinear_jaxfunction: AppliedUndef | None = None
-        self._nonlinear_evaluator: Callable[[Array], Array] | None = None
+        self._nonlinear_evaluator: Callable[[Array, Padding], Array] | None = None
         if self.has_nonlinear:
             self._setup_nonlinear_evaluator(trial)
 
@@ -129,10 +125,10 @@ class BaseIntegrator(ABC, nnx.Module):
 
         lhs_test, lhs_trial = get_basisfunctions(lhs)
         assert isinstance(lhs_test, TestFunction), (
-            "Currently only supports TestFunction in weak form"
+            "Currently only supports one TestFunction in weak form"
         )
         assert isinstance(lhs_trial, TrialFunction), (
-            "Currently only supports TrialFunction in weak form"
+            "Currently only supports one TrialFunction in weak form"
         )
 
         mass_expr = time_derivative_as_operator(lhs, lhs_trial, t)
@@ -140,10 +136,10 @@ class BaseIntegrator(ABC, nnx.Module):
         basis_expr = rhs if sp.sympify(rhs) != 0 else mass_expr
         test, trial = get_basisfunctions(basis_expr)
         assert isinstance(test, TestFunction), (
-            "Currently only supports TestFunction in weak form"
+            "Currently only supports one TestFunction in weak form"
         )
         assert isinstance(trial, TrialFunction), (
-            "Currently only supports TrialFunction in weak form"
+            "Currently only supports one TrialFunction in weak form"
         )
 
         linear, nonlinear = split_linear_nonlinear_terms(-rhs, trial)
@@ -160,10 +156,9 @@ class BaseIntegrator(ABC, nnx.Module):
             self.nonlinear_expr, trial, jaxfunction
         )
         self.nonlinear_expr = nonlinear_expr
-        quad_mesh = self.functionspace.mesh()
         self._nonlinear_jaxfunction = jaxfunction
         self._nonlinear_evaluator = compile_nonlinear_evaluator(
-            nonlinear_expr, self.functionspace, quad_mesh, jaxfunction
+            nonlinear_expr, self.functionspace, jaxfunction
         )
 
     def _dense_matrix(
@@ -228,12 +223,12 @@ class BaseIntegrator(ABC, nnx.Module):
             return rhs
         return solve_operator(self.mass_operator, rhs)
 
-    def nonlinear_rhs(self, uh: Array) -> Array:
+    def nonlinear_rhs(self, uh: Array, N: Padding = None) -> Array:
         """Return the nonlinear contribution in coefficient space."""
         if not self.has_nonlinear:
             return jnp.zeros_like(uh)
         assert self._nonlinear_evaluator is not None
-        return self.functionspace.forward(self._nonlinear_evaluator(uh))
+        return self.functionspace.forward(self._nonlinear_evaluator(uh, N))
 
     def linear_rhs(self, uh: Array) -> Array:
         """Return the linear contribution after applying the inverse mass matrix."""
@@ -247,13 +242,13 @@ class BaseIntegrator(ABC, nnx.Module):
             rhs = rhs + jnp.asarray(self.linear_forcing)
         return self.apply_mass_inverse(rhs)
 
-    @jax.jit(static_argnums=0)
-    def total_rhs(self, uh: Array) -> Array:
+    @jax.jit(static_argnums=(0, 2))
+    def total_rhs(self, uh: Array, N: Padding = None) -> Array:
         """Return the full semi-discrete right-hand side."""
-        return self.linear_rhs(uh) + self.nonlinear_rhs(uh)
+        return self.linear_rhs(uh) + self.nonlinear_rhs(uh, N)
 
     @abstractmethod
-    def step(self, u_hat: Array, dt: float) -> Array: ...
+    def step(self, u_hat: Array, dt: float, N: Padding = None) -> Array: ...
 
     def setup(self, dt: float) -> None:
         """Precompute step-size-dependent coefficients before time stepping."""
@@ -265,6 +260,7 @@ class BaseIntegrator(ABC, nnx.Module):
         steps: int | None = None,
         state0: Array | None = None,
         trange: tuple[float, float] | None = None,
+        N: int | tuple[int | None, ...] | None = None,
         progress: bool = True,
         n_batches: int = 100,
         return_batch_snapshots: bool = False,
@@ -277,6 +273,8 @@ class BaseIntegrator(ABC, nnx.Module):
             state0: Optional coefficient-space restart state. If omitted, use the
                 projected constructor `initial`.
             trange: Optional `(t0, t1)` override for `self.time`.
+            N: Optional physical-space padding passed through to nonlinear
+                backward evaluations.
             progress: Show a progress bar when True.
             n_batches: Number of batched integration chunks.
             return_batch_snapshots: When True, return the initial state plus one
@@ -299,7 +297,7 @@ class BaseIntegrator(ABC, nnx.Module):
             return jnp.expand_dims(u_hat, axis=0)
 
         def inner_n_steps(i: int, u_hat: Array) -> Array:
-            u_hat = self.step(u_hat, dt)
+            u_hat = self.step(u_hat, dt, N)
             return u_hat
 
         batch_count = min(n_batches, n_steps)
@@ -316,7 +314,7 @@ class BaseIntegrator(ABC, nnx.Module):
             else r_batch
         )
         for _ in iterator:
-            u_hat: Array = jax.lax.fori_loop(0, batch_len, inner_n_steps, u_hat)
+            u_hat = jax.lax.fori_loop(0, batch_len, inner_n_steps, u_hat)
             if return_batch_snapshots:
                 states.append(u_hat)
             if jnp.isnan(u_hat).any() or jnp.isinf(u_hat).any():
@@ -324,7 +322,7 @@ class BaseIntegrator(ABC, nnx.Module):
                 break
 
         if remainder and not diverged:
-            u_hat: Array = jax.lax.fori_loop(0, remainder, inner_n_steps, u_hat)
+            u_hat = jax.lax.fori_loop(0, remainder, inner_n_steps, u_hat)
             if return_batch_snapshots:
                 states.append(u_hat)
 

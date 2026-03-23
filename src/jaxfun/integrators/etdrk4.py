@@ -9,7 +9,7 @@ import sympy as sp
 from flax import nnx
 from jax.scipy.linalg import expm as _expm
 
-from jaxfun.typing import Array, FunctionSpaceType
+from jaxfun.typing import Array, FunctionSpaceType, Padding
 
 from .base import BaseIntegrator
 
@@ -153,15 +153,17 @@ class ETDRK4(BaseIntegrator):
         self.f2 = nnx.data(f2)
         self.f3 = nnx.data(f3)
 
-    def _N(self, u_hat: Array) -> Array:
+    def _N(self, u_hat: Array, N: Padding = None) -> Array:
         """Return the nonlinear-plus-forcing contribution used in ETDRK4 stages."""
         nval = (
-            self.nonlinear_rhs(u_hat) if self.has_nonlinear else jnp.zeros_like(u_hat)
+            self.nonlinear_rhs(u_hat, N)
+            if self.has_nonlinear
+            else jnp.zeros_like(u_hat)
         )
         return nval + self._forcing_rhs
 
-    @jax.jit(static_argnums=0)
-    def step(self, u_hat: Array, dt: float) -> Array:
+    @jax.jit(static_argnums=(0, 3))
+    def step(self, u_hat: Array, dt: float, N: Padding = None) -> Array:
         """Advance one ETDRK4 step in coefficient space."""
         shape = u_hat.shape
         is_diag = bool(self.is_diag)
@@ -176,13 +178,13 @@ class ETDRK4(BaseIntegrator):
             return _apply_etd_operator(op, u, is_diag)
 
         u0 = to_state(u_hat)
-        n1 = to_state(self._N(from_state(u0)))
+        n1 = to_state(self._N(from_state(u0), N))
         a = apply(self.E2, u0) + dt * apply(self.Q, n1)
-        n2 = to_state(self._N(from_state(a)))
+        n2 = to_state(self._N(from_state(a), N))
         b = apply(self.E2, u0) + dt * apply(self.Q, n2)
-        n3 = to_state(self._N(from_state(b)))
+        n3 = to_state(self._N(from_state(b), N))
         c = apply(self.E2, a) + dt * apply(self.Q, 2 * n3 - n1)
-        n4 = to_state(self._N(from_state(c)))
+        n4 = to_state(self._N(from_state(c), N))
 
         un = apply(self.E, u0) + dt * (
             apply(self.f1, n1) + 2 * apply(self.f2, n2 + n3) + apply(self.f3, n4)

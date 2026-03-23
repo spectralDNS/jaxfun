@@ -315,7 +315,7 @@ class TensorProductSpace:
         self,
         c: Array,
         kind: MeshKind = MeshKind.QUADRATURE,
-        N: tuple[int, ...] | None = None,
+        N: tuple[int | None, ...] | None = None,
     ) -> Array:
         """Jitted backward transform with optional padding."""
         dim: int = len(self)
@@ -392,42 +392,27 @@ class TensorProductSpace:
     def backward_primitive(
         self,
         c: Array,
-        k: int | tuple[int, ...] = 0,
+        k: tuple[int, ...],
         kind: MeshKind | str = MeshKind.QUADRATURE,
-        N: tuple[int, ...] | None = None,
+        N: tuple[int | None, ...] | None = None,
     ) -> Array:
         """Evaluate the field or mixed derivatives on a tensor-product mesh."""
-        if isinstance(k, int):
-            if k == 0:
-                return self.backward(c, kind=kind, N=N)
-            derivative_orders = (k,) + (0,) * (len(self) - 1)
-        else:
-            derivative_orders = k
-            if all(order == 0 for order in derivative_orders):
-                return self.backward(c, kind=kind, N=N)
-
-        if len(derivative_orders) != len(self):
-            raise ValueError(
-                "Derivative order tuple must match tensor-product dimensionality"
-            )
-
         dim: int = len(self)
         if dim == 2:
             for ax in range(dim):
                 axi: int = dim - 1 - ax
                 backward_p = partial(
                     self.basespaces[ax].backward_primitive,
-                    k=derivative_orders[ax],
+                    k=k[ax],
                     kind=kind,
                     N=self.basespaces[ax].num_quad_points if N is None else N[ax],
                 )
                 c = jax.vmap(backward_p, in_axes=axi, out_axes=axi)(c)
-
         else:
             for ax in range(dim):
                 backward_p = partial(
                     self.basespaces[ax].backward_primitive,
-                    k=derivative_orders[ax],
+                    k=k[ax],
                     kind=kind,
                     N=self.basespaces[ax].num_quad_points if N is None else N[ax],
                 )
@@ -574,7 +559,7 @@ class VectorTensorProductSpace:
         self,
         u: Array,
         kind: MeshKind = MeshKind.QUADRATURE,
-        N: tuple[tuple[int, ...], ...] | None = None,
+        N: tuple[tuple[int | None, ...], ...] | None = None,
     ) -> Array:
         """Backward transform with optional padding."""
         coeffs = []
@@ -587,9 +572,9 @@ class VectorTensorProductSpace:
     def backward_primitive(
         self,
         u: Array,
-        k: int | tuple[int, ...] = 0,
+        k: tuple[int, ...],
         kind: MeshKind | str = MeshKind.QUADRATURE,
-        N: tuple[tuple[int, ...], ...] | None = None,
+        N: tuple[tuple[int | None, ...], ...] | None = None,
     ) -> Array:
         coeffs = []
         for i, space in enumerate(self.tensorspaces):

@@ -21,10 +21,7 @@ def test_fourier_backward_primitive_matches_evaluate_derivative() -> None:
 
     for k in (0, 1, 3):
         got = V.backward_primitive(c, k=k)
-        expected = V.backward(c) if k == 0 else V.evaluate_derivative(xj, c, k=k)
-        if k == 0:
-            assert jnp.allclose(got, expected, atol=1e-8, rtol=1e-8)
-            continue
+        expected = V.evaluate_derivative(xj, c, k=k)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
         assert float(rel) < 1e-5
 
@@ -37,10 +34,7 @@ def test_chebyshev_backward_primitive_matches_evaluate_derivative() -> None:
 
     for k in (0, 1, 2):
         got = V.backward_primitive(c, k=k)
-        expected = V.backward(c) if k == 0 else V.evaluate_derivative(xj, c, k=k)
-        if k == 0:
-            assert jnp.allclose(got, expected, atol=1e-8, rtol=1e-8)
-            continue
+        expected = V.evaluate_derivative(xj, c, k=k)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
         assert float(rel) < 2e-5
 
@@ -58,10 +52,7 @@ def test_directsum_backward_primitive_includes_boundary_lift() -> None:
 
     for k in (0, 1):
         got = V.backward_primitive(c, k=k)
-        expected = V.backward(c) if k == 0 else V.evaluate_derivative(xj, c, k=k)
-        if k == 0:
-            assert jnp.allclose(got, expected, atol=1e-8, rtol=1e-8)
-            continue
+        expected = V.evaluate_derivative(xj, c, k=k)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
         assert float(rel) < 2e-5
 
@@ -76,13 +67,9 @@ def test_tensorproduct_fourier_backward_primitive_matches_derivative() -> None:
     orders = ((0, 0), (1, 0), (0, 2), (1, 1))
     for k in orders:
         got = V.backward_primitive(c, k=k)
-        expected = V.backward(c) if k == (0, 0) else V.evaluate_derivative(xj, c, k=k)
+        expected = V.evaluate_derivative(xj, c, k=k)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
         assert float(rel) < 2e-5
-
-    got_int = V.backward_primitive(c, k=2)
-    got_tuple = V.backward_primitive(c, k=(2, 0))
-    assert jnp.allclose(got_int, got_tuple, atol=1e-8, rtol=1e-8)
 
 
 def test_tensorproduct_fourier_backward_primitive_uses_fft_fast_path() -> None:

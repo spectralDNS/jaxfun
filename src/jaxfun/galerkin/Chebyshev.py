@@ -214,29 +214,6 @@ class Chebyshev(Jacobi):
         return 0.5 * uh[0] + n * jax.scipy.fft.idct(uh, n=n)
 
     @jax.jit(static_argnums=0)
-    def _differentiate_coefficients_once(self, c: Array) -> Array:
-        """Return Chebyshev coefficients for d/dX of ``sum c_n T_n(X)``."""
-        n = c.shape[0]
-        if n <= 1:
-            return jnp.zeros_like(c)
-
-        dc = jnp.zeros_like(c)
-        dc = dc.at[n - 2].set(2 * (n - 1) * c[n - 1])
-
-        if n > 2:
-
-            def body(i: int, acc: Array) -> Array:
-                k = n - 3 - i
-                value = acc[k + 2] + 2 * (k + 1) * c[k + 1]
-                return acc.at[k].set(value)
-
-            dc = jax.lax.fori_loop(0, n - 2, body, dc)
-
-        # T_0 normalization: c0 + 2 * sum_{n>0} c_n T_n in Clenshaw form.
-        dc = dc.at[0].set(0.5 * dc[0])
-        return dc
-
-    @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
         """Return Chebyshev coefficients for function values at quadrature points.
 

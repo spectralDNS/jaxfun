@@ -3,6 +3,7 @@ import pytest
 from flax import nnx
 
 from jaxfun.pinns.embeddings import Embedding, FourierEmbs, PeriodEmbs
+from jaxfun.utils.common import ulp
 
 
 def test_period_embs_values_and_shape_nontrainable():
@@ -15,7 +16,7 @@ def test_period_embs_values_and_shape_nontrainable():
     val = x[0] * 2 * jnp.pi / period
     expected = jnp.array([jnp.cos(val), jnp.sin(val), x[1]])
     assert out.shape == (3,)
-    assert jnp.allclose(out, expected, atol=1e-7)
+    assert jnp.allclose(out, expected, atol=ulp(1.0))
 
     # Period is stored as plain array when not trainable
     assert not isinstance(pe._periods["period_0"], nnx.Param)
@@ -35,7 +36,7 @@ def test_period_embs_trainable_param_and_call():
     expected = jnp.array([jnp.cos(val), jnp.sin(val), x[1]])
 
     assert out.shape == (3,)
-    assert jnp.allclose(out, expected, atol=1e-7)
+    assert jnp.allclose(out, expected, atol=ulp(2.0))
 
 
 def test_period_embs_is_periodic():
@@ -50,8 +51,8 @@ def test_period_embs_is_periodic():
     out2 = pe(x2)
     out3 = pe(x3)
 
-    assert jnp.allclose(out1, out2, atol=1e-6), "Outputs should be periodic"
-    assert jnp.allclose(out1, out3, atol=1e-6), "Outputs should be periodic"
+    assert jnp.allclose(out1, out2, atol=3 * ulp(1.0)), "Outputs should be periodic"
+    assert jnp.allclose(out1, out3, atol=3 * ulp(1.0)), "Outputs should be periodic"
 
 
 def test_fourier_embs_shape_and_batch():
@@ -87,7 +88,7 @@ def test_embedding_only_periodic_matches_period_embs():
     pe = PeriodEmbs(period=period, axis=axis, trainable=trainable)
     expected = pe(x)
     assert out.shape == expected.shape == (3,)
-    assert jnp.allclose(out, expected, atol=1e-7)
+    assert jnp.allclose(out, expected, atol=ulp(1.0))
 
 
 def test_embedding_only_fourier_matches_fourier_embs_shape():

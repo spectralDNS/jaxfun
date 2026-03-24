@@ -1,4 +1,4 @@
-from . import galerkin as galerkin, pinns as pinns
+from . import galerkin as galerkin, integrators as integrators, pinns as pinns
 from .basespace import BaseSpace as BaseSpace
 from .coordinates import CoordSys as CoordSys, get_CoordSys as get_CoordSys
 from .operators import (

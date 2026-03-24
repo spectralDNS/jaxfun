@@ -6,6 +6,7 @@ from jax.experimental import sparse
 from sympy import Expr, Symbol
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, jit_vmap
 
 from .Jacobi import Jacobi
@@ -191,7 +192,7 @@ class Chebyshev(Jacobi):
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
-        self, c: Array, kind: str = "quadrature", N: int | None = None
+        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int | None = None
     ) -> Array:
         """Return Chebyshev series evaluated at quadrature points.
 
@@ -203,13 +204,14 @@ class Chebyshev(Jacobi):
         """
         n: int = self.num_quad_points if N is None else N
 
-        if kind == "quadrature":
-            if n > len(c):
-                c = jnp.pad(c, (0, n - len(c)))
-            sign = (-1) ** jnp.arange(n)
-            uh = c * sign
-            return 0.5 * uh[0] + n * jax.scipy.fft.idct(uh, n=n)
-        return super().backward(c, kind=kind, N=n)  # Does not require padding of c
+        if MeshKind(kind) is not MeshKind.QUADRATURE:
+            return super().backward(c, kind=kind, N=n)  # Does not require padding of c
+
+        if n > len(c):
+            c = jnp.pad(c, (0, n - len(c)))
+        sign = (-1) ** jnp.arange(n)
+        uh = c * sign
+        return 0.5 * uh[0] + n * jax.scipy.fft.idct(uh, n=n)
 
     @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:

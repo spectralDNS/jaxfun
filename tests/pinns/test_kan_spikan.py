@@ -251,6 +251,7 @@ def test_flaxfunction_with_spikanspace_hidden_int():
     assert cast(Any, layer_out).kernel.shape == (V.hidden_size, V.spectral_size, 1)
 
 
+@pytest.mark.slow
 def test_comp_with_kan_and_spikan_spaces():
     rngs = nnx.Rngs(7)
     V1 = nns.KANMLPSpace(

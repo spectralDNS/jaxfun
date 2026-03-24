@@ -421,7 +421,11 @@ def process_results(
     sparse: bool,
     sparse_tol: int,
 ) -> (
-    Array | list[Array] | BCOO | tuple[list[Array] | Array | BCOO, list[Array] | Array]
+    Array
+    | list[Array]
+    | BCOO
+    | list[TPMatrix]
+    | tuple[list[Array] | Array | BCOO | list[TPMatrix], list[Array] | Array]
 ):
     """Finalize assembly results (sum terms, optional sparsify).
 
@@ -445,6 +449,7 @@ def process_results(
             aresults: BCOO = tosparse(aresults, tol=sparse_tol)
 
     if len(aresults) > 0 and dims > 1 and sparse:
+        aresults: list[TPMatrix] = cast(list[TPMatrix], aresults)
         for a0 in aresults:
             if isinstance(a0, TPMatrix):
                 a0.mats: list[BCOO] = [
@@ -728,7 +733,9 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
         return project1D(ue, V)
 
     if V.is_orthogonal:
+        assert not isinstance(V, OrthogonalSpace | Composite | DirectSum)
         uj = lambdify(V.system.base_scalars(), ue, modules="jax")(*V.mesh())
+        uj = jnp.broadcast_to(uj, V.num_dofs)
         return V.forward(uj)
 
     u = TrialFunction(V)

@@ -37,4 +37,5 @@ def test_jacobi_general_parameters():
     assert jnp.isfinite(u).all()
     # Mass matrix diagonal
     M = J.mass_matrix().todense()
-    assert jnp.allclose(M.diagonal(), J.norm_squared() / J.domain_factor)
+    expected = J.norm_squared() / J.domain_factor
+    assert jnp.allclose(M.diagonal(), expected, atol=ulp(1.0))

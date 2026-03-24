@@ -9,7 +9,7 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.galerkin.Ultraspherical import Ultraspherical
-from jaxfun.utils import ulp
+from jaxfun.utils import Domain, ulp
 
 
 # Add pytest fixtures for constants
@@ -26,6 +26,13 @@ def x(N: int) -> jnp.ndarray:
 @pytest.fixture
 def xn(x: jnp.ndarray) -> np.ndarray:
     return np.array(x)
+
+
+@pytest.fixture(
+    params=(Domain(-1, 1), Domain(-2, 2)), ids=("domain-default", "domain-mapped")
+)
+def domain(request: pytest.FixtureRequest) -> Domain:
+    return request.param
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
@@ -89,10 +96,10 @@ def test_backward_primitive(space):
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
-def test_backward_primitive_composite(space):
+def test_backward_primitive_composite(space, domain: Domain):
     N = 24
     bcs = {"left": {"D": 0}, "right": {"D": 0}}
-    D = FunctionSpace(N, space, bcs=bcs)
+    D = FunctionSpace(N, space, bcs=bcs, domain=domain)
     x = D.system.x
     f = sp.sin(x * sp.pi)
     uf = JAXFunction(f, D)
@@ -108,12 +115,18 @@ def test_backward_primitive_composite(space):
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
-def test_backward_primitive_directsum(space):
+def test_backward_primitive_directsum(space, domain: Domain):
+    from jaxfun.coordinates import x
+
     N = 24
-    bcs = {"left": {"D": -1}, "right": {"D": -1}}
-    D = FunctionSpace(N, space, bcs=bcs)
-    x = D.system.x
     f = sp.cos(x * sp.pi)
+    bcs = {
+        "left": {"D": f.subs(x, domain.lower)},
+        "right": {"D": f.subs(x, domain.upper)},
+    }
+    D = FunctionSpace(N, space, bcs=bcs, domain=domain)
+    (x,) = D.system.base_scalars()
+    f = D.system.expr_psi_to_base_scalar(f)
     uf = JAXFunction(f, D)
     du = JAXFunction(sp.diff(f, x), D.orthogonal)  # Cannot use D due to bcs
     df = D.backward_primitive(uf.array, 1)
@@ -141,15 +154,21 @@ def test_backward_primitive_2d(space):
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev, Ultraspherical))
-def test_backward_primitive_directsum_2d(space):
+def test_backward_primitive_directsum_2d(space, domain: Domain):
     from jaxfun.coordinates import x, y
 
     N = 16
     f = sp.cos(x * sp.pi) * sp.cos(y * sp.pi)
-    bcsx = {"left": {"D": f.subs(x, -1)}, "right": {"D": f.subs(x, 1)}}
-    bcsy = {"left": {"D": f.subs(y, -1)}, "right": {"D": f.subs(y, 1)}}
-    Dx = FunctionSpace(N, space, bcs=bcsx)
-    Dy = FunctionSpace(N, space, bcs=bcsy)
+    bcsx = {
+        "left": {"D": f.subs(x, domain.lower)},
+        "right": {"D": f.subs(x, domain.upper)},
+    }
+    bcsy = {
+        "left": {"D": f.subs(y, domain.lower)},
+        "right": {"D": f.subs(y, domain.upper)},
+    }
+    Dx = FunctionSpace(N, space, bcs=bcsx, domain=domain)
+    Dy = FunctionSpace(N, space, bcs=bcsy, domain=domain)
     T = TensorProduct(Dx, Dy)
     x, y = T.system.base_scalars()
     f = T.system.expr_psi_to_base_scalar(f)

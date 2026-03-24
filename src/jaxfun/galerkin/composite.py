@@ -372,7 +372,7 @@ class BCGeneric(Composite):
 
     def bnd_vals(self) -> Array:
         """Return ordered boundary values vector."""
-        return jnp.array(self.bcs.orderedvals())
+        return jnp.array(self.bcs.orderedvals(), dtype=float)
 
     @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int | None = None) -> Array:

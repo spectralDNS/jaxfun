@@ -489,8 +489,8 @@ class Jaxc(sp.Dummy):
         >>> u = TrialFunction(V, name="u")
         >>> a = inner(u * v)
         >>> assert jnp.all(b == a @ w.array)
-        >>> assert w.doit().__str__() == r'\hat{w}_{j}*T_j(x)'
-        >>> assert isinstance(w.doit().args[0], Jaxc)
+        >>> assert w.doit().__str__() == 'w(x)'
+        >>> assert w.doit(linear=True).__str__() == '_\\hat{w}_{j}*T_j(x)'
 
     Args:
         array: JAX array of coefficients.

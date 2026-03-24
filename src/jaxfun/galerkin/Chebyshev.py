@@ -364,10 +364,10 @@ def matrices(
     matrices for combinations of test index i and trial index j flags:
 
         (i, j):
-          (0,0): Diagonal mass-like matrix (norm squares).
-          (0,1): First derivative coupling (odd offsets).
+          (0,0): Diagonal mass-matrix.
+          (0,1): First derivative.
           (1,0): Transpose of (0,1).
-          (0,2): Second derivative coupling (even offsets).
+          (0,2): Second derivative.
           (2,0): Transpose of (0,2).
 
     Args:

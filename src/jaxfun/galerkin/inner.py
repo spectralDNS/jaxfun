@@ -166,7 +166,9 @@ def inner(
                 continue
             if isinstance(uf, BCGeneric) and test_space.dims == 1:
                 sign = 1 if all_linear else -1
-                bresults.append(sign * (z @ jnp.array(uf.bcs.orderedvals())))
+                bresults.append(
+                    sign * (z @ jnp.array(uf.bcs.orderedvals(), dtype=float))
+                )
                 continue
             if "linear" in coeffs and test_space.dims == 1:
                 sign = 1 if all_linear else -1

@@ -101,9 +101,9 @@ def from_cartesian(v: TensorLike) -> TensorLike:
     ... )
     >>> v = C.position_vector(True)
     >>> v
-    r*cos(theta)*R.i + r*sin(theta)*R.j
+    (r*cos(theta))*R.i + (r*sin(theta))*R.j + z*R.k
     >>> from_cartesian(v)
-    r*P.b_r + theta*P.b_theta
+    r*C.b_r + z*C.b_z
     """
     assert hasattr(v, "_sys") and isinstance(v._sys, CoordSys)
     assert v._sys.is_cartesian, "from_cartesian only defined for Cartesian tensors"

@@ -153,8 +153,8 @@ def test_directsumtps():
     bcs1 = {"left": {"D": 1}, "right": {"D": 2}}
     bcs2 = {"left": {"D": 3}, "right": {"D": 4}}
     N = (5, 6)
-    F1 = FunctionSpace(N[0], Legendre.Legendre, bcs=bcs1)
-    F2 = FunctionSpace(N[1], Legendre.Legendre, bcs=bcs2)
+    F1 = FunctionSpace(N[0], Legendre.Legendre, bcs=bcs1, domain=(-2, 2))
+    F2 = FunctionSpace(N[1], Legendre.Legendre, bcs=bcs2, domain=(-2, 2))
     assert isinstance(F1, DirectSum) and isinstance(F2, DirectSum)
     T: DirectSumTPS = cast(DirectSumTPS, TensorProduct(F1, F2))
 

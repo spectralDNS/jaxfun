@@ -1,3 +1,5 @@
+from jaxfun.typing import MeshKind as MeshKind
+
 from . import (
     Chebyshev as Chebyshev,
     Fourier as Fourier,

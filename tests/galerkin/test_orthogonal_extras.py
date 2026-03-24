@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 
-from jaxfun.galerkin import Chebyshev, Legendre
-from jaxfun.utils.common import Domain
+from jaxfun.galerkin import Chebyshev, Legendre, MeshKind
+from jaxfun.utils.common import Domain, ulp
 
 
 def test_orthogonal_mapping_and_uniform_mesh():
@@ -16,14 +16,14 @@ def test_orthogonal_mapping_and_uniform_mesh():
     for p in pts:
         val_orig = p**3 + 2 * p + 1
         val_mapped = tru.subs(symx, p)
-        assert abs(float(val_mapped) - val_orig) < 1e-8
+        assert abs(float(val_mapped) - val_orig) < ulp(100.0)
     # numeric mapping arrays
     pts = jnp.linspace(-2.0, 3.0, 6)
     Xref = jnp.array([L.map_reference_domain(p) for p in pts])
     Xtrue = jnp.array([L.map_true_domain(X) for X in Xref])
     assert jnp.allclose(Xtrue, pts)
     # uniform mesh branch
-    mesh_uniform = L.mesh(kind="uniform", N=7)
+    mesh_uniform = L.mesh(kind=MeshKind.UNIFORM, N=7)
     assert mesh_uniform.shape[0] == 7
     assert jnp.allclose(mesh_uniform, jnp.linspace(-2.0, 3.0, 7))
 
@@ -34,6 +34,6 @@ def test_chebyshev_uniform_mesh_and_reference_roundtrip():
     Xref = jnp.array([C.map_reference_domain(p) for p in pts])
     Xtrue = jnp.array([C.map_true_domain(X) for X in Xref])
     assert jnp.allclose(Xtrue, pts)
-    umesh = C.mesh(kind="uniform", N=5)
+    umesh = C.mesh(kind=MeshKind.UNIFORM, N=5)
     assert umesh.shape[0] == 5
     assert jnp.allclose(umesh, jnp.linspace(-3.0, 1.0, 5))

@@ -15,6 +15,7 @@ from scipy import sparse as scipy_sparse
 from sympy import Number
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, matmat, n
 
 from .Chebyshev import Chebyshev
@@ -174,7 +175,7 @@ class Composite(OrthogonalSpace):
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
-        self, c: Array, kind: str = "quadrature", N: int | None = None
+        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int | None = None
     ) -> Array:
         """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
@@ -420,6 +421,7 @@ class DirectSum:
         num_dofs: Free DOFs (from Composite part).
     """
 
+    is_transient = False
     is_orthogonal = False
 
     def __init__(self, a: Composite, b: BCGeneric) -> None:
@@ -455,7 +457,9 @@ class DirectSum:
         """Return underlying orthogonal basis (from homogeneous component)."""
         return self[0].orthogonal
 
-    def mesh(self, kind: str = "quadrature", N: int | None = None) -> Array:
+    def mesh(
+        self, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
+    ) -> Array:
         """Return mesh from homogeneous Composite summand."""
         return self[0].mesh(kind=kind, N=N)
 

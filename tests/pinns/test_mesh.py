@@ -16,6 +16,7 @@ from jaxfun.pinns.mesh import (
     points_along_axis,
 )
 from jaxfun.utils import leggauss
+from jaxfun.utils.common import ulp
 
 
 def _meshgrid_flatten(x, y):
@@ -87,7 +88,10 @@ def test_unitsquare_boundary_legendre_and_chebyshev_basic():
         # corners present
         corners = jnp.array([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]])
         present = jnp.array(
-            [jnp.any(jnp.all(jnp.isclose(bd_c, c), axis=1)) for c in corners]
+            [
+                jnp.any(jnp.all(jnp.isclose(bd_c, c, atol=ulp(1.0)), axis=1))
+                for c in corners
+            ]
         )
         assert jnp.all(present)
 
@@ -264,14 +268,14 @@ def test_annulus_cartesian_inside_and_boundary_uniform():
     assert pts_in.shape == (Nx * (Ny - 1), 2)
     # radii in [ri, ro]
     radii = jnp.linalg.norm(pts_in, axis=1)
-    assert jnp.all((radii + 1e-6 >= ri) & (radii - 1e-6 <= ro))
+    assert jnp.all((radii + ulp(ri) >= ri) & (radii - ulp(ro) <= ro))
 
     bd = ann.get_points(Nx, Ny, domain="boundary")
     assert bd.shape == (2 * (Ny - 1), 2)
     radii_bd = jnp.linalg.norm(bd, axis=1)
     # first Nx inner, next Nx outer
-    assert jnp.allclose(radii_bd[: Ny - 1], ri, atol=1e-6)
-    assert jnp.allclose(radii_bd[-(Ny - 1) :], ro, atol=1e-6)
+    assert jnp.allclose(radii_bd[: Ny - 1], ri, atol=ulp(ri))
+    assert jnp.allclose(radii_bd[-(Ny - 1) :], ro, atol=ulp(ro))
 
 
 # Test union property: get_all_points = get_points_inside_domain ∪ get_points_on_domain
@@ -706,7 +710,7 @@ def test_triangle_basic_sampling():
     assert jnp.all((all_pts[:, 1] >= 0.0) & (all_pts[:, 1] <= 1.0))
 
     # For triangle: x + y <= 1
-    assert jnp.all(all_pts[:, 0] + all_pts[:, 1] <= 1.0 + 1e-6)
+    assert jnp.all(all_pts[:, 0] + all_pts[:, 1] <= 1.0 + ulp(1.0))
 
 
 def test_triangle_boundary_includes_vertices():
@@ -722,7 +726,7 @@ def test_triangle_boundary_includes_vertices():
     for vertex in vertices:
         # Check if vertex is in boundary points (within tolerance)
         distances = jnp.sqrt(jnp.sum((boundary_pts - vertex) ** 2, axis=1))
-        assert jnp.any(distances < 1e-6)
+        assert jnp.any(distances < ulp(1.0))
 
 
 def test_triangle_weights():
@@ -762,7 +766,7 @@ def test_lshape_boundary_includes_corners():
     )
     for corner in expected_corners:
         distances = jnp.sqrt(jnp.sum((boundary_pts - corner) ** 2, axis=1))
-        assert jnp.any(distances < 1e-6)
+        assert jnp.any(distances < ulp(1.0))
 
 
 def test_lshape_weights():

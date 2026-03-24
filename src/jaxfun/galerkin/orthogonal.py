@@ -27,7 +27,7 @@ from jax.experimental.sparse import BCOO
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
-from jaxfun.typing import Array
+from jaxfun.typing import Array, MeshKind
 from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
 
 if TYPE_CHECKING:
@@ -180,7 +180,7 @@ class OrthogonalSpace(BaseSpace):
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
-        self, c: Array, kind: str = "quadrature", N: int | None = None
+        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int | None = None
     ) -> Array:
         """Implementation of backward transform."""
         xj = self.mesh(kind=kind, N=N)
@@ -377,21 +377,25 @@ class OrthogonalSpace(BaseSpace):
         return x
 
     @jax.jit(static_argnums=(0, 1, 2))
-    def mesh(self, kind: str = "quadrature", N: int | None = None) -> Array:
+    def mesh(
+        self, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
+    ) -> Array:
         """Return sampling mesh in true domain.
 
         Args:
             kind: 'quadrature' (default) or 'uniform'.
             N: Number of points (defaults to self.num_quad_points).
         """
-        if kind == "quadrature":
+        kind = MeshKind(kind)
+        if kind is MeshKind.QUADRATURE:
             return self.map_true_domain(self.quad_points_and_weights(N)[0])
-        assert kind == "uniform"
         a, b = self.domain
         M = N if N is not None else self.num_quad_points
         return jnp.linspace(float(a), float(b), M)
 
-    def cartesian_mesh(self, kind: str = "quadrature", N: int = 0) -> tuple[Array, ...]:
+    def cartesian_mesh(
+        self, kind: MeshKind | str = MeshKind.QUADRATURE, N: int = 0
+    ) -> tuple[Array, ...]:
         """Return physical Cartesian mesh (tuple) for current coordinate system."""
         rv = self.system._position_vector
         t = self.system.base_scalars()[0]

@@ -2,6 +2,7 @@ from jaxfun.typing import MeshKind as MeshKind
 
 from . import (
     Chebyshev as Chebyshev,
+    ChebyshevU as ChebyshevU,
     Fourier as Fourier,
     Jacobi as Jacobi,
     Legendre as Legendre,

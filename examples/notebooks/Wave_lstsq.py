@@ -1,7 +1,7 @@
 import marimo
 
-__generated_with = "0.19.8"
-app = marimo.App()
+__generated_with = "0.19.11"
+app = marimo.App(layout_file="layouts/Wave_lstsq.slides.json")
 
 
 @app.cell(hide_code=True)

@@ -6,6 +6,7 @@ import sympy as sp
 
 from jaxfun.galerkin import FunctionSpace, JAXFunction, TensorProduct
 from jaxfun.galerkin.Chebyshev import Chebyshev
+from jaxfun.galerkin.ChebyshevU import ChebyshevU
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.galerkin.Ultraspherical import Ultraspherical
@@ -77,7 +78,9 @@ def test_evaluate_basis_derivative(
     assert diff < ulp(10 ** (k + 2))
 
 
-@pytest.mark.parametrize("space", (Legendre, Chebyshev, Ultraspherical, Fourier))
+@pytest.mark.parametrize(
+    "space", (Legendre, Chebyshev, ChebyshevU, Ultraspherical, Fourier)
+)
 def test_backward_primitive(space):
     N = 16
     D = space(N)
@@ -95,7 +98,7 @@ def test_backward_primitive(space):
         assert error < jnp.sqrt(ulp(100)), error
 
 
-@pytest.mark.parametrize("space", (Legendre, Chebyshev))
+@pytest.mark.parametrize("space", (Legendre, Chebyshev, ChebyshevU))
 def test_backward_primitive_composite(space, domain: Domain):
     N = 24
     bcs = {"left": {"D": 0}, "right": {"D": 0}}
@@ -114,7 +117,7 @@ def test_backward_primitive_composite(space, domain: Domain):
         assert error < jnp.sqrt(ulp(100)), error
 
 
-@pytest.mark.parametrize("space", (Legendre, Chebyshev))
+@pytest.mark.parametrize("space", (Legendre, Chebyshev, ChebyshevU))
 def test_backward_primitive_directsum(space, domain: Domain):
     from jaxfun.coordinates import x
 
@@ -139,7 +142,9 @@ def test_backward_primitive_directsum(space, domain: Domain):
         assert error < jnp.sqrt(ulp(100)), error
 
 
-@pytest.mark.parametrize("space", (Legendre, Chebyshev, Ultraspherical, Fourier))
+@pytest.mark.parametrize(
+    "space", (Legendre, Chebyshev, ChebyshevU, Ultraspherical, Fourier)
+)
 def test_backward_primitive_2d(space):
     N = 16
     D = space(N)

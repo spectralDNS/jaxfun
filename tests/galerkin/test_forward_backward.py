@@ -4,6 +4,7 @@ import sympy as sp
 
 from jaxfun.galerkin import (
     Chebyshev,
+    ChebyshevU,
     Fourier,
     FunctionSpace,
     Jacobi,
@@ -21,6 +22,7 @@ from jaxfun.utils.common import ulp
     (
         Legendre.Legendre,
         Chebyshev.Chebyshev,
+        ChebyshevU.ChebyshevU,
         Fourier.Fourier,
         Jacobi.Jacobi,
         Ultraspherical.Ultraspherical,
@@ -30,6 +32,7 @@ def test_forward_backward(
     space: type[
         Legendre.Legendre
         | Chebyshev.Chebyshev
+        | ChebyshevU.ChebyshevU
         | Fourier.Fourier
         | Jacobi.Jacobi
         | Ultraspherical.Ultraspherical
@@ -48,6 +51,7 @@ def test_forward_backward(
     (
         Legendre.Legendre,
         Chebyshev.Chebyshev,
+        ChebyshevU.ChebyshevU,
         Jacobi.Jacobi,
         Ultraspherical.Ultraspherical,
     ),
@@ -56,6 +60,7 @@ def test_forward_backward_composite(
     space: type[
         Legendre.Legendre
         | Chebyshev.Chebyshev
+        | ChebyshevU.ChebyshevU
         | Jacobi.Jacobi
         | Ultraspherical.Ultraspherical
     ],
@@ -74,6 +79,7 @@ def test_forward_backward_composite(
     (
         Legendre.Legendre,
         Chebyshev.Chebyshev,
+        ChebyshevU.ChebyshevU,
         Fourier.Fourier,
         Jacobi.Jacobi,
         Ultraspherical.Ultraspherical,
@@ -83,6 +89,7 @@ def test_forward_backward_2d(
     space: type[
         Legendre.Legendre
         | Chebyshev.Chebyshev
+        | ChebyshevU.ChebyshevU
         | Fourier.Fourier
         | Jacobi.Jacobi
         | Ultraspherical.Ultraspherical

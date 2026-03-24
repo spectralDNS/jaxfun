@@ -4,10 +4,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from jax.experimental.sparse import BCOO
+from scipy.fft import dst as scipy_dst
 
 from jaxfun.coordinates import CartCoordSys, x, y
 from jaxfun.typing import Array, ArrayLike
 from jaxfun.utils import common
+from jaxfun.utils.common import ulp
 
 
 @pytest.mark.parametrize("x", [0.0, 1.0, -1.0, 1e-10])
@@ -103,3 +105,17 @@ def test_lambdify_basic() -> None:
     f = common.lambdify((x, y), expr)
     result = f(jnp.array([1.0, 2.0]), jnp.array([1.0, 2.0]))
     np.testing.assert_allclose(result, jnp.array([2.0, 8.0]))
+
+
+def test_dst_type2_vs_scipy() -> None:
+    x = jnp.linspace(-1.0, 1.0, 16)
+    expected = scipy_dst(np.asarray(x), type=2, norm=None)
+    result = common.dst(x, type=2)
+    assert jnp.allclose(result, jnp.asarray(expected), rtol=ulp(1000), atol=ulp(1000))
+
+
+def test_dst_type1_vs_scipy() -> None:
+    x = jnp.linspace(0.25, 2.0, 16)
+    expected = scipy_dst(np.asarray(x), type=1, norm=None)
+    result = common.dst(x, type=1)
+    assert jnp.allclose(result, jnp.asarray(expected), rtol=ulp(1000), atol=ulp(1000))

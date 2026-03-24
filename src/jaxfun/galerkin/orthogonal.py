@@ -191,7 +191,7 @@ class OrthogonalSpace(BaseSpace):
         self,
         c: Array,
         k: int = 0,
-        kind: str = "quadrature",
+        kind: MeshKind = MeshKind.QUADRATURE,
         N: int | None = None,
     ) -> Array:
         r"""Evaluate ``u(x_i)`` or ``\frac{d^k u}{dx^k}`` in physical space.
@@ -199,7 +199,8 @@ class OrthogonalSpace(BaseSpace):
         Args:
             c: Coefficients of orthogonal series (length <= self.N).
             k: Derivative order (default 0 -> function value).
-            kind: Mesh type for backward evaluation ('quadrature' or 'uniform').
+            kind: Mesh type for backward evaluation (MeshKind.QUADRATURE or
+                MeshKind.UNIFORM).
             N: Number of points. Must be >= self._num_quad_points.
         """
         N = self.num_quad_points if N is None else N
@@ -383,7 +384,8 @@ class OrthogonalSpace(BaseSpace):
         """Return sampling mesh in true domain.
 
         Args:
-            kind: 'quadrature' (default) or 'uniform'.
+            kind: Mesh type for backward evaluation (MeshKind.QUADRATURE or
+                MeshKind.UNIFORM).
             N: Number of points (defaults to self.num_quad_points).
         """
         kind = MeshKind(kind)

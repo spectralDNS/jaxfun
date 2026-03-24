@@ -4,6 +4,7 @@ import jax.numpy as jnp
 from jaxfun import Domain
 from jaxfun.galerkin import TensorProductSpace
 from jaxfun.galerkin.Chebyshev import Chebyshev
+from jaxfun.galerkin.ChebyshevU import ChebyshevU
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.utils.common import ulp
@@ -44,7 +45,7 @@ def test_directsum_backward_primitive_includes_boundary_lift() -> None:
     N = 24
     V = FunctionSpace(
         N,
-        Chebyshev,
+        ChebyshevU,
         bcs={"left": {"D": 1.0}, "right": {"D": -0.5}},
         domain=Domain(-1, 1),
     )

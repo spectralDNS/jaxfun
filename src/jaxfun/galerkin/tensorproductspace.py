@@ -128,7 +128,8 @@ class TensorProductSpace:
         """Return tensor mesh (as tuple of arrays) in true domain.
 
         Args:
-            kind: 'quadrature' or 'uniform'.
+            kind: Mesh type for backward evaluation (MeshKind.QUADRATURE or
+            MeshKind.UNIFORM).
             N: Optional per-axis counts (defaults each to space.N).
             broadcast: If True broadcast each axis array to nd-grid shape.
 
@@ -870,7 +871,7 @@ class DirectSumTPS(TensorProductSpace):
         self,
         c: Array,
         k: int | tuple[int, ...] = 0,
-        kind: MeshKind | str = MeshKind.QUADRATURE,
+        kind: MeshKind = MeshKind.QUADRATURE,
         N: tuple[int, ...] | None = None,
     ) -> Array:
         """Evaluate total (homogeneous + lifting) backward transform."""

@@ -194,3 +194,39 @@ def reverse_dict[K, V](d: dict[K, V]) -> dict[V, K]:
     if len(rev_dict) != len(d):
         raise ValueError("Cannot reverse dict with non-unique values.")
     return rev_dict
+
+
+@jax.jit(static_argnums=(1, 2, 3))
+def dst(x: Array, axis: int = -1, type: int = 2, n: int | None = None) -> Array:
+    N = x.shape[axis] if n is None else n
+    x = (
+        jnp.pad(x, [(0, N - x.shape[axis])], mode="constant")
+        if x.shape[axis] < N
+        else x
+    )
+    if type == 1:
+        # odd extension to length 2(N+1) with zero endpoints
+        pad_shape = list(x.shape)
+        pad_shape[axis] = 1
+        zeros = jnp.zeros(pad_shape, dtype=x.dtype)
+        y = jnp.concatenate([zeros, x, zeros, -jnp.flip(x, axis=axis)], axis=axis)
+
+        Y = jnp.fft.fft(y, axis=axis)
+        k = jnp.arange(N)
+        Yk = jnp.take(Y, indices=k + 1, axis=axis)
+
+        return -jnp.imag(Yk)
+
+    if type == 2:
+        # odd extension to length 2N
+        y = jnp.concatenate([x, -jnp.flip(x, axis=axis)], axis=axis)
+
+        Y = jnp.fft.fft(y, axis=axis)
+        k = jnp.arange(N)
+        # take modes 1..N and apply phase
+        Yk = jnp.take(Y, indices=k + 1, axis=axis)
+        tw = jnp.exp(-1j * jnp.pi * (k + 1) / (2 * N))
+
+        return -jnp.imag(tw * Yk)
+
+    raise ValueError(f"Unsupported dst type: {type}")

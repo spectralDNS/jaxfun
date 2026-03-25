@@ -230,6 +230,17 @@ class BaseIntegrator(ABC, nnx.Module):
         assert self._nonlinear_evaluator is not None
         return self.functionspace.forward(self._nonlinear_evaluator(uh, N))
 
+    def nonlinear_rhs_scalar_product(self, uh: Array, N: Padding = None) -> Array:
+        """Return the nonlinear contribution in coefficient space.
+
+        Do *not* apply the mass inverse to complete the forward transformation,
+        because the mass inverse may be required elsewhere.
+        """
+        if not self.has_nonlinear:
+            return jnp.zeros_like(uh)
+        assert self._nonlinear_evaluator is not None
+        return self.functionspace.scalar_product(self._nonlinear_evaluator(uh, N))
+
     def linear_rhs(self, uh: Array) -> Array:
         """Return the linear contribution after applying the inverse mass matrix."""
         rhs = jnp.zeros_like(uh)

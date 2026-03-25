@@ -11,8 +11,8 @@ from .base import BaseIntegrator
 class BackwardEuler(BaseIntegrator):
     """First-order implicit Euler for linear terms (IMEX for nonlinear terms)."""
 
-    _system_diag: Array | None = nnx.data(None)
-    _system_matrix: Array | None = nnx.data(None)
+    _system_diag: Array | None = None
+    _system_matrix: Array | None = None
 
     def setup(self, dt: float) -> None:
         """Precompute the implicit system matrix for the given step size."""
@@ -33,7 +33,7 @@ class BackwardEuler(BaseIntegrator):
         if self.linear_forcing is not None:
             rhs = rhs + dt * jnp.asarray(self.linear_forcing)
         if self.has_nonlinear:
-            rhs = rhs + dt * self.apply_mass(self.nonlinear_rhs(u_hat, N))
+            rhs = rhs + dt * self.nonlinear_rhs_scalar_product(u_hat, N)
 
         if self._system_diag is not None:
             return rhs / self._system_diag

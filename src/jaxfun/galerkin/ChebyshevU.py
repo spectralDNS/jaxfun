@@ -17,7 +17,7 @@ class ChebyshevU(Jacobi):
 
     Implements a Chebyshev basis via the Jacobi formulation with
     alpha = beta = 1/2. Provides several evaluation kernels:
-      * eval_basis_function: Single T_i evaluation (iterative).
+      * eval_basis_function: Single U_i(x) evaluation (iterative).
       * eval_basis_functions: Vectorized generation of all modes < N.
 
     The series expansion (degree N-1):
@@ -226,21 +226,17 @@ class ChebyshevU(Jacobi):
 def matrices(
     test: tuple[ChebyshevU, int], trial: tuple[ChebyshevU, int]
 ) -> sparse.BCOO | None:
-    """Sparse operator matrices between test/trial Chebyshev modes.
+    """Sparse operator matrices between test/trial ChebyshevU modes.
 
     Constructs (possibly rectangular) sparse differentiation / mass-like
     matrices for combinations of test index i and trial index j flags:
 
         (i, j):
           (0,0): Diagonal mass-matrix.
-          (0,1): First derivative.
-          (1,0): Transpose of (0,1).
-          (0,2): Second derivative.
-          (2,0): Transpose of (0,2).
 
     Args:
-        test: Tuple (v, i) with Chebyshev space v and number of derivatives i.
-        trial: Tuple (u, j) with Chebyshev space u and number of derivatives j.
+        test: Tuple (v, i) with ChebyshevU space v and number of derivatives i.
+        trial: Tuple (u, j) with ChebyshevU space u and number of derivatives j.
 
     Returns:
         jax.experimental.sparse.BCOO or None if combination unsupported.

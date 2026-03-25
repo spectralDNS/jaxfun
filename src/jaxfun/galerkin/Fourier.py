@@ -149,7 +149,7 @@ class Fourier(OrthogonalSpace):
         Returns:
             Coefficients scaled by 2π / domain_factor.
         """
-        out = jnp.fft.fft(c, norm="forward") * 2 * jnp.pi / self.domain_factor
+        out = jnp.fft.fft(c, norm="forward") * 2 * jnp.pi / float(self.domain_factor)
         if len(c) > self.N:
             return out[self.wavenumbers()]
         return out

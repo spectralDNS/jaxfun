@@ -1,6 +1,7 @@
 import jax.numpy as jnp
+import pytest
 
-from jaxfun.galerkin import Chebyshev, FunctionSpace, Legendre
+from jaxfun.galerkin import Chebyshev, ChebyshevU, FunctionSpace, JAXFunction, Legendre
 from jaxfun.galerkin.composite import (
     BCGeneric,
     BoundaryConditions,
@@ -39,9 +40,12 @@ def test_get_stencil_matrix_special_cases():
     assert set(stL2.keys()) == {0, 2, 4}
 
 
-def test_composite_and_mass_matrix():
+@pytest.mark.parametrize(
+    "space", (Legendre.Legendre, Chebyshev.Chebyshev, ChebyshevU.ChebyshevU)
+)
+def test_composite_and_mass_matrix(space):
     bcs = {"left": {"D": 0}, "right": {"D": 0}}
-    C = Composite(10, Chebyshev.Chebyshev, bcs)
+    C = Composite(10, space, bcs)
     # Mass matrix should be SPD and same shape as dim
     M = C.mass_matrix().todense()
     assert M.shape == (C.dim, C.dim)
@@ -50,18 +54,24 @@ def test_composite_and_mass_matrix():
     assert scipyM.shape[1] == C.N
 
 
-def test_bcgeneric_space():
+@pytest.mark.parametrize(
+    "space", (Legendre.Legendre, Chebyshev.Chebyshev, ChebyshevU.ChebyshevU)
+)
+def test_bcgeneric_space(space):
     bcs = {"left": {"D": 0, "N": 1}, "right": {"D": 2}}
-    B = BCGeneric(3, Legendre.Legendre, bcs)
+    B = BCGeneric(3, space, bcs)
     assert B.dim == 3
     # quad_points_and_weights should use M when N==0
     xw = B.quad_points_and_weights()
     assert xw[0].shape[0] == B.orthogonal.num_quad_points
 
 
-def test_direct_sum_evaluate_backward():
+@pytest.mark.parametrize(
+    "space", (Legendre.Legendre, Chebyshev.Chebyshev, ChebyshevU.ChebyshevU)
+)
+def test_direct_sum_evaluate_backward(space):
     bcs = {"left": {"D": 1}, "right": {"D": 2}}
-    FS = FunctionSpace(6, Legendre.Legendre, bcs=bcs)
+    FS = FunctionSpace(6, space, bcs=bcs)
     assert isinstance(FS, DirectSum)
     C, _ = FS[0], FS[1]
     c = jnp.ones(C.dim)
@@ -71,17 +81,26 @@ def test_direct_sum_evaluate_backward():
     u = jnp.ones(C.dim)
     uh = FS.backward(u)
     assert uh.shape[0] == C.num_quad_points
+    u = JAXFunction(jnp.zeros(4), FS)
+    assert u(1) == 2.0
+    assert u(-1) == 1.0
 
 
-def test_get_bc_basis():
+@pytest.mark.parametrize(
+    "space", (Legendre.Legendre, Chebyshev.Chebyshev, ChebyshevU.ChebyshevU)
+)
+def test_get_bc_basis(space):
     bcs = {"left": {"D": 0}, "right": {"N": 0}}
-    L = Legendre.Legendre(6)
+    L = space(6)
     B = get_bc_basis(BoundaryConditions(bcs), L)
     assert B.shape[0] == 2  # number of bcs
 
 
-def test_get_homogeneous():
+@pytest.mark.parametrize(
+    "space", (Legendre.Legendre, Chebyshev.Chebyshev, ChebyshevU.ChebyshevU)
+)
+def test_get_homogeneous(space):
     bcs = {"left": {"D": 1}, "right": {"N": 1}}
-    C = Composite(8, Chebyshev.Chebyshev, bcs)
+    C = Composite(8, space, bcs)
     H = C.get_homogeneous()
     assert H.bcs.is_homogeneous()

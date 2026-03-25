@@ -7,6 +7,7 @@ import sympy as sp
 
 from jaxfun.galerkin import (
     Chebyshev,
+    ChebyshevU,
     DirectSum,
     FunctionSpace,
     Legendre,
@@ -103,6 +104,7 @@ def test_tpmats_to_scipy_sparse():
     (
         Legendre.Legendre,
         Chebyshev.Chebyshev,
+        ChebyshevU.ChebyshevU,
         Ultraspherical.Ultraspherical,
     ),
 )

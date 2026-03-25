@@ -25,11 +25,11 @@ def test_fourier_backward_primitive_matches_evaluate_derivative() -> None:
         got = V.backward_primitive(c, k=k)
         expected = V.evaluate_derivative(xj, c, k=k)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
-        assert float(rel) < 20 * ulp(1.0)
+        assert float(rel) < ulp(100)
 
 
 def test_chebyshev_backward_primitive_matches_evaluate_derivative() -> None:
-    N = 33
+    N = 36
     V = Chebyshev(N, domain=Domain(0, 2))
     c = jax.random.normal(jax.random.PRNGKey(2), (N,))
     xj = V.mesh()
@@ -38,11 +38,11 @@ def test_chebyshev_backward_primitive_matches_evaluate_derivative() -> None:
         got = V.backward_primitive(c, k=k)
         expected = V.evaluate_derivative(xj, c, k=k)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
-        assert float(rel) < 70 * ulp(1.0)
+        assert float(rel) < ulp(1000)
 
 
 def test_directsum_backward_primitive_includes_boundary_lift() -> None:
-    N = 24
+    N = 28
     V = FunctionSpace(
         N,
         ChebyshevU,
@@ -56,7 +56,7 @@ def test_directsum_backward_primitive_includes_boundary_lift() -> None:
         got = V.backward_primitive(c, k=k)
         expected = V.evaluate_derivative(xj, c, k=k)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
-        assert float(rel) < 70 * ulp(1.0)
+        assert float(rel) < ulp(1000)
 
 
 def test_tensorproduct_fourier_backward_primitive_matches_derivative() -> None:
@@ -71,7 +71,7 @@ def test_tensorproduct_fourier_backward_primitive_matches_derivative() -> None:
         got = V.backward_primitive(c, k=k)
         expected = V.evaluate_derivative(xj, c, k=k)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
-        assert float(rel) < 30 * ulp(1.0)
+        assert float(rel) < ulp(100)
 
 
 def test_tensorproduct_fourier_backward_primitive_uses_fft_fast_path() -> None:

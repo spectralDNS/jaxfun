@@ -176,7 +176,7 @@ class ChebyshevU(Jacobi):
         if n > len(c):
             c = jnp.pad(c, (0, n - len(c)))
         d = dst(c, n=n, type=1)
-        return d / (2 * jnp.sin((jnp.arange(n) + 1) * jnp.pi / (n + 1)))
+        return (d / (2 * jnp.sin((jnp.arange(n) + 1) * jnp.pi / (n + 1))))[::-1]
 
     @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
@@ -205,7 +205,7 @@ class ChebyshevU(Jacobi):
         assert len(u) >= self.N, "Only truncation supported for forward transform"
         uh = u * jnp.sin(jnp.pi / (n + 1) * jnp.arange(1, n + 1))
         uh = dst(uh, n=n, type=1)
-        uh = uh * (jnp.pi / (2 * (n + 1) * self.domain_factor))
+        uh = uh * (-1) ** jnp.arange(n) * jnp.pi / (2 * (n + 1) * self.domain_factor)
         if len(u) > self.N:
             uh = uh[: self.N]
         return uh

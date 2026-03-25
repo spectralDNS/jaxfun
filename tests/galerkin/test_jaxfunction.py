@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import pytest
 import sympy as sp
@@ -215,7 +216,7 @@ def test_jaxfunction_2d_vector(space: type[OrthogonalSpace], domain: Domain | No
 
 
 def test_evaluate_derivative():
-    N = 24
+    N = 24 if jax.config.jax_enable_x64 else 16  # ty:ignore[unresolved-attribute]
     D = Legendre.Legendre(N)
     T = TensorProduct(D, D, name="T")
     x, y = T.system.base_scalars()

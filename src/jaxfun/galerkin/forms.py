@@ -150,6 +150,15 @@ def check_if_nonlinear_in_jaxfunction(a: sp.Basic) -> bool:
         return False
     assert len(jaxfunctions) <= 1, "Multiple JAXFunctions found"
     ad = a.doit(linear=True)  # assume linear
+    if ad.is_Vector:
+        for comp in ad.components.values():
+            jf = comp.atoms(Jaxc)
+            if len(jf) > 1:
+                return True
+            jf = jf.pop()
+            if sp.diff(comp, jf, 2) != 0:
+                return True
+        return False
     jf = ad.atoms(Jaxc)
     if len(jf) > 1:
         return True

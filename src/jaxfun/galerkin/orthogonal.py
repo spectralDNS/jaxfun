@@ -76,6 +76,7 @@ class OrthogonalSpace(BaseSpace):
         self.S = sparse.BCOO(
             (jnp.ones(N), jnp.vstack((jnp.arange(N),) * 2).T), shape=(N, N)
         )
+        self.S_inv: Array | None = None
         super().__init__(system, name, fun_str)
 
     @abstractmethod
@@ -424,3 +425,10 @@ class OrthogonalSpace(BaseSpace):
     def get_orthogonal(self) -> Self:
         """Return self (orthogonal space is self; overridden in Composite)."""
         return self
+
+    @jax.jit(static_argnums=0)
+    def get_inverse_stencil(self) -> Array:
+        """Return inverse of stencil matrix S."""
+        if self.S_inv is None:
+            self.S_inv = jnp.linalg.pinv(self.S.todense())
+        return self.S_inv

@@ -255,7 +255,7 @@ class Composite(OrthogonalSpace):
     @jax.jit(static_argnums=0)
     def from_orthogonal(self, a: Array) -> Array:
         """Map underlying orthogonal coefficients -> composite coefficients."""
-        return a @ jnp.linalg.pinv(self.S.todense())
+        return a @ self.get_inverse_stencil()
 
     @jax.jit(static_argnums=0)
     def apply_stencil_galerkin(self, b: Array) -> Array:

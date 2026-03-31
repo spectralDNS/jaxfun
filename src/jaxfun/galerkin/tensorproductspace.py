@@ -442,11 +442,11 @@ class TensorProductSpace:
     @jax.jit(static_argnums=0)
     def from_orthogonal(self, c: Array) -> Array:
         """Return coefficients c mapped from underlying orthogonal basis."""
-        S = [s.S.todense() for s in self.basespaces]
+        S = [s.get_inverse_stencil() for s in self.basespaces]
         dim = len(self)
         if dim == 2:
-            return jnp.linalg.pinv(S[0].T) @ c @ jnp.linalg.pinv(S[1])
-        return jnp.einsum("is,jp,kl,ijk->spl", *[jnp.linalg.pinv(s) for s in S], c)
+            return S[0].T @ c @ S[1]
+        return jnp.einsum("is,jp,kl,ijk->spl", *S, c)
 
 
 class VectorTensorProductSpace:
@@ -502,7 +502,7 @@ class VectorTensorProductSpace:
     @property
     def dims(self) -> int:
         """Return spatial dimension of each component space."""
-        return len(self.tensorspaces)
+        return len(self.tensorspaces[0])
 
     @property
     def dim(self) -> int:
@@ -1144,7 +1144,12 @@ class BlockTPMatrix:
         self.test_space = test_space
         self.trial_space = trial_space
         self.shape = (self.test_space.dim, self.trial_space.dim)
-        self.N = self.test_space.dim // self.test_space.dims
+        self.test_block_sizes = jnp.array(
+            [self.test_space[i].dim for i in range(self.test_space.dims)]
+        )
+        self.trial_block_sizes = jnp.array(
+            [self.trial_space[i].dim for i in range(self.trial_space.dims)]
+        )
 
     @jax.jit(static_argnums=0)
     def _matmul_array(self, w: Array) -> Array:
@@ -1165,9 +1170,11 @@ class BlockTPMatrix:
 
     def slice(self, indices: tuple[int, ...]) -> tuple[slice, ...]:  # ty:ignore[invalid-type-form]
         """Return slice object for block matrix indices."""
+        N = self.test_block_sizes
+        M = self.trial_block_sizes
         return (
-            slice(indices[0] * self.N, (indices[0] + 1) * self.N),
-            slice(indices[1] * self.N, (indices[1] + 1) * self.N),
+            slice(jnp.sum(N[: indices[0]]), jnp.sum(N[: indices[0] + 1])),
+            slice(jnp.sum(M[: indices[1]]), jnp.sum(M[: indices[1] + 1])),
         )
 
     def block_array(self) -> scipy_sparse.csc_matrix:

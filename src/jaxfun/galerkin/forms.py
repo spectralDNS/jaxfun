@@ -150,7 +150,19 @@ def check_if_nonlinear_in_jaxfunction(a: sp.Basic) -> bool:
         return False
     assert len(jaxfunctions) <= 1, "Multiple JAXFunctions found"
     ad = a.doit(linear=True)  # assume linear
-    jf = ad.atoms(Jaxc).pop()
+    if ad.is_Vector:
+        for comp in ad.components.values():
+            jf = comp.atoms(Jaxc)
+            if len(jf) > 1:
+                return True
+            jf = jf.pop()
+            if sp.diff(comp, jf, 2) != 0:
+                return True
+        return False
+    jf = ad.atoms(Jaxc)
+    if len(jf) > 1:
+        return True
+    jf = jf.pop()
     return sp.diff(ad, jf, 2) != 0
 
 
@@ -263,7 +275,7 @@ def split(forms: sp.Expr) -> ResultDict:
                 if arg.atoms(Jaxc):
                     jaxc.append(arg)
                     continue
-                if len(arg.free_symbols) == 1:
+                if len(arg.free_symbols) <= 1:
                     rest.append(arg)
                 else:
                     multivar.append(arg)
@@ -276,7 +288,7 @@ def split(forms: sp.Expr) -> ResultDict:
                 if len(multivar) > 0:
                     d["multivar"] = sp.Mul(*multivar)
                 if len(jfun) > 0:
-                    d["jaxfunction"] = jfun[0]
+                    d["jaxfunction"] = sp.Mul(*jfun)
                 if len(jaxc) > 0:
                     d["coeff"] = jaxc[0]
         if d is None:

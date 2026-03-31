@@ -253,6 +253,11 @@ class Composite(OrthogonalSpace):
         return a @ self.S
 
     @jax.jit(static_argnums=0)
+    def from_orthogonal(self, a: Array) -> Array:
+        """Map underlying orthogonal coefficients -> composite coefficients."""
+        return a @ self.get_inverse_stencil()
+
+    @jax.jit(static_argnums=0)
     def apply_stencil_galerkin(self, b: Array) -> Array:
         """Apply stencil on both sides (Galerkin mass-like transform)."""
         return self.S @ b @ self.S.T
@@ -439,9 +444,11 @@ class DirectSum:
         self.map_reference_domain = a.map_reference_domain
         self.map_true_domain = a.map_true_domain
         self.quad_points_and_weights = a.quad_points_and_weights
+        self.num_quad_points = a.num_quad_points
         self.get_orthogonal = a.get_orthogonal
         self.dims = a.dims
         self.rank = a.rank
+        self.domain = a.domain
 
     @overload
     def __getitem__(self, i: Literal[0]) -> Composite: ...
@@ -486,8 +493,16 @@ class DirectSum:
         """Map direct-sum coefficients -> underlying orthogonal coefficients."""
         c_a = self[0].to_orthogonal(c)
         c_b = self[1].to_orthogonal(self[1].bnd_vals())
-        Nd = c_b.shape[0]
-        return jnp.concatenate((c_a[:Nd] + c_b, c_a[Nd:]))
+        c_b = jnp.pad(c_b, (0, c_a.shape[0] - c_b.shape[0]))
+        return c_a + c_b
+
+    @jax.jit(static_argnums=0)
+    def from_orthogonal(self, a: Array) -> Array:
+        """Map underlying orthogonal coefficients -> direct-sum (inhomogeneous) coefficients."""  # noqa: E501
+        c_b = self[1].to_orthogonal(self[1].bnd_vals())
+        c_b = jnp.pad(c_b, (0, a.shape[0] - c_b.shape[0]))
+        c_a = a - c_b
+        return self[0].from_orthogonal(c_a)
 
     @jax.jit(static_argnums=0)
     def evaluate(self, x: Array, c: Array) -> Array:
@@ -512,15 +527,10 @@ class DirectSum:
         """Return backward transform for k-th derivative."""
         return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, kind, N)
 
+    @jax.jit(static_argnums=0)
     def forward(self, uj: Array) -> Array:
-        from .arguments import TestFunction, TrialFunction
-        from .inner import inner
-
-        u = TrialFunction(self)
-        v = TestFunction(self)
-        M, b = inner(v * u)
-        b += self[0].scalar_product(uj)
-        return jnp.linalg.solve(M, b)
+        a = self[0].orthogonal.forward(uj)
+        return self.from_orthogonal(a)
 
     @jax.jit(static_argnums=0)
     def scalar_product(self, uj: Array) -> Array:

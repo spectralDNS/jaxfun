@@ -786,48 +786,11 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         return self.functionspace.evaluate_mesh(x, self.array, True)
 
 
-def evaluate_jaxfunction_expr(
-    a: Basic, xj: Array | tuple[Array, ...], jaxf: JAXFunction | None = None
-) -> Array:
-    """Evaluate a symbolic JAXFunction expression on a mesh.
-
-    Input coordinates ``xj`` are always given in the physical (true) domain.
-    """
-
-    if jaxf is None:
-        from .forms import get_jaxfunctions
-
-        jaxf: set[JAXFunction] = get_jaxfunctions(a)
-        assert len(jaxf) == 1, "Single JAXFunction not found in expression."
-        jaxf: JAXFunction = jaxf.pop()
-
-    V = jaxf.functionspace
-
-    if isinstance(a, sp.Pow):
-        wa = a.args[0]
-        variables = getattr(wa, "variables", ())
-        var = tuple(int(variables.count(s)) for s in V.system.base_scalars())
-        var = var[0] if V.dims == 1 else var
-        h = V.evaluate_derivative(xj, jaxf.array, k=var)
-        return h ** int(a.exp)
-
-    if isinstance(a, sp.Derivative):
-        variables = getattr(a, "variables", ())
-        var = tuple(int(variables.count(s)) for s in V.system.base_scalars())
-        var = var[0] if V.dims == 1 else var
-        return V.evaluate_derivative(xj, jaxf.array, k=var)
-
-    if not isinstance(V, OrthogonalSpace | DirectSum):
-        return V.evaluate_mesh(xj, jaxf.array, True)
-
-    assert isinstance(xj, Array)
-    return V.evaluate(xj, jaxf.array)
-
-
 def evaluate_jaxfunction_expr_quad(
     a: Basic, jaxf: JAXFunction | None = None, N: int | tuple[int, ...] | None = None
 ) -> Array:
     """Evaluate a symbolic JAXFunction expression on the quadrature mesh."""
+    from jaxfun.integrators.nonlinear import compile_nonlinear_evaluator
 
     if jaxf is None:
         from .forms import get_jaxfunctions
@@ -837,19 +800,5 @@ def evaluate_jaxfunction_expr_quad(
         jaxf: JAXFunction = jaxf.pop()
 
     V = jaxf.functionspace
-
-    if isinstance(a, sp.Pow):
-        wa = a.args[0]
-        variables = getattr(wa, "variables", ())
-        var = tuple(int(variables.count(s)) for s in V.system.base_scalars())
-        var = var[0] if V.dims == 1 else var
-        h = V.backward_primitive(jaxf.array, k=var, N=N)
-        return h ** int(a.exp)
-
-    if isinstance(a, sp.Derivative):
-        variables = getattr(a, "variables", ())
-        var = tuple(int(variables.count(s)) for s in V.system.base_scalars())
-        var = var[0] if V.dims == 1 else var
-        return V.backward_primitive(jaxf.array, k=var, N=N)
-
-    return V.backward(jaxf.array, N=N)
+    fun = compile_nonlinear_evaluator(cast(sp.Expr, a), V, cast(AppliedUndef, jaxf))
+    return fun(jaxf.array, N)

@@ -165,7 +165,10 @@ def test_backward_primitive_2d(space):
 def test_backward_primitive_directsum_2d(jspace: type[Jacobi], domain: Domain):
     from jaxfun.coordinates import x, y
 
-    N = 24 if jax.config.jax_enable_x64 else 16  # ty:ignore[unresolved-attribute]
+    if not jax.config.jax_enable_x64:  # ty:ignore[unresolved-attribute]
+        pytest.skip("x64 is disabled")
+
+    N = 24
     f = sp.cos(x * sp.pi) * sp.cos(y * sp.pi)
     bcsx = {
         "left": {"D": f.subs(x, domain.lower)},

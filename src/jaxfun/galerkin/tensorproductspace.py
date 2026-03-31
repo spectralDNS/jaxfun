@@ -107,7 +107,12 @@ class TensorProductSpace:
     @property
     def dim(self) -> int:
         """Return total number of modes."""
-        return int(jnp.prod(jnp.array([space.dim for space in self.basespaces])))
+        return int(
+            jnp.prod(
+                jnp.array([space.dim for space in self.basespaces], dtype=int),
+                dtype=int,
+            )
+        )
 
     @property
     def num_dofs(self) -> tuple[int, ...]:
@@ -429,6 +434,15 @@ class TensorProductSpace:
     def to_orthogonal(self, c: Array) -> Array:
         """Return coefficients c mapped to underlying orthogonal basis."""
         S = [s.S.todense() for s in self.basespaces]
+        dim = len(self)
+        if dim == 2:
+            return S[0].T @ c @ S[1]
+        return jnp.einsum("is,jp,kl,ijk->spl", *S, c)
+
+    @jax.jit(static_argnums=0)
+    def from_orthogonal(self, c: Array) -> Array:
+        """Return coefficients c mapped from underlying orthogonal basis."""
+        S = [s.get_inverse_stencil() for s in self.basespaces]
         dim = len(self)
         if dim == 2:
             return S[0].T @ c @ S[1]
@@ -830,18 +844,11 @@ class DirectSumTPS(TensorProductSpace):
         """Evaluate total (homogeneous + lifting) backward transform."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind=kind, N=N)
 
+    @jax.jit(static_argnums=0)
     def forward(self, c: Array) -> Array:
         """Solve projection for homogeneous coefficients (lifting removed)."""
-        from jaxfun.galerkin import TestFunction, TrialFunction, inner
-
-        v = TestFunction(self)
-        u = TrialFunction(self)
-        A, b = inner(u * v)
-        assert not isinstance(v.functionspace, VectorTensorProductSpace), (
-            "Forward transform not implemented for vector-valued spaces"
-        )
-        b += v.functionspace.scalar_product(c)
-        return jnp.linalg.solve(A[0].mat, b.flatten()).reshape(v.functionspace.num_dofs)
+        d = self.orthogonal.forward(c)
+        return self.from_orthogonal(d)
 
     def scalar_product(self, c: Array) -> NoReturn:
         """Disabled scalar product (non-homogeneous test space)."""
@@ -897,6 +904,29 @@ class DirectSumTPS(TensorProductSpace):
                 )
             )
         return jnp.array(z).sum(axis=0)
+
+    @jax.jit(static_argnums=0)
+    def from_orthogonal(self, c: Array) -> Array:
+        """Return coefficients c mapped from underlying orthogonal basis."""
+        a: list[Array] = []
+        for f, v in self.tpspaces.items():
+            if f in self.bndvals:
+                a.append(-v.to_orthogonal(self.bndvals[f]))
+            else:
+                a.append(c)
+        z = [a[0]]
+        for ai in a[1:]:
+            z.append(
+                jnp.pad(
+                    ai,
+                    [
+                        (0, z[0].shape[0] - ai.shape[0]),
+                        (0, z[0].shape[1] - ai.shape[1]),
+                    ],
+                )
+            )
+        v = self.get_homogeneous()
+        return v.from_orthogonal(jnp.array(z).sum(axis=0))
 
 
 class TPMatrices:
@@ -1094,6 +1124,81 @@ class TensorMatrix:  # noqa: B903
 
         w = u.array if isinstance(u, JAXFunction) else u
         return self._rmatmul_array(w)
+
+
+class BlockTPMatrix:
+    """Block matrix of TPMatrix objects.
+
+    Attributes:
+        blocks: list of TPMatrix objects.
+        test_space, trial_space: VectorTensorProductSpace descriptors.
+    """
+
+    def __init__(
+        self,
+        tpmats: list[TPMatrix],
+        test_space: VectorTensorProductSpace,
+        trial_space: VectorTensorProductSpace,
+    ) -> None:
+        self.tpmats = tpmats
+        self.test_space = test_space
+        self.trial_space = trial_space
+        self.shape = (self.test_space.dim, self.trial_space.dim)
+        self.test_block_sizes = jnp.array(
+            [self.test_space[i].dim for i in range(self.test_space.dims)]
+        )
+        self.trial_block_sizes = jnp.array(
+            [self.trial_space[i].dim for i in range(self.trial_space.dims)]
+        )
+
+    @jax.jit(static_argnums=0)
+    def _matmul_array(self, w: Array) -> Array:
+        out = jnp.zeros_like(w)
+        for mat in self.tpmats:
+            indices = mat.global_indices
+            out = out.at[indices[0]].add(mat @ w[indices[1]])
+        return out
+
+    @jax.jit(static_argnums=0)
+    def mat(self) -> Array:
+        """Return explicit block matrix (dense)."""
+        out = jnp.zeros(self.shape)
+        for m in self.tpmats:
+            indices = m.global_indices
+            out = out.at[self.slice(indices)].add(m.mat)
+        return out
+
+    def slice(self, indices: tuple[int, ...]) -> tuple[slice, ...]:  # ty:ignore[invalid-type-form]
+        """Return slice object for block matrix indices."""
+        N = self.test_block_sizes
+        M = self.trial_block_sizes
+        return (
+            slice(jnp.sum(N[: indices[0]]), jnp.sum(N[: indices[0] + 1])),
+            slice(jnp.sum(M[: indices[1]]), jnp.sum(M[: indices[1] + 1])),
+        )
+
+    def block_array(self) -> scipy_sparse.csc_matrix:
+        out = [
+            [None for _ in range(self.trial_space.dims)]
+            for _ in range(self.test_space.dims)
+        ]
+        for m in self.tpmats:
+            indices = m.global_indices
+            out[indices[0]][indices[1]] = scipy_sparse.kron(
+                m.mats[0], m.mats[1], format="csc"
+            )
+        return scipy_sparse.block_array(out).tocsc()
+
+    def __call__(self, u: Array | JAXFunction) -> Array:
+        """Apply block matrix to coefficient array u."""
+        from jaxfun.galerkin import JAXFunction
+
+        w = u.array if isinstance(u, JAXFunction) else u
+        return self._matmul_array(w)
+
+    def solve(self, b: Array) -> Array:
+        M = self.block_array()
+        return scipy_sparse.linalg.spsolve(M, b.ravel()).reshape(b.shape)
 
 
 def tpmats_to_scipy_sparse(

@@ -1,5 +1,4 @@
 import jax.numpy as jnp
-import numpy as np
 import pytest
 import sympy as sp
 
@@ -9,23 +8,8 @@ from jaxfun.galerkin.ChebyshevU import ChebyshevU
 from jaxfun.galerkin.inner import project
 from jaxfun.galerkin.Jacobi import Jacobi
 from jaxfun.galerkin.Legendre import Legendre
+from jaxfun.galerkin.Ultraspherical import Ultraspherical
 from jaxfun.utils import Domain, ulp
-
-
-# Add pytest fixtures for constants
-@pytest.fixture
-def N() -> int:
-    return 10
-
-
-@pytest.fixture
-def x(N: int) -> jnp.ndarray:
-    return jnp.linspace(-1, 1, N + 1)
-
-
-@pytest.fixture
-def xn(x: jnp.ndarray) -> np.ndarray:
-    return np.array(x)
 
 
 @pytest.fixture(
@@ -36,8 +20,8 @@ def domain(request: pytest.FixtureRequest) -> Domain:
 
 
 @pytest.fixture(
-    params=(Legendre, Chebyshev, ChebyshevU, Jacobi),
-    ids=("Legendre", "Chebyshev", "ChebyshevU", "Jacobi"),
+    params=(Legendre, Chebyshev, ChebyshevU, Jacobi, Ultraspherical),
+    ids=("Legendre", "Chebyshev", "ChebyshevU", "Jacobi", "Ultraspherical"),
 )
 def jspace(request: pytest.FixtureRequest) -> type[Jacobi]:
     return request.param

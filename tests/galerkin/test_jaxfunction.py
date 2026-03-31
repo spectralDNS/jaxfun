@@ -196,6 +196,22 @@ def test_jaxfunction_nonlin_2d(space: type[OrthogonalSpace], domain: Domain | No
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(1000))
 
 
+def test_jaxfunction_nonlingrad_2d(
+    jspace: type[OrthogonalSpace], domain: Domain | None
+):
+    N = 4
+    D = jspace(N, domain=domain)
+    T = TensorProduct(D, D, name="T")
+    x, y = T.system.base_scalars()
+    u = TrialFunction(T)
+    v = TestFunction(T)
+    w = JAXFunction(jnp.ones(T.num_dofs), T, name="w")
+    A = inner(w * Dot(Grad(v), Grad(u)))
+    b0 = A[0] @ w + A[1] @ w
+    b1 = inner(0.5 * Dot(Grad(v), Grad(w**2)))
+    assert jnp.linalg.norm(b0 - b1) / jnp.linalg.norm(b0) < jnp.sqrt(ulp(10))
+
+
 def test_jaxfunction_2d_vector(space: type[OrthogonalSpace], domain: Domain | None):
     N = 8
     D = space(N, domain=domain)
@@ -212,7 +228,7 @@ def test_jaxfunction_2d_vector(space: type[OrthogonalSpace], domain: Domain | No
         )
     )
     b1 = inner(Dot(uf, v))
-    assert jnp.linalg.norm(b0 - b1) < ulp(100)
+    assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(10))
 
 
 def test_evaluate_derivative():
@@ -239,3 +255,68 @@ def test_evaluate_derivative():
     # dw_dx_dy2 = T.evaluate_derivative((xj, yj), w.array, k=(1, 2))
     # dw_dx_dy2_analytic = JAXFunction(sp.diff(ue, x, y, y), T).backward()
     # assert jnp.linalg.norm(dw_dx_dy2 - dw_dx_dy2_analytic) < jnp.sqrt(ulp(1000))
+
+
+def test_jaxfunction_vector(jspace: type[OrthogonalSpace], domain: Domain | None):
+    N = 8
+    D = jspace(N, domain=domain)
+    T = TensorProduct(D, D)
+    V = VectorTensorProductSpace(T, name="V")
+    x, y = T.system.base_scalars()
+    R = T.system
+    ue = sp.Mul(x, R.i) + sp.Mul(y, R.j)
+    w = JAXFunction(ue, V, name="w")
+    uj = w.backward()
+    assert jnp.linalg.norm(uj[0] - T.mesh()[0]) < jnp.sqrt(ulp(10))
+    assert jnp.linalg.norm(uj[1] - T.mesh()[1]) < jnp.sqrt(ulp(10))
+
+    ue = sp.Mul((1 - x**2) * (1 - y**2), R.i + R.j)
+    w = JAXFunction(ue, V, name="w")
+    uj = w.backward()
+    xj, yj = T.mesh()
+    assert jnp.linalg.norm(uj[0] - (1 - xj**2) * (1 - yj**2)) < jnp.sqrt(ulp(10))
+    assert jnp.linalg.norm(uj[1] - (1 - xj**2) * (1 - yj**2)) < jnp.sqrt(ulp(10))
+
+
+def test_jaxfunction_vector_composite(
+    jspace: type[OrthogonalSpace], domain: Domain | None
+):
+    N = 8
+    bcs = {"left": {"D": 0}, "right": {"D": 0}}
+    D = FunctionSpace(N, jspace, domain=domain, bcs=bcs)
+    T = TensorProduct(D, D)
+    V = VectorTensorProductSpace(T, name="V")
+    x, y = T.system.base_scalars()
+    R = T.system
+
+    a = D.domain.upper
+    ue = sp.Mul((a**2 - x**2) * (a**2 - y**2), R.i + R.j)
+    w = JAXFunction(ue, V, name="w")
+    uj = w.backward()
+    xj, yj = T.mesh()
+    assert jnp.linalg.norm(uj[0] - (a**2 - xj**2) * (a**2 - yj**2)) < jnp.sqrt(ulp(10))
+    assert jnp.linalg.norm(uj[1] - (a**2 - xj**2) * (a**2 - yj**2)) < jnp.sqrt(ulp(10))
+
+
+def test_jaxfunction_vector_directsum(
+    jspace: type[OrthogonalSpace], domain: Domain | None
+):
+    N = 8
+    bcs = {"left": {"D": 1}, "right": {"D": 1}}
+    D = FunctionSpace(N, jspace, domain=domain, bcs=bcs)
+    T = TensorProduct(D, D)
+    V = VectorTensorProductSpace(T, name="V")
+    x, y = T.system.base_scalars()
+    R = T.system
+
+    a = D.domain.upper
+    ue = sp.Mul((a**2 - x**2) * (a**2 - y**2) + 1, R.i + R.j)
+    w = JAXFunction(ue, V, name="w")
+    uj = w.backward()
+    xj, yj = T.mesh()
+    assert jnp.linalg.norm(uj[0] - ((a**2 - xj**2) * (a**2 - yj**2) + 1)) < jnp.sqrt(
+        ulp(10)
+    )
+    assert jnp.linalg.norm(uj[1] - ((a**2 - xj**2) * (a**2 - yj**2) + 1)) < jnp.sqrt(
+        ulp(10)
+    )

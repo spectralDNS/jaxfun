@@ -270,7 +270,7 @@ class Chebyshev(Jacobi):
         N: int = c.shape[0] - 1
         x0: Array = jnp.array(0.0, dtype=float)
         if N == 0:
-            return x0
+            return jnp.array([x0])
         x1: Array = c[-1] * N * 2
         if N == 1:
             return jnp.array([x1, x0])
@@ -282,7 +282,7 @@ class Chebyshev(Jacobi):
             x2 = 2 * (n + 1) * c[n + 1] + x0
             return (x1, x2), x2
 
-        _, xs = jax.lax.scan(inner_loop, (x0, x1), jnp.arange(N - 2, -1, -1))
+        xs = jax.lax.scan(inner_loop, (x0, x1), jnp.arange(N - 2, -1, -1))[1]
         return jnp.concatenate(
             (jnp.array([xs[-1] / 2]), xs[-2::-1], jnp.array([x1, x0]))
         )

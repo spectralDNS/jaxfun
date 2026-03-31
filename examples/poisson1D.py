@@ -12,8 +12,6 @@ from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev as space
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
-
-# from jaxfun.Jacobi import Jacobi as space
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -28,7 +26,8 @@ x = D.system.x  # use the same coordinate as u and v
 ue = 1 - x**2  # * sp.exp(sp.cos(2 * sp.pi * x))
 
 # A = inner(v*sp.Derivative(u, x, 2), sparse=True)
-# A = inner(-Dot(Grad(v), Grad(u)), sparse=True)
+# A = inner(-Dot(sp.sqrt(1-x**2)*Grad(v/sp.sqrt(1-x**2)), Grad(u)), sparse=True) # Cheb
+# A = inner(-Dot(Grad(v), Grad(u)), sparse=True) # Legendre
 # A = inner(v*Div(Grad(u)), sparse=True)
 # b = inner(v*sp.Derivative(ue, x, 2))
 A, b = inner(

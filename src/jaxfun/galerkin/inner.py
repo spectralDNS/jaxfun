@@ -6,6 +6,7 @@ import sympy as sp
 from jax import Array
 from jax.experimental.sparse import BCOO
 
+from jaxfun.galerkin import JAXFunction
 from jaxfun.typing import TrialSpaceType
 from jaxfun.utils.common import lambdify, matmat, tosparse
 
@@ -28,6 +29,7 @@ from .forms import (
 )
 from .orthogonal import OrthogonalSpace
 from .tensorproductspace import (
+    BlockTPMatrix,
     DirectSumTPS,
     TensorMatrix,
     TensorProductSpace,
@@ -160,6 +162,7 @@ def inner(
 
             if isinstance(z, tuple):  # multivar
                 mats.append((z, global_indices))
+                sc = 1
                 continue
 
             if z.size == 0:
@@ -202,7 +205,6 @@ def inner(
                 scales.append(
                     evaluate_jaxfunction_expr_quad(a0["jaxfunction"], N=num_quad_points)
                 )
-
             Am = assemble_multivar(mats_, scales, test_space)
             if has_bcs:
                 sign = 1 if all_linear else -1
@@ -224,7 +226,6 @@ def inner(
                     bresults.append(vectorize_bresult(res, test_space, gi[0][0]))
 
                 if "bilinear" in coeffs:
-                    assert coeffs["bilinear"] == 1
                     assert isinstance(trial_space, TensorProductSpace)
                     aresults.append(
                         TensorMatrix(
@@ -312,6 +313,7 @@ def inner(
             sc = sc * (-1)
 
         bs = []
+
         for key, bi in b0.items():
             if key in ("coeff", "multivar", "jaxfunction"):
                 continue
@@ -346,16 +348,17 @@ def inner(
             if isinstance(bs[0], tuple):
                 assert isinstance(num_quad_points, tuple)
                 # multivar or JAXFunction
+                uj = jnp.array(1.0)
                 if "multivar" in b0:
                     s = test_space.system.base_scalars()
-                    uj = lambdify(s, b0["multivar"], modules="jax")(
+                    uj *= lambdify(s, b0["multivar"], modules="jax")(
                         *test_space.mesh(N=num_quad_points)
                     )
-                elif "jaxfunction" in b0:
-                    uj = evaluate_jaxfunction_expr_quad(
+                if "jaxfunction" in b0:
+                    uj *= evaluate_jaxfunction_expr_quad(
                         b0["jaxfunction"], N=num_quad_points
                     )
-                else:
+                if "jaxfunction" not in b0 and "multivar" not in b0:
                     raise ValueError("Expected multivar or jaxfunction key in b0")
                 res = bs[0][0].T @ uj @ bs[1][0]
                 bresults.append(vectorize_bresult(res, test_space, global_index))
@@ -683,7 +686,7 @@ def assemble_multivar(
         test_space: Tensor product space (for mesh / variable order).
 
     Returns:
-        Dense matrix of shape (i*j, k*l) assembled from factors.
+        Dense matrix of shape (i, k, j, l) assembled from factors.
     """
     P0, P1 = mats[0]
     P2, P3 = mats[1]
@@ -730,18 +733,44 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
     Returns:
         Coefficient array shaped to V.num_dofs.
     """
+    from scipy import sparse as scipy_sparse
+
+    from jaxfun.operators import Dot
+
     if V.dims == 1:
         assert isinstance(V, OrthogonalSpace | Composite | DirectSum)
         return project1D(ue, V)
 
-    if V.is_orthogonal:
+    if len(get_jaxfunctions(ue)) == 0:
         assert not isinstance(V, OrthogonalSpace | Composite | DirectSum)
-        uj = lambdify(V.system.base_scalars(), ue, modules="jax")(*V.mesh())
-        uj = jnp.broadcast_to(uj, V.num_dofs)
+        if V.rank == 0:
+            uj = lambdify(V.system.base_scalars(), ue, modules="jax")(*V.mesh())
+            uj = jnp.broadcast_to(uj, V.num_quad_points)
+        elif V.rank == 1:
+            assert isinstance(V, VectorTensorProductSpace)
+            s = V.system.base_scalars()
+            bv = V.system.base_vectors()
+            uj = (lambdify(s, Dot(ue, n).doit())(*V.mesh()) for n in bv)
+            uj = jnp.stack(
+                [jnp.broadcast_to(ui, V.tensorspaces[0].num_quad_points) for ui in uj],
+                axis=0,
+            )
         return V.forward(uj)
 
     u = TrialFunction(V)
     v = TestFunction(V)
-    M, b = inner(v * (u - ue))
-    uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(V.num_dofs)
+    if V.rank == 0:
+        M, b = inner(v * (u - ue))
+        uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(V.num_dofs)
+
+    elif V.rank == 1:
+        assert isinstance(ue, sp.Mul | sp.Add | JAXFunction), (
+            "Projection requires unevaluated expressions"
+        )  # noqa: E501
+        assert isinstance(V, VectorTensorProductSpace)
+        M, b = inner(Dot(v, (u - ue)))
+        A = BlockTPMatrix(M, V, V)
+        C = A.block_array()
+        uh = jnp.array(scipy_sparse.linalg.spsolve(C, b.ravel()).reshape(b.shape))
+
     return uh

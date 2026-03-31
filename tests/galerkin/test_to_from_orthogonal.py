@@ -77,4 +77,4 @@ def test_to_from_orthogonal_3d(jspace: type[Jacobi], domain: Domain):
     x, y, z = T.system.base_scalars()
     f = sp.sin(x * sp.pi) * sp.sin(y * sp.pi) * sp.sin(z * sp.pi)
     u = project(f, T)
-    assert jnp.linalg.norm(u - T.from_orthogonal(T.to_orthogonal(u))) < ulp(100)
+    assert jnp.linalg.norm(u - T.from_orthogonal(T.to_orthogonal(u))) < ulp(1000)

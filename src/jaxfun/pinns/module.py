@@ -370,7 +370,7 @@ class MLP(BaseModule):
                 for i in range(len(hidden_size))
             )
             if isinstance(V.hidden_size, list | tuple)
-            else []
+            else nnx.List([])
         )
         self.linear_out = linlayer(
             hidden_size[-1],
@@ -382,7 +382,7 @@ class MLP(BaseModule):
             dtype=float,
         )
         self.act_fun = (
-            [V.act_fun] * (len(self.hidden) + 1) + [lambda x: x]
+            nnx.List([V.act_fun] * (len(self.hidden) + 1) + [lambda x: x])
             if isinstance(V.act_fun, Callable)
             else V.act_fun
         )

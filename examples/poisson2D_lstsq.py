@@ -22,6 +22,7 @@ print("JAX running on", jax.devices()[0].platform.upper())
 # V = PirateSpace(
 #    [20], dims=2, rank=0, name="V", act_fun=nnx.tanh, act_fun_hidden=nnx.swish
 # )
+# V = MLPSpace([12], dims=2, name="V")
 C = FunctionSpace(10, Chebyshev, domain=(-1, 1), name="C")
 V = TensorProduct(C, C, name="V")
 w = FlaxFunction(V, name="w", rngs=nnx.Rngs(1001))
@@ -29,6 +30,7 @@ w = FlaxFunction(V, name="w", rngs=nnx.Rngs(1001))
 N = 32
 mesh = Rectangle(-1, 1, -1, 1)
 points = C.__class__.__name__.lower()
+# points = "random"
 xyi = mesh.get_points(N, N, domain="inside", kind=points)
 xyb = mesh.get_points(N, N, domain="boundary", kind=points)
 wi = mesh.get_weights(N, N, domain="inside", kind=points)

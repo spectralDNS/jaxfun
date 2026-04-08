@@ -529,8 +529,7 @@ class ResidualVPINN(Residual):
         Js: dict[tuple[int, int, int], Array] | None = None,
         x_id: int | None = None,
     ) -> Array:
-        target = jnp.atleast_1d(jnp.array(self.target))
-        rk = self(self.x, target, module, Js=Js, x_id=x_id)
+        rk = self(self.x, self.target, module, Js=Js, x_id=x_id)
         return (rk.sum(axis=0) ** 2).mean()  # slower
         # return (
         #    jnp.array(

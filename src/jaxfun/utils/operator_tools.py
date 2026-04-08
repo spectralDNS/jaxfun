@@ -7,12 +7,10 @@ import jax.numpy as jnp
 import sympy as sp
 from jax.experimental.sparse import BCOO
 
-from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
 from jaxfun.typing import (
     Array,
-    FunctionSpaceType,
     GalerkinAssembledForm,
     GalerkinOperator,
     GalerkinOperatorLike,
@@ -191,22 +189,3 @@ def assemble_linear_term(
         forcing=forcing,
         diagonal=operator_diagonal(operator),
     )
-
-
-def assemble_mass_term(
-    V: FunctionSpaceType, *, sparse: bool, sparse_tol: int
-) -> AssembledTerm:
-    """Assemble the canonical mass term ``<v, u>`` for a function space."""
-    v = TestFunction(V)
-    u = TrialFunction(V)
-    mass_form = cast(
-        GalerkinAssembledForm, inner(v * u, sparse=sparse, sparse_tol=sparse_tol)
-    )
-    operator, forcing = split_operator_and_forcing(mass_form)
-    if forcing is not None:
-        raise NotImplementedError("Mass assembly returned forcing, unsupported for now")
-
-    diagonal = operator_diagonal(operator)
-    if diagonal is not None:
-        return AssembledTerm(diagonal=diagonal)
-    return AssembledTerm(operator=operator)

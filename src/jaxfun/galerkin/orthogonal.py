@@ -412,16 +412,6 @@ class OrthogonalSpace(BaseSpace):
         """Return number of spatial dimensions (always 1)."""
         return 1
 
-    def get_padded(self, N: int) -> Self:
-        """Return new instance with padded/truncated number of modes N."""
-        return self.__class__(
-            N,
-            domain=self.domain,
-            system=self.system,
-            name=self.name + "p",
-            fun_str=self.fun_str + "p",
-        )
-
     def get_orthogonal(self) -> Self:
         """Return self (orthogonal space is self; overridden in Composite)."""
         return self

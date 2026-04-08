@@ -366,7 +366,6 @@ def train(
 
     if isinstance(loss_fn, Loss):
         loss_with_gw = loss_fn.loss_with_gw
-
         JTJ_with_gw = loss_fn.JTJ
 
     else:

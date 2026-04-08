@@ -601,7 +601,7 @@ def process_input(*fs, residuals=None) -> tuple[Residual | ResidualVPINN, ...]:
     return tuple(residuals)
 
 
-class Loss(nnx.Module):
+class Loss:
     r"""Loss function
 
     Computes the total loss over several equations, all defined at their
@@ -699,14 +699,12 @@ class Loss(nnx.Module):
             >>> loss_fn = Loss((eq, xj), (u, xb, 0, 10))
         """
 
-        self.residuals = nnx.List(process_input(*fs, residuals=[]))
+        self.residuals = process_input(*fs, residuals=[])
 
         # Store the unique collocation points and their order for later use
         xs = {str(id(eq.x)): eq.x for eq in self.residuals}
         x_keys = tuple(xs.keys())
-        self.x_ids = nnx.static(
-            tuple(x_keys.index(str(id(eq.x))) for eq in self.residuals)
-        )
+        self.x_ids = tuple(x_keys.index(str(id(eq.x))) for eq in self.residuals)
         # use indices into xs (0, 1, ...) as keys instead of id(x)
         for i, eq in enumerate(self.residuals):
             eq.keys = frozenset(
@@ -749,7 +747,7 @@ class Loss(nnx.Module):
         """
         Js = self._compute_gradients(module)
         return [
-            eq(eq.x, module, Js=Js, x_id=x_id)
+            eq(eq.x, eq.target, module, Js=Js, x_id=x_id)
             for i, (eq, x_id) in enumerate(zip(self.residuals, self.x_ids, strict=True))
         ]
 

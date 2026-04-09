@@ -361,7 +361,7 @@ def train(
             processes each epoch.
 
     Returns:
-        A function (module, optimizer, gw, x, target) -> loss suitable for epoch loops.
+        A function (module, optimizer, gw) -> loss suitable for epoch loops.
     """
 
     if isinstance(loss_fn, Loss):
@@ -470,14 +470,13 @@ class Trainer:
             loss_fn: Loss function / object (Loss instance) to optimize.
         """
         assert isinstance(loss_fn, Loss), "Trainer requires an Loss loss function"
-        self.loss_fn: Loss = loss_fn
+        self.loss_fn = loss_fn
         self.global_weights: Array = jnp.ones(len(self.loss_fn.residuals), dtype=float)
         if jax.local_device_count() > 1 and loss_fn.local_mesh is not None:
             self.global_weights: Array = jax.device_put(
                 self.global_weights,
                 NamedSharding(loss_fn.local_mesh, P()),
             )
-        self.epoch = 0
 
     def reset_global_weights(self) -> None:
         self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)

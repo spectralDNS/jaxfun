@@ -570,7 +570,6 @@ class Trainer:
         allow_early_break = abs_limit_loss > 0 or abs_limit_change > 0
         loss_old = 1.0
         loss = 0.0
-        # xs, targets = self.loss_fn.args  # Extract points and targets for tracing
         self.losses = []
         for epoch in range(1, num + 1):
             loss = train_step(module, opt, self.global_weights)

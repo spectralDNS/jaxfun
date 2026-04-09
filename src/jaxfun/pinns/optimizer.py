@@ -593,7 +593,6 @@ class Trainer:
             if allreduce_module_freq > 0 and epoch % allreduce_module_freq == 0:
                 self.allreduce(module)
 
-            self.epoch = epoch
             self.losses.append(loss)
 
         if print_final_loss and rank == 0:

@@ -498,7 +498,6 @@ class Trainer:
                 self.global_weights,
                 NamedSharding(loss_fn.local_mesh, P()),
             )
-        self.epoch = 0
 
     def reset_global_weights(self) -> None:
         self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)

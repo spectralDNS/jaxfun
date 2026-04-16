@@ -139,7 +139,7 @@ def _process_input_arrays(
     return tuple(_newarrays)
 
 
-class Residual:
+class Residual(nnx.Pytree):
     r"""Residual of a single equation
 
     Regular least squares residual defined at collocation points. The residual
@@ -229,7 +229,7 @@ class Residual:
                     keys.add((id(x), mod_id, 0))
 
         self.eqs: tuple[ResidualFn, ...] = tuple(eqs)
-        self.keys: set[tuple[int, int, int]] = keys
+        self.keys: frozenset[tuple[int, int, int]] = frozenset(keys)
 
     def __call__(
         self,
@@ -251,11 +251,7 @@ class Residual:
         self.x = x
         self.target = self._compute_target(x)
 
-    def _compute_target(
-        self,
-        x: Array,
-        weights: Array | None = None,
-    ) -> Array:
+    def _compute_target(self, x: Array) -> Array:
         t_expr = self.target_expr
         s = self.base_scalars
         if len(t_expr.free_symbols) > 0:
@@ -442,17 +438,18 @@ class ResidualVPINN(Residual):
                 t_split.append((ta, 0))
             else:
                 raise ValueError("Could not parse target expression")
-        self.t_split = t_split
+        self.t_split = nnx.List(t_split)
 
         # Add all terms with the same test function derivative count
         t_v = {}
         for tn, tv in t_split:
+            tv = str(tv)
             if tv not in t_v:
                 t_v[tv] = []
             t_v[tv].append(tn)
         for tv, tn in t_v.items():
             t_v[tv] = sp.Add(*tn)
-        self.target_dict: dict[int, sp.Expr] = t_v
+        self.target_dict = nnx.Dict(t_v)
 
         # Build list of equations and all required evaluations of flaxfunctions
         eqs: list[tuple[ResidualFn, int]] = []
@@ -474,7 +471,7 @@ class ResidualVPINN(Residual):
                 if get_arg(p) is ArgumentTag.JAXFUNC:
                     keys.add((id(x), mod_id, 0))
         self.eqs: tuple[tuple[ResidualFn, int], ...] = tuple(eqs)
-        self.keys: set[tuple[int, int, int]] = keys
+        self.keys: frozenset[tuple[int, int, int]] = frozenset(keys)
 
         if weights.sharding != x.sharding and jax.local_device_count() > 1:
             if len(weights.shape) > 0 and weights.shape[0] == x.shape[0]:
@@ -484,18 +481,20 @@ class ResidualVPINN(Residual):
 
         # Compute both the test functions (all derivatives needed)
         # and the target stored in target_dict.
-        self.TD = self._compute_test_function(x)
+        self.TD = nnx.Dict(self._compute_test_function(x))
         self.target = self._compute_target(x, weights)
         self.x, self.weights = x, weights
 
-    def _compute_test_function(self, x: Array) -> dict[int, Array]:
+    def _compute_test_function(self, x: Array) -> dict[str, Array]:
         # The test functions should be evaluated once per derivative count
         # FIXME: only implemented for 1D currently
         assert not isinstance(self.V, TensorProductSpace | VectorTensorProductSpace), (
             "Only implemented for 1D spaces currently"
         )
         TD = {
-            k: self.V.evaluate_basis_derivative(self.V.map_reference_domain(x[:, 0]), k)
+            k: self.V.evaluate_basis_derivative(
+                self.V.map_reference_domain(x[:, 0]), int(k)
+            )
             for k in self.target_dict
         }
         return TD
@@ -539,7 +538,7 @@ class ResidualVPINN(Residual):
                 sum(
                     [
                         (
-                            self.TD[k].T
+                            self.TD[str(k)].T
                             @ (self.weights * eq(x, module, Js=Js, x_id=x_id))
                         )
                         for eq, k in self.eqs
@@ -564,7 +563,7 @@ class ResidualVPINN(Residual):
             sum(
                 [
                     (
-                        self.TD[k]
+                        self.TD[str(k)]
                         * (self.weights * eq(x, module, Js=Js, x_id=x_id))[:, None]
                     )
                     for eq, k in self.eqs
@@ -709,11 +708,15 @@ class Loss:
         self.x_ids = tuple(x_keys.index(id(eq.x)) for eq in self.residuals)
         # use indices into xs (0, 1, ...) as keys instead of id(x)
         for i, eq in enumerate(self.residuals):
-            eq.keys = set([(self.x_ids[i], mod_id, k) for (_, mod_id, k) in eq.keys])
+            eq.keys = frozenset(
+                [(self.x_ids[i], mod_id, k) for (_, mod_id, k) in eq.keys]
+            )
             eq.x_id = self.x_ids[i]
 
         # Store all keys needed for gradient computations
-        self.keys = set(key for i, eq in enumerate(self.residuals) for key in eq.keys)
+        self.keys = frozenset(
+            key for i, eq in enumerate(self.residuals) for key in eq.keys
+        )
 
     @property
     def args(self) -> tuple[tuple[Array, ...], tuple[Array, ...]]:

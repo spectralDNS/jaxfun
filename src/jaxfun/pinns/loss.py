@@ -39,8 +39,8 @@ def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
     Returns:
         Callable producing the k-th order Jacobian for batched inputs.
     """
-    for i in range(k):
-        fun = jax.jacfwd(fun) if (i % 2 == 0) else jax.jacrev(fun)
+    for _ in range(k):
+        fun = jax.jacfwd(fun)  # if (i % 2 == 0) else jax.jacrev(fun)
     return jax.vmap(fun, in_axes=0, out_axes=0) if k > 0 else fun  # type: ignore[return-value]
 
 

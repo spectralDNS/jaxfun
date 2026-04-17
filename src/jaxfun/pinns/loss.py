@@ -38,8 +38,8 @@ def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
     Returns:
         Callable producing the k-th order Jacobian for batched inputs.
     """
-    for i in range(k):
-        fun = jax.jacfwd(fun) if (i % 2 == 0) else jax.jacrev(fun)
+    for _ in range(k):
+        fun = jax.jacfwd(fun)  # if (i % 2 == 0) else jax.jacrev(fun)
     return jax.vmap(fun, in_axes=0, out_axes=0) if k > 0 else fun  # type: ignore[return-value]
 
 
@@ -138,7 +138,7 @@ def _process_input_arrays(
     return tuple(_newarrays)
 
 
-class Residual(nnx.Module):
+class Residual(nnx.Pytree):
     r"""Residual of a single equation
 
     Regular least squares residual defined at collocation points. The residual
@@ -197,7 +197,7 @@ class Residual(nnx.Module):
         self.target_expr = t_expr
         self.target0 = target
         self.base_scalars = s
-        self.target: Array = nnx.data(self._compute_target(x))
+        self.target: Array = self._compute_target(x)
 
         if weights.sharding != x.sharding and jax.local_device_count() > 1:
             if len(weights.shape) > 0 and weights.shape[0] == x.shape[0]:
@@ -205,8 +205,8 @@ class Residual(nnx.Module):
             else:
                 weights = jax.device_put(weights, NamedSharding(x.sharding.mesh, P()))  # ty:ignore[unresolved-attribute]
 
-        self.x: Array = nnx.data(x)
-        self.weights: Array = nnx.data(weights)
+        self.x: Array = x
+        self.weights: Array = weights
 
         # Build list of equations and all required evaluations of flaxfunctions
         eqs: list[ResidualFn] = []
@@ -230,7 +230,6 @@ class Residual(nnx.Module):
         self.eqs: tuple[ResidualFn, ...] = tuple(eqs)
         self.keys = frozenset(keys)
 
-    @jax.jit(static_argnums=(0, 5))
     def __call__(
         self,
         x: Array,
@@ -253,11 +252,7 @@ class Residual(nnx.Module):
         self.x = x
         self.target = self._compute_target(x)
 
-    def _compute_target(
-        self,
-        x: Array,
-        weights: Array | None = None,
-    ) -> Array:
+    def _compute_target(self, x: Array) -> Array:
         t_expr = self.target_expr
         s = self.base_scalars
         if len(t_expr.free_symbols) > 0:
@@ -274,7 +269,6 @@ class Residual(nnx.Module):
                 t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))  # ty:ignore[unresolved-attribute]
         return t0
 
-    @jax.jit(static_argnums=(0, 3))
     def loss(
         self,
         module: nnx.Module,

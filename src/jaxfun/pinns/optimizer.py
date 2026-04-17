@@ -472,6 +472,7 @@ class Trainer:
         assert isinstance(loss_fn, Loss), "Trainer requires an Loss loss function"
         self.loss_fn = loss_fn
         self.global_weights: Array = jnp.ones(len(self.loss_fn.residuals), dtype=float)
+        self.epoch = 0
         if jax.local_device_count() > 1 and loss_fn.local_mesh is not None:
             self.global_weights: Array = jax.device_put(
                 self.global_weights,
@@ -593,6 +594,7 @@ class Trainer:
                 self.allreduce(module)
 
             self.losses.append(loss)
+            self.epoch = epoch
 
         if print_final_loss and rank == 0:
             print(f"Final loss for {longname}: {loss} after {epoch} epochs")

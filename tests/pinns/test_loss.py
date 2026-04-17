@@ -172,13 +172,10 @@ def test_lsqr_vector_equation_with_target():
 def test_lsqr_loss_i(flax_func):
     x = jnp.array([[1.0, 2.0]])
     lsqr = Loss((flax_func - 1, x))
-    xs, targets = lsqr.args
-    loss_i = lsqr.loss_i(flax_func.module, xs, targets, 0)
-    assert jnp.allclose(xs[0], x)
-    assert targets[0] == 1.0
-    assert isinstance(loss_i, jnp.ndarray)
+    loss_i = lsqr.loss_i(flax_func.module, 0)
+    xs = lsqr.residuals[0].x
     assert loss_i.shape == ()  # scalar loss
-    assert jnp.allclose((flax_func(xs[0]) - 1.0) ** 2, loss_i)
+    assert jnp.allclose((flax_func(xs) - 1.0) ** 2, loss_i)
 
 
 def test_lsqr_norm_grad_loss_i():
@@ -186,8 +183,7 @@ def test_lsqr_norm_grad_loss_i():
     u = FlaxFunction(V, "u", kernel_init=nnx.initializers.ones)
     x = jnp.array([[0.0], [1.0]])
     lsqr = Loss((u, x, u(x)))
-    xs, targets = lsqr.args
-    norm = lsqr.norm_grad_loss_i(u.module, xs, targets, 0)
+    norm = lsqr.norm_grad_loss_i(u.module, 0)
     assert norm == 0
 
 
@@ -197,7 +193,7 @@ def test_lsqr_norm_grad_loss():
     x1 = jnp.array([[0.2, 0.5]]).T
     x2 = jnp.array([[0.3, 0.4]]).T
     lsqr = Loss((u, x1, u(x1)), (u - 1, x2, u(x2) - 1))
-    norms = lsqr.norm_grad_loss(u.module, *lsqr.args)
+    norms = lsqr.norm_grad_loss(u.module)
     assert norms.shape == (2,)  # Two residuals
     assert jnp.all(norms == 0)
 
@@ -206,7 +202,7 @@ def test_lsqr_compute_global_weights(flax_func):
     x1 = jnp.array([[1.0, 2.0]])
     x2 = jnp.array([[3.0, 4.0]])
     lsqr = Loss((flax_func, x1), (flax_func - 1, x2))
-    weights = lsqr.compute_global_weights(flax_func.module, *lsqr.args)
+    weights = lsqr.compute_global_weights(flax_func.module)
     assert weights.shape == (2,)
     assert jnp.all(weights > 0)
 
@@ -214,13 +210,10 @@ def test_lsqr_compute_global_weights(flax_func):
 def test_lsqr_update_global_weights(flax_func):
     x = jnp.array([[1.0, 2.0]])
     lsqr = Loss((flax_func, x), (flax_func - 1, x, -1))
-    xs, targets = lsqr.args
     gw = jnp.ones(len(lsqr.residuals), dtype=float)
-    _ = lsqr.loss_with_gw(flax_func.module, gw, xs, targets)  # Initialize Js
+    _ = lsqr.loss_with_gw(flax_func.module, gw)  # Initialize Js
     old_weights = jnp.ones(len(lsqr.residuals), dtype=float)
-    new_weights = lsqr.update_global_weights(
-        flax_func.module, old_weights, 0.5, xs, targets
-    )
+    new_weights = lsqr.update_global_weights(flax_func.module, old_weights, 0.5)
     assert not jnp.array_equal(old_weights, new_weights)
 
 
@@ -272,7 +265,7 @@ def test_residual_call_no_flaxfunctions():
     x = jnp.array([[1.0, 2.0]])
     f = sp.Integer(5)
     residual = Residual(f, x)
-    result = residual(x, 0, None)
+    result = residual(x, jnp.array(0), None)
     assert residual.target == -5.0
     assert jnp.allclose(result, 0.0)
 
@@ -418,14 +411,14 @@ def test_process_input_arrays_with_number():
 def test_residual_eval_compute_grad(flax_func):
     x = jnp.array([[1.0, 2.0]])
     residual = Residual(flax_func, x)
-    result = residual.eval_compute_grad(x, residual.target, flax_func.module, id(x))
+    result = residual.eval_compute_grad(flax_func.module, id(x))
     assert result.shape[0] == x.shape[0]
 
 
 def test_residual_loss_compute_grad(flax_func):
     x = jnp.array([[1.0, 2.0]])
     residual = Residual(flax_func, x)
-    result = residual.loss_compute_grad(x, residual.target, flax_func.module, id(x))
+    result = residual.loss_compute_grad(flax_func.module, id(x))
     assert isinstance(result, jnp.ndarray)
     assert result.shape == ()
 
@@ -442,7 +435,7 @@ def test_loss_value_and_grad_and_JTJ(flax_func):
     x = jnp.array([[1.0, 2.0], [3.0, 4.0]])
     lsqr = Loss((flax_func, x))
     gw = jnp.array([1.0])
-    loss, grad, JTJ = lsqr.value_and_grad_and_JTJ(flax_func.module, gw, *lsqr.args)
+    loss, grad, JTJ = lsqr.value_and_grad_and_JTJ(flax_func.module, gw)
     assert isinstance(loss, jnp.ndarray)
     assert loss.shape == ()
     assert isinstance(grad, nnx.State)
@@ -453,7 +446,7 @@ def test_loss_JTJ(flax_func):
     x = jnp.array([[1.0, 2.0], [3.0, 4.0]])
     lsqr = Loss((flax_func, x))
     gw = jnp.array([1.0])
-    JTJ = lsqr.JTJ(flax_func.module, gw, *lsqr.args)
+    JTJ = lsqr.JTJ(flax_func.module, gw)
     assert isinstance(JTJ, jnp.ndarray)
     assert JTJ.ndim == 2
 
@@ -544,7 +537,7 @@ def test_residual_vpinn_loss():
     weights = jnp.ones(10) / 10
     expr = u * v
     residual = ResidualVPINN(expr, xj, weights=weights)
-    loss = residual.loss(xj, residual.target, u.module)
+    loss = residual.loss(u.module)
     assert isinstance(loss, jnp.ndarray)
     assert loss.shape == ()
 

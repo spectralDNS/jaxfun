@@ -476,8 +476,8 @@ class ResidualVPINN(Residual):
         # Compute both the test functions (all derivatives needed)
         # and the target stored in target_dict.
         self.TD = nnx.Dict(self._compute_test_function(x))
-        self.target = nnx.data(self._compute_target(x, weights))
-        self.x, self.weights = nnx.data(x), nnx.data(weights)
+        self.target = self._compute_target(x, weights)
+        self.x, self.weights = x, weights
 
     def _compute_test_function(self, x: Array) -> dict[str, Array]:
         # The test functions should be evaluated once per derivative count
@@ -516,7 +516,6 @@ class ResidualVPINN(Residual):
                 t0 = jax.device_put(t0, NamedSharding(x.sharding.mesh, P()))  # ty:ignore[unresolved-attribute]
         return t0 * weights[:, None]
 
-    @jax.jit(static_argnums=(0, 3))
     def loss(
         self,
         module: nnx.Module | None,
@@ -541,7 +540,6 @@ class ResidualVPINN(Residual):
         #    ** 2
         # ).mean()
 
-    @jax.jit(static_argnums=(0, 5))
     def __call__(
         self,
         x: Array,
@@ -1170,7 +1168,7 @@ class TimeMarchingLoss(Loss):
             init_res = self.residuals[ic]
             # Compute the initial value at the new time.
             init_res.x = init_res.x + march
-            init_res.target0 = init_res(module)
+            init_res.target0 = init_res(init_res.x, init_res.target, module)
             # The only term in the target independent of the solution is the
             # initial condition. Set to zero.
             init_res.target_expr = sp.S.Zero

@@ -352,9 +352,7 @@ def GaussNewton(
 
 def train(
     loss_fn: LossFn, allreduce_gradients_and_loss: bool = False
-) -> Callable[
-    [nnx.Module, nnx.Optimizer, Array, tuple[Array, ...], tuple[Array, ...]], Array
-]:
+) -> Callable[[nnx.Module, nnx.Optimizer, Array, tuple[Array, ...]], Array]:
     """Build a JIT-compiled training step for a loss function.
 
     Args:
@@ -363,30 +361,22 @@ def train(
             processes each epoch.
 
     Returns:
-        A function (module, optimizer, gw, x, target) -> loss suitable for epoch loops.
+        A function (module, optimizer, gw, x) -> loss suitable for epoch loops.
     """
 
     if isinstance(loss_fn, Loss):
 
-        def loss_with_gw(
-            m: nnx.Module, gw: Array, xs: tuple[Array, ...], targets: tuple[Array, ...]
-        ) -> Array:
-            return loss_fn.loss_with_gw(m, gw, xs, targets)
+        def loss_with_gw(m: nnx.Module, gw: Array, xs: tuple[Array, ...]) -> Array:
+            return loss_fn.loss_with_gw(m, gw, xs)
 
-        def JTJ_with_gw(
-            m: nnx.Module, gw: Array, xs: tuple[Array, ...], targets: tuple[Array, ...]
-        ) -> Array:
-            return loss_fn.JTJ(m, gw, xs, targets)
+        def JTJ_with_gw(m: nnx.Module, gw: Array, xs: tuple[Array, ...]) -> Array:
+            return loss_fn.JTJ(m, gw, xs)
     else:
 
-        def loss_with_gw(
-            m: nnx.Module, gw: Array, xs: tuple[Array, ...], targets: tuple[Array, ...]
-        ) -> Array:
+        def loss_with_gw(m: nnx.Module, gw: Array, xs: tuple[Array, ...]) -> Array:
             return loss_fn(m)
 
-        def JTJ_with_gw(
-            m: nnx.Module, gw: Array, xs: tuple[Array, ...], targets: tuple[Array, ...]
-        ) -> Array:
+        def JTJ_with_gw(m: nnx.Module, gw: Array, xs: tuple[Array, ...]) -> Array:
             return jnp.array(0.0)
 
     @nnx.jit
@@ -395,13 +385,12 @@ def train(
         optimizer: nnx.Optimizer,
         gw: Array,
         xs: tuple[Array, ...],
-        targets: tuple[Array, ...],
     ) -> Array:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_with_gw(m, gw, xs, targets)
+            return loss_with_gw(m, gw, xs)
 
         def JTJ(m: nnx.Module) -> Array:
-            return JTJ_with_gw(m, gw, xs, targets)
+            return JTJ_with_gw(m, gw, xs)
 
         gd = nnx.graphdef(module)
         loss, gradients = nnx.value_and_grad(value_fn)(module)
@@ -420,10 +409,10 @@ def train(
 
     @nnx.jit
     def value_and_grad(
-        module: nnx.Module, gw: Array, xs: tuple[Array, ...], targets: tuple[Array, ...]
+        module: nnx.Module, gw: Array, xs: tuple[Array, ...]
     ) -> tuple[Array, PyTree]:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_with_gw(m, gw, xs, targets)
+            return loss_with_gw(m, gw, xs)
 
         return nnx.value_and_grad(value_fn)(module)
 
@@ -435,14 +424,13 @@ def train(
         optimizer: nnx.Optimizer,
         gw: Array,
         xs: tuple[Array, ...],
-        targets: tuple[Array, ...],
     ) -> None:
         def value_fn(m: nnx.Module) -> Array:
-            return loss_with_gw(m, gw, xs, targets)
+            return loss_with_gw(m, gw, xs)
 
         gd = nnx.graphdef(module)
         value_fn_state = lambda state, GN_loss_fn=None: value_fn(nnx.merge(gd, state))
-        GN_loss_fn = lambda state: JTJ_with_gw(nnx.merge(gd, state), gw, xs, targets)
+        GN_loss_fn = lambda state: JTJ_with_gw(nnx.merge(gd, state), gw, xs)
         optimizer.update(
             module,
             gradients,
@@ -462,11 +450,10 @@ def train(
         optimizer: nnx.Optimizer,
         gw: Array,
         xs: tuple[Array, ...],
-        targets: tuple[Array, ...],
     ) -> Array:
-        loss, gradients = value_and_grad(module, gw, xs, targets)
+        loss, gradients = value_and_grad(module, gw, xs)
         loss, gradients = allreduce(loss, gradients)
-        update(loss, gradients, module, optimizer, gw, xs, targets)
+        update(loss, gradients, module, optimizer, gw, xs)
         return loss
 
     if allreduce_gradients_and_loss:
@@ -498,6 +485,7 @@ class Trainer:
                 self.global_weights,
                 NamedSharding(loss_fn.local_mesh, P()),
             )
+        self.epoch: int = 0
 
     def reset_global_weights(self) -> None:
         self.global_weights = jnp.ones(len(self.loss_fn.residuals), dtype=float)
@@ -590,10 +578,10 @@ class Trainer:
         allow_early_break = abs_limit_loss > 0 or abs_limit_change > 0
         loss_old = 1.0
         loss = 0.0
-        xs, targets = self.loss_fn.args  # Extract points and targets for tracing
+        xs = self.loss_fn.xs
         self.losses = []
         for epoch in range(1, num + 1):
-            loss = train_step(module, opt, self.global_weights, xs, targets)
+            loss = train_step(module, opt, self.global_weights, xs)
 
             if epoch % epoch_print == 0 and rank == 0:
                 print(f"Epoch {epoch} {name}, loss: {loss}")
@@ -606,7 +594,7 @@ class Trainer:
             loss_old = loss
             if update_global_weights > 0 and epoch % update_global_weights == 0:
                 self.global_weights: Array = self.loss_fn.update_global_weights(
-                    module, self.global_weights, alpha, xs, targets
+                    module, self.global_weights, alpha, xs
                 )
                 if print_global_weights and rank == 0:
                     print("Global weights", self.global_weights)
@@ -615,6 +603,7 @@ class Trainer:
                 self.allreduce(module)
 
             self.losses.append(loss)
+            self.epoch = epoch
 
         if print_final_loss and rank == 0:
             print(f"Final loss for {longname}: {loss} after {epoch} epochs")

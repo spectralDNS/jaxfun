@@ -234,13 +234,12 @@ class Residual(nnx.Pytree):
     def __call__(
         self,
         x: Array,
-        target: Array | float | int,
         module: nnx.Module | None,
         Js: dict[tuple[int, int, int], Array] | None = None,
         x_id: int | None = None,
     ) -> Array:
         applied_eqs: list[Array] = [eq(x, module, Js=Js, x_id=x_id) for eq in self.eqs]
-        return sum(applied_eqs, start=jnp.array(0)) - target
+        return sum(applied_eqs, start=jnp.array(0)) - self.target
 
     def update_arrays(self, x: Array) -> None:
         """Update the collocation points and target values
@@ -271,12 +270,11 @@ class Residual(nnx.Pytree):
     def loss(
         self,
         x: Array,
-        target: Array,
         module: nnx.Module,
         Js: dict[tuple[int, int, int], Array] | None = None,
         x_id: int | None = None,
     ) -> Array:
-        r = self(x, target, module, Js=Js, x_id=x_id)
+        r = self(x, module, Js=Js, x_id=x_id)
         return (self.weights * r**2).sum()
 
     def _compute_gradients(
@@ -295,17 +293,13 @@ class Residual(nnx.Pytree):
             Js[key] = jacn(mod, key[2])(x)  # ty:ignore[invalid-argument-type]
         return Js
 
-    def eval_compute_grad(
-        self, x: Array, target: Array, module: nnx.Module, x_id: int
-    ) -> Array:
+    def eval_compute_grad(self, x: Array, module: nnx.Module, x_id: int) -> Array:
         Js = self._compute_gradients(module, x)
-        return self(x, target, module, Js=Js, x_id=x_id)
+        return self(x, module, Js=Js, x_id=x_id)
 
-    def loss_compute_grad(
-        self, x: Array, target: Array, module: nnx.Module, x_id: int
-    ) -> Array:
+    def loss_compute_grad(self, x: Array, module: nnx.Module, x_id: int) -> Array:
         Js = self._compute_gradients(module, x)
-        return self.loss(x, target, module, Js=Js, x_id=x_id)
+        return self.loss(x, module, Js=Js, x_id=x_id)
 
     def evaluate(self, module: nnx.Module) -> Array:
         """Evaluate the residual at internal points
@@ -317,7 +311,7 @@ class Residual(nnx.Pytree):
             Array: The residuals at points self.x, self.target
         """
         Js = self._compute_gradients(module, self.x)
-        return self(self.x, self.target, module, Js=Js)
+        return self(self.x, module, Js=Js)
 
 
 class ResidualVPINN(Residual):
@@ -525,12 +519,11 @@ class ResidualVPINN(Residual):
     def loss(
         self,
         x: Array,
-        target: Array | float | int,
         module: nnx.Module | None,
         Js: dict[tuple[int, int, int], Array] | None = None,
         x_id: int | None = None,
     ) -> Array:
-        target = jnp.atleast_1d(jnp.array(target))
+        target = jnp.atleast_1d(jnp.array(self.target))
         # rk = self(x, target, module, Js=Js, x_id=x_id)
         # return (rk.sum(axis=0)**2).mean() # slower
         return (
@@ -552,12 +545,11 @@ class ResidualVPINN(Residual):
     def __call__(
         self,
         x: Array,
-        target: Array | float | int,
         module: nnx.Module | None,
         Js: dict[tuple[int, int, int], Array] | None = None,
         x_id: int | None = None,
     ) -> Array:
-        target = jnp.atleast_1d(jnp.array(target))
+        target = jnp.atleast_1d(jnp.array(self.target))
         # Return N x K array of residuals for all points N and test functions K
         return jnp.array(
             sum(
@@ -703,8 +695,8 @@ class Loss:
         self.residuals: tuple[Residual, ...] = process_input(*fs, residuals=[])
 
         # Store the unique collocation points and their order for later use
-        self.xs: dict[int, Array] = {id(eq.x): eq.x for eq in self.residuals}
-        x_keys = list(self.xs.keys())
+        xs: dict[int, Array] = {id(eq.x): eq.x for eq in self.residuals}
+        x_keys = list(xs.keys())
         self.x_ids = tuple(x_keys.index(id(eq.x)) for eq in self.residuals)
         # use indices into xs (0, 1, ...) as keys instead of id(x)
         for i, eq in enumerate(self.residuals):
@@ -713,15 +705,11 @@ class Loss:
             )
             eq.x_id = self.x_ids[i]
 
+        self.xs = tuple(xs.values())
         # Store all keys needed for gradient computations
         self.keys = frozenset(
             key for i, eq in enumerate(self.residuals) for key in eq.keys
         )
-
-    @property
-    def args(self) -> tuple[tuple[Array, ...], tuple[Array, ...]]:
-        targets = tuple(eq.target for eq in self.residuals)
-        return tuple(self.xs.values()), targets
 
     @abstractmethod
     def update_time(self, module: nnx.Module, march: Array) -> None: ...
@@ -741,7 +729,7 @@ class Loss:
         return self.residuals[0].x.sharding.mesh  # ty:ignore[unresolved-attribute]
 
     def _compute_residual_arrays(
-        self, module: nnx.Module, xs: tuple[Array, ...], targets: tuple[Array, ...]
+        self, module: nnx.Module, xs: tuple[Array, ...]
     ) -> list[Array]:
         """Return the residuals for all collocation points
 
@@ -749,26 +737,17 @@ class Loss:
             module: The module (nnx.Module)
             xs: All the collocation arrays used for all equations (not necessarily same
                 length as self.residuals)
-            targets: Targets for all residuals (same length as self.residuals)
 
         Returns:
             Array: The residuals for all collocation points
         """
         Js = self._compute_gradients(module, xs)
         return [
-            eq(xs[x_id], target, module, Js=Js, x_id=x_id)
-            for i, (eq, target, x_id) in enumerate(
-                zip(self.residuals, targets, self.x_ids, strict=True)
-            )
+            eq(xs[x_id], module, Js=Js, x_id=x_id)
+            for i, (eq, x_id) in enumerate(zip(self.residuals, self.x_ids, strict=True))
         ]
 
-    def JTJ(
-        self,
-        module: nnx.Module,
-        gw: Array,
-        xs: tuple[Array, ...],
-        targets: tuple[Array, ...],
-    ) -> Array:
+    def JTJ(self, module: nnx.Module, gw: Array, xs: tuple[Array, ...]) -> Array:
         """Return the Gauss-Newton approximation to the Hessian
 
         For the loss L = sum_i gw[i] * mean( res_i^2 ), the Gauss-Newton
@@ -786,8 +765,8 @@ class Loss:
             module: The module (nnx.Module)
             gw: Global weights
             xs: All the collocation arrays used for all equations
-            targets: Targets for all residuals"""
-        res = jax.jacfwd(self._compute_residual_arrays, argnums=0)(module, xs, targets)
+        """
+        res = jax.jacfwd(self._compute_residual_arrays, argnums=0)(module, xs)
         JTJ = []
         for i, r in enumerate(res):
             jf = ravel_pytree(r)[0]
@@ -801,11 +780,7 @@ class Loss:
 
     @nnx.jit(static_argnums=0)
     def value_and_grad_and_JTJ(
-        self,
-        module: nnx.Module,
-        gw: Array,
-        xs: tuple[Array, ...],
-        targets: tuple[Array, ...],
+        self, module: nnx.Module, gw: Array, xs: tuple[Array, ...]
     ) -> tuple[Array, Array, Array]:
         """Return the loss value, gradient and JTJ
 
@@ -813,15 +788,14 @@ class Loss:
             module: The module (nnx.Module)
             gw: Global weights
             xs: All the collocation arrays used for all equations
-            targets: Targets for all residuals
 
         Returns:
             A tuple where the first item is the loss value and the second item
             is the gradient and the third is the Gauss-Newton approximation to the
             Hessian
         """
-        res = self._compute_residual_arrays(module, xs, targets)
-        dres = jax.jacfwd(self._compute_residual_arrays, argnums=0)(module, xs, targets)
+        res = self._compute_residual_arrays(module, xs)
+        dres = jax.jacfwd(self._compute_residual_arrays, argnums=0)(module, xs)
         unravel = ravel_pytree(nnx.state(module))[1]
         JTJ = []
         grads = []
@@ -860,9 +834,9 @@ class Loss:
         Returns:
             Array: The residuals for equation i
         """
-        xs, targets = self.args
+        xs = self.xs
         return self.residuals[i].eval_compute_grad(
-            xs[self.x_ids[i]], targets[i], module, x_id=self.x_ids[i]
+            xs[self.x_ids[i]], module, x_id=self.x_ids[i]
         )
 
     def compute_residuals(self, module: nnx.Module) -> Array:
@@ -874,18 +848,17 @@ class Loss:
         Returns:
             Array: The residuals for all equations (not including global weights)
         """
-        xs, targets = self.args
+        xs = self.xs
         L2 = []
         Js = self._compute_gradients(module, xs)
-        for eq, target, x_id in zip(self.residuals, targets, self.x_ids, strict=True):
-            L2.append(eq.loss(xs[x_id], target, module, Js=Js, x_id=x_id))
+        for eq, x_id in zip(self.residuals, self.x_ids, strict=True):
+            L2.append(eq.loss(xs[x_id], module, Js=Js, x_id=x_id))
         return jnp.array(L2)
 
     def loss_i(
         self,
         module: nnx.Module,
         xs: tuple[Array, ...],
-        targets: tuple[Array, ...],
         i: int,
     ) -> Array:
         """Return the loss for equation i
@@ -896,21 +869,19 @@ class Loss:
             module: The module (nnx.Module)
             xs: All the collocation arrays used for all equations (not necessarily same
                 length as self.residuals)
-            targets: Targets for all residuals (same length as self.residuals)
             i: The equation number
 
         Returns:
             Array: The loss for equation i
         """
         return self.residuals[i].loss_compute_grad(
-            xs[self.x_ids[i]], targets[i], module, x_id=self.x_ids[i]
+            xs[self.x_ids[i]], module, x_id=self.x_ids[i]
         )
 
     def norm_grad_loss_i(
         self,
         module: nnx.Module,
         xs: tuple[Array, ...],
-        targets: tuple[Array, ...],
         i: int,
     ) -> Array:
         """Return the norm of the gradient of the loss for equation i
@@ -919,19 +890,14 @@ class Loss:
             module: The module (nnx.Module)
             xs: All the collocation arrays used for all equations (not necessarily same
                 length as self.residuals)
-            targets: Targets for all residuals (same length as self.residuals)
             i: The equation number
 
         Returns:
             Array: The norm of the gradient of the loss for equation i
         """
-        return jnp.linalg.norm(
-            ravel_pytree(nnx.grad(self.loss_i)(module, xs, targets, i))[0]
-        )
+        return jnp.linalg.norm(ravel_pytree(nnx.grad(self.loss_i)(module, xs, i))[0])
 
-    def norm_grad_loss(
-        self, module: nnx.Module, xs: tuple[Array, ...], targets: tuple[Array, ...]
-    ) -> Array:
+    def norm_grad_loss(self, module: nnx.Module, xs: tuple[Array, ...]) -> Array:
         """Return the norms of the gradients of the losses for all equations
 
         Args:
@@ -945,11 +911,11 @@ class Loss:
         """
         norms = []
         for i in range(len(self.residuals)):
-            norms.append(self.norm_grad_loss_i(module, xs, targets, i))
+            norms.append(self.norm_grad_loss_i(module, xs, i))
         return jnp.array(norms)
 
     def compute_global_weights(
-        self, module: nnx.Module, xs: tuple[Array, ...], targets: tuple[Array, ...]
+        self, module: nnx.Module, xs: tuple[Array, ...]
     ) -> Array:
         """Return global weights based on the norms of the gradients
 
@@ -957,22 +923,16 @@ class Loss:
             module: The module (nnx.Module)
             xs: All the collocation arrays used for all equations (not necessarily same
                 length as self.residuals)
-            targets: Targets for all residuals (same length as self.residuals)
 
         Returns:
             Array: The global weights
         """
-        norms = self.norm_grad_loss(module, xs, targets)
+        norms = self.norm_grad_loss(module, xs)
         return jnp.sum(norms) / jnp.where(norms < 1e-16, 1e-16, norms)
 
     @nnx.jit(static_argnums=0)
     def update_global_weights(
-        self,
-        module: nnx.Module,
-        gw: Array,
-        alpha: float,
-        xs: tuple[Array, ...],
-        targets: tuple[Array, ...],
+        self, module: nnx.Module, gw: Array, alpha: float, xs: tuple[Array, ...]
     ) -> Array:
         """Return updated global weights
 
@@ -982,14 +942,13 @@ class Loss:
             alpha: Smoothing parameter (0 < alpha < 1)
             xs: All the collocation arrays used for all equations (not necessarily same
                 length as self.residuals)
-            targets: Targets for all residuals (same length as self.residuals)
 
         Returns:
             Array: The updated global weights
         """
         from jax.experimental import multihost_utils as mh
 
-        new = self.compute_global_weights(module, xs, targets)
+        new = self.compute_global_weights(module, xs)
         if jax.process_count() > 1:
             new = mh.process_allgather(new).mean(0)
         return new * (1 - alpha) + gw * alpha
@@ -1011,11 +970,7 @@ class Loss:
         return Js
 
     def loss_with_gw(
-        self,
-        module: nnx.Module,
-        gw: Array,
-        xs: tuple[Array, ...],
-        targets: tuple[Array, ...],
+        self, module: nnx.Module, gw: Array, xs: tuple[Array, ...]
     ) -> Array:
         """Return the weighted loss with given global weights
 
@@ -1024,7 +979,6 @@ class Loss:
             gw: Global weights
             xs: All the collocation arrays used for all equations (not necessarily same
                 length as self.residuals)
-            targets: Targets for all residuals (same length as self.residuals)
 
         Returns:
             Array: The weighted loss
@@ -1033,9 +987,9 @@ class Loss:
         return (
             jnp.array(
                 [
-                    eq.loss(xs[x_id], target, module, Js=Js, x_id=x_id)
-                    for i, (eq, target, x_id) in enumerate(
-                        zip(self.residuals, targets, self.x_ids, strict=True)
+                    eq.loss(xs[x_id], module, Js=Js, x_id=x_id)
+                    for i, (eq, x_id) in enumerate(
+                        zip(self.residuals, self.x_ids, strict=True)
                     )
                 ]
             )
@@ -1053,13 +1007,13 @@ class Loss:
         Returns:
             Array: The total (unweighted) least squares loss
         """
-        xs, targets = self.args
+        xs = self.xs
         Js = self._compute_gradients(module, xs)
         return sum(
             [
-                eq.loss(xs[x_id], target, module, Js=Js, x_id=x_id)
-                for i, (eq, target, x_id) in enumerate(
-                    zip(self.residuals, targets, self.x_ids, strict=True)
+                eq.loss(xs[x_id], module, Js=Js, x_id=x_id)
+                for i, (eq, x_id) in enumerate(
+                    zip(self.residuals, self.x_ids, strict=True)
                 )
             ]
         )
@@ -1220,7 +1174,7 @@ class TimeMarchingLoss(Loss):
             module: The module (nnx.Module)
             march: Array to be added to all collocation points
         """
-        xs = tuple(self.xs.values())
+        xs = self.xs
         if xs[0].shape[-1] != march.shape[-1]:
             raise ValueError("Cannot update collocation points, dimension mismatch")
 
@@ -1229,10 +1183,11 @@ class TimeMarchingLoss(Loss):
         ):
             init_res = self.residuals[ic]
             # Compute the initial value at the new time.
-            init_res.target0 = init_res(init_res.x + march, 0, module)
+            init_res.target = jnp.array(0.0)
+            init_res.target0 = init_res(init_res.x + march, module)
             # The only term in the target independent of the solution is the
             # initial condition. Set to zero.
             init_res.target_expr = sp.S.Zero
         for eq, x_id in zip(self.residuals, self.x_ids, strict=True):
             eq.update_arrays(xs[x_id] + march)
-        self.xs = {id(eq.x): eq.x for eq in self.residuals}
+        self.xs = tuple(eq.x for eq in self.residuals)

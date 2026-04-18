@@ -516,10 +516,10 @@ class TimeMarchingMesh(CartesianProductMesh):
             kind: Sampling kind(s). List of kinds for each submesh.
         """
         if domain == "initial-time":
-            xi = self.get_points(*N, domain="boundary", kind=kind)
+            xi = super().get_points(*N, domain="boundary", kind=kind)
             return xi[xi[:, -1] <= self.submeshes[-1].left + 1e-7]
         elif domain == "end-time":
-            xi = self.get_points(*N, domain="boundary", kind=kind)
+            xi = super().get_points(*N, domain="boundary", kind=kind)
             return xi[xi[:, -1] >= self.submeshes[-1].right - 1e-7]
         return super().get_points(*N, domain=domain, kind=kind)
 

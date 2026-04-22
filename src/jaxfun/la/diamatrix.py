@@ -206,7 +206,7 @@ class DiaMatrix(nnx.Pytree):
                 f"lu_factor requires a square matrix, got shape {self.shape}"
             )
 
-        offsets = self.offsets  # Python tuple of ints
+        offsets = self.offsets
         p = max((-k for k in offsets if k < 0), default=0)  # lower bandwidth
         q = max((k for k in offsets if k > 0), default=0)  # upper bandwidth
 
@@ -316,10 +316,6 @@ class DiaMatrix(nnx.Pytree):
         )
         return LUFactors(L=L, U=U, shape=(n, n), perm=perm)
 
-    # ------------------------------------------------------------------
-    # Linear solve
-    # ------------------------------------------------------------------
-
     def solve(self, b: Array, axis: int = 0, *, pivot: bool = False) -> Array:
         """Solve ``A x = b`` directly via LU factorisation.
 
@@ -342,10 +338,6 @@ class DiaMatrix(nnx.Pytree):
             A.solve(T, axis=2)  # T shape (a, b, n)  → (a, b, n)
         """
         return self.lu_factor(pivot=pivot).solve(b, axis=axis)
-
-    # ------------------------------------------------------------------
-    # Transpose
-    # ------------------------------------------------------------------
 
     @property
     def T(self) -> DiaMatrix:
@@ -373,10 +365,6 @@ class DiaMatrix(nnx.Pytree):
         return DiaMatrix(
             data=new_data, offsets=tuple((-offsets_arr).tolist()), shape=new_shape
         )
-
-    # ------------------------------------------------------------------
-    # Diagonal extraction
-    # ------------------------------------------------------------------
 
     def diagonal(self, k: int = 0) -> Array:
         """Return the ``k``-th diagonal as a 1-D array.
@@ -406,10 +394,6 @@ class DiaMatrix(nnx.Pytree):
         )
         return result
 
-    # ------------------------------------------------------------------
-    # Scalar arithmetic
-    # ------------------------------------------------------------------
-
     def scale(self, alpha: float | Array) -> DiaMatrix:
         """Return ``alpha * A`` as a new :class:`DiaMatrix`."""
         return DiaMatrix(data=self.data * alpha, offsets=self.offsets, shape=self.shape)
@@ -422,10 +406,6 @@ class DiaMatrix(nnx.Pytree):
 
     def __neg__(self) -> DiaMatrix:
         return self.scale(-1)
-
-    # ------------------------------------------------------------------
-    # Matrix addition / subtraction
-    # ------------------------------------------------------------------
 
     def _merge(self, other: DiaMatrix, sign: float) -> DiaMatrix:
         """Add ``self + sign * other`` in DIA format."""
@@ -441,10 +421,6 @@ class DiaMatrix(nnx.Pytree):
 
     def __sub__(self, other: DiaMatrix) -> DiaMatrix:
         return self._merge(other, -1.0)
-
-    # ------------------------------------------------------------------
-    # Matrix multiplication operators
-    # ------------------------------------------------------------------
 
     @jax.jit
     def _matmul_compute(self, other: DiaMatrix) -> tuple[Array, Array, Array]:
@@ -522,19 +498,11 @@ class DiaMatrix(nnx.Pytree):
         # other: (k, m)  →  A^T @ other^T  is (m_T==n, k)  →  transpose to (k, n)
         return self.T.matvec(other.T, axis=0).T
 
-    # ------------------------------------------------------------------
-    # dtype conversion
-    # ------------------------------------------------------------------
-
     def astype(self, dtype: jnp.dtype) -> DiaMatrix:
         """Return a copy with data cast to ``dtype``."""
         return DiaMatrix(
             data=self.data.astype(dtype), offsets=self.offsets, shape=self.shape
         )
-
-    # ------------------------------------------------------------------
-    # Properties
-    # ------------------------------------------------------------------
 
     @property
     def nnz(self) -> int:
@@ -924,7 +892,7 @@ def diags(
     Example:
         >>> A = diags(
         ...     [jnp.ones(4), -2 * jnp.ones(5), jnp.ones(4)], offsets=(-1, 0, 1)
-        ... )  # 5×5 tridiagonal
+        ... )  # 5x5 tridiagonal
         >>> A = diags(
         ...     [jnp.ones(3), -2 * jnp.ones(4), jnp.ones(4)],
         ...     offsets=(-1, 0, 1),

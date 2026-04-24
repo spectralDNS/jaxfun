@@ -215,7 +215,7 @@ def matrices(
         if u.N < 2:
             return None
         return diags(
-            [jnp.full(v.N - k, 2.0) for k in jnp.arange(1, v.N, 2)],
+            [jnp.full(v.N - k, 2.0) for k in jnp.arange(1, v.N, 2).tolist()],
             offsets=tuple(jnp.arange(1, v.N, 2).tolist()),
             shape=(v.N, u.N),
         )

@@ -982,7 +982,13 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
 
     @jax.jit
     def _matmul_array(self, w: Array) -> Array:
-        return self.mats[0] @ w @ self.mats[1].T
+        if len(self.mats) == 2:
+            return self.mats[0] @ w @ self.mats[1].T
+        elif len(self.mats) == 3:
+            return jnp.einsum(
+                "ik,jl,nm,klm->ijn", self.mats[0], self.mats[1], self.mats[2], w
+            )
+        raise NotImplementedError("Matmul not implemented for >3 dimensions")
 
     def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply matrix to rank-2 coefficient array u."""
@@ -997,7 +1003,13 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
 
     @jax.jit
     def _rmatmul_array(self, w: Array) -> Array:
-        return self.mats[0].T @ w @ self.mats[1]
+        if len(self.mats) == 2:
+            return self.mats[0].T @ w @ self.mats[1]
+        elif len(self.mats) == 3:
+            return jnp.einsum(
+                "ik,jl,nm,klm->ijn", self.mats[0], self.mats[1], self.mats[2], w
+            )
+        raise NotImplementedError("Right matmul not implemented for >3 dimensions")
 
     def __rmatmul__(self, u: Array | JAXFunction) -> Array:
         """Right matmul (u @ A) treating u as left factor."""

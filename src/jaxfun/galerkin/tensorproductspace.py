@@ -8,9 +8,11 @@ from typing import TYPE_CHECKING, NoReturn, TypeGuard, cast, overload
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import sympy as sp
 from flax import nnx
 from jax import Array
+from scipy import sparse as scipy_sparse
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol, diakron
@@ -1167,11 +1169,16 @@ class BlockTPMatrix:
 def tpmats_to_kron(A: list[TPMatrix], tol: int = 100) -> Matrix | DiaMatrix:
     """Return summed Kronecker expansion of a list of separable TPMatrix objects.
 
-    Each :class:`TPMatrix` in ``A`` contributes ``kron(mats[0], mats[1], ...)``
-    multiplied by its :attr:`~TPMatrix.scale`.  The per-factor matrices are
+    Each :class:`TPMatrix` in ``A`` contributes
+    ``scale * kron(mats[0], mats[1], ...)``.  The per-factor matrices are
     zero-cleaned (values below ``A.max() / tol`` are set to zero) before the
     product is formed.  The contributions are summed and returned as a single
     :class:`~jaxfun.la.DiaMatrix`.
+
+    Note: the :attr:`~TPMatrix.scale` on each ``TPMatrix`` should be ``1`` when
+    the bilinear coefficient has already been incorporated into the factor
+    matrices (as :func:`inner_bilinear` does), so that the scale is only applied
+    once.
 
     Args:
         A: List of :class:`TPMatrix` objects with identical result shape.
@@ -1184,18 +1191,20 @@ def tpmats_to_kron(A: list[TPMatrix], tol: int = 100) -> Matrix | DiaMatrix:
     if isinstance(A[0].mats[0], Matrix):
         result: Array | None = None
         for tpm in A:
-            a0 = tpm.mats[0].todense()
+            a0 = eliminate_near_zeros(tpm.mats[0].todense(), tol)
             for m in tpm.mats[1:]:
-                a0 = jnp.kron(a0, m.todense())
-            result = a0 * tpm.scale if result is None else result + a0 * tpm.scale
+                a0 = jnp.kron(a0, eliminate_near_zeros(m.todense(), tol))
+            result = (
+                a0 * jnp.asarray(tpm.scale)
+                if result is None
+                else result + a0 * jnp.asarray(tpm.scale)
+            )
         if result is None:
             raise ValueError("tpmats_to_kron requires a non-empty list.")
         return Matrix(result)
 
     def _to_dia(mat: MatrixProtocol) -> DiaMatrix:
-        if isinstance(mat, DiaMatrix):
-            return mat
-        dense = eliminate_near_zeros(cast(Matrix, mat).data, tol)
+        dense = eliminate_near_zeros(mat.todense(), tol)
         return DiaMatrix.from_dense(dense)
 
     result: DiaMatrix | None = None
@@ -1229,3 +1238,48 @@ def vec(A: Array | list[TPMatrix], tol: int = 100) -> Array | Matrix | DiaMatrix
         return tpmats_to_kron(A, tol=tol)
     else:
         return A.flatten()
+
+
+def tpmats_to_scipy_sparse(
+    A: list[TPMatrix], tol: int = 100
+) -> list[tuple[scipy_sparse.csc_array, ...]]:
+    """Convert list of separable TPMatrix to scipy CSC factors.
+
+    Args:
+        A: List of TPMatrix objects.
+        tol: Near-zero elimination tolerance.
+
+    Returns:
+        List of tuples of per-axis scipy csc_array matrices.
+    """
+    return [
+        tuple(
+            scipy_sparse.csc_array(eliminate_near_zeros(mat.todense(), tol))
+            for mat in a.mats
+        )
+        for a in A
+    ]
+
+
+def tpmats_to_scipy_kron(A: list[TPMatrix], tol: int = 100) -> scipy_sparse.csc_matrix:
+    """Return summed global scipy sparse matrix (Kronecker expansion).
+
+    Args:
+        A: List of TPMatrix objects.
+        tol: Near-zero elimination tolerance.
+
+    Returns:
+        scipy.sparse.csc_matrix representing Σ kron(factors).
+    """
+    a = tpmats_to_scipy_sparse(A)
+    if len(a[0]) == 2:
+        return np.sum([scipy_sparse.kron(b[0], b[1], format="csc") for b in a])
+    else:
+        return np.sum(
+            [
+                scipy_sparse.kron(
+                    scipy_sparse.kron(b[0], b[1], format="csc"), b[2], format="csc"
+                )
+                for b in a
+            ]
+        )

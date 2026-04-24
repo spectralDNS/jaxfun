@@ -288,7 +288,7 @@ def inner(
                     aresults.append(
                         TPMatrix(
                             [cast(MatrixProtocol, m[0]) for m in mats],
-                            coeffs["bilinear"],
+                            1,
                             global_indices=gi[0],
                         )
                     )

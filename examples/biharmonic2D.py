@@ -38,10 +38,9 @@ v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 ue = T.system.expr_psi_to_base_scalar(ue)
 
-A, b = inner(Div(Grad(Div(Grad(u)))) * v - Div(Grad(Div(Grad(ue)))) * v, sparse=False)
+A, b = inner(Div(Grad(Div(Grad(u)))) * v - Div(Grad(Div(Grad(ue)))) * v, sparse=True)
 
 C = tpmats_to_kron(A)
-# uh = jnp.array(scipy_sparse.linalg.spsolve(C, b.flatten()).reshape(b.shape))
 uh = C.solve(b.flatten()).reshape(b.shape)
 
 N = 100

@@ -24,7 +24,7 @@ ue = sp.cos(2 * x) + sp.I * sp.sin(1 * x)
 
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 
-uh = jnp.hstack((jnp.array([0.0]), b[1:] / A.todense().diagonal()[1:]))
+uh = jnp.hstack((jnp.array([0.0]), b[1:] / A.diagonal()[1:]))
 
 uj = D.backward(uh)
 xj = D.mesh()

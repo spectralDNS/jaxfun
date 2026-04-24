@@ -5,19 +5,20 @@ import sys
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-from scipy import sparse as scipy_sparse
 
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
-from jaxfun.galerkin.Chebyshev import Chebyshev
+from jaxfun.galerkin.Chebyshev import Chebyshev as space
+
+# from jaxfun.galerkin.Legendre import Legendre as space
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
+from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
 M = 20
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
-D = FunctionSpace(M, Chebyshev, bcs, scaling=n + 1, name="D", fun_str="psi")
+D = FunctionSpace(M, space, bcs, scaling=n + 1, name="D", fun_str="psi")
 T = TensorProduct(D, D, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
@@ -29,13 +30,8 @@ ue = (1 - x**2) * (1 - y**2)  # * sp.exp(sp.cos(sp.pi * x)) * sp.exp(sp.sin(sp.p
 # A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=False)
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 
-# jax can only do kron for dense matrices
-# C = jnp.kron(*A[0].mats) + jnp.kron(*A[1].mats)
-# uh = jnp.linalg.solve(C, b.flatten()).reshape(b.shape)
-
-# Alternative scipy sparse implementation
-A0 = tpmats_to_scipy_kron(A)
-uh = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
+A0 = tpmats_to_kron(A)
+uh = A0.solve(b.flatten()).reshape(b.shape)
 
 N = 100
 uj = T.backward(uh, kind="uniform", N=(N, N))

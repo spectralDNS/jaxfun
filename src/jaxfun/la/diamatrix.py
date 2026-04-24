@@ -104,6 +104,7 @@ class DiaMatrix(nnx.Pytree):
         cls,
         a: Array,
         offsets: tuple[int, ...] | None = None,
+        tol: float = 1e-12,
     ) -> DiaMatrix:
         """Build a DiaMatrix from a dense 2-D array.
 
@@ -112,13 +113,22 @@ class DiaMatrix(nnx.Pytree):
             offsets: Which diagonals to store.  Defaults to all diagonals
                 with at least one non-zero entry.
         """
+        import numpy as np
+
         a = jnp.asarray(a)
         n, m = a.shape
 
         if offsets is None:
+            # Use NumPy for the detection loop to avoid ~(n+m) separate JAX
+            # device dispatches, which dominate runtime for large matrices.
+            a_np = np.asarray(a)
             offsets = tuple(
-                k for k in range(-(n - 1), m) if jnp.any(jnp.diag(a, k) != 0)
+                k for k in range(-(n - 1), m) if np.any(np.abs(a_np.diagonal(k)) > tol)
             )
+
+        if not offsets:
+            empty = jnp.zeros((0, m), dtype=a.dtype)
+            return cls(data=empty, offsets=(), shape=(n, m))
 
         offsets_arr = jnp.asarray(offsets, dtype=int)
         j = jnp.arange(m)
@@ -388,27 +398,50 @@ class DiaMatrix(nnx.Pytree):
         cache[pivot] = result
         return result
 
-    def solve(self, b: Array, axis: int = 0, *, pivot: bool = False) -> Array:
-        """Solve ``A x = b`` directly via LU factorisation.
+    def solve(
+        self,
+        b: Array,
+        axis: int = 0,
+        *,
+        pivot: bool = False,
+        dense_threshold: int = 100,
+    ) -> Array:
+        """Solve ``A x = b``.
+
+        Uses the banded LU factorisation (:meth:`lu_factor`) when the
+        bandwidth is narrow enough that the JIT-compiled kernel compiles
+        quickly.  Falls back to ``jnp.linalg.solve`` on the dense matrix when
+        the product ``p * (q + 1)`` (number of unrolled loop iterations in the
+        LU kernel) exceeds ``dense_threshold``, avoiding multi-minute XLA
+        compile times for wide-banded Kronecker matrices.
 
         Args:
-            b:     Right-hand side array.  ``b.shape[axis]`` must equal ``n``.
-            axis:  The axis of ``b`` along which the system is solved.  All
-                   other axes are treated as independent batch dimensions.
-                   The output has the same shape as ``b``.
-            pivot: Passed to :meth:`lu_factor`.  Use ``True`` for matrices
-                   with zero or near-zero diagonal entries.
+            b:               Right-hand side array.
+            axis:            Axis of ``b`` along which the system is solved.
+            pivot:           Passed to :meth:`lu_factor` (banded path only).
+            dense_threshold: Maximum ``p * (q + 1)`` before switching to the
+                             dense solver.  Default 100.
 
         Returns:
             Solution array with the same shape as ``b``.
-
-        Examples::
-
-            A.solve(b)  # b shape (n,)       → (n,)
-            A.solve(B, axis=0)  # B shape (n, k)     → (n, k)
-            A.solve(B, axis=1)  # B shape (k, n)     → (k, n)
-            A.solve(T, axis=2)  # T shape (a, b, n)  → (a, b, n)
         """
+        offsets = self.offsets
+        p = max((-k for k in offsets if k < 0), default=0)
+        q = max((k for k in offsets if k > 0), default=0)
+
+        if p * (q + 1) > dense_threshold:
+            # Dense path: XLA compiles jnp.linalg.solve in milliseconds.
+            n = self.shape[0]
+            axis = axis % b.ndim
+            if b.ndim == 1:
+                return jnp.linalg.solve(self.todense(), b)
+            b_moved = jnp.moveaxis(b, axis, 0)  # (n, *rest)
+            rest_shape = b_moved.shape[1:]
+            batch = b_moved.size // n
+            b2d = b_moved.reshape(n, batch)  # (n, batch)
+            x2d = jnp.linalg.solve(self.todense(), b2d)  # (n, batch)
+            return jnp.moveaxis(x2d.reshape((n,) + rest_shape), 0, axis)
+
         return self.lu_factor(pivot=pivot).solve(b, axis=axis)
 
     @property
@@ -591,13 +624,39 @@ class DiaMatrix(nnx.Pytree):
         return self.get_row(i)[j]
 
     def _merge(self, other: DiaMatrix, sign: float) -> DiaMatrix:
-        """Add ``self + sign * other`` in DIA format."""
+        """Add ``self + sign * other`` directly in DIA format.
+
+        Fast path (identical offsets): a single on-device ``data_a + sign *
+        data_b`` — no Python loop, no host transfers, no union logic.
+
+        General path (different offsets): JIT kernel that unions the offset
+        sets at trace time (loop fully unrolled statically).
+
+        Zero diagonals are not pruned in either case.
+        """
         if self.shape != other.shape:
             raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-        # Build the sum as a dense matrix and re-detect non-zero diagonals.
-        # Addition is rarely on the hot path so the dense round-trip is fine.
-        A = self.todense() + sign * other.todense()
-        return DiaMatrix.from_dense(A)
+
+        n, m = self.shape
+
+        # ── fast path: identical offsets ────────────────────────────────────
+        if self.offsets == other.offsets:
+            return DiaMatrix(
+                data=self.data + sign * other.data,
+                offsets=self.offsets,
+                shape=(n, m),
+            )
+
+        # ── general path: different offsets ─────────────────────────────────
+        all_offsets = tuple(sorted(set(self.offsets) | set(other.offsets)))
+        result_data = _merge_jit_kernel(
+            self.data,
+            other.data,
+            self.offsets,
+            other.offsets,
+            float(sign),
+        )
+        return DiaMatrix(data=result_data, offsets=all_offsets, shape=(n, m))
 
     def __add__(self, other: DiaMatrix) -> DiaMatrix:
         return self._merge(other, +1.0)
@@ -757,6 +816,43 @@ class DiaMatrix(nnx.Pytree):
         )
 
 
+@jax.jit(static_argnums=(2, 3, 4))
+def _merge_jit_kernel(
+    data_a: Array,
+    data_b: Array,
+    self_offsets: tuple[int, ...],
+    other_offsets: tuple[int, ...],
+    sign: float,
+) -> Array:
+    """JIT-compiled core of :meth:`DiaMatrix._merge`.
+
+    Keyed on the static offset tuples and sign so that repeated additions of
+    matrices with the same sparsity pattern hit the JIT cache and run with
+    zero Python overhead and zero host↔device transfers.
+
+    Returns a ``(len(all_offsets), m)`` array of the merged diagonal data,
+    where ``all_offsets = sorted(self_offsets | other_offsets)``.
+    """
+    all_offsets: tuple[int, ...] = tuple(sorted(set(self_offsets) | set(other_offsets)))
+    self_map = {off: i for i, off in enumerate(self_offsets)}
+    other_map = {off: i for i, off in enumerate(other_offsets)}
+
+    # The loop is over static offsets so it unrolls completely at trace time.
+    rows: list[Array] = []
+    for k in all_offsets:
+        in_self = k in self_map
+        in_other = k in other_map
+        if in_self and in_other:
+            row = data_a[self_map[k]] + sign * data_b[other_map[k]]
+        elif in_self:
+            row = data_a[self_map[k]]
+        else:
+            row = sign * data_b[other_map[k]]
+        rows.append(row)
+
+    return jnp.stack(rows)  # (n_out, m)
+
+
 class LUFactors:
     """Result of :meth:`DiaMatrix.lu_factor`.
 
@@ -846,6 +942,11 @@ def _lu_banded_no_pivot_kernel(band: Array, p: int, q: int, center: int) -> Arra
     Band convention: ``band[center + off, j] = A[j - off, j]``, ``center = p``,
     ``bw = p + q + 1``.
 
+    The inner double-loop is implemented via ``jax.lax.fori_loop`` rather than
+    Python ``for`` so XLA compiles a single loop body regardless of bandwidth,
+    avoiding the O(p * q) XLA-node explosion that caused multi-minute compile
+    times for wide-banded Kronecker matrices.
+
     Returns the in-place factored band (same shape as input).
     """
     n = band.shape[1]
@@ -854,22 +955,22 @@ def _lu_banded_no_pivot_kernel(band: Array, p: int, q: int, center: int) -> Arra
         k = k.astype(int)
         pivot = band[center, k]
 
-        for s in range(1, p + 1):
+        def s_step(s: Array, band: Array) -> Array:
             in_i = (k + s) < n
-            factor = jnp.where(in_i, band[center - s, k] / pivot, 0.0)
-            band = band.at[center - s, k].set(
-                jnp.where(in_i, factor, band[center - s, k])
-            )
-            for u in range(1, q + 1):
+            f = jnp.where(in_i, band[center - s, k] / pivot, 0.0)
+            band = band.at[center - s, k].set(jnp.where(in_i, f, band[center - s, k]))
+
+            def u_step(u: Array, band: Array) -> Array:
                 j = k + u
                 in_j = j < n
-                s_idx = center + u - s
                 safe_j = jnp.where(in_j, j, 0)
-                band = band.at[s_idx, safe_j].add(
-                    jnp.where(in_i & in_j, -factor * band[center + u, safe_j], 0.0)
+                return band.at[center + u - s, safe_j].add(
+                    jnp.where(in_i & in_j, -f * band[center + u, safe_j], 0.0)
                 )
 
-        return band, None
+            return jax.lax.fori_loop(1, q + 1, u_step, band)
+
+        return jax.lax.fori_loop(1, p + 1, s_step, band), None
 
     band_lu, _ = jax.lax.scan(elim_step, band, jnp.arange(n, dtype=int))
     return band_lu
@@ -908,8 +1009,10 @@ def _lu_banded_kernel(
         k = k.astype(int)
 
         # --- partial pivot: find argmax |A[k..k+p, k]| ---
-        # A[k+t, k] lives at band[center - t, k]  (t static, k traced)
-        pivot_vals = jnp.stack([band[center - t, k] for t in range(p + 1)])
+        # A[k+t, k] lives at band[center - t, k].  Use dynamic_slice to read
+        # p+1 entries from column k without a Python loop.
+        pivot_col = jax.lax.dynamic_slice(band[:, k], (center - p,), (p + 1,))
+        pivot_vals = pivot_col[::-1]  # pivot_vals[t] = band[center-t, k]
         row_inds = k + jnp.arange(p + 1, dtype=int)
         masked = jnp.where(row_inds < n, jnp.abs(pivot_vals), 0.0)
         r_rel = jnp.argmax(masked).astype(int)
@@ -918,34 +1021,29 @@ def _lu_banded_kernel(
         # --- swap rows k ↔ r in DIA band storage ---
         #
         # In column-aligned DIA format:  band[center + off, j] = A[j - off, j].
-        # For a given original-matrix column j, the entry in row i is stored at
-        # band row  s = center + j - i  and band column  j.
-        # Swapping rows k and r means, for each column j:
-        #   swap  band[center + j - k, j]  with  band[center + j - r, j].
-        #
-        # With dj = j - k (static loop variable) and dr = r_rel (traced):
-        #   s_k  = center + dj          (static)
-        #   s_r  = center + dj - r_rel  (dynamic — enumerate dr statically)
-        for dj in range(-center, q_eff + 1):
+        # Swapping rows k and r: for each band column j (= k+dj), exchange
+        # band[center+dj, j] ↔ band[center+dj-r_rel, j].
+        # fori_loop over the bw columns in the band window — avoids O(bw*p)
+        # static unrolling.  dj ranges over [-center, q_eff] so that
+        # s_k = center+dj ∈ [0, bw-1] is always in bounds.  s_r = s_k-r_rel
+        # may be negative; we clamp it and mask the write so stray updates
+        # never escape.
+        def swap_col(dj: Array, band: Array) -> Array:
             j = k + dj
             in_j = (j >= 0) & (j < n)
-            s_k = center + dj  # static band-row for row k at column j
-            if not (0 <= s_k < bw):
-                continue
             safe_j = jnp.where(in_j, j, 0)
-            for dr in range(1, p + 1):
-                s_r = s_k - dr  # static band-row for row r=k+dr at column j
-                if not (0 <= s_r < bw):
-                    continue
-                do_swap = (r_rel == dr) & in_j
-                v_k = band[s_k, safe_j]
-                v_r = band[s_r, safe_j]
-                band = band.at[s_k, safe_j].set(
-                    jnp.where(do_swap, v_r, band[s_k, safe_j])
-                )
-                band = band.at[s_r, safe_j].set(
-                    jnp.where(do_swap, v_k, band[s_r, safe_j])
-                )
+            s_k = center + dj
+            s_r = s_k - r_rel
+            in_band_r = (s_r >= 0) & (s_r < bw)
+            do_swap = in_j & in_band_r & (r_rel > 0)
+            safe_s_r = jnp.maximum(s_r, 0)
+            v_k = band[s_k, safe_j]
+            v_r = band[safe_s_r, safe_j]
+            band = band.at[s_k, safe_j].set(jnp.where(do_swap, v_r, v_k))
+            band = band.at[safe_s_r, safe_j].set(jnp.where(do_swap, v_k, v_r))
+            return band
+
+        band = jax.lax.fori_loop(-center, q_eff + 1, swap_col, band)
 
         pk, pr = perm[k], perm[r]
         perm = perm.at[k].set(pr)
@@ -953,27 +1051,23 @@ def _lu_banded_kernel(
 
         pivot = band[center, k]  # A[k, k] after swap
 
-        # --- eliminate rows k+1 .. k+p (unrolled at trace time) ---
-        for s in range(1, p + 1):
+        # --- eliminate rows k+1 .. k+p via fori_loop (avoids O(p*q) unrolling) ---
+        def s_step(s: Array, band: Array) -> Array:
             in_i = (k + s) < n
-            # Multiplier: A[k+s, k] = band[center - s, k]
-            factor = jnp.where(in_i, band[center - s, k] / pivot, 0.0)
-            band = band.at[center - s, k].set(
-                jnp.where(in_i, factor, band[center - s, k])
-            )
-            for u in range(1, q_eff + 1):
+            f = jnp.where(in_i, band[center - s, k] / pivot, 0.0)
+            band = band.at[center - s, k].set(jnp.where(in_i, f, band[center - s, k]))
+
+            def u_step(u: Array, band: Array) -> Array:
                 j = k + u
                 in_j = j < n
-                # A[k+s, k+u] = band[center + u - s, k+u]  (s_idx = center+u-s, static)
-                s_idx = center + u - s
                 safe_j = jnp.where(in_j, j, 0)
-                band = band.at[s_idx, safe_j].add(
-                    jnp.where(
-                        in_i & in_j,
-                        -factor * band[center + u, safe_j],
-                        0.0,
-                    )
+                return band.at[center + u - s, safe_j].add(
+                    jnp.where(in_i & in_j, -f * band[center + u, safe_j], 0.0)
                 )
+
+            return jax.lax.fori_loop(1, q_eff + 1, u_step, band)
+
+        band = jax.lax.fori_loop(1, p + 1, s_step, band)
 
         return (band, perm), None
 

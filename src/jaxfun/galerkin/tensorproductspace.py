@@ -980,15 +980,16 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
             out = jnp.kron(out, a)
         return Matrix(out)
 
-    @jax.jit
     def _matmul_array(self, w: Array) -> Array:
         if len(self.mats) == 2:
-            return self.mats[0] @ w @ self.mats[1].T
+            result = self.mats[0] @ w @ self.mats[1].T
         elif len(self.mats) == 3:
-            return jnp.einsum(
-                "ik,jl,nm,klm->ijn", self.mats[0], self.mats[1], self.mats[2], w
+            result = self.mats[2].matvec(
+                self.mats[1].matvec(self.mats[0].matvec(w, axis=0), axis=1), axis=2
             )
-        raise NotImplementedError("Matmul not implemented for >3 dimensions")
+        else:
+            raise NotImplementedError("Matmul not implemented for >3 dimensions")
+        return result * jnp.asarray(self.scale)
 
     def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply matrix to rank-2 coefficient array u."""
@@ -1001,15 +1002,16 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         """Alias to __call__ for @ operator."""
         return self.__call__(u)
 
-    @jax.jit
     def _rmatmul_array(self, w: Array) -> Array:
         if len(self.mats) == 2:
-            return self.mats[0].T @ w @ self.mats[1]
+            result = self.mats[0].T @ w @ self.mats[1]
         elif len(self.mats) == 3:
-            return jnp.einsum(
-                "ik,jl,nm,klm->ijn", self.mats[0], self.mats[1], self.mats[2], w
+            result = self.mats[2].T.matvec(
+                self.mats[1].T.matvec(self.mats[0].T.matvec(w, axis=0), axis=1), axis=2
             )
-        raise NotImplementedError("Right matmul not implemented for >3 dimensions")
+        else:
+            raise NotImplementedError("Right matmul not implemented for >3 dimensions")
+        return result * jnp.asarray(self.scale)
 
     def __rmatmul__(self, u: Array | JAXFunction) -> Array:
         """Right matmul (u @ A) treating u as left factor."""

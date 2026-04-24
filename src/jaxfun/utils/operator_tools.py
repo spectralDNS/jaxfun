@@ -73,7 +73,7 @@ def operator_diagonal(obj: GalerkinOperatorLike | None) -> Array | None:
     if isinstance(obj, DiaMatrix):
         return sparse_diagonal(obj)
     if isinstance(obj, Matrix):
-        return obj.data.diagonal()
+        return obj.diagonal()
     if isinstance(obj, TPMatrices):
         return _sum_diagonals(cast(list[GalerkinOperator], list(obj.tpmats)))
     if isinstance(obj, TPMatrix):

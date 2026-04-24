@@ -1,11 +1,13 @@
-"""Tests for diakron, tpmats_to_kron, and solvers on Kronecker-assembled matrices.
+"""Tests for diakron, tpmats_to_kron, TPMatrix matvec, and solvers.
 
 Covers:
 - diakron correctness vs jnp.kron on square/non-square DIA inputs
 - tpmats_to_kron correctness (dense Matrix path and DIA path) vs numpy kron
 - tpmats_to_kron scale is applied exactly once
+- TPMatrix._matmul_array  (A @ u) and _rmatmul_array (u @ A) for 2-D and 3-D
+- scale propagation through __call__ / __matmul__ / __rmatmul__
 - LU and dense solvers on matrices built via tpmats_to_kron
-- Poisson-like and biharmomic-like 2D problems solved end-to-end
+- Poisson-like and biharmonic-like 2D problems solved end-to-end
 """
 
 from __future__ import annotations
@@ -341,3 +343,188 @@ class TestManualKronSolve:
         x_banded = L.solve(b, dense_threshold=10_000)
         x_dense = L.solve(b, dense_threshold=0)
         assert jnp.allclose(x_banded, x_dense, atol=ulp(100))
+
+
+# ---------------------------------------------------------------------------
+# TPMatrix._matmul_array and _rmatmul_array
+# ---------------------------------------------------------------------------
+
+
+def _make_tpmatrix_2d(
+    m0: int, n0: int, m1: int, n1: int, scale: float = 1.0
+) -> tuple[TPMatrix, np.ndarray]:
+    """Return a TPMatrix(A0, A1) and the corresponding dense Kronecker product."""
+    rng = np.random.default_rng(7)
+    a0 = rng.standard_normal((m0, n0)).astype(np.float32)
+    a1 = rng.standard_normal((m1, n1)).astype(np.float32)
+    tp = TPMatrix(
+        [Matrix(jnp.array(a0)), Matrix(jnp.array(a1))],
+        scale,
+    )
+    K = np.kron(a0, a1) * scale
+    return tp, K
+
+
+def _make_tpmatrix_3d(
+    sizes: tuple[int, int, int], scale: float = 1.0, seed: int = 11
+) -> tuple[TPMatrix, np.ndarray]:
+    """Return a square TPMatrix(A0, A1, A2) and matching dense Kronecker product."""
+    rng = np.random.default_rng(seed)
+    mats_np = [rng.standard_normal((s, s)).astype(np.float32) for s in sizes]
+    K = mats_np[0]
+    for a in mats_np[1:]:
+        K = np.kron(K, a)
+    K = K * scale
+    tp = TPMatrix([Matrix(jnp.array(a)) for a in mats_np], scale)
+    return tp, K
+
+
+class TestTPMatrixMatmul:
+    """Tests for TPMatrix._matmul_array (A @ u) and _rmatmul_array (u @ A)."""
+
+    # ------------------------------------------------------------------
+    # 2-D: square factor matrices
+    # ------------------------------------------------------------------
+
+    def test_2d_matmul_vs_kron(self):
+        """(A0⊗A1) @ vec(w) == vec(A0 @ w @ A1.T) for square factors."""
+        n0, n1 = 5, 4
+        tp, K = _make_tpmatrix_2d(n0, n0, n1, n1)
+        rng = np.random.default_rng(0)
+        w = jnp.array(rng.standard_normal((n0, n1)).astype(np.float32))
+        result = tp(w)
+        expected = (K @ np.array(w).ravel()).reshape(n0, n1)
+        assert jnp.allclose(result, jnp.array(expected), atol=1e-5)
+
+    def test_2d_rmatmul_vs_kron(self):
+        """vec(w) @ (A0⊗A1) == vec(A0.T @ w @ A1)."""
+        n0, n1 = 5, 4
+        tp, K = _make_tpmatrix_2d(n0, n0, n1, n1)
+        rng = np.random.default_rng(1)
+        w = jnp.array(rng.standard_normal((n0, n1)).astype(np.float32))
+        result = w @ tp  # calls __rmatmul__
+        expected = (np.array(w).ravel() @ K).reshape(n0, n1)
+        assert jnp.allclose(result, jnp.array(expected), atol=1e-5)
+
+    def test_2d_matmul_rmatmul_consistent(self):
+        """For a symmetric Kronecker product A@w and w@A must coincide."""
+        n = 4
+        T = _diag3(n)
+        I = diags([jnp.ones(n)], offsets=(0,))
+        K_dia = diakron(T, I)  # symmetric
+        tp = TPMatrix([T, I], 1.0)
+        rng = np.random.default_rng(2)
+        w = jnp.array(rng.standard_normal((n, n)).astype(np.float32))
+        # A @ w (flattened) and w @ A (flattened) differ only by interpretation:
+        # check against kron dense product
+        K_dense = np.array(K_dia.todense())
+        fwd = np.array(tp(w)).ravel()
+        rev = np.array(w @ tp).ravel()
+        assert np.allclose(fwd, K_dense @ np.array(w).ravel(), atol=1e-5)
+        assert np.allclose(rev, np.array(w).ravel() @ K_dense, atol=1e-5)
+
+    # ------------------------------------------------------------------
+    # 2-D: non-square factor matrices
+    # ------------------------------------------------------------------
+
+    def test_2d_matmul_nonsquare(self):
+        """Works when A0 is m0×n0 with m0 ≠ n0."""
+        tp, K = _make_tpmatrix_2d(3, 5, 4, 6)  # (12, 30) Kronecker product
+        rng = np.random.default_rng(3)
+        w = jnp.array(rng.standard_normal((5, 6)).astype(np.float32))
+        result = tp(w)
+        expected = (K @ np.array(w).ravel()).reshape(3, 4)
+        assert result.shape == (3, 4)
+        assert jnp.allclose(result, jnp.array(expected), atol=1e-5)
+
+    def test_2d_rmatmul_nonsquare(self):
+        """vec(w) @ kron for non-square factors."""
+        tp, K = _make_tpmatrix_2d(3, 5, 4, 6)
+        rng = np.random.default_rng(4)
+        w = jnp.array(rng.standard_normal((3, 4)).astype(np.float32))
+        result = w @ tp
+        expected = (np.array(w).ravel() @ K).reshape(5, 6)
+        assert result.shape == (5, 6)
+        assert jnp.allclose(result, jnp.array(expected), atol=1e-5)
+
+    # ------------------------------------------------------------------
+    # 2-D: scale propagation
+    # ------------------------------------------------------------------
+
+    def test_2d_scale_applied(self):
+        """scale=3 must multiply the output by 3."""
+        n0, n1 = 4, 5
+        tp1, _ = _make_tpmatrix_2d(n0, n0, n1, n1, scale=1.0)
+        # same matrices, tripled scale
+        tp3 = TPMatrix(list(tp1.mats), scale=3.0)
+        rng = np.random.default_rng(5)
+        w = jnp.array(rng.standard_normal((n0, n1)).astype(np.float32))
+        assert jnp.allclose(tp3(w), 3.0 * tp1(w), atol=1e-5)
+
+    def test_2d_rmatmul_scale_applied(self):
+        n0, n1 = 4, 5
+        tp1, _ = _make_tpmatrix_2d(n0, n0, n1, n1, scale=1.0)
+        # same matrices, double scale
+        tp2 = TPMatrix(list(tp1.mats), scale=2.0)
+        rng = np.random.default_rng(6)
+        w = jnp.array(rng.standard_normal((n0, n1)).astype(np.float32))
+        assert jnp.allclose(w @ tp2, 2.0 * (w @ tp1), atol=1e-5)
+
+    # ------------------------------------------------------------------
+    # 3-D: square factor matrices
+    # ------------------------------------------------------------------
+
+    def test_3d_matmul_vs_kron(self):
+        """(A0⊗A1⊗A2) @ vec(w) == result from sequential matvec."""
+        # Use uniform sizes to avoid JIT pytree shape mismatch across tests
+        tp, K = _make_tpmatrix_3d((4, 4, 4))
+        rng = np.random.default_rng(8)
+        w = jnp.array(rng.standard_normal((4, 4, 4)).astype(np.float32))
+        result = tp(w)
+        expected = (K @ np.array(w).ravel()).reshape(4, 4, 4)
+        assert result.shape == (4, 4, 4)
+        assert jnp.allclose(result, jnp.array(expected), atol=1e-4)
+
+    def test_3d_rmatmul_vs_kron(self):
+        """vec(w) @ (A0⊗A1⊗A2) via __rmatmul__."""
+        tp, K = _make_tpmatrix_3d((4, 4, 4), seed=99)
+        rng = np.random.default_rng(9)
+        w = jnp.array(rng.standard_normal((4, 4, 4)).astype(np.float32))
+        result = w @ tp
+        expected = (np.array(w).ravel() @ K).reshape(4, 4, 4)
+        assert result.shape == (4, 4, 4)
+        assert jnp.allclose(result, jnp.array(expected), atol=1e-4)
+
+    def test_3d_scale_applied(self):
+        """scale propagates correctly in 3-D."""
+        tp1, _ = _make_tpmatrix_3d((4, 4, 4), scale=1.0)
+        tp4 = TPMatrix(list(tp1.mats), scale=4.0)
+        rng = np.random.default_rng(10)
+        w = jnp.array(rng.standard_normal((4, 4, 4)).astype(np.float32))
+        assert jnp.allclose(tp4(w), 4.0 * tp1(w), atol=1e-4)
+
+    # ------------------------------------------------------------------
+    # Galerkin-assembled TPMatrix (DIA factor matrices)
+    # ------------------------------------------------------------------
+
+    def test_galerkin_2d_matmul_vs_kron(self):
+        """TPMatrix from inner() with DIA factors: A@u matches tpmats_to_kron @ u."""
+        A, _ = _poisson_tpmats(N=8)
+        C = tpmats_to_kron(A)
+        rng = np.random.default_rng(20)
+        shape = tuple(m.shape[1] for m in A[0].mats)
+        w = jnp.array(rng.standard_normal(shape).astype(np.float32))
+        result = sum(tpm(w) for tpm in A)
+        expected = (C.todense() @ np.array(w).ravel()).reshape(shape)
+        assert jnp.allclose(result, jnp.array(expected), atol=1e-4)
+
+    def test_galerkin_2d_rmatmul_vs_kron(self):
+        """w @ TPMatrix from inner() matches w @ tpmats_to_kron."""
+        A, _ = _poisson_tpmats(N=8)
+        C = tpmats_to_kron(A)
+        rng = np.random.default_rng(21)
+        shape = tuple(m.shape[0] for m in A[0].mats)
+        w = jnp.array(rng.standard_normal(shape).astype(np.float32))
+        result = sum(w @ tpm for tpm in A)
+        expected = (np.array(w).ravel() @ C.todense()).reshape(shape)
+        assert jnp.allclose(result, jnp.array(expected), atol=1e-4)

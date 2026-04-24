@@ -5,14 +5,13 @@ import sys
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-from scipy import sparse as scipy_sparse
 
 from jaxfun.coordinates import x, y
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
+from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -41,8 +40,9 @@ ue = T.system.expr_psi_to_base_scalar(ue)
 
 A, b = inner(Div(Grad(Div(Grad(u)))) * v - Div(Grad(Div(Grad(ue)))) * v, sparse=False)
 
-C = tpmats_to_scipy_kron(A)
-uh = jnp.array(scipy_sparse.linalg.spsolve(C, b.flatten()).reshape(b.shape))
+C = tpmats_to_kron(A)
+# uh = jnp.array(scipy_sparse.linalg.spsolve(C, b.flatten()).reshape(b.shape))
+uh = C.solve(b.flatten()).reshape(b.shape)
 
 N = 100
 xj = T.mesh(kind="uniform", N=(N, N))
@@ -51,7 +51,7 @@ uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
 if "PYTEST" in os.environ:
-    assert error < ulp(C.max()), error
+    assert error < ulp(C.data.max()), error
     sys.exit(1)
 
 print("Error =", error)

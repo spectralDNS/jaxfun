@@ -67,7 +67,7 @@ def _circdiag(n: int) -> tuple[np.ndarray, DiaMatrix]:
         + np.diag(-np.ones(n - 1), 1)
         + np.diag(-np.ones(n - 1), -1)
         + np.diag(-np.ones(1), n - 1)  # wrap-around super-diagonal
-        + np.diag(-np.ones(1), -(n - 1))  # wrap-around sub-diagonal
+        + np.diag(np.ones(1), -(n - 1))  # wrap-around sub-diagonal
     )
     A = DiaMatrix.from_dense(jnp.array(a), offsets=(-n + 1, -1, 0, 1, n - 1))
     return a, A
@@ -89,7 +89,7 @@ class TestConstruction:
         """from_dense with no offsets should detect all non-zero diagonals."""
         a, A = mat(8)
         A2 = DiaMatrix.from_dense(jnp.array(a))
-        assert jnp.allclose(A2.to_dense(), jnp.array(a))
+        assert jnp.allclose(A2.todense(), jnp.array(a))
 
     def test_from_dense_nonsquare(self):
         a = jnp.zeros((3, 5))
@@ -118,6 +118,25 @@ class TestConstruction:
         assert A.shape == (3, 3)
         assert jnp.allclose(A.diagonal(), jnp.array([3.0, 3.0, 3.0]))
 
+    def test_diags_scalar_broadcast(self):
+        """A length-1 diagonal should be broadcast to the full diagonal length."""
+        n = 5
+        A = diags(
+            [jnp.array([-1.0]), jnp.array([2.0]), jnp.array([-1.0])],
+            offsets=(-1, 0, 1),
+            shape=(n, n),
+        )
+        assert A.shape == (n, n)
+        assert jnp.allclose(A.diagonal(0), 2.0 * jnp.ones(n))
+        assert jnp.allclose(A.diagonal(1), -1.0 * jnp.ones(n - 1))
+        assert jnp.allclose(A.diagonal(-1), -1.0 * jnp.ones(n - 1))
+        # dense round-trip via todense
+        import numpy as np
+
+        dense = np.array(A.todense())
+        expected = 2 * np.eye(n) - np.eye(n, k=1) - np.eye(n, k=-1)
+        assert jnp.allclose(jnp.array(dense), jnp.array(expected))
+
     def test_diags_vs_scipy(self):
         """diags should match scipy.sparse.diags for square matrices."""
         d_sub = np.ones(4)
@@ -129,7 +148,7 @@ class TestConstruction:
         A_scipy = scipy.sparse.diags(
             [d_sub, d_main, d_sup], offsets=(-1, 0, 1)
         ).toarray()
-        assert jnp.allclose(A.to_dense(), jnp.array(A_scipy))
+        assert jnp.allclose(A.todense(), jnp.array(A_scipy))
 
     def test_init_stores_int32_offsets(self):
         _, A = _tridiag(3)
@@ -140,7 +159,7 @@ class TestToDense:
     @pytest.mark.parametrize("mat", allmatrices)
     def test_round_trip_square(self, mat):
         a, A = mat(6)
-        assert jnp.allclose(A.to_dense(), jnp.array(a))
+        assert jnp.allclose(A.todense(), jnp.array(a))
 
     def test_round_trip_nonsquare(self):
         # Build a known sparse 4×7 matrix by hand via diags.
@@ -153,13 +172,13 @@ class TestToDense:
             offsets=(-1, 0, 1),
             shape=(4, 7),
         )
-        assert jnp.allclose(A.to_dense(), A.to_dense())  # idempotent
-        A2 = DiaMatrix.from_dense(A.to_dense(), offsets=(-1, 0, 1))
-        assert jnp.allclose(A2.to_dense(), A.to_dense())
+        assert jnp.allclose(A.todense(), A.todense())  # idempotent
+        A2 = DiaMatrix.from_dense(A.todense(), offsets=(-1, 0, 1))
+        assert jnp.allclose(A2.todense(), A.todense())
 
     def test_zero_matrix(self):
         A = DiaMatrix.from_dense(jnp.zeros((3, 4)), offsets=(0,))
-        assert jnp.allclose(A.to_dense(), jnp.zeros((3, 4)))
+        assert jnp.allclose(A.todense(), jnp.zeros((3, 4)))
 
 
 class TestMatvec:
@@ -180,7 +199,7 @@ class TestMatvec:
             shape=(4, 6),
         )
         x = jnp.ones(6)
-        expected = A.to_dense() @ x
+        expected = A.todense() @ x
         assert jnp.allclose(A.matvec(x), expected)
 
     def test_matmat_nonsquare(self):
@@ -190,9 +209,9 @@ class TestMatvec:
             shape=(4, 6),
         )
         AT = A.T
-        expected = A.to_dense() @ AT.to_dense()
+        expected = A.todense() @ AT.todense()
         H = A @ AT
-        assert jnp.allclose(cast(DiaMatrix, H).to_dense(), expected)
+        assert jnp.allclose(cast(DiaMatrix, H).todense(), expected)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_matmat_shape(self, mat):
@@ -233,7 +252,7 @@ class TestMatvec:
         a, A = mat(6)
         result = A @ A
         expected = jnp.array(a) @ jnp.array(a)
-        assert jnp.allclose(result.to_dense(), expected, atol=1e-6)
+        assert jnp.allclose(result.todense(), expected, atol=1e-6)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_rmatmul_vector(self, mat):
@@ -257,7 +276,7 @@ class TestTranspose:
     @pytest.mark.parametrize("mat", allmatrices)
     def test_T_dense_square(self, mat):
         a, A = mat(6)
-        assert jnp.allclose(A.T.to_dense(), jnp.array(a).T)
+        assert jnp.allclose(A.T.todense(), jnp.array(a).T)
 
     def test_T_shape_nonsquare(self):
         A = diags(
@@ -274,7 +293,7 @@ class TestTranspose:
             offsets=(-1, 0, 1),
             shape=(4, 6),
         )
-        assert jnp.allclose(A.T.to_dense(), A.to_dense().T)
+        assert jnp.allclose(A.T.todense(), A.todense().T)
 
     def test_T_offsets_negated(self):
         _, A = _tridiag(4)
@@ -284,7 +303,7 @@ class TestTranspose:
     @pytest.mark.parametrize("mat", allmatrices)
     def test_double_T_identity(self, mat):
         _, A = mat(6)
-        assert jnp.allclose(A.T.T.to_dense(), A.to_dense())
+        assert jnp.allclose(A.T.T.todense(), A.todense())
 
 
 class TestDiagonal:
@@ -318,7 +337,7 @@ class TestDiagonal:
             offsets=(-1, 0, 1),
             shape=(4, 6),
         )
-        np_dense = np.array(A.to_dense())
+        np_dense = np.array(A.todense())
         assert jnp.allclose(A.diagonal(0), jnp.array(np.diag(np_dense, 0)))
         assert jnp.allclose(A.diagonal(1), jnp.array(np.diag(np_dense, 1)))
         assert jnp.allclose(A.diagonal(-1), jnp.array(np.diag(np_dense, -1)))
@@ -327,19 +346,19 @@ class TestDiagonal:
 class TestScalarArithmetic:
     def test_scale(self):
         a, A = _tridiag(3)
-        assert jnp.allclose((A.scale(3.0)).to_dense(), 3.0 * jnp.array(a))
+        assert jnp.allclose((A.scale(3.0)).todense(), 3.0 * jnp.array(a))
 
     def test_mul(self):
         a, A = _tridiag(3)
-        assert jnp.allclose((A * 2.0).to_dense(), 2.0 * jnp.array(a))
+        assert jnp.allclose((A * 2.0).todense(), 2.0 * jnp.array(a))
 
     def test_rmul(self):
         a, A = _tridiag(3)
-        assert jnp.allclose((0.5 * A).to_dense(), 0.5 * jnp.array(a))
+        assert jnp.allclose((0.5 * A).todense(), 0.5 * jnp.array(a))
 
     def test_neg(self):
         a, A = _tridiag(3)
-        assert jnp.allclose((-A).to_dense(), -jnp.array(a))
+        assert jnp.allclose((-A).todense(), -jnp.array(a))
 
 
 class TestMatvecAxis:
@@ -431,12 +450,12 @@ class TestAddSub:
     def test_add(self):
         a, A = _tridiag(4)
         result = A + A
-        assert jnp.allclose(result.to_dense(), 2.0 * jnp.array(a))
+        assert jnp.allclose(result.todense(), 2.0 * jnp.array(a))
 
     def test_sub_zero(self):
         _, A = _tridiag(4)
         result = A - A
-        assert jnp.allclose(result.to_dense(), jnp.zeros((4, 4)))
+        assert jnp.allclose(result.todense(), jnp.zeros((4, 4)))
 
     def test_add_shape_mismatch(self):
         _, A = _tridiag(3)
@@ -473,7 +492,7 @@ class TestProperties:
         _, A = _tridiag(3)
         B = A.astype(jnp.float16)
         assert B.dtype == jnp.float16
-        assert jnp.allclose(B.to_dense().astype(jnp.float32), A.to_dense(), atol=1e-2)
+        assert jnp.allclose(B.todense().astype(jnp.float32), A.todense(), atol=1e-2)
 
     def test_repr(self):
         _, A = _tridiag(3)
@@ -483,23 +502,26 @@ class TestProperties:
 
 
 class TestSolve:
-    def test_solve_small(self):
-        a, A = _tridiag(5)
-        x_true = jnp.arange(1, 6, dtype=float)
-        b = jnp.array(a) @ x_true
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_solve_small(self, mat):
+        a, A = mat(7)
+        x_true = jnp.arange(1, 8, dtype=float)
+        b = a @ x_true
         x_hat = A.solve(b)
         assert jnp.allclose(x_hat, x_true, atol=1e-5)
 
-    def test_solve_residual(self):
-        a, A = _tridiag(8)
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_solve_residual(self, mat):
+        a, A = mat(8)
         rng = np.random.default_rng(42)
         b = jnp.array(rng.standard_normal(8))
         x = A.solve(b)
         assert float(jnp.linalg.norm(A.matvec(x) - b)) < 1e-5
 
-    def test_solve_axis1(self):
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_solve_axis1(self, mat):
         """A.solve(B, axis=1): each row of B is a separate RHS."""
-        a, A = _tridiag(6)
+        a, A = mat(6)
         rng = np.random.default_rng(55)
         X_true = jnp.array(rng.standard_normal((4, 6)))
         B = (jnp.array(a) @ X_true.T).T  # (4, 6)
@@ -507,13 +529,14 @@ class TestSolve:
         assert X_hat.shape == (4, 6)
         assert jnp.allclose(X_hat, X_true, atol=1e-5)
 
-    def test_solve_axis_matches_matvec(self):
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_solve_axis_matches_matvec(self, mat):
         """A.solve(A.matvec(X, axis=k), axis=k) == X for k in 0,1,2."""
-        a, A = _tridiag(5)
+        a, A = mat(7)
         rng = np.random.default_rng(66)
         for ax in (0, 1, 2):
-            shape = [3, 5, 4]
-            shape[ax] = 5
+            shape = [3, 7, 4]
+            shape[ax] = 7
             X = jnp.array(rng.standard_normal(shape))
             B = A.matvec(X, axis=ax)
             X_hat = A.solve(B, axis=ax)
@@ -522,68 +545,76 @@ class TestSolve:
 
 
 class TestLU:
-    def test_lu_factor_returns_lu_factors(self):
-        _, A = _tridiag(4)
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_lu_factor_returns_lu_factors(self, mat):
+        _, A = mat(4)
         lu = A.lu_factor()
         assert isinstance(lu, LUFactors)
         assert isinstance(lu.L, DiaMatrix)
         assert isinstance(lu.U, DiaMatrix)
 
-    def test_lu_L_shape(self):
-        _, A = _tridiag(5)
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_lu_L_shape(self, mat):
+        _, A = mat(5)
         lu = A.lu_factor()
         assert lu.L.shape == (5, 5)
 
-    def test_lu_U_shape(self):
-        _, A = _tridiag(5)
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_lu_U_shape(self, mat):
+        _, A = mat(5)
         lu = A.lu_factor()
         assert lu.U.shape == (5, 5)
 
-    def test_lu_L_unit_diagonal(self):
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_lu_L_unit_diagonal(self, mat):
         """L must have a unit main diagonal."""
-        _, A = _tridiag(5)
+        _, A = mat(5)
         lu = A.lu_factor()
         assert jnp.allclose(lu.L.diagonal(0), jnp.ones(5))
 
     def test_lu_L_offsets(self):
         """For a tridiagonal matrix (lower bandwidth 1), L has offsets (-1, 0)."""
-        _, A = _tridiag(5)
+        _, A = _pentadiag(5)
         lu = A.lu_factor()
-        assert set(lu.L.offsets) == {-1, 0}
+        assert set(lu.L.offsets) == {-2, -1, 0}
 
     def test_lu_U_offsets(self):
         """For a tridiagonal (no pivoting), U has offsets (0, 1)."""
-        _, A = _tridiag(5)
+        _, A = _pentadiagO(5)
         lu = A.lu_factor()
-        assert set(lu.U.offsets) == {0, 1}
+        assert set(lu.U.offsets) == {0, 1, 2, 3, 4}
 
-    def test_lu_product_equals_original(self):
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_lu_product_equals_original(self, mat):
         """L @ U should reproduce the permuted matrix P @ A."""
-        a, A = _tridiag(5)
+        a, A = mat(5)
         lu = A.lu_factor()
         LU = cast(DiaMatrix, lu.L @ lu.U)
         PA = jnp.array(a) if lu.perm is None else jnp.array(a)[lu.perm, :]
-        assert jnp.allclose(LU.to_dense(), PA, atol=1e-5)
+        assert jnp.allclose(LU.todense(), PA, atol=1e-5)
 
-    def test_lu_solve_exact(self):
-        a, A = _tridiag(5)
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_lu_solve_exact(self, mat):
+        a, A = mat(5)
         x_true = jnp.arange(1.0, 6.0)
         b = jnp.array(a) @ x_true
         lu = A.lu_factor()
         x_hat = lu.solve(b)
         assert jnp.allclose(x_hat, x_true, atol=1e-5)
 
-    def test_lu_solve_random_rhs(self):
-        a, A = _tridiag(8)
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_lu_solve_random_rhs(self, mat):
+        a, A = mat(8)
         rng = np.random.default_rng(99)
         b = jnp.array(rng.standard_normal(8))
         lu = A.lu_factor()
         x = lu.solve(b)
         assert float(jnp.linalg.norm(A.matvec(x) - b)) < 1e-5
 
-    def test_lu_solve_multiple_rhs(self):
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_lu_solve_multiple_rhs(self, mat):
         """solve() should work for 2-D right-hand sides (n, k)."""
-        a, A = _tridiag(6)
+        a, A = mat(6)
         rng = np.random.default_rng(7)
         X_true = jnp.array(rng.standard_normal((6, 4)))
         B = jnp.array(a) @ X_true
@@ -617,28 +648,6 @@ class TestLU:
         x = lu.solve(b)
         assert jnp.allclose(x, b / d, atol=1e-6)
 
-    def test_lu_pentadiagonal(self):
-        """LU factorisation for a pentadiagonal (bandwidth 2) SPD matrix."""
-        n = 7
-        a = (
-            np.diag(4 * np.ones(n))
-            + np.diag(-np.ones(n - 1), 1)
-            + np.diag(-np.ones(n - 1), -1)
-            + np.diag(-0.1 * np.ones(n - 2), 2)
-            + np.diag(-0.1 * np.ones(n - 2), -2)
-        )
-        A = DiaMatrix.from_dense(jnp.array(a), offsets=(-2, -1, 0, 1, 2))
-        lu = A.lu_factor()
-        # Check P @ A == L @ U
-        PA = jnp.array(a) if lu.perm is None else jnp.array(a)[lu.perm, :]
-        H = cast(DiaMatrix, lu.L @ lu.U)
-        assert jnp.allclose(H.to_dense(), PA, atol=1e-5)
-        # Solve a random system
-        rng = np.random.default_rng(3)
-        b = jnp.array(rng.standard_normal(n))
-        x = lu.solve(b)
-        assert float(jnp.linalg.norm(A.matvec(x) - b)) < 1e-5
-
     def test_lu_zero_diagonal(self):
         """Matrix whose main diagonal starts with zero — requires pivoting."""
         # Construct a simple banded matrix with A[0,0] = 0:
@@ -651,7 +660,7 @@ class TestLU:
         # L @ U == P @ A
         PA = a if lu.perm is None else a[lu.perm, :]
         H = cast(DiaMatrix, lu.L @ lu.U)
-        assert jnp.allclose(H.to_dense(), PA, atol=1e-5)
+        assert jnp.allclose(H.todense(), PA, atol=1e-5)
         # Solve A x = b
         x_true = jnp.array([1.0, 2.0, 3.0])
         b = a @ x_true
@@ -671,9 +680,10 @@ class TestLU:
         assert lu_swap.perm.shape == (3,)
         assert lu_swap.perm.dtype == jnp.int32
 
-    def test_lu_solve_axis1(self):
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_lu_solve_axis1(self, mat):
         """solve(B, axis=1) solves each row of B as a separate RHS."""
-        a, A = _tridiag(6)
+        a, A = mat(6)
         lu = A.lu_factor()
         rng = np.random.default_rng(11)
         X_true = jnp.array(rng.standard_normal((4, 6)))  # (batch, n)
@@ -683,9 +693,10 @@ class TestLU:
         assert X_hat.shape == (4, 6)
         assert jnp.allclose(X_hat, X_true, atol=1e-5)
 
-    def test_lu_solve_3d_axis(self):
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_lu_solve_3d_axis(self, mat):
         """solve on a 3-D array along a non-zero axis."""
-        a, A = _tridiag(5)
+        a, A = mat(5)
         lu = A.lu_factor()
         rng = np.random.default_rng(22)
         X_true = jnp.array(rng.standard_normal((3, 5, 4)))  # (a, n, b)
@@ -695,9 +706,10 @@ class TestLU:
         assert X_hat.shape == (3, 5, 4)
         assert jnp.allclose(X_hat, X_true, atol=1e-5)
 
-    def test_lu_solve_axis_matches_matvec(self):
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_lu_solve_axis_matches_matvec(self, mat):
         """lu.solve(A.matvec(X, axis=k), axis=k) == X for any axis."""
-        a, A = _tridiag(5)
+        a, A = mat(5)
         lu = A.lu_factor()
         rng = np.random.default_rng(33)
         for ax in (0, 1, 2):
@@ -708,3 +720,120 @@ class TestLU:
             X_hat = lu.solve(B, axis=ax)
             assert X_hat.shape == tuple(shape)
             assert jnp.allclose(X_hat, X, atol=1e-5), f"failed for axis={ax}"
+
+
+class TestGetRow:
+    def test_first_row(self):
+        a, A = _tridiag(5)
+        assert jnp.allclose(A.get_row(0), jnp.array(a[0]))
+
+    def test_last_row(self):
+        a, A = _tridiag(5)
+        assert jnp.allclose(A.get_row(4), jnp.array(a[4]))
+
+    def test_interior_row(self):
+        a, A = _tridiag(5)
+        assert jnp.allclose(A.get_row(2), jnp.array(a[2]))
+
+    def test_all_rows_match_todense(self):
+        a, A = _tridiag(6)
+        dense = A.todense()
+        for i in range(6):
+            assert jnp.allclose(A.get_row(i), dense[i]), f"row {i} mismatch"
+
+    def test_pentadiag(self):
+        a, A = _pentadiag(7)
+        dense = A.todense()
+        for i in range(7):
+            assert jnp.allclose(A.get_row(i), dense[i]), f"row {i} mismatch"
+
+    def test_nonsquare(self):
+        A = diags(
+            [jnp.ones(3), -2 * jnp.ones(4), jnp.ones(4)],
+            offsets=(-1, 0, 1),
+            shape=(4, 6),
+        )
+        dense = A.todense()
+        for i in range(4):
+            assert jnp.allclose(A.get_row(i), dense[i]), f"row {i} mismatch"
+
+    def test_unstored_diagonal_is_zero(self):
+        # Only main diagonal stored; every row should be a one-hot vector.
+        A = diags([jnp.arange(1, 5, dtype=jnp.float32)], offsets=(0,))
+        for i in range(4):
+            row = A.get_row(i)
+            expected = jnp.zeros(4).at[i].set(float(i + 1))
+            assert jnp.allclose(row, expected), f"row {i} mismatch"
+
+    def test_jit_compatible(self):
+        import jax
+
+        _, A = _tridiag(5)
+        row_jit = jax.jit(A.get_row)(2)
+        assert jnp.allclose(row_jit, A.get_row(2))
+
+    def test_vmap_reconstructs_matrix(self):
+        import jax
+
+        _, A = _tridiag(5)
+        all_rows = jax.vmap(A.get_row)(jnp.arange(5))
+        assert jnp.allclose(all_rows, A.todense())
+
+
+class TestGetColumn:
+    def test_first_column(self):
+        a, A = _tridiag(5)
+        assert jnp.allclose(A.get_column(0), jnp.array(a[:, 0]))
+
+    def test_last_column(self):
+        a, A = _tridiag(5)
+        assert jnp.allclose(A.get_column(4), jnp.array(a[:, 4]))
+
+    def test_interior_column(self):
+        a, A = _tridiag(5)
+        assert jnp.allclose(A.get_column(2), jnp.array(a[:, 2]))
+
+    def test_all_columns_match_todense(self):
+        a, A = _tridiag(6)
+        dense = A.todense()
+        for j in range(6):
+            assert jnp.allclose(A.get_column(j), dense[:, j]), f"col {j} mismatch"
+
+    def test_pentadiag(self):
+        a, A = _pentadiag(7)
+        dense = A.todense()
+        for j in range(7):
+            assert jnp.allclose(A.get_column(j), dense[:, j]), f"col {j} mismatch"
+
+    def test_nonsquare(self):
+        A = diags(
+            [jnp.ones(3), -2 * jnp.ones(4), jnp.ones(4)],
+            offsets=(-1, 0, 1),
+            shape=(4, 6),
+        )
+        dense = A.todense()
+        for j in range(6):
+            assert jnp.allclose(A.get_column(j), dense[:, j]), f"col {j} mismatch"
+
+    def test_unstored_diagonal_is_zero(self):
+        # Only main diagonal stored; every column should be a one-hot vector.
+        A = diags([jnp.arange(1, 5, dtype=jnp.float32)], offsets=(0,))
+        for j in range(4):
+            col = A.get_column(j)
+            expected = jnp.zeros(4).at[j].set(float(j + 1))
+            assert jnp.allclose(col, expected), f"col {j} mismatch"
+
+    def test_jit_compatible(self):
+        import jax
+
+        _, A = _tridiag(5)
+        col_jit = jax.jit(A.get_column)(2)
+        assert jnp.allclose(col_jit, A.get_column(2))
+
+    def test_vmap_reconstructs_matrix(self):
+        import jax
+
+        _, A = _tridiag(5)
+        # vmap over columns produces (m, n); transpose to (n, m) for comparison
+        all_cols = jax.vmap(A.get_column)(jnp.arange(5))
+        assert jnp.allclose(all_cols.T, A.todense())

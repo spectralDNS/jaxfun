@@ -2,9 +2,9 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
-from jax.experimental import sparse
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.la import DiaMatrix, diags
 from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, jit_vmap
 
@@ -214,7 +214,7 @@ class Fourier(OrthogonalSpace):
         return (1j * m) ** k * c
 
 
-def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> sparse.BCOO:
+def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> DiaMatrix:
     """Return sparse operator matrix for Fourier test/trial derivatives.
 
     Builds diagonal matrix with entries:
@@ -226,17 +226,19 @@ def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> sparse.BC
         trial: Tuple (u, j) with space u and trial derivative order j.
 
     Returns:
-        sparse.BCOO diagonal matrix shape (v.N, u.N).
+        DiaMatrix diagonal matrix shape (v.N, u.N).
     """
     v, i = test
     u, j = trial
     k = (1j * v.wavenumbers()) ** j * (-1j * u.wavenumbers()) ** i
     if (i + j) % 2 == 0:
-        return sparse.BCOO(
-            (k.real * v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
+        return diags(
+            [k.real * v.norm_squared()],
+            offsets=(0,),
             shape=(v.N, u.N),
         )
-    return sparse.BCOO(
-        (k * v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
+    return diags(
+        [k * v.norm_squared()],
+        offsets=(0,),
         shape=(v.N, u.N),
     )

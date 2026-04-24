@@ -49,9 +49,6 @@ def test_composite_and_mass_matrix(space):
     # Mass matrix should be SPD and same shape as dim
     M = C.mass_matrix().todense()
     assert M.shape == (C.dim, C.dim)
-    # Stencil consistency with scipy diag construction
-    scipyM = C.stencil_to_scipy_sparse().todense()
-    assert scipyM.shape[1] == C.N
 
 
 @pytest.mark.parametrize(

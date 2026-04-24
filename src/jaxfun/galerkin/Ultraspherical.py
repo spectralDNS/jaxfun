@@ -1,9 +1,8 @@
-import jax.numpy as jnp
 import sympy as sp
-from jax.experimental import sparse
 from sympy import Expr, Number, Symbol
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.la import DiaMatrix, diags
 from jaxfun.utils.common import Domain
 
 from .Jacobi import Jacobi
@@ -103,7 +102,7 @@ class Ultraspherical(Jacobi):
 
 def matrices(
     test: tuple[Ultraspherical, int], trial: tuple[Ultraspherical, int]
-) -> sparse.BCOO | None:
+) -> DiaMatrix | None:
     """Return sparse mass matrix for (i,j)=(0,0) else None.
 
     Args:
@@ -111,13 +110,11 @@ def matrices(
         trial: (space, derivative order) for trial function.
 
     Returns:
-        BCOO diagonal mass matrix or None if derivative combo unsupported.
+        DiaMatrix diagonal mass matrix or None if derivative combo unsupported.
     """
     v, i = test
     u, j = trial
     if i == 0 and j == 0:
-        return sparse.BCOO(
-            (v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
-            shape=(v.N, u.N),
-        )
+        return diags([v.norm_squared()], offsets=(0,), shape=(v.N, u.N))
+
     return None

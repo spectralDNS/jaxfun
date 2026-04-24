@@ -2,10 +2,10 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
-from jax.experimental import sparse
 from sympy import Expr, Symbol
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.la import DiaMatrix, diags
 from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, dst, jit_vmap
 
@@ -225,7 +225,7 @@ class ChebyshevU(Jacobi):
 
 def matrices(
     test: tuple[ChebyshevU, int], trial: tuple[ChebyshevU, int]
-) -> sparse.BCOO | None:
+) -> DiaMatrix | None:
     """Sparse operator matrices between test/trial ChebyshevU modes.
 
     Constructs (possibly rectangular) sparse differentiation / mass-like
@@ -239,15 +239,11 @@ def matrices(
         trial: Tuple (u, j) with ChebyshevU space u and number of derivatives j.
 
     Returns:
-        jax.experimental.sparse.BCOO or None if combination unsupported.
+        DiaMatrix or None if combination unsupported.
     """
     v, i = test
     u, j = trial
     if i == 0 and j == 0:
-        # BCOO chops the array if v.N > u.N, so no need to check sizes
-        return sparse.BCOO(
-            (v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
-            shape=(v.N, u.N),
-        )
+        return diags([v.norm_squared()], offsets=(0,), shape=(v.N, u.N))
 
     return None

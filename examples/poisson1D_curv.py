@@ -20,7 +20,6 @@ using curvilinear coordinates.
 import os
 import sys
 
-import jax.numpy as jnp
 import numpy as np
 import sympy as sp
 from sympy.plotting import plot3d_parametric_line
@@ -51,7 +50,7 @@ b = inner(-v * Div(Grad(ue)))
 # b = inner(-v*sp.Derivative(ue, t, 2))
 A = inner(-v * Div(Grad(u)), sparse=True)
 
-u_hat = jnp.linalg.solve(A.todense(), b)
+u_hat = A.solve(b)
 
 xj = D.orthogonal.quad_points_and_weights()[0]
 uj = D.evaluate(xj, u_hat)

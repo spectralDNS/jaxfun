@@ -2,10 +2,10 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
-from jax.experimental import sparse
 from sympy import Expr, Symbol
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.la import DiaMatrix, diags
 from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, jit_vmap
 
@@ -359,7 +359,7 @@ class Chebyshev(Jacobi):
 
 def matrices(
     test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]
-) -> sparse.BCOO | None:
+) -> DiaMatrix | None:
     """Sparse operator matrices between test/trial Chebyshev modes.
 
     Constructs (possibly rectangular) sparse differentiation / mass-like
@@ -377,17 +377,16 @@ def matrices(
         trial: Tuple (u, j) with Chebyshev space u and number of derivatives j.
 
     Returns:
-        jax.experimental.sparse.BCOO or None if combination unsupported.
+        DiaMatrix | None if combination unsupported.
     """
     import numpy as np
-    from scipy import sparse as scipy_sparse
 
     v, i = test
     u, j = trial
     if i == 0 and j == 0:
-        # BCOO chops the array if v.N > u.N, so no need to check sizes
-        return sparse.BCOO(
-            (v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
+        return diags(
+            [v.norm_squared()],
+            offsets=(0,),
             shape=(v.N, u.N),
         )
     if i == 0 and j == 1:
@@ -397,24 +396,21 @@ def matrices(
             Q = min(v.N, u.N - j)
             return np.pi * k[j : (Q + j)]
 
-        d = dict.fromkeys(np.arange(1, u.N + 1, 2), _getkey)
+        d = dict.fromkeys(np.arange(1, u.N + 1, 2).tolist(), _getkey)
 
         if len(d) == 0:
             return None
 
-        return sparse.BCOO.from_scipy_sparse(
-            scipy_sparse.diags(
-                [d[i](i) for i in np.arange(1, u.N, 2)],
-                jnp.arange(1, u.N, 2),
-                (v.N, u.N),
-                "csr",
-            )
+        return diags(
+            [d[i](i) for i in np.arange(1, u.N, 2).tolist()],
+            tuple(int(k) for k in jnp.arange(1, u.N, 2).tolist()),
+            (v.N, u.N),
         )
 
     if i == 1 and j == 0:
         m = matrices(trial, test)
         if m is not None:
-            return m.transpose()
+            return m.T
         return None
 
     if i == 0 and j == 2:
@@ -424,21 +420,19 @@ def matrices(
             Q = min(v.N, u.N - j)
             return k[j : (Q + j)] * (k[j : (Q + j)] ** 2 - k[:Q] ** 2) * jnp.pi / 2
 
-        d = dict.fromkeys(np.arange(2, u.N, 2), _getkey)
+        d = dict.fromkeys(np.arange(2, u.N, 2).tolist(), _getkey)
         if len(d) == 0:
             return None
 
-        return sparse.BCOO.from_scipy_sparse(
-            scipy_sparse.diags(
-                [d[i](i) for i in np.arange(2, u.N, 2)],
-                jnp.arange(2, u.N, 2),
-                (v.N, u.N),
-                "csr",
-            )
+        return diags(
+            [d[i](i) for i in np.arange(2, u.N, 2).tolist()],
+            tuple(int(k) for k in jnp.arange(2, u.N, 2).tolist()),
+            (v.N, u.N),
         )
+
     if i == 2 and j == 0:
         m = matrices(trial, test)
         if m is not None:
-            return m.transpose()
+            return m.T
 
     return None

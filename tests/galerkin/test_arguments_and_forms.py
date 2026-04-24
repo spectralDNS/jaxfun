@@ -22,7 +22,7 @@ def test_scalar_vector_function_print_and_backward():
     u = TrialFunction(C)
     v = TestFunction(C)
     M, b = inner(v * (u - jf))
-    uh = jnp.linalg.solve(M, b)
+    uh = M.solve(b)
     assert jnp.linalg.norm(uh - coeffs) < ulp(100)
     # Should approximate jf coefficients (diagonal mass matrix scaling)
     assert uh.shape[0] == C.N

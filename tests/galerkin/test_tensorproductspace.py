@@ -17,7 +17,7 @@ from jaxfun.galerkin import (
 )
 from jaxfun.galerkin.composite import DirectSum
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TPMatrix, tpmats_to_scipy_kron
+from jaxfun.galerkin.tensorproductspace import TPMatrix, tpmats_to_kron
 from jaxfun.utils.common import ulp
 
 
@@ -81,11 +81,8 @@ def test_tp_matrix_and_preconditioner():
     # Check manual matmul versus kron
     Y2 = tp.mats[0] @ X @ tp.mats[1].T
     assert jnp.linalg.norm(Y - Y2) < ulp(100)
-    # Preconditioner
-    Z = tp.precond(X)
-    assert Z.shape == X.shape
-    # Convert to scipy kron
-    _ = tpmats_to_scipy_kron([tp])
+    # Convert to kron
+    _ = tpmats_to_kron([tp])
 
 
 def test_vectortensorproductspace_forward_backward_roundtrip():

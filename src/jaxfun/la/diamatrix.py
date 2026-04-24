@@ -1,10 +1,41 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, overload
+
 import jax
 import jax.numpy as jnp
 from flax import nnx
 
+if TYPE_CHECKING:
+    from jaxfun.galerkin import JAXFunction
+
 Array = jax.Array
+
+
+class _CacheBox[T]:
+    """Thin wrapper that provides identity-based equality and hashing.
+
+    Flax NNX captures all instance ``__dict__`` entries as pytree aux_data
+    (metadata).  Metadata is compared by equality on every JIT cache lookup.
+    Storing a :class:`DiaMatrix` or a :class:`LUFactors` containing JAX arrays
+    directly would trigger array equality checks and crash.  Wrapping the
+    cached value in ``_CacheBox`` makes the comparison use ``is`` (identity),
+    so the same cached object always compares equal to itself.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+    def __eq__(self, other: object) -> bool:
+        return type(other) is _CacheBox and self.value is other.value
+
+    def __hash__(self) -> int:
+        return id(self.value)
+
+    def __repr__(self) -> str:
+        return f"_CacheBox({self.value!r})"
 
 
 @nnx.dataclass
@@ -24,6 +55,21 @@ class DiaMatrix(nnx.Pytree):
           ``data[i, k:k+length] = diag_values``.
         * ``k < 0``  : valid columns are ``0 .. min(m, n+k)-1``;
           ``data[i, 0:length]   = diag_values``.
+
+    Attributes:
+        data: Float array of shape ``(n_diags, n_cols)`` holding the stored
+            diagonals in column-aligned format.
+        offsets: Tuple of diagonal offsets corresponding to rows in ``data``.
+        shape: ``(n, m)`` shape of the represented matrix.
+        _lu_cache: Private ``dict[bool, LUFactors]`` populated on the first
+            call to :meth:`lu_factor`.  Keyed by the ``pivot`` flag so the
+            no-pivot and pivoting factorisations are cached independently.
+            Stored via ``object.__setattr__`` so it is invisible to JAX's
+            pytree machinery and does not affect JIT tracing or compilation.
+        _T_cache: Private ``_CacheBox`` wrapping the transposed DiaMatrix,
+            populated on the first call to the :attr:`T` property.
+            Stored via ``object.__setattr__``, invisible to JAX's pytree
+            machinery.
 
     Example (tridiagonal 3x3):
     >>> import jax.numpy as jnp
@@ -46,6 +92,13 @@ class DiaMatrix(nnx.Pytree):
     offsets: tuple[int, ...]
     shape: tuple[int, int]
 
+    def __post_init__(self) -> None:
+        n, m = self.shape
+        total = 0
+        for k in self.offsets:
+            total += min(n - max(0, -k), m - max(0, k))
+        self._size = total
+
     @classmethod
     def from_dense(
         cls,
@@ -63,9 +116,11 @@ class DiaMatrix(nnx.Pytree):
         n, m = a.shape
 
         if offsets is None:
-            offsets = tuple(k for k in range(-(n - 1), m) if jnp.any(jnp.diag(a, k)))
+            offsets = tuple(
+                k for k in range(-(n - 1), m) if jnp.any(jnp.diag(a, k) != 0)
+            )
 
-        offsets_arr = jnp.asarray(offsets, dtype=jnp.int32)
+        offsets_arr = jnp.asarray(offsets, dtype=int)
         j = jnp.arange(m)
 
         def _extract(k: Array) -> Array:
@@ -98,7 +153,7 @@ class DiaMatrix(nnx.Pytree):
             A.matvec(T, axis=2)  # T shape (a, b, m) → (a, b, n)
         """
         n, m = self.shape
-        offsets_arr = jnp.array(self.offsets, dtype=jnp.int32)
+        offsets_arr = jnp.array(self.offsets, dtype=int)
 
         if x.ndim == 1:
             # v[p, j] = data[p, j] * x[j]  contributes to output row  i = j - k_p,
@@ -151,7 +206,7 @@ class DiaMatrix(nnx.Pytree):
         return self.matvec(x, axis=axis)
 
     @jax.jit
-    def to_dense(self) -> Array:
+    def todense(self) -> Array:
         """Return the equivalent dense ``(n, m)`` array."""
         # return self.matvec(jnp.eye(self.shape[1], dtype=self.data.dtype), axis=0) # expensive  # noqa: E501
 
@@ -169,12 +224,20 @@ class DiaMatrix(nnx.Pytree):
         A, _ = jax.lax.scan(
             _add_diag,
             jnp.zeros((n, m), dtype=self.data.dtype),
-            (self.data, jnp.array(self.offsets, dtype=jnp.int32)),
+            (self.data, jnp.array(self.offsets, dtype=int)),
         )
         return A
 
+    # Alias so DiaMatrix satisfies MatrixProtocol (which uses to_dense).
+    to_dense = todense
+
     def lu_factor(self, *, pivot: bool = False) -> LUFactors:
         """Compute a banded LU factorisation of this (square) matrix.
+
+        The result is cached on the matrix instance (keyed by ``pivot``) so
+        that repeated calls — including from :meth:`solve` — pay the
+        factorisation cost only once.  The cache is stored as a plain Python
+        attribute (``_lu_cache``) so it is invisible to JAX's pytree machinery.
 
         Args:
             pivot: If ``False`` (default), no row interchanges are performed.
@@ -200,6 +263,15 @@ class DiaMatrix(nnx.Pytree):
         Raises:
             ValueError: if the matrix is not square or the system is singular.
         """
+        # --- lazy cache -------------------------------------------------
+        _box: _CacheBox[dict[bool, LUFactors]] | None = getattr(self, "_lu_cache", None)
+        if _box is None:
+            _box = _CacheBox({})
+            object.__setattr__(self, "_lu_cache", _box)
+        cache: dict[bool, LUFactors] = _box.value
+        if pivot in cache:
+            return cache[pivot]
+
         n, m = self.shape
         if n != m:
             raise ValueError(
@@ -246,7 +318,9 @@ class DiaMatrix(nnx.Pytree):
             ]
             U = DiaMatrix(data=jnp.stack(u_data_rows), offsets=u_offsets, shape=(n, n))
 
-            return LUFactors(L=L, U=U, shape=(n, n), perm=None)
+            result = LUFactors(L=L, U=U, shape=(n, n), perm=None)
+            cache[pivot] = result
+            return result
 
         # ---- pivoting path ----------------------------------------------
         # Row pivoting within the band can introduce fill: U bandwidth ≤ p + q.
@@ -309,12 +383,10 @@ class DiaMatrix(nnx.Pytree):
         )
 
         # Use None when no rows were actually swapped (identity permutation).
-        perm = (
-            None
-            if bool(jnp.all(perm_arr == jnp.arange(n, dtype=jnp.int32)))
-            else perm_arr
-        )
-        return LUFactors(L=L, U=U, shape=(n, n), perm=perm)
+        perm = None if bool(jnp.all(perm_arr == jnp.arange(n, dtype=int))) else perm_arr
+        result = LUFactors(L=L, U=U, shape=(n, n), perm=perm)
+        cache[pivot] = result
+        return result
 
     def solve(self, b: Array, axis: int = 0, *, pivot: bool = False) -> Array:
         """Solve ``A x = b`` directly via LU factorisation.
@@ -346,7 +418,15 @@ class DiaMatrix(nnx.Pytree):
         Shape becomes ``(m, n)``.  Each diagonal at offset ``k`` maps to
         offset ``-k`` in the transpose.  The data is re-aligned to the new
         column count ``n``.
+
+        The result is cached as ``_T_cache`` (a :class:`_CacheBox`) via
+        ``object.__setattr__`` so it is invisible to JAX's pytree machinery.
+        Repeated calls always return the same transposed instance.
         """
+        cached: DiaMatrix | None = getattr(self, "_T_cache", None)
+        if cached is not None:
+            return cached.value
+
         n, m = self.shape
         new_shape = (m, n)
 
@@ -360,11 +440,12 @@ class DiaMatrix(nnx.Pytree):
             safe_j = jnp.where(valid, j, 0)
             return jnp.where(valid, d[safe_j], jnp.zeros((), dtype=d.dtype))
 
-        offsets_arr = jnp.asarray(self.offsets, dtype=jnp.int32)
+        offsets_arr = jnp.asarray(self.offsets, dtype=int)
         new_data = jax.vmap(_transpose_row)(self.data, offsets_arr)  # (n_diags, n)
-        return DiaMatrix(
-            data=new_data, offsets=tuple((-offsets_arr).tolist()), shape=new_shape
-        )
+        new_offsets = tuple(-k for k in self.offsets)
+        result = DiaMatrix(data=new_data, offsets=new_offsets, shape=new_shape)
+        object.__setattr__(self, "_T_cache", _CacheBox(result))
+        return result
 
     def diagonal(self, k: int = 0) -> Array:
         """Return the ``k``-th diagonal as a 1-D array.
@@ -390,13 +471,108 @@ class DiaMatrix(nnx.Pytree):
             return jnp.where(off == k, vals, acc), None
 
         result, _ = jax.lax.scan(
-            _pick, zero_diag, (self.data, jnp.array(self.offsets, dtype=jnp.int32))
+            _pick, zero_diag, (self.data, jnp.array(self.offsets, dtype=int))
         )
         return result
+
+    def get_row(self, i: int | Array) -> Array:
+        """Return row ``i`` of the matrix as a dense 1-D array of length ``m``.
+
+        In DIA format each stored diagonal at offset ``k`` contributes to row
+        ``i`` at column ``j = i + k``, provided ``0 <= j < m``.  The value is
+        ``data[p, i + k]`` (column-aligned storage).
+
+        Args:
+            i: Row index (0-based).  May be a traced JAX scalar so the method
+               is usable inside :func:`jax.jit` / :func:`jax.vmap`.
+
+        Returns:
+            Dense array of shape ``(m,)`` with the row values; columns not
+            covered by any stored diagonal are zero.
+
+        Examples:
+
+            >>> import jax.numpy as jnp
+            >>> from jaxfun.la import diags
+            >>> A = diags([jnp.ones(4), -2 * jnp.ones(5), jnp.ones(4)], (-1, 0, 1))
+            >>> bool(jnp.allclose(A.get_row(0), jnp.array([-2.0, 1.0, 0.0, 0.0, 0.0])))
+            True
+            >>> bool(jnp.allclose(A.get_row(2), jnp.array([0.0, 1.0, -2.0, 1.0, 0.0])))
+            True
+        """
+        n, m = self.shape
+        i = jnp.asarray(i, dtype=int)
+        row = jnp.zeros(m, dtype=self.data.dtype)
+
+        offsets_arr = jnp.array(self.offsets, dtype=int)
+
+        def _place(row: Array, args: tuple) -> tuple[Array, None]:
+            d, k = args  # d: (m,),  k: scalar int32
+            j = i + k  # column where this diagonal hits row i
+            in_bounds = (j >= 0) & (j < m)
+            safe_j = jnp.where(in_bounds, j, 0)
+            val = jnp.where(in_bounds, d[safe_j], jnp.zeros((), dtype=d.dtype))
+            return row.at[safe_j].add(jnp.where(in_bounds, val, 0.0)), None
+
+        row, _ = jax.lax.scan(_place, row, (self.data, offsets_arr))
+        return row
+
+    def get_column(self, j: int | Array) -> Array:
+        """Return column ``j`` of the matrix as a dense 1-D array of length ``n``.
+
+        In DIA format each stored diagonal at offset ``k`` contributes to
+        column ``j`` at row ``i = j - k``, provided ``0 <= i < n``.  The
+        value is ``data[p, j]`` (column-aligned storage, so ``data[p, j] =
+        A[j - k, j]``).
+
+        Args:
+            j: Column index.  May be a traced JAX scalar so the method is usable inside
+            :func:`jax.jit` / :func:`jax.vmap`.
+
+        Returns:
+            Dense array of shape ``(n,)`` with the column values; rows not
+            covered by any stored diagonal are zero.
+
+        Examples:
+
+            >>> import jax.numpy as jnp
+            >>> from jaxfun.la import diags
+            >>> A = diags([jnp.ones(4), -2 * jnp.ones(5), jnp.ones(4)], (-1, 0, 1))
+            >>> bool(
+            ...     jnp.allclose(A.get_column(0), jnp.array([-2.0, 1.0, 0.0, 0.0, 0.0]))
+            ... )
+            True
+            >>> bool(
+            ...     jnp.allclose(A.get_column(2), jnp.array([0.0, 1.0, -2.0, 1.0, 0.0]))
+            ... )
+            True
+        """
+        n, m = self.shape
+        j = jnp.asarray(j, dtype=int)
+        col = jnp.zeros(n, dtype=self.data.dtype)
+
+        offsets_arr = jnp.array(self.offsets, dtype=int)
+
+        def _place(col: Array, args: tuple) -> tuple[Array, None]:
+            d, k = args  # d: (m,),  k: scalar int
+            i = j - k  # row where this diagonal hits column j
+            in_bounds = (i >= 0) & (i < n) & (j >= 0) & (j < m)
+            safe_i = jnp.where(in_bounds, i, 0)
+            safe_j = jnp.where(in_bounds, j, 0)
+            val = jnp.where(in_bounds, d[safe_j], jnp.zeros((), dtype=d.dtype))
+            return col.at[safe_i].add(val), None
+
+        col, _ = jax.lax.scan(_place, col, (self.data, offsets_arr))
+        return col
 
     def scale(self, alpha: float | Array) -> DiaMatrix:
         """Return ``alpha * A`` as a new :class:`DiaMatrix`."""
         return DiaMatrix(data=self.data * alpha, offsets=self.offsets, shape=self.shape)
+
+    @property
+    def size(self) -> int:
+        """Return the total number of entries in the matrix (including zeros)."""
+        return self._size
 
     def __mul__(self, other: float | Array) -> DiaMatrix:
         return self.scale(other)
@@ -407,13 +583,20 @@ class DiaMatrix(nnx.Pytree):
     def __neg__(self) -> DiaMatrix:
         return self.scale(-1)
 
+    def __len__(self) -> int:
+        return min(self.shape)
+
+    def __getitem__(self, key: tuple[int, int]) -> Array:
+        i, j = key
+        return self.get_row(i)[j]
+
     def _merge(self, other: DiaMatrix, sign: float) -> DiaMatrix:
         """Add ``self + sign * other`` in DIA format."""
         if self.shape != other.shape:
             raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
         # Build the sum as a dense matrix and re-detect non-zero diagonals.
         # Addition is rarely on the hot path so the dense round-trip is fine.
-        A = self.to_dense() + sign * other.to_dense()
+        A = self.todense() + sign * other.todense()
         return DiaMatrix.from_dense(A)
 
     def __add__(self, other: DiaMatrix) -> DiaMatrix:
@@ -423,7 +606,9 @@ class DiaMatrix(nnx.Pytree):
         return self._merge(other, -1.0)
 
     @jax.jit
-    def _matmul_compute(self, other: DiaMatrix) -> tuple[Array, Array, Array]:
+    def _matmul_compute(
+        self, other: DiaMatrix
+    ) -> tuple[Array, tuple[int, ...], tuple[int, int]]:
         n, m = self.shape
         _, l = other.shape
         if m != other.shape[0]:
@@ -462,41 +647,87 @@ class DiaMatrix(nnx.Pytree):
         if not accum:
             offsets_out = (0,)
             data_out = jnp.zeros((1, l), dtype=self.data.dtype)
-            return data_out, jnp.array(offsets_out), jnp.array((n, l))
+            return data_out, offsets_out, (n, l)
 
-        offsets_list = sorted(accum.keys())
+        offsets_list = tuple(sorted(accum.keys()))
         return (
             jnp.stack([accum[r] for r in offsets_list]),
-            jnp.array(offsets_list, dtype=jnp.int32),
-            jnp.array((n, l), dtype=jnp.int32),
+            offsets_list,
+            (n, l),
         )
 
-    def __matmul__(self, other: Array | DiaMatrix) -> Array | DiaMatrix:
+    @overload
+    def __matmul__(self, other: Array) -> Array: ...
+    @overload
+    def __matmul__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __matmul__(self, other: JAXFunction) -> Array: ...
+    def __matmul__(self, other: Array | DiaMatrix | JAXFunction) -> Array | DiaMatrix:
         """Support ``A @ x`` (vector/matrix) and ``A @ B`` (DiaMatrix).
 
         DiaMatrix x DiaMatrix is computed purely in DIA format without
         materialising either operand as a dense array.
 
         """
+        from jaxfun.galerkin import JAXFunction as _JAXFunction
+
         if not isinstance(other, DiaMatrix):
             return self.apply(other)
+
+        if isinstance(other, _JAXFunction):
+            return self.apply(other.array)
 
         data_out, offsets_out, shape_out = self._matmul_compute(other)
         return DiaMatrix(
             data=data_out,
-            offsets=tuple(offsets_out.tolist()),
-            shape=tuple(shape_out.tolist()),
+            offsets=tuple(int(k) for k in offsets_out),
+            shape=(int(shape_out[0]), int(shape_out[1])),
         )
 
     def __rmatmul__(self, other: Array) -> Array:
         """Support ``x @ A`` (row-vector or matrix on the left).
 
-        ``x @ A == (A^T @ x^T)^T``.  Works for 1-D and 2-D ``other``.
+        Computes ``x @ A`` as an explicit transpose-matvec directly from this
+        matrix's DIA storage, avoiding the ``.T`` cache and any pytree metadata
+        side-effects (important when called inside a ``jax.jit``-traced method).
+
+        For diagonal at offset ``k``:  ``A[j-k, j] = data[k_idx, j]``, so the
+        contribution to output column ``j`` is ``data[k_idx, j] * other[..., j-k]``.
+        Works for 1-D and 2-D ``other``.
         """
+        n, m = self.shape
+        dtype = jnp.result_type(other.dtype, self.data.dtype)
+        j = jnp.arange(m)
+
         if other.ndim == 1:
-            return self.T.matvec(other)
-        # other: (k, m)  →  A^T @ other^T  is (m_T==n, k)  →  transpose to (k, n)
-        return self.T.matvec(other.T, axis=0).T
+            # other shape (n,) → result shape (m,)
+            result = jnp.zeros(m, dtype=dtype)
+            for k_idx, k in enumerate(self.offsets):
+                i = j - k  # row index for column j
+                valid = (i >= 0) & (i < n)
+                safe_i = jnp.where(valid, i, 0)
+                contrib = jnp.where(
+                    valid, self.data[k_idx] * other[safe_i], jnp.zeros((), dtype=dtype)
+                )
+                result = result + contrib
+            return result
+
+        # other shape (..., n) → result shape (..., m)
+        # Normalise: bring the contracting axis (n) to position 0 → (n, batch)
+        batch_shape = other.shape[:-1]
+        batch = other[..., 0].size  # number of batch elements
+        x2d = other.reshape(batch, n).T  # (n, batch)
+        res2d = jnp.zeros((m, batch), dtype=dtype)
+        for k_idx, k in enumerate(self.offsets):
+            i = j - k
+            valid = (i >= 0) & (i < n)
+            safe_i = jnp.where(valid, i, 0)
+            # data[k_idx, j] scalar per j; x2d[safe_i, :] is (m, batch)
+            scale = self.data[k_idx]  # (m,)
+            vals = x2d[safe_i, :] * scale[:, None]  # (m, batch)
+            vals = jnp.where(valid[:, None], vals, jnp.zeros((), dtype=dtype))
+            res2d = res2d + vals
+        return res2d.T.reshape(batch_shape + (m,))
 
     def astype(self, dtype: jnp.dtype) -> DiaMatrix:
         """Return a copy with data cast to ``dtype``."""
@@ -507,11 +738,7 @@ class DiaMatrix(nnx.Pytree):
     @property
     def nnz(self) -> int:
         """Number of explicitly stored (structurally non-zero) entries."""
-        n, m = self.shape
-        total = 0
-        for k in self.offsets:
-            total += min(n - max(0, -k), m - max(0, k))
-        return total
+        return self._size
 
     @property
     def ndim(self) -> int:
@@ -624,7 +851,7 @@ def _lu_banded_no_pivot_kernel(band: Array, p: int, q: int, center: int) -> Arra
     n = band.shape[1]
 
     def elim_step(band: Array, k: Array) -> tuple[Array, None]:
-        k = k.astype(jnp.int32)
+        k = k.astype(int)
         pivot = band[center, k]
 
         for s in range(1, p + 1):
@@ -644,7 +871,7 @@ def _lu_banded_no_pivot_kernel(band: Array, p: int, q: int, center: int) -> Arra
 
         return band, None
 
-    band_lu, _ = jax.lax.scan(elim_step, band, jnp.arange(n, dtype=jnp.int32))
+    band_lu, _ = jax.lax.scan(elim_step, band, jnp.arange(n, dtype=int))
     return band_lu
 
 
@@ -678,14 +905,14 @@ def _lu_banded_kernel(
         carry: tuple[Array, Array], k: Array
     ) -> tuple[tuple[Array, Array], None]:
         band, perm = carry
-        k = k.astype(jnp.int32)
+        k = k.astype(int)
 
         # --- partial pivot: find argmax |A[k..k+p, k]| ---
         # A[k+t, k] lives at band[center - t, k]  (t static, k traced)
         pivot_vals = jnp.stack([band[center - t, k] for t in range(p + 1)])
-        row_inds = k + jnp.arange(p + 1, dtype=jnp.int32)
+        row_inds = k + jnp.arange(p + 1, dtype=int)
         masked = jnp.where(row_inds < n, jnp.abs(pivot_vals), 0.0)
-        r_rel = jnp.argmax(masked).astype(jnp.int32)
+        r_rel = jnp.argmax(masked).astype(int)
         r = k + r_rel
 
         # --- swap rows k ↔ r in DIA band storage ---
@@ -750,9 +977,9 @@ def _lu_banded_kernel(
 
         return (band, perm), None
 
-    perm0 = jnp.arange(n, dtype=jnp.int32)
+    perm0 = jnp.arange(n, dtype=int)
     (band_lu, perm), _ = jax.lax.scan(
-        elim_step, (band, perm0), jnp.arange(n, dtype=jnp.int32)
+        elim_step, (band, perm0), jnp.arange(n, dtype=int)
     )
     return band_lu, perm
 
@@ -778,19 +1005,22 @@ def _forward_elimination(L: DiaMatrix, b: Array) -> Array:
     k = b2d.shape[1]
 
     # Build l_mat[j, i] = L[i, i-(j+1)]  for j = 0 .. p-1.
-    l_rows: list[Array] = []
-    for off in sorted(
-        (o for o in offsets if o < 0), reverse=True
-    ):  # -1, -2, ... (s=1,2,...)
-        s = -off
-        idx = offsets.index(off)
-        d = L.data[idx]
-        # d[i-s] = L[i, i-s]; shift right by s: zeros(s) ++ d[:n-s]
-        l_rows.append(jnp.concatenate([jnp.zeros(s, dtype=d.dtype), d[: n - s]]))
-
-    p = len(l_rows)
+    # Important: iterate over the FULL range 1..p_max so that j always maps
+    # to window slot (j+1)-th sub-diagonal.  Missing offsets get zero rows.
+    p = max((-o for o in offsets if o < 0), default=0)
     if p == 0:
         return b  # L is identity
+
+    l_rows: list[Array] = []
+    for s in range(1, p + 1):  # s = 1, 2, ..., p
+        off = -s
+        if off in offsets:
+            idx = offsets.index(off)
+            d = L.data[idx]
+            # d[j] = L[j+s, j]; shift right by s → l_rows[-1][i] = L[i, i-s]
+            l_rows.append(jnp.concatenate([jnp.zeros(s, dtype=d.dtype), d[: n - s]]))
+        else:
+            l_rows.append(jnp.zeros(n, dtype=L.data.dtype))
 
     l_mat = jnp.stack(l_rows)  # (p, n);  l_mat[j, i] = L[i, i-(j+1)]
 
@@ -831,15 +1061,9 @@ def _backward_substitution(U: DiaMatrix, b: Array) -> Array:
     diag_d = U.data[main_idx]  # diag_d[i] = U[i, i]
 
     # Build u_mat[j, i] = U[i, i+(j+1)]  for j = 0 .. q-1.
-    u_rows: list[Array] = []
-    for off in sorted(o for o in offsets if o > 0):  # 1, 2, ...
-        s = off
-        idx = offsets.index(off)
-        d = U.data[idx]
-        # d[i+s] = U[i, i+s]; shift left by s: d[s:] ++ zeros(s)
-        u_rows.append(jnp.concatenate([d[s:n], jnp.zeros(s, dtype=d.dtype)]))
-
-    q = len(u_rows)
+    # Iterate over the FULL range 1..q_max so j always maps to the correct
+    # window slot.  Missing offsets get zero rows.
+    q = max((o for o in offsets if o > 0), default=0)
 
     # Reverse all xs so the scan runs from i = n-1 down to 0.
     rev = jnp.arange(n - 1, -1, -1)
@@ -851,6 +1075,17 @@ def _backward_substitution(U: DiaMatrix, b: Array) -> Array:
         xs_rev = b_rev / diag_rev[:, None]  # (n, k)
         x = xs_rev[rev]  # un-reverse
         return x[:, 0] if scalar else x
+
+    u_rows: list[Array] = []
+    for s in range(1, q + 1):  # s = 1, 2, ..., q
+        off = s
+        if off in offsets:
+            idx = offsets.index(off)
+            d = U.data[idx]
+            # d[i+s] = U[i, i+s]; shift left by s: d[s:] ++ zeros(s)
+            u_rows.append(jnp.concatenate([d[s:n], jnp.zeros(s, dtype=d.dtype)]))
+        else:
+            u_rows.append(jnp.zeros(n, dtype=U.data.dtype))
 
     u_mat = jnp.stack(u_rows)  # (q, n)
     u_mat_rev = u_mat[:, rev].T  # (n, q)
@@ -920,7 +1155,10 @@ def diags(
         row = jnp.zeros(m, dtype=common_dtype)
         col_start = max(0, k)
         row_start = max(0, -k)
-        length = min(len(d), m - col_start, n - row_start)
+        diag_len = min(m - col_start, n - row_start)
+        if len(d) == 1 and diag_len > 1:
+            d = jnp.broadcast_to(d, (diag_len,))
+        length = min(len(d), diag_len)
         if length > 0:
             # d[0] maps to A[row_start, col_start], i.e., column col_start
             row = row.at[col_start : col_start + length].set(d[:length])
@@ -928,3 +1166,76 @@ def diags(
 
     data = jnp.stack(data_rows)  # (n_diags, m)
     return DiaMatrix(data=data, offsets=offsets, shape=(n, m))
+
+
+def diakron(A: DiaMatrix, B: DiaMatrix) -> DiaMatrix:
+    """Kronecker (tensor) product ``A ⊗ B`` of two DIA sparse matrices.
+
+    When ``B`` is square (``p == q``), each pair of diagonals ``(k_a, k_b)``
+    produces a single diagonal at offset ``k_a * p + k_b`` in the result, and
+    the column-aligned data is the ravel of the outer product of the two
+    row buffers.  When ``B`` is not square the method falls back to dense
+    intermediates via :func:`jnp.kron`.
+
+    Args:
+        A: First DIA matrix of shape ``(m, n)``.
+        B: Second DIA matrix of shape ``(p, q)``.
+
+    Returns:
+        A new :class:`DiaMatrix` of shape ``(m * p, n * q)`` representing the
+        Kronecker product.
+
+    Example:
+        >>> import jax.numpy as jnp
+        >>> I2 = diags([jnp.ones(2)], offsets=(0,), shape=(2, 2))
+        >>> T3 = diags(
+        ...     [-jnp.ones(2), 2 * jnp.ones(3), -jnp.ones(2)],
+        ...     offsets=(-1, 0, 1),
+        ... )
+        >>> K = diakron(I2, T3)
+        >>> K.shape
+        (6, 6)
+    """
+    m, n = A.shape
+    p, q = B.shape
+
+    if p != q:
+        # Non-square B: construct via dense intermediates.
+        return DiaMatrix.from_dense(jnp.kron(A.todense(), B.todense()))
+
+    # Fast DIA path — B is square (p == q).
+    # For offset k_a in A and k_b in B the Kronecker product has a single
+    # diagonal at K = k_a*p + k_b (result shape m*p × n*p).
+    # Column j of the result splits as j = j0*p + j1 (j0 ∈ [0,n), j1 ∈ [0,p)),
+    # and result.data[K_idx, j] = A.data[ka_idx, j0] * B.data[kb_idx, j1],
+    # i.e. the ravel of the outer product A.data[ka, :] ⊗ B.data[kb, :].
+    result_shape = (m * p, n * p)
+    accumulated: dict[int, Array] = {}
+
+    for ka_idx, k_a in enumerate(A.offsets):
+        a_row = A.data[ka_idx]  # shape (n,)
+        for kb_idx, k_b in enumerate(B.offsets):
+            b_row = B.data[kb_idx]  # shape (p,)
+            K = int(k_a) * p + int(k_b)
+            col_data: Array = (a_row[:, None] * b_row[None, :]).ravel()
+            if K in accumulated:
+                accumulated[K] = accumulated[K] + col_data
+            else:
+                accumulated[K] = col_data
+
+    sorted_offsets = tuple(sorted(accumulated))
+    result_data = jnp.stack([accumulated[k] for k in sorted_offsets])
+    return DiaMatrix(data=result_data, offsets=sorted_offsets, shape=result_shape)
+
+
+def _tridiag(n: int) -> tuple:
+    """Return a symmetric tridiagonal nxn matrix as (dense_numpy, DiaMatrix)."""
+    import numpy as np
+
+    a = (
+        np.diag(2 * np.ones(n))
+        + np.diag(-np.ones(n - 1), 1)
+        + np.diag(-np.ones(n - 1), -1)
+    )
+    A = DiaMatrix.from_dense(jnp.array(a), offsets=(-1, 0, 1))
+    return a, A

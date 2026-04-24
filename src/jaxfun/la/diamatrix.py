@@ -624,16 +624,6 @@ class DiaMatrix(nnx.Pytree):
         return self.get_row(i)[j]
 
     def _merge(self, other: DiaMatrix, sign: float) -> DiaMatrix:
-        """Add ``self + sign * other`` directly in DIA format.
-
-        Fast path (identical offsets): a single on-device ``data_a + sign *
-        data_b`` — no Python loop, no host transfers, no union logic.
-
-        General path (different offsets): JIT kernel that unions the offset
-        sets at trace time (loop fully unrolled statically).
-
-        Zero diagonals are not pruned in either case.
-        """
         if self.shape != other.shape:
             raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
 
@@ -941,11 +931,6 @@ def _lu_banded_no_pivot_kernel(band: Array, p: int, q: int, center: int) -> Arra
 
     Band convention: ``band[center + off, j] = A[j - off, j]``, ``center = p``,
     ``bw = p + q + 1``.
-
-    The inner double-loop is implemented via ``jax.lax.fori_loop`` rather than
-    Python ``for`` so XLA compiles a single loop body regardless of bandwidth,
-    avoiding the O(p * q) XLA-node explosion that caused multi-minute compile
-    times for wide-banded Kronecker matrices.
 
     Returns the in-place factored band (same shape as input).
     """

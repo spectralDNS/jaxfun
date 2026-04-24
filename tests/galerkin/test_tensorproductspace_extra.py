@@ -88,7 +88,7 @@ def test_tpmats_to_kron():
     S = tpmats_to_kron(A)
     assert S.shape == (T.dim, T.dim)
     # Compare to dense version
-    A_dense = sum(mat.mat for mat in A)
+    A_dense = sum(mat.mat.todense() for mat in A)
     assert jnp.allclose(S.todense(), A_dense)
 
 

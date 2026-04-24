@@ -33,7 +33,7 @@ def test_tensorproduct_forward_backward_padding_fourier():
     # Solve
     M = cast(list[TPMatrix], M)
     b = cast(jax.Array, b)
-    uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(T.num_dofs)
+    uh = M[0].mat.solve(b.flatten()).reshape(T.num_dofs)
     # Backward on padded grid
     up = T.backward(uh, N=(12, 8))
     # Make sure shape matches requested padding (only first axis padded)

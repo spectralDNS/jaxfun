@@ -21,8 +21,7 @@ class MatrixProtocol(Protocol):
 
     Example::
 
-        from jaxfun.la import DiaMatrix, Matrix
-        from jaxfun.la.protocol import MatrixProtocol
+        from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol
         import jax.numpy as jnp
 
 

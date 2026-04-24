@@ -3,6 +3,7 @@ from typing import Any, Literal, TypeGuard, cast, overload
 
 import jax.numpy as jnp
 import sympy as sp
+from flax import nnx
 from jax import Array
 
 from jaxfun.galerkin import JAXFunction
@@ -466,10 +467,10 @@ def process_results(
         aresults: list[TPMatrix] = cast(list[TPMatrix], aresults)
         for a0 in aresults:
             if isinstance(a0, TPMatrix):
-                a0.mats: list[DiaMatrix] = [
+                a0.mats = nnx.List(
                     tosparse(cast(Matrix, a0.mats[i]).data, sparse_tol)
                     for i in range(a0.dims)
-                ]
+                )
 
     if len(bresults) > 0:
         bresults: Array = jnp.sum(jnp.array(bresults), axis=0)
@@ -739,8 +740,6 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
     Returns:
         Coefficient array shaped to V.num_dofs.
     """
-    from scipy import sparse as scipy_sparse
-
     from jaxfun.operators import Dot
 
     if V.dims == 1:
@@ -767,7 +766,7 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
     v = TestFunction(V)
     if V.rank == 0:
         M, b = inner(v * (u - ue))
-        uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(V.num_dofs)
+        uh = M[0].solve(b.flatten()).reshape(V.num_dofs)
 
     elif V.rank == 1:
         assert isinstance(ue, sp.Mul | sp.Add | JAXFunction), (
@@ -777,6 +776,6 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
         M, b = inner(Dot(v, (u - ue)))
         A = BlockTPMatrix(M, V, V)
         C = A.block_array()
-        uh = jnp.array(scipy_sparse.linalg.spsolve(C, b.ravel()).reshape(b.shape))
+        uh = C.solve(b.ravel()).reshape(b.shape)
 
     return uh

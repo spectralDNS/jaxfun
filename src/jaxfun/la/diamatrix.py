@@ -720,11 +720,11 @@ class DiaMatrix(nnx.Pytree):
         """
         from jaxfun.galerkin import JAXFunction as _JAXFunction
 
-        if not isinstance(other, DiaMatrix):
-            return self.apply(other)
-
         if isinstance(other, _JAXFunction):
             return self.apply(other.array)
+
+        if not isinstance(other, DiaMatrix):
+            return self.apply(other)
 
         data_out, offsets_out, shape_out = self._matmul_compute(other)
         return DiaMatrix(

@@ -959,7 +959,7 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         return len(self.mats)
 
     @property
-    def mat(self) -> DiaMatrix | Array:
+    def mat(self) -> DiaMatrix | Matrix:
         """Return explicit Kronecker product.
 
         Returns a :class:`~jaxfun.la.DiaMatrix` when all factor matrices are
@@ -978,7 +978,7 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         out = arrays[0]
         for a in arrays[1:]:
             out = jnp.kron(out, a)
-        return out
+        return Matrix(out)
 
     @jax.jit
     def _matmul_array(self, w: Array) -> Array:
@@ -1143,27 +1143,27 @@ class BlockTPMatrix:
             slice(jnp.sum(M[: indices[1]]), jnp.sum(M[: indices[1] + 1])),
         )
 
-    def block_array(self) -> Array:
+    def block_array(self) -> Matrix:
         """Return dense block matrix assembled from Kronecker products."""
         out = jnp.zeros(self.shape)
         for m in self.tpmats:
             indices = m.global_indices
             block = m.mat
-            dense = block.todense() if isinstance(block, DiaMatrix) else block
+            dense = block.todense()
             out = out.at[self.slice(indices)].add(dense)
-        return out
+        return Matrix(out)
 
     def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply block matrix to coefficient array u."""
-        from jaxfun.galerkin import JAXFunction
+        from jaxfun.galerkin import JAXFunction as _JAXFunction
 
-        w = u.array if isinstance(u, JAXFunction) else u
+        w = u.array if isinstance(u, _JAXFunction) else u
         return self._matmul_array(w)
 
     def solve(self, b: Array) -> Array:
         """Solve M x = b using a dense factorisation of the block matrix."""
         M = self.block_array()
-        return jnp.linalg.solve(M, b.ravel()).reshape(b.shape)
+        return M.solve(b.ravel()).reshape(b.shape)
 
 
 def tpmats_to_kron(A: list[TPMatrix], tol: int = 100) -> Matrix | DiaMatrix:
@@ -1188,6 +1188,9 @@ def tpmats_to_kron(A: list[TPMatrix], tol: int = 100) -> Matrix | DiaMatrix:
     Returns:
         :class:`~jaxfun.la.DiaMatrix` representing ``Σ scale * kron(factors)``.
     """
+    if not A:
+        raise ValueError("tpmats_to_kron requires a non-empty list.")
+
     if isinstance(A[0].mats[0], Matrix):
         result: Array | None = None
         for tpm in A:

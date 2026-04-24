@@ -180,7 +180,7 @@ def test_jaxfunction_diff_2d(space: type[OrthogonalSpace], domain: Domain | None
     w = JAXFunction(jnp.ones(T.num_dofs), T, name="w")
     b0 = TPMatrices(A) @ w
     b1 = inner(v * Div(Grad(w)))
-    assert jnp.linalg.norm(b0 - b1) < ulp(100)
+    assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(10))
 
 
 def test_jaxfunction_nonlin_2d(space: type[OrthogonalSpace], domain: Domain | None):

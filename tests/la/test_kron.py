@@ -358,7 +358,7 @@ def _make_tpmatrix_2d(
     a0 = rng.standard_normal((m0, n0)).astype(np.float32)
     a1 = rng.standard_normal((m1, n1)).astype(np.float32)
     tp = TPMatrix(
-        [Matrix(jnp.array(a0)), Matrix(jnp.array(a1))],
+        [Matrix(jnp.array(a0)), Matrix(jnp.array(a1))],  # ty:ignore[invalid-argument-type]
         scale,
     )
     K = np.kron(a0, a1) * scale
@@ -375,7 +375,7 @@ def _make_tpmatrix_3d(
     for a in mats_np[1:]:
         K = np.kron(K, a)
     K = K * scale
-    tp = TPMatrix([Matrix(jnp.array(a)) for a in mats_np], scale)
+    tp = TPMatrix([Matrix(jnp.array(a)) for a in mats_np], scale)  # ty:ignore[invalid-argument-type]
     return tp, K
 
 
@@ -412,7 +412,7 @@ class TestTPMatrixMatmul:
         T = _diag3(n)
         I = diags([jnp.ones(n)], offsets=(0,))
         K_dia = diakron(T, I)  # symmetric
-        tp = TPMatrix([T, I], 1.0)
+        tp = TPMatrix([T, I], 1.0)  # ty:ignore[invalid-argument-type]
         rng = np.random.default_rng(2)
         w = jnp.array(rng.standard_normal((n, n)).astype(np.float32))
         # A @ w (flattened) and w @ A (flattened) differ only by interpretation:

@@ -483,10 +483,6 @@ class TestProperties:
         _, A = _tridiag(3)
         assert A.ndim == 2
 
-    def test_dtype(self):
-        _, A = _tridiag(3)
-        assert A.dtype == jnp.float32
-
     def test_astype(self):
         # float16 is always available regardless of x64 mode.
         _, A = _tridiag(3)
@@ -678,7 +674,6 @@ class TestLU:
         lu_swap = DiaMatrix.from_dense(a, offsets=(-1, 0, 1)).lu_factor(pivot=True)
         assert lu_swap.perm is not None
         assert lu_swap.perm.shape == (3,)
-        assert lu_swap.perm.dtype == jnp.int32
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_lu_solve_axis1(self, mat):

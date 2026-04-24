@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import scipy.sparse
 
-from jaxfun.la import DiaMatrix, LUFactors, diags
+from jaxfun.la.diamatrix import DiaMatrix, LUFactors, diags
 
 
 def _tridiag(n: int) -> tuple[np.ndarray, DiaMatrix]:
@@ -211,7 +211,7 @@ class TestMatvec:
         AT = A.T
         expected = A.todense() @ AT.todense()
         H = A @ AT
-        assert jnp.allclose(cast(DiaMatrix, H).todense(), expected)
+        assert jnp.allclose(H.todense(), expected)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_matmat_shape(self, mat):

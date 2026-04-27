@@ -561,8 +561,20 @@ class DiaMatrix(nnx.Pytree):
             True
         """
         _, m = self.shape
-        cols = jnp.arange(m, dtype=jnp.int32)
-        return self._get_entries(i, cols)
+
+        i = jnp.asarray(i, dtype=jnp.int32)
+        offsets = jnp.asarray(self.offsets, dtype=jnp.int32)
+
+        cols = i + offsets
+        in_bounds = (cols >= 0) & (cols < m)
+        safe_cols = jnp.where(in_bounds, cols, 0)
+
+        diag_ids = jnp.arange(self.data.shape[0])
+        vals = self.data[diag_ids, safe_cols]
+        vals = jnp.where(in_bounds, vals, jnp.zeros((), dtype=self.data.dtype))
+
+        row = jnp.zeros((m,), dtype=self.data.dtype)
+        return row.at[cols].add(vals)
 
     def get_column(self, j: int | Array) -> Array:
         """Return column ``j`` of the matrix as a dense 1-D array of length ``n``.
@@ -594,9 +606,21 @@ class DiaMatrix(nnx.Pytree):
             ... )
             True
         """
-        n, _ = self.shape
-        rows = jnp.arange(n, dtype=jnp.int32)
-        return self._get_entries(rows, j)
+        n, m = self.shape
+
+        j = jnp.asarray(j, dtype=jnp.int32)
+        offsets = jnp.asarray(self.offsets, dtype=jnp.int32)
+
+        rows = j - offsets
+        in_bounds = (rows >= 0) & (rows < n) & (j >= 0) & (j < m)
+        safe_rows = jnp.where(in_bounds, rows, 0)
+        safe_j = jnp.where((j >= 0) & (j < m), j, 0)
+
+        vals = self.data[:, safe_j]
+        vals = jnp.where(in_bounds, vals, jnp.zeros((), dtype=self.data.dtype))
+
+        col = jnp.zeros((n,), dtype=self.data.dtype)
+        return col.at[safe_rows].add(vals)
 
     def scale(self, alpha: float | Array) -> DiaMatrix:
         """Return ``alpha * A`` as a new :class:`DiaMatrix`."""

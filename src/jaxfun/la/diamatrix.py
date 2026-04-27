@@ -30,6 +30,15 @@ def _normalize_index(idx, size: int):
     return jnp.clip(idx, 0, size - 1)
 
 
+def _is_full_slice(key) -> bool:
+    return (
+        isinstance(key, slice)
+        and key.start is None
+        and key.stop is None
+        and key.step is None
+    )
+
+
 class _CacheBox[T]:
     """Thin wrapper that provides identity-based equality and hashing.
 
@@ -650,28 +659,115 @@ class DiaMatrix(nnx.Pytree):
         if not isinstance(key, tuple):
             return self._get_single_axis(key)
 
-        if len(key) != 2:
+        key = self._expand_tuple_key(key)
+        axis_keys = [item for item in key if item is not None]
+        if len(axis_keys) != 2:
             raise TypeError("DiaMatrix indexing expects A[i, j].")
 
-        row_key, col_key = key
+        row_key, col_key = axis_keys
+        result, axis_counts = self._get_tuple_axes(row_key, col_key)
+        return self._apply_newaxes(result, key, axis_counts)
+
+    def _expand_tuple_key(self, key: tuple) -> tuple:
+        items = list(key)
+        ellipsis_count = sum(item is Ellipsis for item in items)
+        if ellipsis_count > 1:
+            raise TypeError("DiaMatrix indexing expects at most one ellipsis.")
+
+        if ellipsis_count:
+            ellipsis_pos = next(i for i, item in enumerate(items) if item is Ellipsis)
+            used_axes = sum(item is not None and item is not Ellipsis for item in items)
+            fill = 2 - used_axes
+            if fill < 0:
+                raise TypeError("DiaMatrix indexing expects A[i, j].")
+            items[ellipsis_pos : ellipsis_pos + 1] = [slice(None)] * fill
+
+        used_axes = sum(item is not None for item in items)
+        if used_axes > 2:
+            raise TypeError("DiaMatrix indexing expects A[i, j].")
+
+        items.extend([slice(None)] * (2 - used_axes))
+        return tuple(items)
+
+    def _axis_indices(self, key, size: int) -> tuple[Array, bool, bool]:
+        if isinstance(key, slice):
+            return jnp.arange(size, dtype=jnp.int32)[key], False, False
+
+        if isinstance(key, int) and not isinstance(key, bool):
+            idx = jnp.asarray(_normalize_index(key, size), dtype=jnp.int32)
+            return idx, True, False
+
+        idx = jnp.asarray(key)
+        if idx.dtype == jnp.bool_:
+            if idx.ndim != 1:
+                raise TypeError("DiaMatrix tuple boolean masks must be 1-D.")
+            return jnp.nonzero(idx)[0].astype(jnp.int32), False, True
+
+        idx = jnp.asarray(_normalize_index(idx, size), dtype=jnp.int32)
+        return idx, idx.ndim == 0, idx.ndim > 0
+
+    def _gather_rows(self, rows: Array) -> Array:
+        original_shape = rows.shape
+        rows = rows.reshape((-1,))
+        selected = jax.vmap(self.get_row)(rows)
+        return selected.reshape(original_shape + selected.shape[1:])
+
+    def _gather_columns(self, cols: Array) -> Array:
+        original_shape = cols.shape
+        cols = cols.reshape((-1,))
+        selected = jax.vmap(self.get_column)(cols)
+        selected = selected.reshape(original_shape + selected.shape[1:])
+        return jnp.moveaxis(selected, -1, 0)
+
+    def _get_tuple_axes(self, row_key, col_key) -> tuple[Array, tuple[int, int]]:
         n, m = self.shape
-
-        rows = jnp.asarray(_normalize_index(row_key, n), dtype=jnp.int32)
-        cols = jnp.asarray(_normalize_index(col_key, m), dtype=jnp.int32)
-
-        row_scalar = rows.ndim == 0
-        col_scalar = cols.ndim == 0
+        rows, row_scalar, row_advanced = self._axis_indices(row_key, n)
+        cols, col_scalar, col_advanced = self._axis_indices(col_key, m)
 
         if row_scalar and col_scalar:
-            return self._get_scalar(rows, cols)
+            return self._get_scalar(rows, cols), (0, 0)
 
         if row_scalar:
-            return self.get_row(rows)[cols]
+            return self.get_row(rows)[cols], (0, cols.ndim)
 
         if col_scalar:
-            return self.get_column(cols)[rows]
+            return self.get_column(cols)[rows], (rows.ndim, 0)
 
-        return self._get_entries(rows[:, None], cols[None, :])
+        if row_advanced and col_advanced:
+            rows, cols = jnp.broadcast_arrays(rows, cols)
+            return self._get_entries(rows, cols), (rows.ndim, 0)
+
+        if _is_full_slice(col_key) and row_advanced:
+            return self._gather_rows(rows), (rows.ndim, 1)
+
+        if _is_full_slice(row_key) and col_advanced:
+            return self._gather_columns(cols), (1, cols.ndim)
+
+        row_grid = rows.reshape(rows.shape + (1,) * cols.ndim)
+        col_grid = cols.reshape((1,) * rows.ndim + cols.shape)
+        return self._get_entries(row_grid, col_grid), (rows.ndim, cols.ndim)
+
+    def _apply_newaxes(
+        self, result: Array, key: tuple, axis_counts: tuple[int, int]
+    ) -> Array:
+        if None not in key:
+            return result
+
+        final_shape = []
+        result_axis = 0
+        consumed_axis = 0
+
+        for item in key:
+            if item is None:
+                final_shape.append(1)
+                continue
+
+            count = axis_counts[consumed_axis]
+            final_shape.extend(result.shape[result_axis : result_axis + count])
+            result_axis += count
+            consumed_axis += 1
+
+        return result.reshape(tuple(final_shape))
 
     def _get_single_axis(self, key: int | slice | Array) -> Array:
         n, m = self.shape
@@ -687,7 +783,7 @@ class DiaMatrix(nnx.Pytree):
             return jax.vmap(self.get_row)(rows)
 
         if isinstance(key, int) and not isinstance(key, bool):
-            return self.get_row(key)
+            return self.get_row(_normalize_index(key, n))
 
         if key is Ellipsis or key is None or isinstance(key, bool):
             if key is False:

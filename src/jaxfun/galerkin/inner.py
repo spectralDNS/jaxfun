@@ -45,6 +45,7 @@ def inner(
     sparse_tol: int = 1000,
     return_all_items: bool = False,
     num_quad_points: int | tuple[int, ...] | None = None,
+    use_precomputed_matrices: bool = True,
 ):
     r"""Assemble Galerkin inner products (bilinear / linear forms).
 
@@ -80,6 +81,11 @@ def inner(
             nonlinear terms, but the user is responsible for ensuring that
             the number of quadrature points is sufficient. For the 3/2 rule,
             use tuple(int(1.5 * n) for n in test_space.num_quad_points).
+        use_precomputed_matrices: If True, use precomputed sparse matrices if
+            available for the given test/trial derivative orders. If False,
+            always compute matrices via quadrature. Setting to False can be
+            useful for testing.
+
 
     Returns:
         Depending on content:
@@ -159,7 +165,7 @@ def inner(
                 else num_quad_points[vf.system.base_scalars()[0]._id[0]]
             )
 
-            z = inner_bilinear(ai, vf, uf, sc, is_multivar, N)
+            z = inner_bilinear(ai, vf, uf, sc, is_multivar, N, use_precomputed_matrices)
 
             if isinstance(z, tuple):  # multivar
                 mats.append((z, global_indices))
@@ -493,6 +499,7 @@ def inner_bilinear(
     sc: float | complex,
     multivar: Literal[False],
     num_quad_points: int,
+    use_precomputed_matrices: bool,
 ) -> Matrix: ...
 @overload
 def inner_bilinear(
@@ -502,6 +509,7 @@ def inner_bilinear(
     sc: float | complex,
     multivar: Literal[True],
     num_quad_points: int,
+    use_precomputed_matrices: bool,
 ) -> tuple[Array, Array]: ...
 def inner_bilinear(
     ai: sp.Expr,
@@ -510,6 +518,7 @@ def inner_bilinear(
     sc: float | complex,
     multivar: bool,
     num_quad_points: int,
+    use_precomputed_matrices: bool,
 ) -> Matrix | tuple[Array, Array]:
     """Assemble single bilinear form contribution term.
 
@@ -565,7 +574,7 @@ def inner_bilinear(
             scale *= float(aii)  # ty:ignore[invalid-argument-type]
 
     z = None
-    if len(scale) == 1 and not multivar:
+    if len(scale) == 1 and use_precomputed_matrices and not multivar:
         # Look up matrix
         mod = importlib.import_module(vo.__class__.__module__)
         z = mod.matrices((vo, i), (uo, j))

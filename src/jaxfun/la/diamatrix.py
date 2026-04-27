@@ -17,14 +17,17 @@ Array = jax.Array
 def _normalize_index(idx, size: int):
     """Normalize an int/slice/array index into either scalar or 1-D JAX indices."""
     if isinstance(idx, int):
-        return idx + size if idx < 0 else idx
+        idx = idx + size if idx < 0 else idx
+        return min(max(idx, 0), size - 1)
 
     if isinstance(idx, slice):
         return jnp.arange(size, dtype=jnp.int32)[idx]
 
     # Array / traced scalar / advanced index.
     idx = jnp.asarray(idx, dtype=jnp.int32)
-    return jnp.where(idx < 0, idx + size, idx)
+    idx = jnp.where(idx < 0, idx + size, idx)
+    # jax clips out-of-bounds indices to the edge of the array.
+    return jnp.clip(idx, 0, size - 1)
 
 
 class _CacheBox[T]:
@@ -643,8 +646,11 @@ class DiaMatrix(nnx.Pytree):
     def __len__(self) -> int:
         return min(self.shape)
 
-    def __getitem__(self, key: tuple) -> Array:
-        if not (isinstance(key, tuple) and len(key) == 2):
+    def __getitem__(self, key: int | slice | tuple | Array) -> Array:
+        if not isinstance(key, tuple):
+            return self._get_single_axis(key)
+
+        if len(key) != 2:
             raise TypeError("DiaMatrix indexing expects A[i, j].")
 
         row_key, col_key = key
@@ -659,10 +665,57 @@ class DiaMatrix(nnx.Pytree):
         if row_scalar and col_scalar:
             return self._get_scalar(rows, cols)
 
-        if row_scalar or col_scalar:
-            return self._get_entries(rows, cols)
+        if row_scalar:
+            return self.get_row(rows)[cols]
+
+        if col_scalar:
+            return self.get_column(cols)[rows]
 
         return self._get_entries(rows[:, None], cols[None, :])
+
+    def _get_single_axis(self, key: int | slice | Array) -> Array:
+        n, m = self.shape
+
+        if isinstance(key, list):
+            raise TypeError(
+                "Using a non-tuple sequence for multidimensional indexing is "
+                "not allowed; use arr[array(seq)] instead of arr[seq]."
+            )
+
+        if isinstance(key, slice):
+            rows = jnp.arange(n, dtype=jnp.int32)[key]
+            return jax.vmap(self.get_row)(rows)
+
+        if isinstance(key, int) and not isinstance(key, bool):
+            return self.get_row(key)
+
+        if key is Ellipsis or key is None or isinstance(key, bool):
+            if key is False:
+                return jnp.zeros((0, n, m), dtype=self.data.dtype)
+            # Add warning that we are getting dense output.
+            A = self.todense()
+            if key is Ellipsis:
+                return A
+            return A[None, ...]
+
+        idx = jnp.asarray(key)
+
+        if idx.dtype == jnp.bool_:
+            rows = jnp.arange(n, dtype=jnp.int32)
+            if idx.ndim == 1:
+                return jax.vmap(self.get_row)(rows[idx])
+
+            row_idx, col_idx = jnp.nonzero(idx)
+            return jax.vmap(self._get_scalar)(row_idx, col_idx)
+
+        rows = _normalize_index(idx, n)
+        if rows.ndim == 0:
+            return self.get_row(rows)
+
+        original_shape = rows.shape
+        rows = rows.reshape((-1,))
+        selected = jax.vmap(self.get_row)(rows)
+        return selected.reshape(original_shape + selected.shape[1:])
 
     def _get_scalar(self, i: int | Array, j: int | Array) -> Array:
         n, m = self.shape

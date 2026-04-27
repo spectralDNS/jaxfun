@@ -381,53 +381,46 @@ def matrices(
     """
     v, i = test
     u, j = trial
+    if (i, j) not in {(0, 0), (0, 1), (1, 0), (0, 2), (2, 0)}:
+        return None
     if i == 0 and j == 0:
         return diags(
             [v.norm_squared()],
             offsets=(0,),
             shape=(v.N, u.N),
         )
-    if i == 0 and j == 1:
-        offsets = jnp.arange(1, u.N, 2)
-        if len(offsets) == 0:
+
+    if j == 0:
+        if i not in (1, 2):
             return None
-        k = jnp.arange(max(v.N, u.N))
 
-        def _getkey(j):
-            Q = min(v.N, u.N - j)
-            return jnp.pi * k[j : (Q + j)]
-
-        return diags(
-            [_getkey(j) for j in offsets],
-            tuple(offsets.tolist()),
-            (v.N, u.N),
-        )
-
-    if i == 1 and j == 0:
         m = matrices(trial, test)
         if m is not None:
             return m.T
         return None
 
-    if i == 0 and j == 2:
-        offsets = jnp.arange(2, u.N, 2)
-        if len(offsets) == 0:
-            return None
-        k = jnp.arange(max(v.N, u.N))
+    offsets = jnp.arange(j, u.N, 2)
+    if len(offsets) == 0:
+        return None
+    k = jnp.arange(max(v.N, u.N))
 
-        def _getkey(j):
-            Q = min(v.N, u.N - j)
-            return k[j : (Q + j)] * (k[j : (Q + j)] ** 2 - k[:Q] ** 2) * jnp.pi / 2
+    def _getkey1(offset):
+        Q = min(v.N, u.N - offset)
+        return jnp.pi * k[offset : (Q + offset)]
 
-        return diags(
-            [_getkey(j) for j in offsets],
-            tuple(offsets.tolist()),
-            (v.N, u.N),
+    def _getkey2(offset):
+        Q = min(v.N, u.N - offset)
+        return (
+            k[offset : (Q + offset)]
+            * (k[offset : (Q + offset)] ** 2 - k[:Q] ** 2)
+            * jnp.pi
+            / 2
         )
 
-    if i == 2 and j == 0:
-        m = matrices(trial, test)
-        if m is not None:
-            return m.T
+    _getkey = _getkey1 if j == 1 else _getkey2
 
-    return None
+    return diags(
+        [_getkey(m) for m in offsets],
+        tuple(offsets.tolist()),
+        (v.N, u.N),
+    )

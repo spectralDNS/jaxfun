@@ -232,11 +232,7 @@ def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> DiaMatrix
     u, j = trial
     k = (1j * v.wavenumbers()) ** j * (-1j * u.wavenumbers()) ** i
     if (i + j) % 2 == 0:
-        return diags(
-            [k.real * v.norm_squared()],
-            offsets=(0,),
-            shape=(v.N, u.N),
-        )
+        k = k.real
     return diags(
         [k * v.norm_squared()],
         offsets=(0,),

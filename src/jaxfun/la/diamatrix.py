@@ -547,22 +547,21 @@ class DiaMatrix(nnx.Pytree):
             >>> bool(jnp.allclose(A.get_row(2), jnp.array([0.0, 1.0, -2.0, 1.0, 0.0])))
             True
         """
-        n, m = self.shape
-        i = jnp.asarray(i, dtype=int)
-        row = jnp.zeros(m, dtype=self.data.dtype)
+        _, m = self.shape
 
-        offsets_arr = jnp.array(self.offsets, dtype=int)
+        i = jnp.asarray(i, dtype=jnp.int32)
+        offsets = jnp.asarray(self.offsets, dtype=jnp.int32)
 
-        def _place(row: Array, args: tuple) -> tuple[Array, None]:
-            d, k = args  # d: (m,),  k: scalar int32
-            j = i + k  # column where this diagonal hits row i
-            in_bounds = (j >= 0) & (j < m)
-            safe_j = jnp.where(in_bounds, j, 0)
-            val = jnp.where(in_bounds, d[safe_j], jnp.zeros((), dtype=d.dtype))
-            return row.at[safe_j].add(jnp.where(in_bounds, val, 0.0)), None
+        cols = i + offsets  # shape: (num_diags,)
+        in_bounds = (cols >= 0) & (cols < m)
+        safe_cols = jnp.where(in_bounds, cols, 0)
 
-        row, _ = jax.lax.scan(_place, row, (self.data, offsets_arr))
-        return row
+        diag_ids = jnp.arange(self.data.shape[0])
+        vals = self.data[diag_ids, safe_cols]
+        vals = jnp.where(in_bounds, vals, jnp.zeros((), dtype=self.data.dtype))
+
+        row = jnp.zeros((m,), dtype=self.data.dtype)
+        return row.at[safe_cols].add(vals)
 
     def get_column(self, j: int | Array) -> Array:
         """Return column ``j`` of the matrix as a dense 1-D array of length ``n``.

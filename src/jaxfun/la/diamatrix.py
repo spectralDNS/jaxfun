@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING, overload
 
 import jax
@@ -12,6 +13,43 @@ if TYPE_CHECKING:
     from .matrix import Matrix
 
 Array = jax.Array
+
+
+class DenseIndexingWarning(UserWarning):
+    """Warning raised when DiaMatrix indexing must materialize dense output."""
+
+
+def _normalize_index(idx, size: int):
+    """Normalize an int/slice/array index into either scalar or 1-D JAX indices."""
+    if isinstance(idx, int):
+        idx = idx + size if idx < 0 else idx
+        return min(max(idx, 0), size - 1)
+
+    if isinstance(idx, slice):
+        return jnp.arange(size, dtype=jnp.int32)[idx]
+
+    # Array / traced scalar / advanced index.
+    idx = jnp.asarray(idx, dtype=jnp.int32)
+    idx = jnp.where(idx < 0, idx + size, idx)
+    # jax clips out-of-bounds indices to the edge of the array.
+    return jnp.clip(idx, 0, size - 1)
+
+
+def _is_full_slice(key) -> bool:
+    return (
+        isinstance(key, slice)
+        and key.start is None
+        and key.stop is None
+        and key.step is None
+    )
+
+
+def _warn_dense_indexing() -> None:
+    warnings.warn(
+        "DiaMatrix indexing materializes dense output for this key.",
+        DenseIndexingWarning,
+        stacklevel=3,
+    )
 
 
 class _CacheBox[T]:
@@ -547,22 +585,21 @@ class DiaMatrix(nnx.Pytree):
             >>> bool(jnp.allclose(A.get_row(2), jnp.array([0.0, 1.0, -2.0, 1.0, 0.0])))
             True
         """
-        n, m = self.shape
-        i = jnp.asarray(i, dtype=int)
-        row = jnp.zeros(m, dtype=self.data.dtype)
+        _, m = self.shape
 
-        offsets_arr = jnp.array(self.offsets, dtype=int)
+        i = jnp.asarray(i, dtype=jnp.int32)
+        offsets = jnp.asarray(self.offsets, dtype=jnp.int32)
 
-        def _place(row: Array, args: tuple) -> tuple[Array, None]:
-            d, k = args  # d: (m,),  k: scalar int32
-            j = i + k  # column where this diagonal hits row i
-            in_bounds = (j >= 0) & (j < m)
-            safe_j = jnp.where(in_bounds, j, 0)
-            val = jnp.where(in_bounds, d[safe_j], jnp.zeros((), dtype=d.dtype))
-            return row.at[safe_j].add(jnp.where(in_bounds, val, 0.0)), None
+        cols = i + offsets
+        in_bounds = (cols >= 0) & (cols < m)
+        safe_cols = jnp.where(in_bounds, cols, 0)
 
-        row, _ = jax.lax.scan(_place, row, (self.data, offsets_arr))
-        return row
+        diag_ids = jnp.arange(self.data.shape[0])
+        vals = self.data[diag_ids, safe_cols]
+        vals = jnp.where(in_bounds, vals, jnp.zeros((), dtype=self.data.dtype))
+
+        row = jnp.zeros((m,), dtype=self.data.dtype)
+        return row.at[safe_cols].add(vals)
 
     def get_column(self, j: int | Array) -> Array:
         """Return column ``j`` of the matrix as a dense 1-D array of length ``n``.
@@ -595,22 +632,20 @@ class DiaMatrix(nnx.Pytree):
             True
         """
         n, m = self.shape
-        j = jnp.asarray(j, dtype=int)
-        col = jnp.zeros(n, dtype=self.data.dtype)
 
-        offsets_arr = jnp.array(self.offsets, dtype=int)
+        j = jnp.asarray(j, dtype=jnp.int32)
+        offsets = jnp.asarray(self.offsets, dtype=jnp.int32)
 
-        def _place(col: Array, args: tuple) -> tuple[Array, None]:
-            d, k = args  # d: (m,),  k: scalar int
-            i = j - k  # row where this diagonal hits column j
-            in_bounds = (i >= 0) & (i < n) & (j >= 0) & (j < m)
-            safe_i = jnp.where(in_bounds, i, 0)
-            safe_j = jnp.where(in_bounds, j, 0)
-            val = jnp.where(in_bounds, d[safe_j], jnp.zeros((), dtype=d.dtype))
-            return col.at[safe_i].add(val), None
+        rows = j - offsets
+        in_bounds = (rows >= 0) & (rows < n) & (j >= 0) & (j < m)
+        safe_rows = jnp.where(in_bounds, rows, 0)
+        safe_j = jnp.where((j >= 0) & (j < m), j, 0)
 
-        col, _ = jax.lax.scan(_place, col, (self.data, offsets_arr))
-        return col
+        vals = self.data[:, safe_j]
+        vals = jnp.where(in_bounds, vals, jnp.zeros((), dtype=self.data.dtype))
+
+        col = jnp.zeros((n,), dtype=self.data.dtype)
+        return col.at[safe_rows].add(vals)
 
     def scale(self, alpha: float | Array) -> DiaMatrix:
         """Return ``alpha * A`` as a new :class:`DiaMatrix`."""
@@ -633,19 +668,216 @@ class DiaMatrix(nnx.Pytree):
     def __len__(self) -> int:
         return min(self.shape)
 
-    def __getitem__(self, key: tuple[int, int]) -> Array:
-        if not (
-            isinstance(key, tuple)
-            and len(key) == 2
-            and isinstance(key[0], int)
-            and isinstance(key[1], int)
-        ):
+    def __getitem__(self, key: int | slice | tuple | Array) -> Array:
+        if not isinstance(key, tuple):
+            return self._get_single_axis(key)
+
+        key = self._expand_tuple_key(key)
+        axis_keys = [item for item in key if item is not None]
+        if len(axis_keys) != 2:
+            raise TypeError("DiaMatrix indexing expects A[i, j].")
+
+        row_key, col_key = axis_keys
+        result, axis_counts = self._get_tuple_axes(row_key, col_key)
+        return self._apply_newaxes(result, key, axis_counts)
+
+    def _expand_tuple_key(self, key: tuple) -> tuple:
+        items = list(key)
+        ellipsis_count = sum(item is Ellipsis for item in items)
+        if ellipsis_count > 1:
+            raise TypeError("DiaMatrix indexing expects at most one ellipsis.")
+
+        if ellipsis_count:
+            ellipsis_pos = next(i for i, item in enumerate(items) if item is Ellipsis)
+            used_axes = sum(item is not None and item is not Ellipsis for item in items)
+            fill = 2 - used_axes
+            if fill < 0:
+                raise TypeError("DiaMatrix indexing expects A[i, j].")
+            items[ellipsis_pos : ellipsis_pos + 1] = [slice(None)] * fill
+
+        used_axes = sum(item is not None for item in items)
+        if used_axes > 2:
+            raise TypeError("DiaMatrix indexing expects A[i, j].")
+
+        items.extend([slice(None)] * (2 - used_axes))
+        return tuple(items)
+
+    def _axis_indices(self, key, size: int) -> tuple[Array, bool, bool]:
+        if isinstance(key, slice):
+            return jnp.arange(size, dtype=jnp.int32)[key], False, False
+
+        if isinstance(key, int) and not isinstance(key, bool):
+            idx = jnp.asarray(_normalize_index(key, size), dtype=jnp.int32)
+            return idx, True, False
+
+        idx = jnp.asarray(key)
+        if idx.dtype == jnp.bool_:
+            if idx.ndim != 1:
+                raise TypeError("DiaMatrix tuple boolean masks must be 1-D.")
+            return jnp.nonzero(idx)[0].astype(jnp.int32), False, True
+
+        idx = jnp.asarray(_normalize_index(idx, size), dtype=jnp.int32)
+        return idx, idx.ndim == 0, idx.ndim > 0
+
+    def _gather_rows(self, rows: Array) -> Array:
+        original_shape = rows.shape
+        rows = rows.reshape((-1,))
+        selected = jax.vmap(self.get_row)(rows)
+        return selected.reshape(original_shape + selected.shape[1:])
+
+    def _gather_columns(self, cols: Array) -> Array:
+        original_shape = cols.shape
+        cols = cols.reshape((-1,))
+        selected = jax.vmap(self.get_column)(cols)
+        selected = selected.reshape(original_shape + selected.shape[1:])
+        return jnp.moveaxis(selected, -1, 0)
+
+    def _get_tuple_axes(self, row_key, col_key) -> tuple[Array, tuple[int, int]]:
+        n, m = self.shape
+        rows, row_scalar, row_advanced = self._axis_indices(row_key, n)
+        cols, col_scalar, col_advanced = self._axis_indices(col_key, m)
+
+        if row_scalar and col_scalar:
+            return self._get_scalar(rows, cols), (0, 0)
+
+        if row_scalar:
+            return self.get_row(rows)[cols], (0, cols.ndim)
+
+        if col_scalar:
+            return self.get_column(cols)[rows], (rows.ndim, 0)
+
+        if row_advanced and col_advanced:
+            rows, cols = jnp.broadcast_arrays(rows, cols)
+            return self._get_entries(rows, cols), (rows.ndim, 0)
+
+        if _is_full_slice(col_key) and row_advanced:
+            return self._gather_rows(rows), (rows.ndim, 1)
+
+        if _is_full_slice(row_key) and col_advanced:
+            return self._gather_columns(cols), (1, cols.ndim)
+
+        row_grid = rows.reshape(rows.shape + (1,) * cols.ndim)
+        col_grid = cols.reshape((1,) * rows.ndim + cols.shape)
+        return self._get_entries(row_grid, col_grid), (rows.ndim, cols.ndim)
+
+    def _apply_newaxes(
+        self, result: Array, key: tuple, axis_counts: tuple[int, int]
+    ) -> Array:
+        if None not in key:
+            return result
+
+        final_shape = []
+        result_axis = 0
+        consumed_axis = 0
+
+        for item in key:
+            if item is None:
+                final_shape.append(1)
+                continue
+
+            count = axis_counts[consumed_axis]
+            final_shape.extend(result.shape[result_axis : result_axis + count])
+            result_axis += count
+            consumed_axis += 1
+
+        return result.reshape(tuple(final_shape))
+
+    def _get_single_axis(self, key: int | slice | Array) -> Array:
+        n, m = self.shape
+
+        if isinstance(key, list):
             raise TypeError(
-                "DiaMatrix only supports scalar two-index access A[i, j] "
-                "with integer indices; call .todense() first for slicing."
+                "Using a non-tuple sequence for multidimensional indexing is "
+                "not allowed; use arr[array(seq)] instead of arr[seq]."
             )
-        i, j = key
-        return self.get_row(i)[j]
+
+        if isinstance(key, slice):
+            rows = jnp.arange(n, dtype=jnp.int32)[key]
+            return jax.vmap(self.get_row)(rows)
+
+        if isinstance(key, int) and not isinstance(key, bool):
+            return self.get_row(_normalize_index(key, n))
+
+        if key is Ellipsis or key is None or isinstance(key, bool):
+            if key is False:
+                return jnp.zeros((0, n, m), dtype=self.data.dtype)
+            _warn_dense_indexing()
+            A = self.todense()
+            if key is Ellipsis:
+                return A
+            return A[None, ...]
+
+        idx = jnp.asarray(key)
+
+        if idx.dtype == jnp.bool_:
+            if idx.ndim == 0:
+                if not bool(idx):
+                    return jnp.zeros((0, n, m), dtype=self.data.dtype)
+                _warn_dense_indexing()
+                return self.todense()[None, ...]
+
+            rows = jnp.arange(n, dtype=jnp.int32)
+            if idx.ndim == 1:
+                return jax.vmap(self.get_row)(rows[idx])
+
+            row_idx, col_idx = jnp.nonzero(idx)
+            return jax.vmap(self._get_scalar)(row_idx, col_idx)
+
+        rows = _normalize_index(idx, n)
+        if rows.ndim == 0:
+            return self.get_row(rows)
+
+        original_shape = rows.shape
+        rows = rows.reshape((-1,))
+        selected = jax.vmap(self.get_row)(rows)
+        return selected.reshape(original_shape + selected.shape[1:])
+
+    def _get_scalar(self, i: int | Array, j: int | Array) -> Array:
+        n, m = self.shape
+
+        i = jnp.asarray(i, dtype=jnp.int32)
+        j = jnp.asarray(j, dtype=jnp.int32)
+
+        offsets = jnp.asarray(self.offsets, dtype=jnp.int32)
+        k = j - i
+
+        ij_in_bounds = (i >= 0) & (i < n) & (j >= 0) & (j < m)
+        safe_j = jnp.where((j >= 0) & (j < m), j, 0)
+
+        vals = self.data[:, safe_j]
+        matches = offsets == k
+
+        # We never check for repeated offsets, so sum over all matches just in case.
+        val = jnp.sum(jnp.where(matches, vals, jnp.zeros((), dtype=self.data.dtype)))
+
+        return jnp.where(ij_in_bounds, val, jnp.zeros((), dtype=self.data.dtype))
+
+    def _get_entries(self, i: int | Array, j: int | Array) -> Array:
+        """Return A[i, j] for broadcast-compatible i and j.
+
+        Supports scalar, vector, and broadcasted matrix-shaped ``i``/``j``.
+        """
+        n, m = self.shape
+
+        i = jnp.asarray(i, dtype=jnp.int32)
+        j = jnp.asarray(j, dtype=jnp.int32)
+
+        offsets = jnp.asarray(self.offsets, dtype=jnp.int32)
+        k = j - i
+
+        in_bounds = (i >= 0) & (i < n) & (j >= 0) & (j < m)
+        safe_j = jnp.where((j >= 0) & (j < m), j, 0)
+
+        vals = jnp.take(self.data, safe_j, axis=1)
+        vals = jnp.moveaxis(vals, 0, -1)
+        matches = k[..., None] == offsets
+
+        # Sum as offsets may be repeated
+        out = jnp.sum(
+            jnp.where(matches, vals, jnp.zeros((), dtype=self.data.dtype)), axis=-1
+        )
+
+        return jnp.where(in_bounds, out, jnp.zeros((), dtype=self.data.dtype))
 
     def _merge(self, other: DiaMatrix, sign: float) -> DiaMatrix:
         if self.shape != other.shape:

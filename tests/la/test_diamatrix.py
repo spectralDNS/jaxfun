@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import scipy.sparse
 
-from jaxfun.la.diamatrix import DiaMatrix, LUFactors, diags
+from jaxfun.la.diamatrix import DenseIndexingWarning, DiaMatrix, LUFactors, diags
 from jaxfun.la.matrix import Matrix
 
 
@@ -376,10 +376,24 @@ def _indexing_matrix() -> tuple[jax.Array, DiaMatrix]:
 
 def _assert_getitem_matches_dense(key) -> None:
     dense, A = _indexing_matrix()
-    actual = A[key]
+    if _warns_for_dense_indexing(key):
+        with pytest.warns(DenseIndexingWarning, match="materializes dense output"):
+            actual = A[key]
+    else:
+        actual = A[key]
     expected = dense[key]
     assert actual.shape == expected.shape
     assert jnp.array_equal(actual, expected)
+
+
+def _warns_for_dense_indexing(key) -> bool:
+    if key is Ellipsis or key is None or key is True:
+        return True
+
+    if isinstance(key, jax.Array):
+        return bool(key.dtype == jnp.bool_ and key.ndim == 0 and bool(key))
+
+    return False
 
 
 class TestGetItem:
@@ -393,6 +407,8 @@ class TestGetItem:
             pytest.param(None, id="newaxis"),
             pytest.param(True, id="bool-scalar-true"),
             pytest.param(False, id="bool-scalar-false"),
+            pytest.param(jnp.array(True), id="jax-bool-scalar-true"),
+            pytest.param(jnp.array(False), id="jax-bool-scalar-false"),
             pytest.param((Ellipsis, 2), id="ellipsis-column"),
             pytest.param((1, Ellipsis), id="row-ellipsis"),
             pytest.param((None, slice(None), 2), id="newaxis-column"),

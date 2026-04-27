@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING, overload
 
 import jax
@@ -12,6 +13,10 @@ if TYPE_CHECKING:
     from .matrix import Matrix
 
 Array = jax.Array
+
+
+class DenseIndexingWarning(UserWarning):
+    """Warning raised when DiaMatrix indexing must materialize dense output."""
 
 
 def _normalize_index(idx, size: int):
@@ -36,6 +41,14 @@ def _is_full_slice(key) -> bool:
         and key.start is None
         and key.stop is None
         and key.step is None
+    )
+
+
+def _warn_dense_indexing() -> None:
+    warnings.warn(
+        "DiaMatrix indexing materializes dense output for this key.",
+        DenseIndexingWarning,
+        stacklevel=3,
     )
 
 
@@ -788,7 +801,7 @@ class DiaMatrix(nnx.Pytree):
         if key is Ellipsis or key is None or isinstance(key, bool):
             if key is False:
                 return jnp.zeros((0, n, m), dtype=self.data.dtype)
-            # Add warning that we are getting dense output.
+            _warn_dense_indexing()
             A = self.todense()
             if key is Ellipsis:
                 return A
@@ -797,6 +810,12 @@ class DiaMatrix(nnx.Pytree):
         idx = jnp.asarray(key)
 
         if idx.dtype == jnp.bool_:
+            if idx.ndim == 0:
+                if not bool(idx):
+                    return jnp.zeros((0, n, m), dtype=self.data.dtype)
+                _warn_dense_indexing()
+                return self.todense()[None, ...]
+
             rows = jnp.arange(n, dtype=jnp.int32)
             if idx.ndim == 1:
                 return jax.vmap(self.get_row)(rows[idx])

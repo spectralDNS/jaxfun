@@ -599,7 +599,7 @@ class DiaMatrix(nnx.Pytree):
         vals = jnp.where(in_bounds, vals, jnp.zeros((), dtype=self.data.dtype))
 
         row = jnp.zeros((m,), dtype=self.data.dtype)
-        return row.at[cols].add(vals)
+        return row.at[safe_cols].add(vals)
 
     def get_column(self, j: int | Array) -> Array:
         """Return column ``j`` of the matrix as a dense 1-D array of length ``n``.

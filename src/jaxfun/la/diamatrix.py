@@ -14,6 +14,19 @@ if TYPE_CHECKING:
 Array = jax.Array
 
 
+def _normalize_index(idx, size: int):
+    """Normalize an int/slice/array index into either scalar or 1-D JAX indices."""
+    if isinstance(idx, int):
+        return idx + size if idx < 0 else idx
+
+    if isinstance(idx, slice):
+        return jnp.arange(size, dtype=jnp.int32)[idx]
+
+    # Array / traced scalar / advanced index.
+    idx = jnp.asarray(idx, dtype=jnp.int32)
+    return jnp.where(idx < 0, idx + size, idx)
+
+
 class _CacheBox[T]:
     """Thin wrapper that provides identity-based equality and hashing.
 
@@ -548,20 +561,8 @@ class DiaMatrix(nnx.Pytree):
             True
         """
         _, m = self.shape
-
-        i = jnp.asarray(i, dtype=jnp.int32)
-        offsets = jnp.asarray(self.offsets, dtype=jnp.int32)
-
-        cols = i + offsets  # shape: (num_diags,)
-        in_bounds = (cols >= 0) & (cols < m)
-        safe_cols = jnp.where(in_bounds, cols, 0)
-
-        diag_ids = jnp.arange(self.data.shape[0])
-        vals = self.data[diag_ids, safe_cols]
-        vals = jnp.where(in_bounds, vals, jnp.zeros((), dtype=self.data.dtype))
-
-        row = jnp.zeros((m,), dtype=self.data.dtype)
-        return row.at[safe_cols].add(vals)
+        cols = jnp.arange(m, dtype=jnp.int32)
+        return self._get_entries(i, cols)
 
     def get_column(self, j: int | Array) -> Array:
         """Return column ``j`` of the matrix as a dense 1-D array of length ``n``.
@@ -593,21 +594,9 @@ class DiaMatrix(nnx.Pytree):
             ... )
             True
         """
-        n, m = self.shape
-
-        j = jnp.asarray(j, dtype=jnp.int32)
-        offsets = jnp.asarray(self.offsets, dtype=jnp.int32)
-
-        rows = j - offsets
-        in_bounds = (rows >= 0) & (rows < n) & (j >= 0) & (j < m)
-        safe_rows = jnp.where(in_bounds, rows, 0)
-        safe_j = jnp.where((j >= 0) & (j < m), j, 0)
-
-        vals = self.data[:, safe_j]
-        vals = jnp.where(in_bounds, vals, jnp.zeros((), dtype=self.data.dtype))
-
-        col = jnp.zeros((n,), dtype=self.data.dtype)
-        return col.at[safe_rows].add(vals)
+        n, _ = self.shape
+        rows = jnp.arange(n, dtype=jnp.int32)
+        return self._get_entries(rows, j)
 
     def scale(self, alpha: float | Array) -> DiaMatrix:
         """Return ``alpha * A`` as a new :class:`DiaMatrix`."""
@@ -630,19 +619,73 @@ class DiaMatrix(nnx.Pytree):
     def __len__(self) -> int:
         return min(self.shape)
 
-    def __getitem__(self, key: tuple[int, int]) -> Array:
-        if not (
-            isinstance(key, tuple)
-            and len(key) == 2
-            and isinstance(key[0], int)
-            and isinstance(key[1], int)
-        ):
-            raise TypeError(
-                "DiaMatrix only supports scalar two-index access A[i, j] "
-                "with integer indices; call .todense() first for slicing."
-            )
-        i, j = key
-        return self.get_row(i)[j]
+    def __getitem__(self, key: tuple) -> Array:
+        if not (isinstance(key, tuple) and len(key) == 2):
+            raise TypeError("DiaMatrix indexing expects A[i, j].")
+
+        row_key, col_key = key
+        n, m = self.shape
+
+        rows = jnp.asarray(_normalize_index(row_key, n), dtype=jnp.int32)
+        cols = jnp.asarray(_normalize_index(col_key, m), dtype=jnp.int32)
+
+        row_scalar = rows.ndim == 0
+        col_scalar = cols.ndim == 0
+
+        if row_scalar and col_scalar:
+            return self._get_scalar(rows, cols)
+
+        if row_scalar or col_scalar:
+            return self._get_entries(rows, cols)
+
+        return self._get_entries(rows[:, None], cols[None, :])
+
+    def _get_scalar(self, i: int | Array, j: int | Array) -> Array:
+        n, m = self.shape
+
+        i = jnp.asarray(i, dtype=jnp.int32)
+        j = jnp.asarray(j, dtype=jnp.int32)
+
+        offsets = jnp.asarray(self.offsets, dtype=jnp.int32)
+        k = j - i
+
+        ij_in_bounds = (i >= 0) & (i < n) & (j >= 0) & (j < m)
+        safe_j = jnp.where((j >= 0) & (j < m), j, 0)
+
+        vals = self.data[:, safe_j]
+        matches = offsets == k
+
+        # We never check for repeated offsets, so sum over all matches just in case.
+        val = jnp.sum(jnp.where(matches, vals, jnp.zeros((), dtype=self.data.dtype)))
+
+        return jnp.where(ij_in_bounds, val, jnp.zeros((), dtype=self.data.dtype))
+
+    def _get_entries(self, i: int | Array, j: int | Array) -> Array:
+        """Return A[i, j] for broadcast-compatible i and j.
+
+        Supports scalar, vector, and broadcasted matrix-shaped ``i``/``j``.
+        """
+        n, m = self.shape
+
+        i = jnp.asarray(i, dtype=jnp.int32)
+        j = jnp.asarray(j, dtype=jnp.int32)
+
+        offsets = jnp.asarray(self.offsets, dtype=jnp.int32)
+        k = j - i
+
+        in_bounds = (i >= 0) & (i < n) & (j >= 0) & (j < m)
+        safe_j = jnp.where((j >= 0) & (j < m), j, 0)
+
+        vals = jnp.take(self.data, safe_j, axis=1)
+        vals = jnp.moveaxis(vals, 0, -1)
+        matches = k[..., None] == offsets
+
+        # Sum as offsets may be repeated
+        out = jnp.sum(
+            jnp.where(matches, vals, jnp.zeros((), dtype=self.data.dtype)), axis=-1
+        )
+
+        return jnp.where(in_bounds, out, jnp.zeros((), dtype=self.data.dtype))
 
     def _merge(self, other: DiaMatrix, sign: float) -> DiaMatrix:
         if self.shape != other.shape:

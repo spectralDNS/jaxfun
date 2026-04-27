@@ -528,3 +528,63 @@ class TestTPMatrixMatmul:
         result = sum(w @ tpm for tpm in A)
         expected = (np.array(w).ravel() @ C.todense()).reshape(shape)
         assert jnp.allclose(result, jnp.array(expected), atol=1e-4)
+
+
+class TestTpmatsToScipySparse:
+    """Tests for tpmats_to_scipy_sparse and tpmats_to_scipy_kron."""
+
+    def test_scipy_sparse_factors_match_dense(self):
+        """Each factor in tpmats_to_scipy_sparse matches the TPMatrix dense factor."""
+        from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_sparse
+
+        A, _ = _poisson_tpmats(N=8)
+        result = tpmats_to_scipy_sparse(A)
+        assert len(result) == len(A)
+        for tpm, (f0, f1) in zip(A, result):
+            scale = complex(tpm.scale).real
+            assert np.allclose(
+                f0.toarray(), np.array(tpm.mats[0].todense()) * scale, atol=1e-6
+            )
+            assert np.allclose(f1.toarray(), np.array(tpm.mats[1].todense()), atol=1e-6)
+
+    def test_scipy_sparse_scale_applied(self):
+        """Scale is folded into first factor, not applied twice."""
+        from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_sparse
+
+        A, _ = _poisson_tpmats(N=8)
+        # Build a scaled copy
+        scaled = [TPMatrix(list(tpm.mats), scale=tpm.scale * 3) for tpm in A]
+        orig = tpmats_to_scipy_sparse(A)
+        scl = tpmats_to_scipy_sparse(scaled)
+        for (o0, o1), (s0, s1) in zip(orig, scl):
+            assert np.allclose(s0.toarray(), 3 * o0.toarray(), atol=1e-6)
+            assert np.allclose(s1.toarray(), o1.toarray(), atol=1e-6)
+
+    def test_scipy_kron_matches_tpmats_to_kron(self):
+        """tpmats_to_scipy_kron assembles the same global matrix as tpmats_to_kron."""
+        from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_kron
+
+        A, _ = _poisson_tpmats(N=8)
+        K_jax = np.array(tpmats_to_kron(A).todense())
+        K_sp = tpmats_to_scipy_kron(A).toarray()
+        assert np.allclose(K_jax, K_sp, atol=1e-5)
+
+    def test_scipy_kron_scale_matches_tpmats_to_kron(self):
+        """Scaled tpmats_to_scipy_kron matches scaled tpmats_to_kron."""
+        from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_kron
+
+        A, _ = _poisson_tpmats(N=8)
+        scaled = [TPMatrix(list(tpm.mats), scale=tpm.scale * 2) for tpm in A]
+        K_jax = np.array(tpmats_to_kron(scaled).todense())
+        K_sp = tpmats_to_scipy_kron(scaled).toarray()
+        assert np.allclose(K_jax, K_sp, atol=1e-5)
+
+    def test_scipy_kron_matvec_matches_solve_rhs(self):
+        """Scipy kron matrix applied to known vector matches JAX kron result."""
+        from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_kron
+
+        A, b = _poisson_tpmats(N=8)
+        K_sp = tpmats_to_scipy_kron(A)
+        K_jax = tpmats_to_kron(A)
+        x = np.random.default_rng(42).standard_normal(K_sp.shape[1]).astype(np.float32)
+        assert np.allclose(K_sp @ x, np.array(K_jax.todense()) @ x, atol=1e-4)

@@ -134,7 +134,7 @@ class Matrix(nnx.Pytree):
         object.__setattr__(self, "_lu_cache", result)
         return result
 
-    def solve(self, b: Array, axis: int = 0) -> Array:
+    def lu_solve(self, b: Array, axis: int = 0) -> Array:
         """Solve ``A x = b`` via LU factorisation.
 
         Args:
@@ -145,12 +145,41 @@ class Matrix(nnx.Pytree):
 
         Examples::
 
+            A.lu_solve(b)  # b shape (n,)      → (n,)
+            A.lu_solve(B, axis=0)  # B shape (n, k)    → (n, k)
+            A.lu_solve(B, axis=1)  # B shape (k, n)    → (k, n)
+            A.lu_solve(T, axis=2)  # T shape (a, b, n) → (a, b, n)
+        """
+        return self.lu_factor().solve(b, axis=axis)
+
+    def solve(self, b: Array, axis: int = 0) -> Array:
+        """Solve ``A x = b``.
+
+        Args:
+            b:    Right-hand side array.  ``b.shape[axis]`` must equal ``n``.
+            axis: The axis of ``b`` along which the system is solved.  All
+                  other axes are treated as independent batch dimensions.
+                  The output has the same shape as ``b``.
+
+        Examples::
             A.solve(b)  # b shape (n,)      → (n,)
             A.solve(B, axis=0)  # B shape (n, k)    → (n, k)
             A.solve(B, axis=1)  # B shape (k, n)    → (k, n)
             A.solve(T, axis=2)  # T shape (a, b, n) → (a, b, n)
         """
-        return self.lu_factor().solve(b, axis=axis)
+        n = self.shape[0]
+
+        if b.ndim == 1:
+            return jnp.linalg.solve(self.data, b)
+
+        axis = axis % b.ndim
+        b_moved = jnp.moveaxis(b, axis, 0)  # (n, *rest)
+        rest_shape = b_moved.shape[1:]
+        batch = b_moved.size // n
+        b2d = b_moved.reshape(n, batch)  # (n, batch)
+        x2d = jnp.linalg.solve(self.data, b2d)  # (n, batch)
+        x_moved = x2d.reshape((n,) + rest_shape)
+        return jnp.moveaxis(x_moved, 0, axis)
 
     @property
     def T(self) -> Matrix:
@@ -242,8 +271,10 @@ class Matrix(nnx.Pytree):
                     f"Shape mismatch for matrix product: ({n}, {m}) @ {other.shape}"
                 )
             return Matrix(self.data @ other.data)
-        elif isinstance(other, _JAXFunction):
+
+        if isinstance(other, _JAXFunction):
             return self @ other.array
+
         return self.apply(other)
 
     def __rmatmul__(self, other: Array) -> Array:
@@ -313,6 +344,10 @@ class LUFactors:
         x2d = jax.scipy.linalg.lu_solve((self.lu, self.piv), b2d)  # (n, batch)
         x_moved = x2d.reshape((n,) + rest_shape)
         return jnp.moveaxis(x_moved, 0, axis)
+
+    def get_pivots(self) -> Array | None:
+        """Return pivot indices as a 1-D array."""
+        return self.piv
 
     def __repr__(self) -> str:
         n, m = self.shape

@@ -71,6 +71,14 @@ class MatrixProtocol(Protocol):
         """Solve ``A x = b`` along ``axis`` of ``b``."""
         ...
 
+    def lu_solve(self, b: Array, axis: int = 0) -> Array:
+        """Solve ``A x = b`` using LU factors along ``axis`` of ``b``."""
+        ...
+
+    def lu_factor(self) -> LUProtocol:
+        """Return LU factors and pivot indices."""
+        ...
+
     @property
     def T(self) -> MatrixProtocol:
         """Transpose ``A^T``."""
@@ -106,7 +114,7 @@ class MatrixProtocol(Protocol):
 
     @property
     def size(self) -> int:
-        """Return total number of elements (``n * m``)."""
+        """Return total number of nonzero elements"""
         ...
 
     def __getitem__(self, key: tuple[int, int]) -> Array: ...
@@ -123,3 +131,20 @@ class MatrixProtocol(Protocol):
     @overload
     def __matmul__(self, other: JAXFunction) -> Array: ...
     def __rmatmul__(self, other: Array) -> Array: ...
+
+
+@runtime_checkable
+class LUProtocol(Protocol):
+    """Structural interface for LU factorization and solving linear systems."""
+
+    def solve(self, b: Array, axis: int = 0) -> Array:
+        """Solve linear system using LU factors."""
+        ...
+
+    def get_pivots(self) -> Array | None:
+        """Return pivot indices or None if no pivoting was done."""
+        ...
+
+    def __repr__(self) -> str:
+        """String representation of the LU factorization."""
+        ...

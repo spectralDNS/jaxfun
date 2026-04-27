@@ -379,8 +379,6 @@ def matrices(
     Returns:
         DiaMatrix | None if combination unsupported.
     """
-    import numpy as np
-
     v, i = test
     u, j = trial
     if i == 0 and j == 0:
@@ -390,20 +388,18 @@ def matrices(
             shape=(v.N, u.N),
         )
     if i == 0 and j == 1:
+        offsets = jnp.arange(1, u.N, 2)
+        if len(offsets) == 0:
+            return None
         k = jnp.arange(max(v.N, u.N))
 
         def _getkey(j):
             Q = min(v.N, u.N - j)
-            return np.pi * k[j : (Q + j)]
-
-        d = dict.fromkeys(np.arange(1, u.N + 1, 2).tolist(), _getkey)
-
-        if len(d) == 0:
-            return None
+            return jnp.pi * k[j : (Q + j)]
 
         return diags(
-            [d[i](i) for i in np.arange(1, u.N, 2).tolist()],
-            tuple(int(k) for k in jnp.arange(1, u.N, 2).tolist()),
+            [_getkey(j) for j in offsets],
+            tuple(offsets.tolist()),
             (v.N, u.N),
         )
 
@@ -414,19 +410,18 @@ def matrices(
         return None
 
     if i == 0 and j == 2:
+        offsets = jnp.arange(2, u.N, 2)
+        if len(offsets) == 0:
+            return None
         k = jnp.arange(max(v.N, u.N))
 
         def _getkey(j):
             Q = min(v.N, u.N - j)
             return k[j : (Q + j)] * (k[j : (Q + j)] ** 2 - k[:Q] ** 2) * jnp.pi / 2
 
-        d = dict.fromkeys(np.arange(2, u.N, 2).tolist(), _getkey)
-        if len(d) == 0:
-            return None
-
         return diags(
-            [d[i](i) for i in np.arange(2, u.N, 2).tolist()],
-            tuple(int(k) for k in jnp.arange(2, u.N, 2).tolist()),
+            [_getkey(j) for j in offsets],
+            tuple(offsets.tolist()),
             (v.N, u.N),
         )
 

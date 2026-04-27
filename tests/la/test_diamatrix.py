@@ -10,66 +10,72 @@ import pytest
 import scipy.sparse
 
 from jaxfun.la.diamatrix import DiaMatrix, LUFactors, diags
+from jaxfun.la.matrix import Matrix
 
 
-def _tridiag(n: int) -> tuple[np.ndarray, DiaMatrix]:
-    """Return a symmetric tridiagonal nxn matrix as (dense_numpy, DiaMatrix)."""
-    a = (
+def _tridiag(n: int) -> tuple[Matrix, DiaMatrix]:
+    """Return a symmetric tridiagonal nxn matrix as (Matrix, DiaMatrix)."""
+    dense = (
         np.diag(2 * np.ones(n))
         + np.diag(-np.ones(n - 1), 1)
         + np.diag(-np.ones(n - 1), -1)
     )
-    A = DiaMatrix.from_dense(jnp.array(a), offsets=(-1, 0, 1))
+    a = Matrix(jnp.array(dense))
+    A = DiaMatrix.from_dense(a.data, offsets=(-1, 0, 1))
     return a, A
 
 
-def _pentadiag(n: int) -> tuple[np.ndarray, DiaMatrix]:
-    """Return a symmetric pentadiagonal nxn matrix as (dense_numpy, DiaMatrix)."""
-    a = (
+def _pentadiag(n: int) -> tuple[Matrix, DiaMatrix]:
+    """Return a symmetric pentadiagonal nxn matrix as (Matrix, DiaMatrix)."""
+    dense = (
         np.diag(2 * np.ones(n))
         + np.diag(-np.ones(n - 1), 1)
         + np.diag(-np.ones(n - 1), -1)
         + np.diag(-0.5 * np.ones(n - 2), 2)
         + np.diag(-0.5 * np.ones(n - 2), -2)
     )
-    A = DiaMatrix.from_dense(jnp.array(a), offsets=(-2, -1, 0, 1, 2))
+    a = Matrix(jnp.array(dense))
+    A = DiaMatrix.from_dense(a.data, offsets=(-2, -1, 0, 1, 2))
     return a, A
 
 
-def _tridiagO(n: int) -> tuple[np.ndarray, DiaMatrix]:
-    """Return a symmetric tridiagonal nxn matrix as (dense_numpy, DiaMatrix)."""
-    a = (
+def _tridiagO(n: int) -> tuple[Matrix, DiaMatrix]:
+    """Return a symmetric tridiagonal nxn matrix as (Matrix, DiaMatrix)."""
+    dense = (
         np.diag(2 * np.ones(n))
         + np.diag(-np.ones(n - 2), 2)
         + np.diag(-np.ones(n - 2), -2)
     )
-    A = DiaMatrix.from_dense(jnp.array(a), offsets=(-2, 0, 2))
+    a = Matrix(jnp.array(dense))
+    A = DiaMatrix.from_dense(a.data, offsets=(-2, 0, 2))
     return a, A
 
 
-def _pentadiagO(n: int) -> tuple[np.ndarray, DiaMatrix]:
-    """Return a symmetric pentadiagonal nxn matrix as (dense_numpy, DiaMatrix)."""
-    a = (
+def _pentadiagO(n: int) -> tuple[Matrix, DiaMatrix]:
+    """Return a symmetric pentadiagonal nxn matrix as (Matrix, DiaMatrix)."""
+    dense = (
         np.diag(2 * np.ones(n))
         + np.diag(-np.ones(n - 2), 2)
         + np.diag(-np.ones(n - 2), -2)
         + np.diag(-0.5 * np.ones(n - 4), 4)
         + np.diag(-0.5 * np.ones(n - 4), -4)
     )
-    A = DiaMatrix.from_dense(jnp.array(a), offsets=(-4, -2, 0, 2, 4))
+    a = Matrix(jnp.array(dense))
+    A = DiaMatrix.from_dense(a.data, offsets=(-4, -2, 0, 2, 4))
     return a, A
 
 
-def _circdiag(n: int) -> tuple[np.ndarray, DiaMatrix]:
-    """Return a symmetric tridiagonal nxn matrix as (dense_numpy, DiaMatrix)."""
-    a = (
+def _circdiag(n: int) -> tuple[Matrix, DiaMatrix]:
+    """Return a symmetric tridiagonal nxn matrix as (Matrix, DiaMatrix)."""
+    dense = (
         np.diag(2 * np.ones(n))
         + np.diag(-np.ones(n - 1), 1)
         + np.diag(-np.ones(n - 1), -1)
         + np.diag(-np.ones(1), n - 1)  # wrap-around super-diagonal
         + np.diag(np.ones(1), -(n - 1))  # wrap-around sub-diagonal
     )
-    A = DiaMatrix.from_dense(jnp.array(a), offsets=(-n + 1, -1, 0, 1, n - 1))
+    a = Matrix(jnp.array(dense))
+    A = DiaMatrix.from_dense(a.data, offsets=(-n + 1, -1, 0, 1, n - 1))
     return a, A
 
 
@@ -88,8 +94,8 @@ class TestConstruction:
     def test_from_dense_default_offsets(self, mat):
         """from_dense with no offsets should detect all non-zero diagonals."""
         a, A = mat(8)
-        A2 = DiaMatrix.from_dense(jnp.array(a))
-        assert jnp.allclose(A2.todense(), jnp.array(a))
+        A2 = DiaMatrix.from_dense(a.data)
+        assert jnp.allclose(A2.todense(), a.todense())
 
     def test_from_dense_nonsquare(self):
         a = jnp.zeros((3, 5))
@@ -159,7 +165,7 @@ class TestToDense:
     @pytest.mark.parametrize("mat", allmatrices)
     def test_round_trip_square(self, mat):
         a, A = mat(6)
-        assert jnp.allclose(A.todense(), jnp.array(a))
+        assert jnp.allclose(A.todense(), a.todense())
 
     def test_round_trip_nonsquare(self):
         # Build a known sparse 4×7 matrix by hand via diags.
@@ -190,7 +196,7 @@ class TestMatvec:
     def test_matvec_tridiag(self):
         a, A = _tridiag(4)
         x = jnp.array([1.0, 2.0, 3.0, 4.0])
-        assert jnp.allclose(A.matvec(x), jnp.array(a) @ x)
+        assert jnp.allclose(A.matvec(x), a @ x)
 
     def test_matvec_nonsquare(self):
         A = diags(
@@ -225,7 +231,7 @@ class TestMatvec:
         a, A = mat(6)
         rng = np.random.default_rng(1)
         X = jnp.array(rng.standard_normal((6, 3)))
-        assert jnp.allclose(A.matmat(X), jnp.array(a) @ X, atol=1e-6)
+        assert jnp.allclose(A.matmat(X), a @ X, atol=1e-6)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_apply_dispatches(self, mat):
@@ -239,32 +245,33 @@ class TestMatvec:
     def test_matmul_vector(self, mat):
         a, A = mat(6)
         x = jnp.arange(6, dtype=float)
-        assert jnp.allclose(A @ x, jnp.array(a) @ x)
+        assert jnp.allclose(A @ x, a @ x)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_matmul_matrix(self, mat):
         a, A = mat(6)
         X = jnp.eye(6)
-        assert jnp.allclose(A @ X, jnp.array(a), atol=1e-6)
+        assert jnp.allclose(A @ X, a.todense(), atol=1e-6)
 
     @pytest.mark.parametrize("mat", allmatrices)
-    def test_matmul_diamatrix(self, mat):
+    def test_matmul_Matrix(self, mat):
+        """DiaMatrix @ DiaMatrix and Matrix @ Matrix should agree."""
         a, A = mat(6)
         result = A @ A
-        expected = jnp.array(a) @ jnp.array(a)
+        expected = (a @ a).todense()
         assert jnp.allclose(result.todense(), expected, atol=1e-6)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_rmatmul_vector(self, mat):
         a, A = mat(6)
         x = jnp.arange(6, dtype=float)
-        assert jnp.allclose(x @ A, x @ jnp.array(a))
+        assert jnp.allclose(x @ A, x @ a)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_rmatmul_matrix(self, mat):
         a, A = mat(6)
         X = jnp.eye(6)
-        assert jnp.allclose(X @ A, jnp.array(a), atol=1e-6)
+        assert jnp.allclose(X @ A, a.todense(), atol=1e-6)
 
 
 class TestTranspose:
@@ -276,7 +283,7 @@ class TestTranspose:
     @pytest.mark.parametrize("mat", allmatrices)
     def test_T_dense_square(self, mat):
         a, A = mat(6)
-        assert jnp.allclose(A.T.todense(), jnp.array(a).T)
+        assert jnp.allclose(A.T.todense(), a.T.todense())
 
     def test_T_shape_nonsquare(self):
         A = diags(
@@ -346,19 +353,19 @@ class TestDiagonal:
 class TestScalarArithmetic:
     def test_scale(self):
         a, A = _tridiag(3)
-        assert jnp.allclose((A.scale(3.0)).todense(), 3.0 * jnp.array(a))
+        assert jnp.allclose((A.scale(3.0)).todense(), (a * 3.0).todense())
 
     def test_mul(self):
         a, A = _tridiag(3)
-        assert jnp.allclose((A * 2.0).todense(), 2.0 * jnp.array(a))
+        assert jnp.allclose((A * 2.0).todense(), (a * 2.0).todense())
 
     def test_rmul(self):
         a, A = _tridiag(3)
-        assert jnp.allclose((0.5 * A).todense(), 0.5 * jnp.array(a))
+        assert jnp.allclose((0.5 * A).todense(), (0.5 * a).todense())
 
     def test_neg(self):
         a, A = _tridiag(3)
-        assert jnp.allclose((-A).todense(), -jnp.array(a))
+        assert jnp.allclose((-A).todense(), (-a).todense())
 
 
 class TestMatvecAxis:
@@ -370,8 +377,9 @@ class TestMatvecAxis:
         a, A = mat(6)
         rng = np.random.default_rng(7)
         X = jnp.array(rng.standard_normal((6, 5)))
-        expected = jnp.array(a) @ X
+        expected = a @ X
         assert jnp.allclose(A.matvec(X, axis=0), expected, atol=1e-5)
+        assert jnp.allclose(a.matvec(X, axis=0), expected, atol=1e-5)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_axis1_2d(self, mat):
@@ -379,15 +387,16 @@ class TestMatvecAxis:
         a, A = mat(6)
         rng = np.random.default_rng(8)
         X = jnp.array(rng.standard_normal((5, 6)))  # (batch, m)
-        expected = (jnp.array(a) @ X.T).T  # (n, batch) → (batch, n)
+        expected = (a @ X.T).T  # (n, batch) → (batch, n)
         assert jnp.allclose(A.matvec(X, axis=1), expected, atol=1e-5)
+        assert jnp.allclose(a.matvec(X, axis=1), expected, atol=1e-5)
 
     def test_axis_1d_ignores_axis(self):
         """For 1-D input the axis argument is irrelevant."""
         a, A = _tridiag(4)
         x = jnp.arange(4, dtype=float)
         result = A.matvec(x, axis=0)
-        assert jnp.allclose(result, jnp.array(a) @ x)
+        assert jnp.allclose(result, a @ x)
 
     def test_axis0_3d(self):
         """matvec(T, axis=0): T shape (m, b1, b2) → (n, b1, b2)."""
@@ -396,24 +405,27 @@ class TestMatvecAxis:
         T = jnp.array(rng.standard_normal((4, 3, 2)))
         # Expected: contract axis 0 with A
         # result[i, j, k] = sum_l A[i, l] * T[l, j, k]
-        expected = jnp.einsum("il,ljk->ijk", jnp.array(a), T)
+        expected = jnp.einsum("il,ljk->ijk", a.data, T)
         assert jnp.allclose(A.matvec(T, axis=0), expected, atol=1e-5)
+        assert jnp.allclose(a.matvec(T, axis=0), expected, atol=1e-5)
 
     def test_axis1_3d(self):
         """matvec(T, axis=1): T shape (b0, m, b2) → (b0, n, b2)."""
         a, A = _tridiag(4)
         rng = np.random.default_rng(10)
         T = jnp.array(rng.standard_normal((3, 4, 2)))
-        expected = jnp.einsum("il,jlk->jik", jnp.array(a), T)
+        expected = jnp.einsum("il,jlk->jik", a.data, T)
         assert jnp.allclose(A.matvec(T, axis=1), expected, atol=1e-5)
+        assert jnp.allclose(a.matvec(T, axis=1), expected, atol=1e-5)
 
     def test_axis2_3d(self):
         """matvec(T, axis=2): T shape (b0, b1, m) → (b0, b1, n)."""
         a, A = _tridiag(4)
         rng = np.random.default_rng(11)
         T = jnp.array(rng.standard_normal((3, 2, 4)))
-        expected = jnp.einsum("il,jkl->jki", jnp.array(a), T)
+        expected = jnp.einsum("il,jkl->jki", a.data, T)
         assert jnp.allclose(A.matvec(T, axis=2), expected, atol=1e-5)
+        assert jnp.allclose(a.matvec(T, axis=2), expected, atol=1e-5)
 
     def test_negative_axis(self):
         """Negative axis should work like numpy convention."""
@@ -450,7 +462,8 @@ class TestAddSub:
     def test_add(self):
         a, A = _tridiag(4)
         result = A + A
-        assert jnp.allclose(result.todense(), 2.0 * jnp.array(a))
+        expected = (a + a).todense()
+        assert jnp.allclose(result.todense(), expected)
 
     def test_sub_zero(self):
         _, A = _tridiag(4)
@@ -505,6 +518,8 @@ class TestSolve:
         b = a @ x_true
         x_hat = A.solve(b)
         assert jnp.allclose(x_hat, x_true, atol=1e-5)
+        # Matrix.solve should give the same answer
+        assert jnp.allclose(a.solve(b), x_true, atol=1e-5)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_solve_residual(self, mat):
@@ -520,10 +535,11 @@ class TestSolve:
         a, A = mat(6)
         rng = np.random.default_rng(55)
         X_true = jnp.array(rng.standard_normal((4, 6)))
-        B = (jnp.array(a) @ X_true.T).T  # (4, 6)
+        B = (a @ X_true.T).T  # (4, 6)
         X_hat = A.solve(B, axis=1)
         assert X_hat.shape == (4, 6)
         assert jnp.allclose(X_hat, X_true, atol=1e-5)
+        assert jnp.allclose(a.solve(B, axis=1), X_true, atol=1e-5)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_solve_axis_matches_matvec(self, mat):
@@ -586,17 +602,19 @@ class TestLU:
         a, A = mat(5)
         lu = A.lu_factor()
         LU = cast(DiaMatrix, lu.L @ lu.U)
-        PA = jnp.array(a) if lu.perm is None else jnp.array(a)[lu.perm, :]
+        PA = a.todense() if lu.perm is None else a.todense()[lu.perm, :]
         assert jnp.allclose(LU.todense(), PA, atol=1e-5)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_lu_solve_exact(self, mat):
         a, A = mat(5)
         x_true = jnp.arange(1.0, 6.0)
-        b = jnp.array(a) @ x_true
+        b = a @ x_true
         lu = A.lu_factor()
         x_hat = lu.solve(b)
         assert jnp.allclose(x_hat, x_true, atol=1e-5)
+        # Matrix.lu_solve should give the same result
+        assert jnp.allclose(a.lu_solve(b), x_true, atol=1e-5)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_lu_solve_random_rhs(self, mat):
@@ -613,11 +631,13 @@ class TestLU:
         a, A = mat(6)
         rng = np.random.default_rng(7)
         X_true = jnp.array(rng.standard_normal((6, 4)))
-        B = jnp.array(a) @ X_true
+        B = a @ X_true
         lu = A.lu_factor()
         X_hat = lu.solve(B)
         assert X_hat.shape == (6, 4)
         assert jnp.allclose(X_hat, X_true, atol=1e-5)
+        # Matrix.solve should reproduce the same result
+        assert jnp.allclose(a.solve(B), X_true, atol=1e-5)
 
     def test_lu_nonsquare_raises(self):
         A = diags(
@@ -682,11 +702,12 @@ class TestLU:
         lu = A.lu_factor()
         rng = np.random.default_rng(11)
         X_true = jnp.array(rng.standard_normal((4, 6)))  # (batch, n)
-        B = jnp.array(a) @ X_true.T  # (n, batch)
+        B = a @ X_true.T  # (n, batch)
         B_T = B.T  # (batch, n)
         X_hat = lu.solve(B_T, axis=1)
         assert X_hat.shape == (4, 6)
         assert jnp.allclose(X_hat, X_true, atol=1e-5)
+        assert jnp.allclose(a.lu_solve(B_T, axis=1), X_true, atol=1e-5)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_lu_solve_3d_axis(self, mat):
@@ -700,6 +721,9 @@ class TestLU:
         X_hat = lu.solve(B, axis=1)
         assert X_hat.shape == (3, 5, 4)
         assert jnp.allclose(X_hat, X_true, atol=1e-5)
+        # Matrix counterpart
+        assert jnp.allclose(a.lu_solve(B, axis=1), X_true, atol=1e-5)
+        assert jnp.allclose(a.solve(B, axis=1), X_true, atol=1e-5)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_lu_solve_axis_matches_matvec(self, mat):
@@ -714,21 +738,29 @@ class TestLU:
             B = A.matvec(X, axis=ax)
             X_hat = lu.solve(B, axis=ax)
             assert X_hat.shape == tuple(shape)
-            assert jnp.allclose(X_hat, X, atol=1e-5), f"failed for axis={ax}"
+            assert jnp.allclose(X_hat, X, atol=1e-5), f"DiaMatrix failed for axis={ax}"
+            # Matrix counterpart: a.matvec then a.solve / a.lu_solve
+            B_dense = a.matvec(X, axis=ax)
+            assert jnp.allclose(a.solve(B_dense, axis=ax), X, atol=1e-5), (
+                f"Matrix.solve failed for axis={ax}"
+            )
+            assert jnp.allclose(a.lu_solve(B_dense, axis=ax), X, atol=1e-5), (
+                f"Matrix.lu_solve failed for axis={ax}"
+            )
 
 
 class TestGetRow:
     def test_first_row(self):
         a, A = _tridiag(5)
-        assert jnp.allclose(A.get_row(0), jnp.array(a[0]))
+        assert jnp.allclose(A.get_row(0), a.get_row(0))
 
     def test_last_row(self):
         a, A = _tridiag(5)
-        assert jnp.allclose(A.get_row(4), jnp.array(a[4]))
+        assert jnp.allclose(A.get_row(4), a.get_row(4))
 
     def test_interior_row(self):
         a, A = _tridiag(5)
-        assert jnp.allclose(A.get_row(2), jnp.array(a[2]))
+        assert jnp.allclose(A.get_row(2), a.get_row(2))
 
     def test_all_rows_match_todense(self):
         a, A = _tridiag(6)
@@ -778,15 +810,15 @@ class TestGetRow:
 class TestGetColumn:
     def test_first_column(self):
         a, A = _tridiag(5)
-        assert jnp.allclose(A.get_column(0), jnp.array(a[:, 0]))
+        assert jnp.allclose(A.get_column(0), a.get_column(0))
 
     def test_last_column(self):
         a, A = _tridiag(5)
-        assert jnp.allclose(A.get_column(4), jnp.array(a[:, 4]))
+        assert jnp.allclose(A.get_column(4), a.get_column(4))
 
     def test_interior_column(self):
         a, A = _tridiag(5)
-        assert jnp.allclose(A.get_column(2), jnp.array(a[:, 2]))
+        assert jnp.allclose(A.get_column(2), a.get_column(2))
 
     def test_all_columns_match_todense(self):
         a, A = _tridiag(6)

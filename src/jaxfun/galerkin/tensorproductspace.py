@@ -940,8 +940,7 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
     Attributes:
         mats: List of per-axis sparse/dense matrices.
         scale: Scalar scaling (multiplicative).
-        test_space, trial_space: TensorProductSpace descriptors.
-        M: Preconditioner (diagonal inverse of kron diagonals).
+        global_indices: Tuple of global index into vectorized expansions.
     """
 
     def __init__(
@@ -971,31 +970,23 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
             for m in self.mats[1:]:
                 result = diakron(result, m)  # type: ignore[arg-type]
             return result
-        arrays = [
-            m.todense() if isinstance(m, DiaMatrix) else cast(Matrix, m).data
-            for m in self.mats
-        ]
+        arrays = [m.todense() for m in self.mats]
         out = arrays[0]
         for a in arrays[1:]:
             out = jnp.kron(out, a)
         return Matrix(out)
 
     def _matmul_array(self, w: Array) -> Array:
-        if len(self.mats) == 2:
-            result = self.mats[0] @ w @ self.mats[1].T
-        elif len(self.mats) == 3:
-            result = self.mats[2].matvec(
-                self.mats[1].matvec(self.mats[0].matvec(w, axis=0), axis=1), axis=2
-            )
-        else:
-            raise NotImplementedError("Matmul not implemented for >3 dimensions")
+        result = w
+        for i, mat in enumerate(self.mats):
+            result = mat.matvec(result, axis=i)
         return result * jnp.asarray(self.scale)
 
     def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply matrix to rank-2 coefficient array u."""
-        from jaxfun.galerkin import JAXFunction as _JAXFunction
+        from jaxfun.galerkin import JAXFunction
 
-        w = u.array if isinstance(u, _JAXFunction) else u
+        w = u.array if isinstance(u, JAXFunction) else u
         return self._matmul_array(w)
 
     def __matmul__(self, u: Array | JAXFunction) -> Array:
@@ -1003,14 +994,9 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         return self.__call__(u)
 
     def _rmatmul_array(self, w: Array) -> Array:
-        if len(self.mats) == 2:
-            result = self.mats[0].T @ w @ self.mats[1]
-        elif len(self.mats) == 3:
-            result = self.mats[2].T.matvec(
-                self.mats[1].T.matvec(self.mats[0].T.matvec(w, axis=0), axis=1), axis=2
-            )
-        else:
-            raise NotImplementedError("Right matmul not implemented for >3 dimensions")
+        result = w
+        for i, mat in enumerate(self.mats):
+            result = mat.T.matvec(result, axis=i)
         return result * jnp.asarray(self.scale)
 
     def __rmatmul__(self, u: Array | JAXFunction) -> Array:
@@ -1020,13 +1006,14 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         w = u.array if isinstance(u, JAXFunction) else u
         return self._rmatmul_array(w)
 
+    def solve(self, rhs: Array) -> Array:
+        """Solve linear system"""
+        A = self.mat
+        return A.solve(rhs.flatten()).reshape(rhs.shape)
+
 
 class TPMatrices(nnx.Pytree):
-    """Container for list of TPMatrix bilinear operator tensors.
-
-    Provides vectorized application (sum of individual tensor products)
-    and a combined diagonal preconditioner (sum of per-matrix M(u)).
-    """
+    """Container for list of TPMatrix bilinear operator tensors."""
 
     def __init__(self, tpmats: list[TPMatrix]) -> None:
         self.tpmats = nnx.List(tpmats)
@@ -1037,9 +1024,9 @@ class TPMatrices(nnx.Pytree):
 
     def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply summed tensor product operator to u."""
-        from jaxfun.galerkin import JAXFunction as _JAXFunction
+        from jaxfun.galerkin import JAXFunction
 
-        w = u.array if isinstance(u, _JAXFunction) else u
+        w = u.array if isinstance(u, JAXFunction) else u
         return self._apply_array(w)
 
     def __matmul__(self, u: Array | JAXFunction) -> Array:
@@ -1048,12 +1035,17 @@ class TPMatrices(nnx.Pytree):
 
     def __rmatmul__(self, u: Array | JAXFunction) -> Array:
         """Right matmul (u @ A) treating u as left factor."""
-        from jaxfun.galerkin import JAXFunction as _JAXFunction
+        from jaxfun.galerkin import JAXFunction
 
-        w = u.array if isinstance(u, _JAXFunction) else u
+        w = u.array if isinstance(u, JAXFunction) else u
         return jnp.sum(
             jnp.array([mat._rmatmul_array(w) for mat in self.tpmats]), axis=0
         )
+
+    def solve(self, rhs: Array) -> Array:
+        """Solve linear system"""
+        A = tpmats_to_kron(list(self.tpmats))
+        return A.solve(rhs.flatten()).reshape(rhs.shape)
 
 
 class TensorMatrix(nnx.Pytree):  # noqa: B903
@@ -1085,9 +1077,9 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
 
     def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply matrix to coefficient array u."""
-        from jaxfun.galerkin import JAXFunction as _JAXFunction
+        from jaxfun.galerkin import JAXFunction
 
-        w = u.array if isinstance(u, _JAXFunction) else u
+        w = u.array if isinstance(u, JAXFunction) else u
         return self._matmul_array(w)
 
     def __matmul__(self, u: Array | JAXFunction) -> Array:
@@ -1100,9 +1092,9 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
 
     def __rmatmul__(self, u: Array | JAXFunction) -> Array:
         """Right matmul (u @ A) treating u as left factor."""
-        from jaxfun.galerkin import JAXFunction as _JAXFunction
+        from jaxfun.galerkin import JAXFunction
 
-        w = u.array if isinstance(u, _JAXFunction) else u
+        w = u.array if isinstance(u, JAXFunction) else u
         return self._rmatmul_array(w)
 
 
@@ -1169,9 +1161,9 @@ class BlockTPMatrix:
 
     def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply block matrix to coefficient array u."""
-        from jaxfun.galerkin import JAXFunction as _JAXFunction
+        from jaxfun.galerkin import JAXFunction
 
-        w = u.array if isinstance(u, _JAXFunction) else u
+        w = u.array if isinstance(u, JAXFunction) else u
         return self._matmul_array(w)
 
     def solve(self, b: Array) -> Array:
@@ -1180,72 +1172,68 @@ class BlockTPMatrix:
         return M.solve(b.ravel()).reshape(b.shape)
 
 
-def tpmats_to_kron(A: list[TPMatrix], tol: int = 100) -> Matrix | DiaMatrix:
-    """Return summed Kronecker expansion of a list of separable TPMatrix objects.
-
-    Each :class:`TPMatrix` in ``A`` contributes
-    ``scale * kron(mats[0], mats[1], ...)``.  The per-factor matrices are
-    zero-cleaned (values below ``A.max() / tol`` are set to zero) before the
-    product is formed.  The contributions are summed and returned as a single
-    :class:`~jaxfun.la.DiaMatrix`.
-
-    Note: the :attr:`~TPMatrix.scale` on each ``TPMatrix`` should be ``1`` when
-    the bilinear coefficient has already been incorporated into the factor
-    matrices (as :func:`inner_bilinear` does), so that the scale is only applied
-    once.
+def tpmats_to_kron(A: TPMatrix | list[TPMatrix], tol: int = 100) -> Matrix | DiaMatrix:
+    """Return summed Kronecker expansion of a (list of) TPMatrix.
 
     Args:
-        A: List of :class:`TPMatrix` objects with identical result shape.
+        A: :class:`TPMatrix` or list of :class:`TPMatrix` objects with identical
+            result shape.
         tol: Near-zero elimination tolerance applied to dense factor matrices
             before Kronecker expansion.
 
     Returns:
-        :class:`~jaxfun.la.DiaMatrix` representing ``Σ scale * kron(factors)``.
+        :class:`~jaxfun.la.DiaMatrix` or :class:`~jaxfun.la.Matrix` representing
+            the summed Kronecker expansion of the input TPMatrix objects.
     """
+    if isinstance(A, TPMatrix):
+        A = [A]
+
     if not A:
-        raise ValueError("tpmats_to_kron requires a non-empty list.")
+        raise ValueError("tpmats_to_kron requires a non-empty argument.")
 
     if isinstance(A[0].mats[0], Matrix):
         result: Array | None = None
         for tpm in A:
             a0 = eliminate_near_zeros(tpm.mats[0].todense(), tol)
+            a0 = a0 * jnp.asarray(tpm.scale)
             for m in tpm.mats[1:]:
                 a0 = jnp.kron(a0, eliminate_near_zeros(m.todense(), tol))
-            result = (
-                a0 * jnp.asarray(tpm.scale)
-                if result is None
-                else result + a0 * jnp.asarray(tpm.scale)
-            )
-        if result is None:
-            raise ValueError("tpmats_to_kron requires a non-empty list.")
+            result = a0 if result is None else result + a0
+        assert result is not None
         return Matrix(result)
 
-    def _to_dia(mat: MatrixProtocol) -> DiaMatrix:
-        dense = eliminate_near_zeros(mat.todense(), tol)
-        return DiaMatrix.from_dense(dense)
+    def _get_dia(mat: MatrixProtocol) -> DiaMatrix:
+        if isinstance(mat, Matrix):
+            return DiaMatrix.from_dense(eliminate_near_zeros(mat, tol))
+        assert isinstance(mat, DiaMatrix)
+        return mat
 
     result: DiaMatrix | None = None
     for tpm in A:
-        k: DiaMatrix = _to_dia(tpm.mats[0])
+        dmat: DiaMatrix = _get_dia(tpm.mats[0]) * jnp.asarray(tpm.scale)
         for m in tpm.mats[1:]:
-            k = diakron(k, _to_dia(m))
-        k = k * jnp.asarray(tpm.scale)
-        result = k if result is None else result + k
-    if result is None:
-        raise ValueError("tpmats_to_kron requires a non-empty list.")
+            dmat = diakron(dmat, _get_dia(m))
+        dmat = dmat
+        result = dmat if result is None else result + dmat
+    assert result is not None
     return result
 
 
 @overload
 def vec(A: Array, tol: int = 100) -> Array: ...
 @overload
+def vec(A: TPMatrix, tol: int = 100) -> Matrix | DiaMatrix: ...
+@overload
 def vec(A: list[TPMatrix], tol: int = 100) -> Matrix | DiaMatrix: ...
-def vec(A: Array | list[TPMatrix], tol: int = 100) -> Array | Matrix | DiaMatrix:
-    """Vectorize array or list of TPMatrix objects.
+def vec(
+    A: Array | TPMatrix | list[TPMatrix], tol: int = 100
+) -> Array | Matrix | DiaMatrix:
+    """Vectorize array or TPMatrix objects.
 
     Args:
-        A: Dense :class:`jax.Array` or list of :class:`TPMatrix` objects.
-        tol: Near-zero elimination tolerance (only used for TPMatrix lists).
+        A: Dense :class:`jax.Array`, :class:`TPMatrix`, or list of :class:`TPMatrix`
+            objects.
+        tol: Near-zero elimination tolerance (only used for TPMatrix objects).
 
     Returns:
         Flattened :class:`jax.Array` or the summed Kronecker expansion as a
@@ -1253,14 +1241,16 @@ def vec(A: Array | list[TPMatrix], tol: int = 100) -> Array | Matrix | DiaMatrix
     """
     if not isinstance(A, Array):
         return tpmats_to_kron(A, tol=tol)
-    else:
-        return A.flatten()
+
+    return A.flatten()
 
 
 def tpmats_to_scipy_sparse(
     A: list[TPMatrix], tol: int = 100
 ) -> list[tuple[scipy_sparse.csc_array, ...]]:
     """Convert list of separable TPMatrix to scipy CSC factors.
+
+    The :attr:`~TPMatrix.scale` is folded into the first factor matrix.
 
     Args:
         A: List of TPMatrix objects.
@@ -1269,13 +1259,17 @@ def tpmats_to_scipy_sparse(
     Returns:
         List of tuples of per-axis scipy csc_array matrices.
     """
-    return [
-        tuple(
-            scipy_sparse.csc_array(eliminate_near_zeros(mat.todense(), tol))
-            for mat in a.mats
-        )
-        for a in A
-    ]
+    result = []
+    for a in A:
+        scale = a.scale
+        factors = []
+        for i, mat in enumerate(a.mats):
+            dense = eliminate_near_zeros(mat.todense(), tol)
+            if i == 0:
+                dense = dense * scale
+            factors.append(scipy_sparse.csc_array(dense))
+        result.append(tuple(factors))
+    return result
 
 
 def tpmats_to_scipy_kron(A: list[TPMatrix], tol: int = 100) -> scipy_sparse.csc_matrix:

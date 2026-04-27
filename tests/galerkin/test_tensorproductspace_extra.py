@@ -69,9 +69,9 @@ def test_multivar_and_linear_bcs_branch():
     u = TrialFunction(T)
     # multivar coefficient (x+y) and linear JAXFunction coefficient in same expression
     coeffs = jax.random.normal(jax.random.PRNGKey(1), shape=T.num_dofs)
-    from jaxfun.galerkin import JAXFunction as _JAXFunction
+    from jaxfun.galerkin import JAXFunction
 
-    jf = _JAXFunction(coeffs, T)
+    jf = JAXFunction(coeffs, T)
     A = inner((sp.sqrt(x + y) * u * v) + jf * v, return_all_items=True)
     # Should return tuple (aresults,bresults)
     assert isinstance(A, tuple)

@@ -227,6 +227,9 @@ def matrices(
         return None
     if i == 0 and j == 2:
         k = jnp.arange(max(v.N, u.N))
+        offsets = jnp.arange(2, u.N, 2).tolist()
+        if len(offsets) == 0:
+            return None
 
         def _getkey(j):
             Q = min(v.N, u.N - j)
@@ -237,13 +240,9 @@ def matrices(
                 / (2 * k[:Q] + 1)
             )
 
-        d = dict.fromkeys(jnp.arange(2, u.N, 2).tolist(), _getkey)
-        if len(d) == 0:
-            return None
-
         return diags(
-            [d[i](i) for i in jnp.arange(2, u.N, 2).tolist()],
-            offsets=tuple(jnp.arange(2, u.N, 2).tolist()),
+            [_getkey(j) for j in offsets],
+            offsets=tuple(offsets),
             shape=(v.N, u.N),
         )
     if i == 2 and j == 0:

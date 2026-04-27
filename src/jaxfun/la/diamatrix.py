@@ -634,6 +634,16 @@ class DiaMatrix(nnx.Pytree):
         return min(self.shape)
 
     def __getitem__(self, key: tuple[int, int]) -> Array:
+        if not (
+            isinstance(key, tuple)
+            and len(key) == 2
+            and isinstance(key[0], int)
+            and isinstance(key[1], int)
+        ):
+            raise TypeError(
+                "DiaMatrix only supports scalar two-index access A[i, j] "
+                "with integer indices; call .todense() first for slicing."
+            )
         i, j = key
         return self.get_row(i)[j]
 

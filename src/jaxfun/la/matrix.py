@@ -250,9 +250,8 @@ class Matrix(nnx.Pytree):
             raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
         return Matrix(self.data - other.data)
 
-    def __getitem__(self, key: tuple[int, int]) -> Array:
-        i, j = key
-        return self.data[i, j]
+    def __getitem__(self, idx: int | slice | tuple | Array) -> Array:
+        return self.data.__getitem__(idx)
 
     @overload
     def __matmul__(self, other: Array) -> Array: ...
@@ -262,7 +261,7 @@ class Matrix(nnx.Pytree):
     def __matmul__(self, other: JAXFunction) -> Array: ...
     def __matmul__(self, other: Array | Matrix | JAXFunction) -> Array | Matrix:
         """Support ``A @ x`` (vector/array) and ``A @ B`` (Matrix)."""
-        from jaxfun.galerkin import JAXFunction as _JAXFunction
+        from jaxfun.galerkin import JAXFunction
 
         if isinstance(other, Matrix):
             n, m = self.shape
@@ -272,7 +271,7 @@ class Matrix(nnx.Pytree):
                 )
             return Matrix(self.data @ other.data)
 
-        if isinstance(other, _JAXFunction):
+        if isinstance(other, JAXFunction):
             return self @ other.array
 
         return self.apply(other)

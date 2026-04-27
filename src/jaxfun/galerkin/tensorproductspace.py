@@ -1065,7 +1065,6 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
 
     Attributes:
         mat: Dense (or sparse) global matrix.
-        test_space, trial_space: TensorProductSpace descriptors.
     """
 
     def __init__(self, mat: Array) -> None:

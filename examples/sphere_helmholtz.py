@@ -6,7 +6,6 @@ import jax.numpy as jnp
 import numpy as np
 import plotly.graph_objects as go
 import sympy as sp
-from scipy import sparse as scipy_sparse
 
 from jaxfun.coordinates import get_CoordSys
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
@@ -14,7 +13,7 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
+from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, ulp
 
@@ -57,8 +56,8 @@ A, b = inner(
 )
 
 # Alternative scipy sparse implementation
-A0 = tpmats_to_scipy_kron(A)
-un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
+A0 = tpmats_to_kron(A)
+un = A0.solve(b.flatten()).reshape(b.shape)
 
 rj, tj = T.mesh(N=(100, 100))
 xc, yc, zc = T.cartesian_mesh(N=(100, 100))

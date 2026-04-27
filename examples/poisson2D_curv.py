@@ -6,14 +6,13 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-from scipy import sparse as scipy_sparse
 
 from jaxfun.coordinates import get_CoordSys
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
+from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -39,15 +38,8 @@ ue = (1 - r) * (sp.S.Half - r) * theta * (sp.pi / 2 - theta)
 # A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
 A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue))), sparse=False)
 
-# jax can only do kron for dense matrices
-H = A[0].mat + A[1].mat + A[2].mat
-uh = jnp.linalg.solve(H, b.flatten()).reshape(b.shape)
-
-# Alternative scipy sparse implementation
-A0 = tpmats_to_scipy_kron(A)
-un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
-
-assert jnp.linalg.norm(uh - un) < ulp(1000)
+A0 = tpmats_to_kron(A)
+uh = A0.solve(b.flatten()).reshape(b.shape)
 
 rj, tj = T.mesh(kind="uniform", N=(100, 100))
 xc, yc = T.cartesian_mesh(kind="uniform", N=(100, 100))

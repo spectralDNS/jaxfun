@@ -6,7 +6,6 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-from scipy import sparse as scipy_sparse
 
 from jaxfun.coordinates import x, y
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
@@ -15,7 +14,7 @@ from jaxfun.galerkin.functionspace import FunctionSpace
 
 # from jaxfun.Jacobi import Jacobi as space
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
+from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
 
 # from jaxfun.galerkin.Legendre import Legendre as space
 from jaxfun.operators import Div, Grad
@@ -43,8 +42,8 @@ A, L = inner(
     v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True, sparse_tol=1000
 )
 
-A0 = tpmats_to_scipy_kron(A)
-un = jnp.array(scipy_sparse.linalg.spsolve(A0, L.flatten()).reshape(L.shape))
+A0 = tpmats_to_kron(A)
+un = A0.solve(L.flatten()).reshape(L.shape)
 
 N = 100
 uj = T.backward(un, kind="uniform", N=(N, N))

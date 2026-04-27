@@ -3,10 +3,10 @@ from collections.abc import Callable
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.experimental.sparse import BCOO
 from scipy.fft import dst as scipy_dst
 
 from jaxfun.coordinates import CartCoordSys, x, y
+from jaxfun.la import DiaMatrix
 from jaxfun.typing import Array, ArrayLike
 from jaxfun.utils import common
 from jaxfun.utils.common import ulp
@@ -82,14 +82,14 @@ def test_eliminate_near_zeros(tol: float) -> None:
 
 def test_fromdense_and_tosparse() -> None:
     a = jnp.array([[1.0, 0.0], [0.0, 2.0]])
-    bcoo_fromdense = common.fromdense(a)
-    bcoo_tosparse = common.tosparse(a)
+    dia_fromdense = common.fromdense(a)
+    dia_tosparse = common.tosparse(a)
     # Check type and values
-    assert isinstance(bcoo_fromdense, BCOO)
-    assert isinstance(bcoo_tosparse, BCOO)
+    assert isinstance(dia_fromdense, DiaMatrix)
+    assert isinstance(dia_tosparse, DiaMatrix)
 
-    assert jnp.allclose(bcoo_fromdense.todense(), a)
-    assert jnp.allclose(bcoo_tosparse.todense(), a)
+    assert jnp.allclose(dia_fromdense.todense(), a)
+    assert jnp.allclose(dia_tosparse.todense(), a)
 
 
 def test_Domain_namedtuple() -> None:

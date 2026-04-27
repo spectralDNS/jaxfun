@@ -9,12 +9,10 @@ import jax.numpy as jnp
 import numpy as np
 import sympy as sp
 from jax import Array
-from jax.experimental import sparse
-from jax.experimental.sparse import BCOO
-from scipy import sparse as scipy_sparse
 from sympy import Number
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.la import DiaMatrix, diags
 from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, matmat, n
 
@@ -109,7 +107,7 @@ class Composite(OrthogonalSpace):
     Builds a constrained basis φ_i = Σ_j S_{ij} P_{j} where P_j are
     orthogonal polynomials (Chebyshev/Legendre/Jacobi). The stencil is
     selected/derived from BoundaryConditions and converted into a sparse
-    matrix S (BCOO). Basis reduction removes degrees constrained by BCs.
+    matrix S (DiaMatrix). Basis reduction removes degrees constrained by BCs.
 
     Args:
         N: Target (unconstrained) number of modes of underlying orthogonal.
@@ -127,7 +125,7 @@ class Composite(OrthogonalSpace):
     Attributes:
         orthogonal: Instance of underlying orthogonal basis.
         stencil: Ordered dict of diagonal shift -> expression / scaling.
-        S: Sparse (BCOO) stencil matrix.
+        S: Sparse (DiaMatrix) stencil matrix.
         scaling: Scaling expression applied to user stencil.
     """
 
@@ -161,7 +159,11 @@ class Composite(OrthogonalSpace):
             stencil = get_stencil_matrix(self.bcs, self.orthogonal)
         self.scaling = scaling
         self.stencil = {(si[0]): si[1] / scaling for si in sorted(stencil.items())}
-        self.S = BCOO.from_scipy_sparse(self.stencil_to_scipy_sparse())
+        self.S = self.stencil_to_diamatrix()
+        self.ST: DiaMatrix = self.S.T  # pre-computed transpose; avoids creating
+        # a new DiaMatrix inside jax.jit traces (which breaks metadata comparison)
+        self._mass_matrix: DiaMatrix = self._compute_mass_matrix()
+        self._mass_matrix.lu_factor()
 
     @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
@@ -220,16 +222,16 @@ class Composite(OrthogonalSpace):
 
     def get_stencil_row(self, i: int) -> Array:
         """Return nonzero stencil row data for basis index i."""
-        return self.S[i].data[: len(self.stencil)]
+        return self.S.get_row(i)
 
     def stencil_width(self) -> int:
         """Return max diagonal shift minus min shift (stencil width)."""
         return max(self.stencil) - min(self.stencil)
 
-    def stencil_to_scipy_sparse(self) -> scipy_sparse.spmatrix:
-        """Convert symbolic stencil to scipy sparse diagonal matrix."""
+    def stencil_to_diamatrix(self) -> DiaMatrix:
+        """Convert symbolic stencil to DiaMatrix."""
         k = jnp.arange(self.N - 1)
-        return scipy_sparse.diags(
+        return diags(
             [
                 jnp.atleast_1d(
                     sp.lambdify(
@@ -238,7 +240,7 @@ class Composite(OrthogonalSpace):
                 ).astype(float)
                 for val in self.stencil.values()
             ],
-            [key for key in self.stencil],
+            tuple(int(key) for key in self.stencil),
             shape=(self.N - self.stencil_width(), self.N),
         )
 
@@ -257,41 +259,36 @@ class Composite(OrthogonalSpace):
         """Map underlying orthogonal coefficients -> composite coefficients."""
         return a @ self.get_inverse_stencil()
 
-    @jax.jit(static_argnums=0)
     def apply_stencil_galerkin(self, b: Array) -> Array:
         """Apply stencil on both sides (Galerkin mass-like transform)."""
-        return self.S @ b @ self.S.T
+        return self.S @ b @ self.ST
 
-    @jax.jit(static_argnums=0)
-    def apply_stencils_petrovgalerkin(self, b: Array, P: BCOO) -> Array:
+    def apply_stencils_petrovgalerkin(self, b: Array, P: DiaMatrix) -> Array:
         """Apply test (S) and trial (P) stencils (Petrov-Galerkin)."""
         return self.S @ b @ P.T
 
-    @jax.jit(static_argnums=0)
     def apply_stencil_left(self, b: Array) -> Array:
         """Left-multiply by stencil (test projection)."""
         return self.S @ b
 
-    @jax.jit(static_argnums=0)
     def apply_stencil_right(self, a: Array) -> Array:
         """Right-multiply by stencil transpose (trial projection)."""
-        return a @ self.S.T
+        return a @ self.ST
 
-    @jax.jit(static_argnums=0)
-    def mass_matrix(self) -> BCOO:
-        """Return constrained mass matrix in sparse BCOO format."""
-        P: BCOO = self.orthogonal.mass_matrix()
-        T = matmat((self.S * P.data[None, :]), self.S.T).data.reshape(
-            (self.dim, -1)
-        )  # sparse @ sparse -> dense (yet sparse format), so need to remove zeros
-        return sparse.BCOO.fromdense(T, nse=2 * self.S.nse - self.S.shape[1])
+    def _compute_mass_matrix(self) -> DiaMatrix:
+        """Compute and return the constrained mass matrix (eager, internal)."""
+        P: DiaMatrix = self.orthogonal.mass_matrix()
+        return self.S @ P @ self.ST
+
+    def mass_matrix(self) -> DiaMatrix:
+        """Return constrained mass matrix in sparse DiaMatrix format."""
+        return self._mass_matrix
 
     @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
         """Project physical samples u -> constrained coefficients."""
-        A = self.mass_matrix().todense()
         L = self.scalar_product(u)
-        return jnp.linalg.solve(A, L)
+        return self._mass_matrix.solve(L)
 
     @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
@@ -368,7 +365,8 @@ class BCGeneric(Composite):
         S = get_bc_basis(bcs, self.orthogonal)
         self.orthogonal.N = S.shape[1]
         self.orthogonal._num_quad_points = num_quad_points
-        self.S = BCOO.fromdense(S.__array__().astype(float))
+        self.S = DiaMatrix.from_dense(S.__array__().astype(float))
+        self.ST: DiaMatrix = self.S.T  # pre-computed transpose; avoids creating
 
     @property
     def dim(self) -> int:

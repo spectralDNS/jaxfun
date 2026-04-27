@@ -5,10 +5,10 @@ from typing import cast
 
 import jax.numpy as jnp
 import sympy as sp
-from jax.experimental.sparse import BCOO
 
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
+from jaxfun.la import DiaMatrix, Matrix
 from jaxfun.typing import (
     Array,
     GalerkinAssembledForm,
@@ -26,17 +26,13 @@ class AssembledTerm:
     diagonal: Array | None = None
 
 
-def bcoo_diagonal(mat: BCOO) -> Array | None:
-    """Return the diagonal of a sparse BCOO matrix when it is purely diagonal."""
+def sparse_diagonal(mat: DiaMatrix) -> Array | None:
+    """Return the diagonal of a sparse DiaMatrix matrix when it is purely diagonal."""
     if mat.ndim != 2 or mat.shape[0] != mat.shape[1]:
         return None
-    indices = mat.indices
-    if indices.shape[1] != 2:
+    if mat.offsets != (0,):
         return None
-    if not bool(jnp.all(indices[:, 0] == indices[:, 1])):
-        return None
-    diag = jnp.zeros(mat.shape[0], dtype=mat.data.dtype)
-    return diag.at[indices[:, 0]].add(mat.data)
+    return mat.diagonal()
 
 
 def _sum_diagonals(operators: list[GalerkinOperator]) -> Array | None:
@@ -74,8 +70,10 @@ def operator_diagonal(obj: GalerkinOperatorLike | None) -> Array | None:
         return None
     if isinstance(obj, list):
         return _sum_diagonals(cast(list[GalerkinOperator], obj))
-    if isinstance(obj, BCOO):
-        return bcoo_diagonal(obj)
+    if isinstance(obj, DiaMatrix):
+        return sparse_diagonal(obj)
+    if isinstance(obj, Matrix):
+        return obj.diagonal()
     if isinstance(obj, TPMatrices):
         return _sum_diagonals(cast(list[GalerkinOperator], list(obj.tpmats)))
     if isinstance(obj, TPMatrix):
@@ -102,7 +100,7 @@ def apply_operator(op: GalerkinOperatorLike | None, u: Array) -> Array:
         return op(u)
     if isinstance(op, TensorMatrix):
         return apply_operator(op.mat, u)
-    if isinstance(op, BCOO):
+    if isinstance(op, DiaMatrix | Matrix):
         return op @ u
     arr = jnp.asarray(op)
     if arr.ndim == u.ndim:
@@ -132,8 +130,10 @@ def _tpmatrix_to_dense(op: TPMatrix) -> Array:
 
 def operator_to_dense(op: GalerkinOperatorLike) -> Array:
     """Convert a supported Galerkin operator representation to a dense array."""
-    if isinstance(op, BCOO):
+    if isinstance(op, DiaMatrix):
         return op.todense()
+    if isinstance(op, Matrix):
+        return op.data
     if isinstance(op, list):
         return _sum_dense_operators(cast(list[GalerkinOperator], op))
     if isinstance(op, TPMatrices):
@@ -165,7 +165,9 @@ def split_operator_and_forcing(
         operator, forcing = cast(tuple[GalerkinOperatorLike, Array | None], form)
         rhs = jnp.asarray(forcing) if forcing is not None else None
         return operator, rhs
-    if isinstance(form, list | BCOO | TPMatrix | TensorMatrix | TPMatrices):
+    if isinstance(
+        form, list | DiaMatrix | Matrix | TPMatrix | TensorMatrix | TPMatrices
+    ):
         return form, None
     arr = jnp.asarray(form)
     if arr.ndim <= 1:

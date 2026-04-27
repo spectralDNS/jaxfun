@@ -4,7 +4,6 @@ import jax
 import jax.numpy as jnp
 import pytest
 import sympy as sp
-from jax.experimental.sparse import BCOO
 from scipy.integrate import dblquad
 
 from jaxfun.galerkin import (
@@ -19,6 +18,7 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
+from jaxfun.la import DiaMatrix
 from jaxfun.utils import ulp
 
 
@@ -30,16 +30,16 @@ def test_inner(space: type[Legendre] | type[Chebyshev]) -> None:
     u = TrialFunction(V)
     v = TestFunction(V)
     M = inner(v * u, sparse=True, sparse_tol=1000)
-    assert isinstance(M, BCOO)
+    assert isinstance(M, DiaMatrix)
     M0 = V.mass_matrix()
     assert jnp.allclose(M.data, M0.data)
     M = inner(x * v * u, sparse=True)
-    assert isinstance(M, BCOO)
+    assert isinstance(M, DiaMatrix)
     a0 = answer1[space.__name__]
     assert jnp.allclose(M.todense().diagonal(1), a0)
     assert jnp.allclose(M.todense().diagonal(-1), a0)
     M = inner(x * v * u + sp.diff(u, x) * v, sparse=True)
-    assert isinstance(M, BCOO)
+    assert isinstance(M, DiaMatrix)
 
     N = 11
     C = Composite(N, space, {"left": {"D": 0}, "right": {"D": 0}})
@@ -276,12 +276,14 @@ def test_bilinear_inner(space):
     for fi in f:
         l0.append(inner(v * u * fi))
 
-    assert jnp.allclose(l0[0], l0[1], atol=ulp(100))
+    assert jnp.allclose(l0[0].data, l0[1].data, atol=ulp(100))
 
     l1 = []
     for fi in f:
         l1.append(inner(v.diff(x, 1) * u * fi))
-    assert jnp.allclose(l1[0], l1[1], atol=ulp(1000)), jnp.max(jnp.abs(l1[0] - l1[1]))
+    assert jnp.allclose(l1[0].data, l1[1].data, atol=ulp(1000)), jnp.max(
+        jnp.abs(l1[0].data - l1[1].data)
+    )
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
@@ -497,15 +499,15 @@ def test_inner_exact_poly_2d():
 
     # Check that without padding we get wrong result
     B = inner((x**2 + y**2) * v * u)
-    A = B[0].mats[0]
+    A = B[0].mats[0].data
     assert not jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
-    A = B[1].mats[1]
+    A = B[1].mats[1].data
     assert not jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
     # Check that with padding we get correct result
     B = inner((x**2 + y**2) * v * u, num_quad_points=(7, 7))
-    A = B[0].mats[0]
+    A = B[0].mats[0].data
     assert jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
-    A = B[1].mats[1]
+    A = B[1].mats[1].data
     assert jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
 
 

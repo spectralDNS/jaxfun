@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, Protocol, cast, ove
 
 import sympy as sp
 from jax import Array as Array
-from jax.experimental.sparse import BCOO as BCOO
 from jax.typing import ArrayLike as ArrayLike
 from sympy.core.function import AppliedUndef
 from sympy.vector import (
@@ -20,6 +19,8 @@ from sympy.vector import (
     VectorZero,
 )
 from typing_extensions import TypedDict
+
+from jaxfun.la import MatrixProtocol
 
 if TYPE_CHECKING:
     from jaxfun.coordinates import BaseDyadic, BaseScalar, BaseVector
@@ -77,10 +78,10 @@ class MeshKind(StrEnum):
 
 
 type DomainType = Literal["inside", "boundary", "intersection", "all"]
-type InnerBilinearResult = Array | BCOO | TPMatrix | TensorMatrix
-type InnerBilinearResults = list[Array | TPMatrix | TensorMatrix]
+type InnerBilinearResult = Array | MatrixProtocol | TPMatrix | TensorMatrix
+type InnerBilinearResults = list[Array | MatrixProtocol | TPMatrix | TensorMatrix]
 type InnerLinearResults = list[Array]
-type GalerkinOperator = Array | BCOO | TPMatrix | TensorMatrix | TPMatrices
+type GalerkinOperator = Array | MatrixProtocol | TPMatrix | TensorMatrix | TPMatrices
 type GalerkinOperatorLike = GalerkinOperator | list[GalerkinOperator]
 type GalerkinAssembledForm = (
     GalerkinOperatorLike | tuple[GalerkinOperatorLike, Array | None] | None

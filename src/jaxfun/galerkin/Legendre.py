@@ -1,9 +1,9 @@
 import jax
 import jax.numpy as jnp
 from jax import Array
-from jax.experimental import sparse
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.la import DiaMatrix, diags
 from jaxfun.utils.common import Domain, jit_vmap
 from jaxfun.utils.fastgl import leggauss
 
@@ -188,7 +188,7 @@ class Legendre(Jacobi):
 
 def matrices(
     test: tuple[Legendre, int], trial: tuple[Legendre, int]
-) -> sparse.BCOO | None:
+) -> DiaMatrix | None:
     """Return sparse operator matrices for Legendre derivative coupling.
 
     Supported (i,j) derivative orders:
@@ -203,36 +203,33 @@ def matrices(
         trial: (space, derivative order) trial side.
 
     Returns:
-        BCOO sparse matrix or None if unsupported.
+        DiaMatrix diagonal mass matrix or None if unsupported.
     """
-    import numpy as np
-    from scipy import sparse as scipy_sparse
 
     v, i = test
     u, j = trial
     if i == 0 and j == 0:
-        return sparse.BCOO(
-            (v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
-            shape=(v.N, u.N),
-        )
+        return diags([v.norm_squared()], offsets=(0,), shape=(v.N, u.N))
+
     if i == 0 and j == 1:
         if u.N < 2:
             return None
-        return sparse.BCOO.from_scipy_sparse(
-            scipy_sparse.diags(
-                [2.0] * len(jnp.arange(1, u.N, 2)),
-                jnp.arange(1, u.N, 2),
-                (v.N, u.N),
-                "csr",
-            )
+        return diags(
+            [jnp.full(v.N - k, 2.0) for k in jnp.arange(1, v.N, 2).tolist()],
+            offsets=tuple(jnp.arange(1, v.N, 2).tolist()),
+            shape=(v.N, u.N),
         )
+
     if i == 1 and j == 0:
         m = matrices(trial, test)
         if m is not None:
-            return m.transpose()
+            return m.T
         return None
     if i == 0 and j == 2:
         k = jnp.arange(max(v.N, u.N))
+        offsets = jnp.arange(2, u.N, 2).tolist()
+        if len(offsets) == 0:
+            return None
 
         def _getkey(j):
             Q = min(v.N, u.N - j)
@@ -243,20 +240,13 @@ def matrices(
                 / (2 * k[:Q] + 1)
             )
 
-        d = dict.fromkeys(np.arange(2, u.N, 2), _getkey)
-        if len(d) == 0:
-            return None
-
-        return sparse.BCOO.from_scipy_sparse(
-            scipy_sparse.diags(
-                [d[i](i) for i in np.arange(2, u.N, 2)],
-                jnp.arange(2, u.N, 2),
-                (v.N, u.N),
-                "csr",
-            )
+        return diags(
+            [_getkey(j) for j in offsets],
+            offsets=tuple(offsets),
+            shape=(v.N, u.N),
         )
     if i == 2 and j == 0:
         m = matrices(trial, test)
         if m is not None:
-            return m.transpose()
+            return m.T
     return None

@@ -16,14 +16,10 @@ from jaxfun.galerkin import (
     TrialFunction,
     Ultraspherical,
     VectorTensorProductSpace,
+    tpmats_to_kron,
 )
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import (
-    DirectSumTPS,
-    TPMatrices,
-    TPMatrix,
-    tpmats_to_scipy_sparse,
-)
+from jaxfun.galerkin.tensorproductspace import DirectSumTPS
 from jaxfun.utils.common import ulp
 
 
@@ -46,7 +42,7 @@ def test_directsum_two_inhomogeneous_bnd_assembly_and_backward():
     assert u.shape[0] == hom0.num_quad_points and u.shape[1] == hom1.num_quad_points
 
 
-def test_tensorproduct_get_homogeneous_and_tpmatrices_precond():
+def test_tensorproduct_get_homogeneous():
     bcs = {"left": {"D": 1}, "right": {"D": 2}}
     F = FunctionSpace(5, Chebyshev.Chebyshev, bcs=bcs)
     L = Legendre.Legendre(5)
@@ -59,11 +55,6 @@ def test_tensorproduct_get_homogeneous_and_tpmatrices_precond():
     u = TrialFunction(H)
     A = inner(v * u)
     assert isinstance(A, list)
-    mats_list = [m for m in cast(list[TPMatrix], A) if hasattr(m, "M")]
-    mats = TPMatrices(mats_list)
-    X = jax.random.normal(jax.random.PRNGKey(0), shape=T.num_dofs)
-    Z = mats.precond(X)
-    assert Z.shape == X.shape
 
 
 def test_multivar_and_linear_bcs_branch():
@@ -78,7 +69,7 @@ def test_multivar_and_linear_bcs_branch():
     u = TrialFunction(T)
     # multivar coefficient (x+y) and linear JAXFunction coefficient in same expression
     coeffs = jax.random.normal(jax.random.PRNGKey(1), shape=T.num_dofs)
-    from jaxfun.galerkin.arguments import JAXFunction
+    from jaxfun.galerkin import JAXFunction
 
     jf = JAXFunction(coeffs, T)
     A = inner((sp.sqrt(x + y) * u * v) + jf * v, return_all_items=True)
@@ -86,7 +77,7 @@ def test_multivar_and_linear_bcs_branch():
     assert isinstance(A, tuple)
 
 
-def test_tpmats_to_scipy_sparse():
+def test_tpmats_to_kron():
     C = Chebyshev.Chebyshev(4)
     L = Legendre.Legendre(4)
     T = TensorProduct(C, L)
@@ -94,9 +85,11 @@ def test_tpmats_to_scipy_sparse():
     u = TrialFunction(T)
     A = inner(v * u)
     assert isinstance(A, list)
-    A_tp = cast(list[TPMatrix], A)
-    S = tpmats_to_scipy_sparse(A_tp)
-    assert len(S) == len(A_tp)
+    S = tpmats_to_kron(A)
+    assert S.shape == (T.dim, T.dim)
+    # Compare to dense version
+    A_dense = sum(mat.mat.todense() for mat in A)
+    assert jnp.allclose(S.todense(), A_dense)
 
 
 @pytest.mark.parametrize(

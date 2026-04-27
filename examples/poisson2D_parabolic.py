@@ -6,14 +6,13 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-from scipy import sparse as scipy_sparse
 
 from jaxfun.coordinates import get_CoordSys
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
+from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -43,8 +42,8 @@ ue = (tau * (1 - tau)) ** 2 * (1 - sigma**2) ** 1 * sp.sin(4 * sp.pi * sigma)
 # Assemble linear system of equations
 A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue))) * C.sg, sparse=False)
 
-A0 = tpmats_to_scipy_kron(A)
-un = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
+A0 = tpmats_to_kron(A)
+un = A0.solve(b.flatten()).reshape(b.shape)
 
 N = 100
 rj, tj = T.mesh(kind="uniform", N=(N, N))

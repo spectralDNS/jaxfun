@@ -8,11 +8,10 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
-from jax.experimental.sparse import BCOO
-from scipy import sparse as scipy_sparse
 from scipy.special import sph_harm_y
 from sympy import Expr, Symbol
 
+from jaxfun.la import DiaMatrix
 from jaxfun.typing import FloatLike
 
 if TYPE_CHECKING:
@@ -124,13 +123,13 @@ def jacn(fun: Callable[[Array], Array], k: int = 1) -> Callable[[Array], Array]:
 @overload
 def matmat(a: Array, b: Array) -> Array: ...
 @overload
-def matmat(a: BCOO, b: BCOO) -> BCOO: ...
+def matmat(a: DiaMatrix, b: DiaMatrix) -> DiaMatrix: ...
 @overload
-def matmat(a: Array, b: BCOO) -> Array: ...  # unchecked
+def matmat(a: Array, b: DiaMatrix) -> Array: ...  # unchecked
 @overload
-def matmat(a: BCOO, b: Array) -> Array: ...  # unchecked
+def matmat(a: DiaMatrix, b: Array) -> Array: ...  # unchecked
 @jax.jit
-def matmat(a: Array | BCOO, b: Array | BCOO) -> Array | BCOO:
+def matmat(a: Array | DiaMatrix, b: Array | DiaMatrix) -> Array | DiaMatrix:
     return a @ b
 
 
@@ -140,14 +139,14 @@ def eliminate_near_zeros(a: Array, tol: int = 100) -> Array:
     return jnp.where(jnp.abs(a) < atol, jnp.zeros(a.shape), a)
 
 
-def fromdense(a: Array, tol: int = 100) -> BCOO:
+def fromdense(a: Array, tol: int = 100) -> DiaMatrix:
     a0: Array = eliminate_near_zeros(a, tol=tol)
-    return BCOO.fromdense(a0)
+    return DiaMatrix.from_dense(a0)
 
 
-def tosparse(a: Array, tol: int = 100) -> BCOO:
+def tosparse(a: Array, tol: int = 100) -> DiaMatrix:
     a0: Array = eliminate_near_zeros(a, tol=tol)
-    return BCOO.from_scipy_sparse(scipy_sparse.csr_matrix(a0))
+    return DiaMatrix.from_dense(a0)
 
 
 class ArrayFn(Protocol):

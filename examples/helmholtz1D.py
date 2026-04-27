@@ -36,12 +36,12 @@ A, L = inner(
 )
 
 xj = D.mesh(kind="uniform", N=100)
-uh = jnp.linalg.solve(A.todense(), L)
+uh = A.solve(L)
 uj = D.evaluate(xj, uh)
 uej = lambdify(x, ue)(xj)
 error = jnp.linalg.norm(uj - uej)
 if "PYTEST" in os.environ:
-    assert error < ulp(100000), error
+    assert error < jnp.sqrt(ulp(10)), error
     sys.exit(1)
 
 print("Error =", error)

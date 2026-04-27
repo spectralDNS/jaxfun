@@ -22,4 +22,5 @@ from .tensorproductspace import (
     TensorProduct as TensorProduct,
     TensorProductSpace as TensorProductSpace,
     VectorTensorProductSpace as VectorTensorProductSpace,
+    tpmats_to_kron as tpmats_to_kron,
 )

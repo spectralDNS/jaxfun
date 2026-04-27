@@ -22,11 +22,10 @@ from typing import TYPE_CHECKING, Self, overload
 import jax
 import jax.numpy as jnp
 import sympy as sp
-from jax.experimental import sparse
-from jax.experimental.sparse import BCOO
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
+from jaxfun.la import DiaMatrix, diags
 from jaxfun.typing import Array, MeshKind
 from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
 
@@ -73,9 +72,7 @@ class OrthogonalSpace(BaseSpace):
         self.bcs: BoundaryConditions | None = None
         self.orthogonal: Self = self
         self.stencil = {0: 1}
-        self.S = sparse.BCOO(
-            (jnp.ones(N), jnp.vstack((jnp.arange(N),) * 2).T), shape=(N, N)
-        )
+        self.S = diags([jnp.ones(N)], offsets=(0,), shape=(N, N))
         self.S_inv: Array | None = None
         super().__init__(system, name, fun_str)
 
@@ -208,14 +205,11 @@ class OrthogonalSpace(BaseSpace):
         df = float(self.domain_factor**k)
         return df * self.backward(self.derivative_coeffs(c, k), kind=kind, N=N)
 
-    @jax.jit(static_argnums=0)
-    def mass_matrix(self) -> BCOO:
+    def mass_matrix(self) -> DiaMatrix:
         """Return diagonal mass matrix (orthogonality) in sparse format."""
-        return BCOO(
-            (
-                self.norm_squared() / self.domain_factor,
-                jnp.vstack((jnp.arange(self.N),) * 2).T,
-            ),
+        return diags(
+            [self.norm_squared() / self.domain_factor],
+            offsets=(0,),
             shape=(self.N, self.N),
         )
 
@@ -248,7 +242,7 @@ class OrthogonalSpace(BaseSpace):
         return b
 
     @jax.jit(static_argnums=0)
-    def apply_stencils_petrovgalerkin(self, b: Array, P: BCOO) -> Array:
+    def apply_stencils_petrovgalerkin(self, b: Array, P: DiaMatrix) -> Array:
         """Apply trial stencil only (identity left) for Petrov–Galerkin."""
         return b @ P.T
 

@@ -1,12 +1,13 @@
 import importlib
-from typing import Literal, TypeGuard, cast, overload
+from typing import Any, Literal, TypeGuard, cast, overload
 
 import jax.numpy as jnp
 import sympy as sp
+from flax import nnx
 from jax import Array
-from jax.experimental.sparse import BCOO
 
 from jaxfun.galerkin import JAXFunction
+from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol
 from jaxfun.typing import TrialSpaceType
 from jaxfun.utils.common import lambdify, matmat, tosparse
 
@@ -44,6 +45,7 @@ def inner(
     sparse_tol: int = 1000,
     return_all_items: bool = False,
     num_quad_points: int | tuple[int, ...] | None = None,
+    use_precomputed_matrices: bool = True,
 ):
     r"""Assemble Galerkin inner products (bilinear / linear forms).
 
@@ -64,7 +66,7 @@ def inner(
         expr: SymPy expression containing TestFunction (mandatory) and
             optionally TrialFunction, JAXFunction, scalar
             coordinate-dependent factors.
-        sparse: If True, sparsify (1D) matrix/tensor factors (BCOO).
+        sparse: If True, sparsify (1D) matrix/tensor factors (DiaMatrix).
         sparse_tol: Zero tolerance (integer multiple of ulp) for sparsify.
         return_all_items: If True return raw list(s) of matrices / vectors
             before summation (always for >1D tensor product).
@@ -79,6 +81,11 @@ def inner(
             nonlinear terms, but the user is responsible for ensuring that
             the number of quadrature points is sufficient. For the 3/2 rule,
             use tuple(int(1.5 * n) for n in test_space.num_quad_points).
+        use_precomputed_matrices: If True, use precomputed sparse matrices if
+            available for the given test/trial derivative orders. If False,
+            always compute matrices via quadrature. Setting to False can be
+            useful for testing.
+
 
     Returns:
         Depending on content:
@@ -112,7 +119,7 @@ def inner(
         # If the form contains a JAXFunction, then the matrix assembled will
         # be multiplied with the JAXFunction and a vector will be returned
 
-        mats: list[tuple[tuple[Array, Array] | Array, tuple[int, int]]] = []
+        mats: list[tuple[tuple[Array, Array] | Matrix, tuple[int, int]]] = []
         # Split coefficients into linear (JAXFunction) and bilinear (constant
         # coefficients) contributions.
         coeffs = split_coeff(a0["coeff"])
@@ -158,7 +165,7 @@ def inner(
                 else num_quad_points[vf.system.base_scalars()[0]._id[0]]
             )
 
-            z = inner_bilinear(ai, vf, uf, sc, is_multivar, N)
+            z = inner_bilinear(ai, vf, uf, sc, is_multivar, N, use_precomputed_matrices)
 
             if isinstance(z, tuple):  # multivar
                 mats.append((z, global_indices))
@@ -227,18 +234,10 @@ def inner(
 
                 if "bilinear" in coeffs:
                     assert isinstance(trial_space, TensorProductSpace)
-                    aresults.append(
-                        TensorMatrix(
-                            Am,
-                            test_space,
-                            trial_space.tpspaces[tuple(trial)]
-                            if isinstance(trial_space, DirectSumTPS)
-                            else trial_space,
-                        )
-                    )
+                    aresults.append(TensorMatrix(Am))
 
         elif len(mats) > 1:  # regular separable multivariable form
-            mats_ = [cast(Array, m[0]) for m in mats]
+            mats_: list[Array] = [cast(Matrix, m[0]).data for m in mats]
             gi = [m[1] for m in mats]
 
             assert isinstance(test_space, TensorProductSpace | VectorTensorProductSpace)
@@ -295,12 +294,8 @@ def inner(
                     )
                     aresults.append(
                         TPMatrix(
-                            mats_,
-                            coeffs["bilinear"],
-                            test_space,
-                            trial_space.tpspaces[tuple(trial)]
-                            if isinstance(trial_space, DirectSumTPS)
-                            else trial_space,
+                            [cast(MatrixProtocol, m[0]) for m in mats],
+                            1,
                             global_indices=gi[0],
                         )
                     )
@@ -396,19 +391,6 @@ def inner(
     )
 
 
-def toBCOO(z: Array, sparse_tol: int) -> BCOO:
-    """Convert dense operator to BCOO.
-
-    Args:
-        z: Dense matrix with attached attributes (test/trial data).
-        sparse_tol: Zero tolerance passed to tosparse.
-
-    Returns:
-        BCOO sparse matrix.
-    """
-    return tosparse(z, tol=sparse_tol)
-
-
 def vectorize_bresult(
     res: Array, space: TensorProductSpace | VectorTensorProductSpace, global_index: int
 ) -> Array:
@@ -418,20 +400,53 @@ def vectorize_bresult(
     return out.at[global_index].set(res)
 
 
+@overload
 def process_results(
-    aresults: list[Array],
+    aresults: list[Matrix | TPMatrix | TensorMatrix],
+    bresults: list[Array],
+    return_all_items: Literal[True],
+    dims: int,
+    sparse: bool,
+    sparse_tol: int,
+) -> tuple[list[Matrix | TPMatrix | TensorMatrix], list[Array]]: ...
+@overload
+def process_results(
+    aresults: list[Matrix | TPMatrix | TensorMatrix],
+    bresults: list[Array],
+    return_all_items: Literal[False],
+    dims: int,
+    sparse: Literal[False],
+    sparse_tol: int,
+) -> (
+    Matrix
+    | TPMatrix
+    | TensorMatrix
+    | Array
+    | tuple[Matrix | TPMatrix | TensorMatrix, Array]
+): ...
+@overload
+def process_results(
+    aresults: list[Matrix | TPMatrix | TensorMatrix],
+    bresults: list[Array],
+    return_all_items: Literal[False],
+    dims: int,
+    sparse: Literal[True],
+    sparse_tol: int,
+) -> (
+    DiaMatrix
+    | TPMatrix
+    | TensorMatrix
+    | Array
+    | tuple[DiaMatrix | TPMatrix | TensorMatrix, Array]
+): ...
+def process_results(
+    aresults: list[Matrix | TPMatrix | TensorMatrix],
     bresults: list[Array],
     return_all_items: bool,
     dims: int,
     sparse: bool,
     sparse_tol: int,
-) -> (
-    Array
-    | list[Array]
-    | BCOO
-    | list[TPMatrix]
-    | tuple[list[Array] | Array | BCOO | list[TPMatrix], list[Array] | Array]
-):
+) -> Any:
     """Finalize assembly results (sum terms, optional sparsify).
 
     Args:
@@ -447,23 +462,21 @@ def process_results(
     """
     if return_all_items:
         return aresults, bresults
-
     if len(aresults) > 0 and dims == 1:
-        aresults: Array = jnp.sum(jnp.array(aresults), axis=0)
+        aresults: Matrix = Matrix(
+            jnp.sum(jnp.array([cast(Matrix, a).data for a in aresults]), axis=0)
+        )
         if sparse:
-            aresults: BCOO = tosparse(aresults, tol=sparse_tol)
+            aresults: DiaMatrix = tosparse(aresults.data, tol=sparse_tol)
 
     if len(aresults) > 0 and dims > 1 and sparse:
         aresults: list[TPMatrix] = cast(list[TPMatrix], aresults)
         for a0 in aresults:
             if isinstance(a0, TPMatrix):
-                a0.mats: list[BCOO] = [
-                    toBCOO(
-                        a0.mats[i],
-                        sparse_tol,
-                    )
+                a0.mats = nnx.List(
+                    tosparse(cast(Matrix, a0.mats[i]).data, sparse_tol)
                     for i in range(a0.dims)
-                ]
+                )
 
     if len(bresults) > 0:
         bresults: Array = jnp.sum(jnp.array(bresults), axis=0)
@@ -486,7 +499,8 @@ def inner_bilinear(
     sc: float | complex,
     multivar: Literal[False],
     num_quad_points: int,
-) -> Array: ...
+    use_precomputed_matrices: bool,
+) -> Matrix: ...
 @overload
 def inner_bilinear(
     ai: sp.Expr,
@@ -495,6 +509,7 @@ def inner_bilinear(
     sc: float | complex,
     multivar: Literal[True],
     num_quad_points: int,
+    use_precomputed_matrices: bool,
 ) -> tuple[Array, Array]: ...
 def inner_bilinear(
     ai: sp.Expr,
@@ -503,7 +518,8 @@ def inner_bilinear(
     sc: float | complex,
     multivar: bool,
     num_quad_points: int,
-) -> Array | tuple[Array, Array]:
+    use_precomputed_matrices: bool,
+) -> Matrix | tuple[Array, Array]:
     """Assemble single bilinear form contribution term.
 
     Detects derivative orders on test/trial factors, applies optional
@@ -518,7 +534,7 @@ def inner_bilinear(
         multivar: True if coefficient not separable (handled upstream).
         num_quad_points: Number of quadrature points.
     Returns:
-        Dense matrix, or (Pi, Pj) tuple for multivar separation.
+        Matrix, or (Pi, Pj) tuple for multivar separation.
     """
     vo = v.orthogonal
     uo = u.orthogonal
@@ -558,7 +574,7 @@ def inner_bilinear(
             scale *= float(aii)  # ty:ignore[invalid-argument-type]
 
     z = None
-    if len(scale) == 1 and not multivar:
+    if len(scale) == 1 and use_precomputed_matrices and not multivar:
         # Look up matrix
         mod = importlib.import_module(vo.__class__.__module__)
         z = mod.matrices((vo, i), (uo, j))
@@ -591,7 +607,7 @@ def inner_bilinear(
     elif isinstance(u, Composite):
         z = u.apply_stencil_right(z)
 
-    return z
+    return Matrix(z)
 
 
 def inner_linear(
@@ -719,7 +735,7 @@ def project1D(ue: sp.Expr, V: OrthogonalSpace | Composite | DirectSum) -> Array:
     u = TrialFunction(V)
     v = TestFunction(V)
     M, b = inner(v * (u - ue))
-    uh = jnp.linalg.solve(M, b)
+    uh = M.solve(b)
     return uh
 
 
@@ -733,8 +749,6 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
     Returns:
         Coefficient array shaped to V.num_dofs.
     """
-    from scipy import sparse as scipy_sparse
-
     from jaxfun.operators import Dot
 
     if V.dims == 1:
@@ -761,7 +775,7 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
     v = TestFunction(V)
     if V.rank == 0:
         M, b = inner(v * (u - ue))
-        uh = jnp.linalg.solve(M[0].mat, b.flatten()).reshape(V.num_dofs)
+        uh = M[0].solve(b.flatten()).reshape(V.num_dofs)
 
     elif V.rank == 1:
         assert isinstance(ue, sp.Mul | sp.Add | JAXFunction), (
@@ -771,6 +785,6 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
         M, b = inner(Dot(v, (u - ue)))
         A = BlockTPMatrix(M, V, V)
         C = A.block_array()
-        uh = jnp.array(scipy_sparse.linalg.spsolve(C, b.ravel()).reshape(b.shape))
+        uh = C.solve(b.ravel()).reshape(b.shape)
 
     return uh

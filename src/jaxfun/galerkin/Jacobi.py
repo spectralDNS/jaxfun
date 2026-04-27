@@ -4,11 +4,11 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
-from jax.experimental import sparse
 from scipy.special import roots_jacobi
 from sympy import Expr, Number, Symbol
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.la import DiaMatrix, diags
 from jaxfun.utils.common import Domain, jit_vmap, n
 
 from .orthogonal import OrthogonalSpace
@@ -440,7 +440,7 @@ class Jacobi(OrthogonalSpace):
         return factor * f
 
 
-def matrices(test: tuple[Jacobi, int], trial: tuple[Jacobi, int]) -> sparse.BCOO | None:
+def matrices(test: tuple[Jacobi, int], trial: tuple[Jacobi, int]) -> DiaMatrix | None:
     """Return sparse mass matrix for (i,j)=(0,0) else None.
 
     Args:
@@ -448,13 +448,10 @@ def matrices(test: tuple[Jacobi, int], trial: tuple[Jacobi, int]) -> sparse.BCOO
         trial: (space, derivative order) for trial function.
 
     Returns:
-        BCOO diagonal mass matrix or None if derivative combo unsupported.
+        DiaMatrix diagonal mass matrix or None if derivative combo unsupported.
     """
     v, i = test
     u, j = trial
     if i == 0 and j == 0:
-        return sparse.BCOO(
-            (v.norm_squared(), jnp.vstack((jnp.arange(v.N),) * 2).T),
-            shape=(v.N, u.N),
-        )
+        return diags([v.norm_squared()], offsets=(0,), shape=(v.N, u.N))
     return None

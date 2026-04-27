@@ -6,14 +6,13 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-from scipy import sparse as scipy_sparse
 
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction, x, y
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_scipy_kron
+from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -35,8 +34,8 @@ ue = T.system.expr_psi_to_base_scalar(ue)
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=False)
 
 # Alternative scipy sparse implementation
-A0 = tpmats_to_scipy_kron(A)
-uh = jnp.array(scipy_sparse.linalg.spsolve(A0, b.flatten()).reshape(b.shape))
+A0 = tpmats_to_kron(A)
+uh = A0.solve(b.flatten()).reshape(b.shape)
 
 N = 100
 uj = T.backward(uh, N=(N, N))

@@ -35,7 +35,7 @@ A, b = inner(
 )
 
 xj = D.mesh()
-uh = jnp.linalg.solve(A.todense(), b)
+uh = A.solve(b)
 uj = D.backward(uh)
 uej = lambdify(x, ue)(xj)
 error = jnp.linalg.norm(uj - uej)

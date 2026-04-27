@@ -105,4 +105,5 @@ def test_forward_backward_2d(
 
 
 if __name__ == "__main__":
-    test_forward_backward_2d(Fourier.Fourier)
+    # test_forward_backward_2d(Fourier.Fourier)
+    test_forward_backward_composite(Legendre.Legendre)

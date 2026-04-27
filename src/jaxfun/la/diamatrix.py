@@ -594,22 +594,20 @@ class DiaMatrix(nnx.Pytree):
             True
         """
         n, m = self.shape
-        j = jnp.asarray(j, dtype=int)
-        col = jnp.zeros(n, dtype=self.data.dtype)
 
-        offsets_arr = jnp.array(self.offsets, dtype=int)
+        j = jnp.asarray(j, dtype=jnp.int32)
+        offsets = jnp.asarray(self.offsets, dtype=jnp.int32)
 
-        def _place(col: Array, args: tuple) -> tuple[Array, None]:
-            d, k = args  # d: (m,),  k: scalar int
-            i = j - k  # row where this diagonal hits column j
-            in_bounds = (i >= 0) & (i < n) & (j >= 0) & (j < m)
-            safe_i = jnp.where(in_bounds, i, 0)
-            safe_j = jnp.where(in_bounds, j, 0)
-            val = jnp.where(in_bounds, d[safe_j], jnp.zeros((), dtype=d.dtype))
-            return col.at[safe_i].add(val), None
+        rows = j - offsets
+        in_bounds = (rows >= 0) & (rows < n) & (j >= 0) & (j < m)
+        safe_rows = jnp.where(in_bounds, rows, 0)
+        safe_j = jnp.where((j >= 0) & (j < m), j, 0)
 
-        col, _ = jax.lax.scan(_place, col, (self.data, offsets_arr))
-        return col
+        vals = self.data[:, safe_j]
+        vals = jnp.where(in_bounds, vals, jnp.zeros((), dtype=self.data.dtype))
+
+        col = jnp.zeros((n,), dtype=self.data.dtype)
+        return col.at[safe_rows].add(vals)
 
     def scale(self, alpha: float | Array) -> DiaMatrix:
         """Return ``alpha * A`` as a new :class:`DiaMatrix`."""

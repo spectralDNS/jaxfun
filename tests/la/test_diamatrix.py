@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import cast
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -366,6 +367,77 @@ class TestScalarArithmetic:
     def test_neg(self):
         a, A = _tridiag(3)
         assert jnp.allclose((-A).todense(), (-a).todense())
+
+
+def _indexing_matrix() -> tuple[jax.Array, DiaMatrix]:
+    dense = jnp.arange(1, 21, dtype=jnp.float32).reshape(4, 5)
+    return dense, DiaMatrix.from_dense(dense)
+
+
+def _assert_getitem_matches_dense(key) -> None:
+    dense, A = _indexing_matrix()
+    actual = A[key]
+    expected = dense[key]
+    assert actual.shape == expected.shape
+    assert jnp.array_equal(actual, expected)
+
+
+class TestGetItem:
+    @pytest.mark.parametrize(
+        "key",
+        [
+            pytest.param(1, id="row-int"),
+            pytest.param(slice(1, None, 2), id="row-slice"),
+            pytest.param(jnp.array([3, 1]), id="row-advanced"),
+            pytest.param((Ellipsis, 2), id="ellipsis-column"),
+            pytest.param((1, Ellipsis), id="row-ellipsis"),
+            pytest.param((None, slice(None), 2), id="newaxis-column"),
+        ],
+    )
+    def test_basic_indexing_forms_match_dense_array(self, key):
+        _assert_getitem_matches_dense(key)
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            pytest.param(
+                (jnp.array([0, 2, 3]), jnp.array([1, 2, 4])),
+                id="paired-advanced-indices",
+            ),
+            pytest.param(
+                (jnp.array([[0], [2]]), jnp.array([1, 3])),
+                id="broadcast-advanced-indices",
+            ),
+            pytest.param(
+                (jnp.array([True, False, True, False]), slice(None)),
+                id="row-bool-mask",
+            ),
+            pytest.param(
+                (slice(None), jnp.array([False, True, False, True, False])),
+                id="column-bool-mask",
+            ),
+            pytest.param(
+                (
+                    jnp.array([True, False, True, False]),
+                    jnp.array([False, True, False, False, True]),
+                ),
+                id="paired-bool-masks",
+            ),
+            pytest.param(
+                jnp.array(
+                    [
+                        [True, False, False, False, False],
+                        [False, False, False, False, False],
+                        [False, False, True, False, False],
+                        [False, False, False, False, True],
+                    ]
+                ),
+                id="matrix-bool-mask",
+            ),
+        ],
+    )
+    def test_advanced_indexing_forms_match_dense_array(self, key):
+        _assert_getitem_matches_dense(key)
 
 
 class TestMatvecAxis:

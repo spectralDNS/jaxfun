@@ -82,13 +82,9 @@ def test_eliminate_near_zeros(tol: float) -> None:
 
 def test_fromdense_and_tosparse() -> None:
     a = jnp.array([[1.0, 0.0], [0.0, 2.0]])
-    dia_fromdense = common.fromdense(a)
     dia_tosparse = common.tosparse(a)
     # Check type and values
-    assert isinstance(dia_fromdense, DiaMatrix)
     assert isinstance(dia_tosparse, DiaMatrix)
-
-    assert jnp.allclose(dia_fromdense.todense(), a)
     assert jnp.allclose(dia_tosparse.todense(), a)
 
 

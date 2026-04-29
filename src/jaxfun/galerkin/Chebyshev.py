@@ -5,7 +5,7 @@ from jax import Array
 from sympy import Expr, Symbol
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.la import DiaMatrix, diags
+from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, jit_vmap
 
@@ -359,8 +359,8 @@ class Chebyshev(Jacobi):
 
 def matrices(
     test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]
-) -> DiaMatrix | None:
-    """Sparse operator matrices between test/trial Chebyshev modes.
+) -> Matrix | DiaMatrix | None:
+    """Return (possibly sparse) operator matrices between test/trial Chebyshev modes.
 
     Constructs (possibly rectangular) sparse differentiation / mass-like
     matrices for combinations of test index i and trial index j flags:
@@ -377,27 +377,21 @@ def matrices(
         trial: Tuple (u, j) with Chebyshev space u and number of derivatives j.
 
     Returns:
-        DiaMatrix | None if combination unsupported.
+        Matrix | DiaMatrix | None if combination unsupported.
     """
     v, i = test
     u, j = trial
-    if (i, j) not in {(0, 0), (0, 1), (1, 0), (0, 2), (2, 0)}:
+    if (i, j) not in ((0, 0), (0, 1), (1, 0), (0, 2), (2, 0)):
         return None
+
     if i == 0 and j == 0:
-        return diags(
-            [v.norm_squared()],
-            offsets=(0,),
-            shape=(v.N, u.N),
-        )
+        return diags([v.norm_squared()], offsets=(0,), shape=(v.N, u.N))
 
-    if j == 0:
-        if i not in (1, 2):
-            return None
-
+    if i in (1, 2) and j == 0:
         m = matrices(trial, test)
         if m is not None:
-            return m.T
-        return None
+            m = m.T
+        return m
 
     offsets = jnp.arange(j, u.N, 2)
     if len(offsets) == 0:
@@ -420,7 +414,5 @@ def matrices(
     _getkey = _getkey1 if j == 1 else _getkey2
 
     return diags(
-        [_getkey(m) for m in offsets],
-        tuple(offsets.tolist()),
-        (v.N, u.N),
-    )
+        [_getkey(m) for m in offsets], tuple(offsets.tolist()), (v.N, u.N)
+    ).to_Matrix()  # Matrix is upper triangular, better and faster to use dense.

@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from jax import Array
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.la import DiaMatrix, diags
+from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.utils.common import Domain, jit_vmap
 from jaxfun.utils.fastgl import leggauss
 
@@ -188,8 +188,8 @@ class Legendre(Jacobi):
 
 def matrices(
     test: tuple[Legendre, int], trial: tuple[Legendre, int]
-) -> DiaMatrix | None:
-    """Return sparse operator matrices for Legendre derivative coupling.
+) -> Matrix | DiaMatrix | None:
+    """Return (sparse) operator matrices for Legendre derivative coupling.
 
     Supported (i,j) derivative orders:
         (0,0): Mass (diagonal)
@@ -203,7 +203,7 @@ def matrices(
         trial: (space, derivative order) trial side.
 
     Returns:
-        DiaMatrix diagonal mass matrix or None if unsupported.
+        Matrix or DiaMatrix diagonal mass matrix or None if unsupported.
     """
 
     v, i = test
@@ -218,7 +218,7 @@ def matrices(
             [jnp.full(v.N - k, 2.0) for k in jnp.arange(1, v.N, 2).tolist()],
             offsets=tuple(jnp.arange(1, v.N, 2).tolist()),
             shape=(v.N, u.N),
-        )
+        ).to_Matrix()  # Matrix is upper triangular, better and faster to use dense.
 
     if i == 1 and j == 0:
         m = matrices(trial, test)
@@ -244,7 +244,7 @@ def matrices(
             [_getkey(j) for j in offsets],
             offsets=tuple(offsets),
             shape=(v.N, u.N),
-        )
+        ).to_Matrix()  # Matrix is upper triangular, better and faster to use dense.
     if i == 2 and j == 0:
         m = matrices(trial, test)
         if m is not None:

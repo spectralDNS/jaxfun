@@ -224,7 +224,7 @@ class TestMatvec:
     def test_matmat_shape(self, mat):
         _, A = mat(8)
         X = jnp.ones((8, 3))
-        Y = A.matmat(X)
+        Y = A @ X
         assert Y.shape == (8, 3)
 
     @pytest.mark.parametrize("mat", allmatrices)
@@ -232,15 +232,7 @@ class TestMatvec:
         a, A = mat(6)
         rng = np.random.default_rng(1)
         X = jnp.array(rng.standard_normal((6, 3)))
-        assert jnp.allclose(A.matmat(X), a @ X, atol=1e-6)
-
-    @pytest.mark.parametrize("mat", allmatrices)
-    def test_apply_dispatches(self, mat):
-        _, A = mat(8)
-        x = jnp.ones(8)
-        X = jnp.ones((8, 2))
-        assert A.apply(x).shape == (8,)
-        assert A.apply(X).shape == (8, 2)
+        assert jnp.allclose(A @ X, a @ X, atol=1e-6)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_matmul_vector(self, mat):
@@ -273,6 +265,37 @@ class TestMatvec:
         a, A = mat(6)
         X = jnp.eye(6)
         assert jnp.allclose(X @ A, a.todense(), atol=1e-6)
+
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_rmatmul_2d_array_x_matrix(self, mat):
+        """Array (2-D) @ Matrix → Matrix.__rmatmul__(Array) 2-D path."""
+        a, A = mat(6)
+        rng = np.random.default_rng(42)
+        X = jnp.array(rng.standard_normal((4, 6)))
+        expected = X @ a.data
+        assert jnp.allclose(X @ a, expected, atol=1e-6)
+
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_matmul_dia_x_matrix(self, mat):
+        """DiaMatrix @ Matrix → DiaMatrix.__matmul__(Matrix) path."""
+        a, A = mat(6)
+        rng = np.random.default_rng(43)
+        B = Matrix(jnp.array(rng.standard_normal((6, 4))))
+        result = A @ B
+        expected = A.todense() @ B.data
+        assert isinstance(result, Matrix)
+        assert jnp.allclose(result.data, expected, atol=1e-6)
+
+    @pytest.mark.parametrize("mat", allmatrices)
+    def test_matmul_matrix_x_dia(self, mat):
+        """Matrix @ DiaMatrix → Matrix.__matmul__(DiaMatrix) path."""
+        a, A = mat(6)
+        rng = np.random.default_rng(44)
+        B = Matrix(jnp.array(rng.standard_normal((4, 6))))
+        result = B @ A
+        expected = B.data @ A.todense()
+        assert isinstance(result, Matrix)
+        assert jnp.allclose(result.data, expected, atol=1e-6)
 
 
 class TestTranspose:
@@ -541,13 +564,6 @@ class TestMatvecAxis:
         T = jnp.ones((6, 5))  # axis 0 has size m=6
         Y = A.matvec(T, axis=0)
         assert Y.shape == (4, 5)  # axis 0 now has size n=4
-
-    def test_apply_axis(self):
-        """apply() should forward the axis argument to matvec."""
-        a, A = _tridiag(4)
-        X = jnp.ones((4, 3))
-        assert jnp.allclose(A.apply(X, axis=0), A.matvec(X, axis=0))
-        assert jnp.allclose(A.apply(X.T, axis=1), A.matvec(X.T, axis=1))
 
 
 class TestAddSub:

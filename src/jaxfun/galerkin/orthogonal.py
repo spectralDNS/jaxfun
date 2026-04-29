@@ -25,7 +25,7 @@ import sympy as sp
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
-from jaxfun.la import DiaMatrix, diags
+from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol, diags
 from jaxfun.typing import Array, MeshKind
 from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
 
@@ -236,22 +236,36 @@ class OrthogonalSpace(BaseSpace):
             wj = wj * sg
         return (u * wj) @ jnp.conj(Pi)  # Truncated to (self.N,)
 
-    @jax.jit(static_argnums=0)
-    def apply_stencil_galerkin(self, b: Array) -> Array:
+    @overload
+    def apply_stencil_galerkin(self, b: Matrix) -> Matrix: ...
+    @overload
+    def apply_stencil_galerkin(self, b: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def apply_stencil_galerkin(self, b: MatrixProtocol) -> MatrixProtocol: ...
+    def apply_stencil_galerkin(self, b: MatrixProtocol) -> MatrixProtocol:
         """Apply (left,right) stencil in Galerkin case (identity here)."""
         return b
 
-    @jax.jit(static_argnums=0)
-    def apply_stencils_petrovgalerkin(self, b: Array, P: DiaMatrix) -> Array:
+    @overload
+    def apply_stencils_petrovgalerkin(self, b: Matrix, PT: DiaMatrix) -> Matrix: ...
+    @overload
+    def apply_stencils_petrovgalerkin(
+        self, b: DiaMatrix, PT: DiaMatrix
+    ) -> DiaMatrix: ...
+    @overload
+    def apply_stencils_petrovgalerkin(
+        self, b: MatrixProtocol, PT: DiaMatrix
+    ) -> MatrixProtocol: ...
+    def apply_stencils_petrovgalerkin(
+        self, b: MatrixProtocol, PT: DiaMatrix
+    ) -> MatrixProtocol:
         """Apply trial stencil only (identity left) for Petrov–Galerkin."""
-        return b @ P.T
+        return b @ PT
 
-    @jax.jit(static_argnums=0)
     def apply_stencil_left(self, b: Array) -> Array:
         """Apply test-side stencil (identity in pure orthogonal space)."""
         return b
 
-    @jax.jit(static_argnums=0)
     def apply_stencil_right(self, a: Array) -> Array:
         """Apply trial-side stencil (identity in pure orthogonal space)."""
         return a

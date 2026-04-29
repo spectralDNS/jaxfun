@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, overload, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import jax
 import jax.numpy as jnp
@@ -36,6 +36,8 @@ class MatrixProtocol(Protocol):
         assert isinstance(A_sparse, MatrixProtocol)
     """
 
+    data: Array
+
     @property
     def shape(self) -> tuple[int, int]:
         """``(n, m)`` shape of the matrix."""
@@ -57,14 +59,6 @@ class MatrixProtocol(Protocol):
         ``x.shape[axis]`` must equal ``m``; the output has the same shape as
         ``x`` except ``shape[axis]`` becomes ``n``.
         """
-        ...
-
-    def matmat(self, X: Array, axis: int = 0) -> Array:
-        """Alias for :meth:`matvec` treating ``X`` as a batch of column vectors."""
-        ...
-
-    def apply(self, x: Array, axis: int = 0) -> Array:
-        """Apply ``A`` along ``axis`` of ``x`` (alias for :meth:`matvec`)."""
         ...
 
     def solve(self, b: Array, axis: int = 0) -> Array:
@@ -124,13 +118,8 @@ class MatrixProtocol(Protocol):
     def __len__(self) -> int: ...
     def __add__(self, other: MatrixProtocol) -> MatrixProtocol: ...
     def __sub__(self, other: MatrixProtocol) -> MatrixProtocol: ...
-    @overload
-    def __matmul__(self, other: Array) -> Array: ...
-    @overload
-    def __matmul__(self, other: MatrixProtocol) -> MatrixProtocol: ...
-    @overload
-    def __matmul__(self, other: JAXFunction) -> Array: ...
-    def __rmatmul__(self, other: Array) -> Array: ...
+    def __matmul__(self, other: Array | JAXFunction | MatrixProtocol) -> Any: ...
+    def __rmatmul__(self, other: Array | JAXFunction | MatrixProtocol) -> Any: ...
 
 
 @runtime_checkable

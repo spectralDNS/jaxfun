@@ -214,8 +214,11 @@ class TestTpmatsToKron:
     def test_biharmonic_matches_numpy_kron(self):
         """Same correctness check for higher-order (biharmonic) problem."""
         import jax
+        import pytest
 
-        jax.config.update("jax_enable_x64", True)
+        if not jax.config.x64_enabled:  # ty:ignore[unresolved-attribute]
+            pytest.skip("requires float64 (run with jax_enable_x64=True)")
+
         A, _ = _biharmonic_tpmats(N=10)
         C = tpmats_to_kron(A)
 

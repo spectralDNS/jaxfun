@@ -5,3 +5,4 @@ from .diamatrix import (
 )
 from .matrix import Matrix as Matrix
 from .matrixprotocol import MatrixProtocol as MatrixProtocol
+from .pinned import PinnedSystem as PinnedSystem

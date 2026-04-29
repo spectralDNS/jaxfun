@@ -405,7 +405,11 @@ class DiaMatrix(nnx.Pytree):
             band_lu = _lu_banded_no_pivot_kernel(band, p, q, center)
 
             if float(jnp.min(jnp.abs(band_lu[center]))) == 0.0:
-                raise ValueError("Matrix is singular: zero pivot in LU factorisation.")
+                raise ValueError(
+                    "Matrix is singular: zero pivot in LU factorisation. "
+                    "Consider pinning (:meth:`DiaMatrix.pin`) additional DOFs or "
+                    "enabling pivoting for this matrix."
+                )
 
             l_offsets = tuple(
                 off
@@ -460,7 +464,11 @@ class DiaMatrix(nnx.Pytree):
 
         # Singularity check: the main diagonal of U lives at band row `center`.
         if float(jnp.min(jnp.abs(band_lu[center]))) == 0.0:
-            raise ValueError("Matrix is singular: zero pivot in LU factorisation.")
+            raise ValueError(
+                "Matrix is singular: zero pivot in LU factorisation. "
+                "Consider pinning (:meth:`DiaMatrix.pin`) additional DOFs "
+                "for this matrix."
+            )
 
         # ---------- extract L -------------------------------------------
         # band_lu[center - t, :] is already the column-aligned DIA row for

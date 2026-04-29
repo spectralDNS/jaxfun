@@ -122,6 +122,11 @@ class Matrix(nnx.Pytree):
                 f"lu_factor requires a square matrix, got shape {self.shape}"
             )
         lu, piv = jax.scipy.linalg.lu_factor(self.data)
+        if float(jnp.min(jnp.abs(jnp.diag(lu)))) == 0.0:
+            raise ValueError(
+                "Matrix is singular: zero pivot in LU factorisation. "
+                "Consider pinning (:meth:`Matrix.pin`) additional DOFs."
+            )
         result = LUFactors(lu=lu, piv=piv, shape=(n, n))
         object.__setattr__(self, "_lu_cache", result)
         return result

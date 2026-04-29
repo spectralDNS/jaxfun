@@ -1123,7 +1123,9 @@ class DiaMatrix(nnx.Pytree):
         Args:
             constraints: Mapping from DOF index to pinned value, e.g.
                 ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0}``.  Negative indices
-                are supported (Python-style, relative to ``n``).
+                are supported (Python-style, relative to ``n``).  Positive
+                indices must be in ``[0, n)``, otherwise :exc:`IndexError`
+                is raised.
 
         Returns:
             :class:`PinnedSystem` whose :meth:`~PinnedSystem.solve` method
@@ -1134,41 +1136,47 @@ class DiaMatrix(nnx.Pytree):
             A_sys = A.pin({0: 0.0})  # singular Fourier system
             x = A_sys.solve(b)
         """
-        import numpy as np
-
         from jaxfun.la.pinned import PinnedSystem
 
         n, m = self.shape
-        d_np = np.array(self.data)
+        data = self.data  # keep as JAX array — no device→host transfer
         offsets: list[int] = list(self.offsets)
 
         # Ensure the main diagonal is present so we can write A[i,i] = 1.
+        # The structural decision (whether to insert) uses only static ints.
         if 0 not in offsets:
             insert_pos = next(
                 (k for k, off in enumerate(offsets) if off > 0), len(offsets)
             )
             offsets.insert(insert_pos, 0)
-            d_np = np.insert(d_np, insert_pos, np.zeros(m, dtype=d_np.dtype), axis=0)
+            zero_row = jnp.zeros((1, m), dtype=data.dtype)
+            data = jnp.concatenate(
+                [data[:insert_pos], zero_row, data[insert_pos:]], axis=0
+            )
 
         main_idx = offsets.index(0)
 
-        # Normalise negative indices.
-        norm_constraints: dict[int, float] = {
-            (idx % n): val for idx, val in constraints.items()
-        }
+        # Normalise negative indices (Python-style); reject out-of-range positives.
+        norm_constraints: dict[int, float] = {}
+        for idx, val in constraints.items():
+            if idx < -n or idx >= n:
+                raise IndexError(
+                    f"Constraint index {idx} is out of range for matrix of size {n}"
+                )
+            norm_constraints[idx % n] = val
 
+        # Zero every stored entry in each pinned row, then set diagonal to 1.
+        # All indices (di, j) are Python ints — static at trace time — so
+        # .at[...].set() is fully traceable under jax.jit / jax.vmap.
         for row_idx, _val in norm_constraints.items():
-            # Zero all stored entries in this row: A[row_idx, row_idx + k].
             for di, k in enumerate(offsets):
                 j = row_idx + k
                 if 0 <= j < m:
-                    d_np[di, j] = 0.0
-            # Set diagonal entry to 1.
-            d_np[main_idx, row_idx] = 1.0
+                    data = data.at[di, j].set(0.0)
+            data = data.at[main_idx, row_idx].set(1.0)
 
         new_offsets = tuple(offsets)
-        new_data = jnp.array(d_np)
-        pinned_matrix = DiaMatrix(data=new_data, offsets=new_offsets, shape=self.shape)
+        pinned_matrix = DiaMatrix(data=data, offsets=new_offsets, shape=self.shape)
         return PinnedSystem(pinned_matrix, norm_constraints)
 
     def __repr__(self) -> str:
@@ -1667,6 +1675,8 @@ def diakron(A: DiaMatrix, B: DiaMatrix) -> DiaMatrix:
     # and result.data[K_idx, j] = A.data[ka_idx, j0] * B.data[kb_idx, j1],
     # i.e. the ravel of the outer product A.data[ka, :] ⊗ B.data[kb, :].
     result_shape = (m * p, n * p)
+    result_rows = m * p  # valid negative-offset bound: -(result_rows - 1)
+    result_cols = n * p  # valid positive-offset bound:  (result_cols - 1)
     accumulated: dict[int, Array] = {}
 
     for ka_idx, k_a in enumerate(A.offsets):
@@ -1675,8 +1685,9 @@ def diakron(A: DiaMatrix, B: DiaMatrix) -> DiaMatrix:
             b_row = B.data[kb_idx]  # shape (p,)
             K = int(k_a) * p + int(k_b)
             # Skip diagonals entirely outside the result matrix.
-            result_n = m * p
-            if result_n <= K or -result_n >= K:
+            # The result has shape (result_rows, result_cols), so valid
+            # offsets are [-(result_rows - 1), result_cols - 1].
+            if result_cols <= K or -result_rows >= K:
                 continue
             col_data: Array = (a_row[:, None] * b_row[None, :]).ravel()
             if K in accumulated:

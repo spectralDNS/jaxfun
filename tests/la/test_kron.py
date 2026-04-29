@@ -155,6 +155,38 @@ class TestDiakron:
         # offsets = {k_a*5 + k_b} for k_a in {-1,0,1}, k_b in {-1,0,1} → 9 distinct
         assert len(K.offsets) == 9
 
+    def test_rectangular_A_wide(self):
+        """Rectangular A with n > m: positive offsets up to (n*p - 1) must be kept.
+
+        The old code used result_n = m*p for both bounds, which incorrectly
+        dropped valid positive-offset diagonals when n > m.
+        """
+        # A is 2×4 (wide), B is 3×3 square → result is 6×12.
+        # Valid offsets: [-(6-1), 12-1] = [-5, 11].
+        m, n, p = 2, 4, 3
+        A_dense = jnp.array([[1.0, 0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 1.0]])
+        A = DiaMatrix.from_dense(A_dense)
+        B = _diag3(p)
+        K = diakron(A, B)
+        expected = jnp.kron(A_dense, np.array(B.todense()))
+        assert K.shape == (m * p, n * p)
+        assert jnp.allclose(K.todense(), expected, ulp(100))
+
+    def test_rectangular_A_tall(self):
+        """Rectangular A with m > n: negative offsets down to -(m*p - 1) must be kept."""  # noqa: E501
+        # A is 4×2 (tall), B is 3×3 → result is 12×6.
+        # Valid offsets: [-(12-1), 6-1] = [-11, 5].
+        m, n, p = 4, 2, 3
+        A_dense = jnp.array(
+            [[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32
+        )
+        A = DiaMatrix.from_dense(A_dense)
+        B = _diag3(p)
+        K = diakron(A, B)
+        expected = jnp.kron(A_dense, np.array(B.todense()))
+        assert K.shape == (m * p, n * p)
+        assert jnp.allclose(K.todense(), expected, ulp(100))
+
 
 class TestTpmatsToKron:
     def test_poisson_matches_numpy_kron(self):

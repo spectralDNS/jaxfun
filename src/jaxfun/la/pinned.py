@@ -125,6 +125,70 @@ class PinnedSystem(nnx.Pytree):
         b_mod = self.fix_rhs(b, axis=axis)
         return self.matrix.solve(b_mod, axis=axis)
 
+    # ------------------------------------------------------------------
+    # Read-only delegation to the underlying modified matrix.
+    # These give PinnedSystem the inspection half of MatrixProtocol so
+    # it can be used wherever a read-only matrix view is expected.
+    # Arithmetic methods (scale, T, __add__, …) are intentionally *not*
+    # delegated because they would silently break the constraint structure.
+    # ------------------------------------------------------------------
+
+    @property
+    def ndim(self) -> int:
+        """Always 2."""
+        return self.matrix.ndim
+
+    @property
+    def dtype(self):
+        """Element dtype of the underlying matrix."""
+        return self.matrix.dtype
+
+    @property
+    def size(self) -> int:
+        """Number of explicitly stored entries in the underlying matrix."""
+        return self.matrix.size
+
+    def matvec(self, x: Array, axis: int = 0) -> Array:
+        """Apply the *modified* (row-substituted) matrix along ``axis`` of ``x``."""
+        return self.matrix.matvec(x, axis=axis)
+
+    def lu_solve(self, b: Array, axis: int = 0) -> Array:
+        """Solve using the cached LU factors (does **not** call :meth:`fix_rhs`).
+
+        Use :meth:`solve` for the full pinned solve that also fixes the RHS.
+        """
+        return self.matrix.lu_solve(b, axis=axis)
+
+    def diagonal(self, k: int = 0) -> Array:
+        """Return the ``k``-th diagonal of the modified matrix."""
+        return self.matrix.diagonal(k)
+
+    def to_dense(self) -> Array:
+        """Return the modified matrix as a dense array."""
+        return self.matrix.to_dense()
+
+    todense = to_dense
+
+    def get_row(self, i: int | Array) -> Array:
+        """Return row ``i`` of the modified matrix."""
+        return self.matrix.get_row(i)
+
+    def get_column(self, j: int | Array) -> Array:
+        """Return column ``j`` of the modified matrix."""
+        return self.matrix.get_column(j)
+
+    def astype(self, dtype) -> PinnedSystem:
+        """Return a copy with the underlying matrix cast to ``dtype``."""
+        from jaxfun.la.pinned import PinnedSystem  # local to avoid re-import issues
+
+        return PinnedSystem(self.matrix.astype(dtype), dict(self.constraints))
+
+    def __len__(self) -> int:
+        return min(self.shape)
+
+    def __getitem__(self, key):
+        return self.matrix[key]
+
     def __repr__(self) -> str:
         pins = ", ".join(f"{k}={v}" for k, v in self.constraints)
         return f"PinnedSystem(shape={self.shape}, constraints={{{pins}}})"

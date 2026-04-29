@@ -320,7 +320,9 @@ class Matrix(nnx.Pytree):
         Args:
             constraints: Mapping from DOF index to pinned value, e.g.
                 ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0}``.  Negative indices
-                are supported (Python-style, relative to ``n``).
+                are supported (Python-style, relative to ``n``).  Positive
+                indices must be in ``[0, n)``, otherwise :exc:`IndexError`
+                is raised.
 
         Returns:
             :class:`PinnedSystem` whose :meth:`~PinnedSystem.solve` method
@@ -334,10 +336,14 @@ class Matrix(nnx.Pytree):
         from jaxfun.la.pinned import PinnedSystem
 
         n, _m = self.shape
-        # Normalise negative indices.
-        norm_constraints: dict[int, float] = {
-            (idx % n): val for idx, val in constraints.items()
-        }
+        # Normalise negative indices (Python-style); reject out-of-range positives.
+        norm_constraints: dict[int, float] = {}
+        for idx, val in constraints.items():
+            if idx < -n or idx >= n:
+                raise IndexError(
+                    f"Constraint index {idx} is out of range for matrix of size {n}"
+                )
+            norm_constraints[idx % n] = val
         data = self.data
         for idx in norm_constraints:
             data = data.at[idx].set(0.0)

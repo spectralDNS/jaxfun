@@ -1008,6 +1008,22 @@ class TestPin:
         sys_pos = A.pin({4: 2.0})
         assert sys_neg.constraints == sys_pos.constraints
 
+    @pytest.mark.parametrize("use_matrix", [False, True])
+    def test_out_of_range_positive_raises(self, use_matrix):
+        """Positive indices >= n must raise IndexError, not silently wrap."""
+        a, A = _tridiag(5)
+        mat = a if use_matrix else A
+        with pytest.raises(IndexError, match="out of range"):
+            mat.pin({5: 0.0})
+
+    @pytest.mark.parametrize("use_matrix", [False, True])
+    def test_out_of_range_negative_raises(self, use_matrix):
+        """Indices < -n must raise IndexError."""
+        a, A = _tridiag(5)
+        mat = a if use_matrix else A
+        with pytest.raises(IndexError, match="out of range"):
+            mat.pin({-6: 0.0})
+
     def test_shape_preserved(self):
         _, A = _tridiag(7)
         sys = A.pin({0: 0.0})
@@ -1090,6 +1106,22 @@ class TestPin:
         row0 = sys.matrix.get_row(0)
         expected = jnp.zeros(5).at[0].set(1.0)
         assert jnp.allclose(row0, expected)
+
+    def test_pin_data_stays_on_device(self):
+        """pin() must not force a device→host transfer; result should be a JAX array."""
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        assert isinstance(sys.matrix.data, jax.Array)
+
+    def test_pin_callable_inside_jit(self):
+        """solve() inside jax.jit must work once the LU cache is warmed up."""
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        sys.lu_factor()  # warm up the LU cache outside JIT
+        b = jnp.array([0.0, 1.0, 1.0, 1.0, 1.0])
+        x_jit = jax.jit(lambda b: sys.solve(b))(b)
+        x_ref = sys.solve(b)
+        assert jnp.allclose(x_jit, x_ref, atol=ulp(100))
 
     # ------------------------------------------------------------------
     # fix_rhs
@@ -1214,3 +1246,69 @@ class TestPin:
         lu_after_second = sys.lu_factor()
         assert lu_after_first is lu_after_second
         assert jnp.allclose(x1, x2)
+
+    # ------------------------------------------------------------------
+    # Delegation / read-only MatrixProtocol surface
+    # ------------------------------------------------------------------
+
+    def test_ndim(self):
+        _, A = _tridiag(5)
+        assert A.pin({0: 0.0}).ndim == 2
+
+    def test_dtype_matches_matrix(self):
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        assert sys.dtype == A.dtype
+
+    def test_size_matches_matrix(self):
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        assert sys.size == sys.matrix.size
+
+    def test_matvec_delegates(self):
+        """sys.matvec(x) must equal the modified matrix's matvec."""
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        x = jnp.arange(5, dtype=float)
+        assert jnp.allclose(sys.matvec(x), sys.matrix.matvec(x))
+
+    def test_diagonal_delegates(self):
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        assert jnp.allclose(sys.diagonal(), sys.matrix.diagonal())
+
+    def test_to_dense_delegates(self):
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        assert jnp.allclose(sys.to_dense(), sys.matrix.to_dense())
+        assert jnp.allclose(sys.todense(), sys.matrix.todense())
+
+    def test_get_row_delegates(self):
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        for i in range(5):
+            assert jnp.allclose(sys.get_row(i), sys.matrix.get_row(i))
+
+    def test_get_column_delegates(self):
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        for j in range(5):
+            assert jnp.allclose(sys.get_column(j), sys.matrix.get_column(j))
+
+    def test_len(self):
+        _, A = _tridiag(7)
+        assert len(A.pin({0: 0.0})) == 7
+
+    def test_getitem(self):
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        # Pinned row i=0: only diagonal entry should be 1.
+        assert float(sys[0, 0]) == pytest.approx(1.0)
+        assert float(sys[0, 1]) == pytest.approx(0.0)
+
+    def test_astype_preserves_constraints(self):
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0, 4: 1.0})
+        sys64 = sys.astype(jnp.float64)
+        assert sys64.constraints == sys.constraints
+        assert sys64.shape == sys.shape

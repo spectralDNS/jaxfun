@@ -12,6 +12,8 @@ import scipy.sparse
 
 from jaxfun.la.diamatrix import DenseIndexingWarning, DiaMatrix, LUFactors, diags
 from jaxfun.la.matrix import Matrix
+from jaxfun.la.pinned import PinnedSystem
+from jaxfun.utils.common import ulp
 
 
 def _tridiag(n: int) -> tuple[Matrix, DiaMatrix]:
@@ -493,8 +495,8 @@ class TestMatvecAxis:
         rng = np.random.default_rng(7)
         X = jnp.array(rng.standard_normal((6, 5)))
         expected = a @ X
-        assert jnp.allclose(A.matvec(X, axis=0), expected, atol=1e-5)
-        assert jnp.allclose(a.matvec(X, axis=0), expected, atol=1e-5)
+        assert jnp.allclose(A.matvec(X, axis=0), expected, atol=ulp(100))
+        assert jnp.allclose(a.matvec(X, axis=0), expected, atol=ulp(100))
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_axis1_2d(self, mat):
@@ -503,8 +505,8 @@ class TestMatvecAxis:
         rng = np.random.default_rng(8)
         X = jnp.array(rng.standard_normal((5, 6)))  # (batch, m)
         expected = (a @ X.T).T  # (n, batch) → (batch, n)
-        assert jnp.allclose(A.matvec(X, axis=1), expected, atol=1e-5)
-        assert jnp.allclose(a.matvec(X, axis=1), expected, atol=1e-5)
+        assert jnp.allclose(A.matvec(X, axis=1), expected, atol=ulp(100))
+        assert jnp.allclose(a.matvec(X, axis=1), expected, atol=ulp(100))
 
     def test_axis_1d_ignores_axis(self):
         """For 1-D input the axis argument is irrelevant."""
@@ -521,8 +523,8 @@ class TestMatvecAxis:
         # Expected: contract axis 0 with A
         # result[i, j, k] = sum_l A[i, l] * T[l, j, k]
         expected = jnp.einsum("il,ljk->ijk", a.data, T)
-        assert jnp.allclose(A.matvec(T, axis=0), expected, atol=1e-5)
-        assert jnp.allclose(a.matvec(T, axis=0), expected, atol=1e-5)
+        assert jnp.allclose(A.matvec(T, axis=0), expected, atol=ulp(100))
+        assert jnp.allclose(a.matvec(T, axis=0), expected, atol=ulp(100))
 
     def test_axis1_3d(self):
         """matvec(T, axis=1): T shape (b0, m, b2) → (b0, n, b2)."""
@@ -530,8 +532,8 @@ class TestMatvecAxis:
         rng = np.random.default_rng(10)
         T = jnp.array(rng.standard_normal((3, 4, 2)))
         expected = jnp.einsum("il,jlk->jik", a.data, T)
-        assert jnp.allclose(A.matvec(T, axis=1), expected, atol=1e-5)
-        assert jnp.allclose(a.matvec(T, axis=1), expected, atol=1e-5)
+        assert jnp.allclose(A.matvec(T, axis=1), expected, atol=ulp(100))
+        assert jnp.allclose(a.matvec(T, axis=1), expected, atol=ulp(100))
 
     def test_axis2_3d(self):
         """matvec(T, axis=2): T shape (b0, b1, m) → (b0, b1, n)."""
@@ -539,8 +541,8 @@ class TestMatvecAxis:
         rng = np.random.default_rng(11)
         T = jnp.array(rng.standard_normal((3, 2, 4)))
         expected = jnp.einsum("il,jkl->jki", a.data, T)
-        assert jnp.allclose(A.matvec(T, axis=2), expected, atol=1e-5)
-        assert jnp.allclose(a.matvec(T, axis=2), expected, atol=1e-5)
+        assert jnp.allclose(A.matvec(T, axis=2), expected, atol=ulp(100))
+        assert jnp.allclose(a.matvec(T, axis=2), expected, atol=ulp(100))
 
     def test_negative_axis(self):
         """Negative axis should work like numpy convention."""
@@ -625,9 +627,9 @@ class TestSolve:
         x_true = jnp.arange(1, 8, dtype=float)
         b = a @ x_true
         x_hat = A.solve(b)
-        assert jnp.allclose(x_hat, x_true, atol=1e-5)
+        assert jnp.allclose(x_hat, x_true, atol=ulp(100))
         # Matrix.solve should give the same answer
-        assert jnp.allclose(a.solve(b), x_true, atol=1e-5)
+        assert jnp.allclose(a.solve(b), x_true, atol=ulp(100))
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_solve_residual(self, mat):
@@ -635,7 +637,7 @@ class TestSolve:
         rng = np.random.default_rng(42)
         b = jnp.array(rng.standard_normal(8))
         x = A.solve(b)
-        assert float(jnp.linalg.norm(A.matvec(x) - b)) < 1e-5
+        assert float(jnp.linalg.norm(A.matvec(x) - b)) < ulp(100)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_solve_axis1(self, mat):
@@ -646,8 +648,8 @@ class TestSolve:
         B = (a @ X_true.T).T  # (4, 6)
         X_hat = A.solve(B, axis=1)
         assert X_hat.shape == (4, 6)
-        assert jnp.allclose(X_hat, X_true, atol=1e-5)
-        assert jnp.allclose(a.solve(B, axis=1), X_true, atol=1e-5)
+        assert jnp.allclose(X_hat, X_true, atol=ulp(100))
+        assert jnp.allclose(a.solve(B, axis=1), X_true, atol=ulp(100))
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_solve_axis_matches_matvec(self, mat):
@@ -661,7 +663,7 @@ class TestSolve:
             B = A.matvec(X, axis=ax)
             X_hat = A.solve(B, axis=ax)
             assert X_hat.shape == tuple(shape)
-            assert jnp.allclose(X_hat, X, atol=1e-5), f"failed for axis={ax}"
+            assert jnp.allclose(X_hat, X, atol=ulp(100)), f"failed for axis={ax}"
 
 
 class TestLU:
@@ -711,7 +713,7 @@ class TestLU:
         lu = A.lu_factor()
         LU = cast(DiaMatrix, lu.L @ lu.U)
         PA = a.todense() if lu.perm is None else a.todense()[lu.perm, :]
-        assert jnp.allclose(LU.todense(), PA, atol=1e-5)
+        assert jnp.allclose(LU.todense(), PA, atol=ulp(100))
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_lu_solve_exact(self, mat):
@@ -720,9 +722,9 @@ class TestLU:
         b = a @ x_true
         lu = A.lu_factor()
         x_hat = lu.solve(b)
-        assert jnp.allclose(x_hat, x_true, atol=1e-5)
+        assert jnp.allclose(x_hat, x_true, atol=ulp(100))
         # Matrix.lu_solve should give the same result
-        assert jnp.allclose(a.lu_solve(b), x_true, atol=1e-5)
+        assert jnp.allclose(a.lu_solve(b), x_true, atol=ulp(100))
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_lu_solve_random_rhs(self, mat):
@@ -731,7 +733,7 @@ class TestLU:
         b = jnp.array(rng.standard_normal(8))
         lu = A.lu_factor()
         x = lu.solve(b)
-        assert float(jnp.linalg.norm(A.matvec(x) - b)) < 1e-5
+        assert float(jnp.linalg.norm(A.matvec(x) - b)) < ulp(100)
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_lu_solve_multiple_rhs(self, mat):
@@ -743,9 +745,9 @@ class TestLU:
         lu = A.lu_factor()
         X_hat = lu.solve(B)
         assert X_hat.shape == (6, 4)
-        assert jnp.allclose(X_hat, X_true, atol=1e-5)
+        assert jnp.allclose(X_hat, X_true, atol=ulp(100))
         # Matrix.solve should reproduce the same result
-        assert jnp.allclose(a.solve(B), X_true, atol=1e-5)
+        assert jnp.allclose(a.solve(B), X_true, atol=ulp(100))
 
     def test_lu_nonsquare_raises(self):
         A = diags(
@@ -784,12 +786,12 @@ class TestLU:
         # L @ U == P @ A
         PA = a if lu.perm is None else a[lu.perm, :]
         H = cast(DiaMatrix, lu.L @ lu.U)
-        assert jnp.allclose(H.todense(), PA, atol=1e-5)
+        assert jnp.allclose(H.todense(), PA, atol=ulp(100))
         # Solve A x = b
         x_true = jnp.array([1.0, 2.0, 3.0])
         b = a @ x_true
         x = lu.solve(b)
-        assert jnp.allclose(x, x_true, atol=1e-5)
+        assert jnp.allclose(x, x_true, atol=ulp(100))
 
     def test_lu_perm_attribute(self):
         """perm is None when no pivoting occurred; a JAX int array when it did."""
@@ -814,8 +816,8 @@ class TestLU:
         B_T = B.T  # (batch, n)
         X_hat = lu.solve(B_T, axis=1)
         assert X_hat.shape == (4, 6)
-        assert jnp.allclose(X_hat, X_true, atol=1e-5)
-        assert jnp.allclose(a.lu_solve(B_T, axis=1), X_true, atol=1e-5)
+        assert jnp.allclose(X_hat, X_true, atol=ulp(100))
+        assert jnp.allclose(a.lu_solve(B_T, axis=1), X_true, atol=ulp(100))
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_lu_solve_3d_axis(self, mat):
@@ -828,10 +830,10 @@ class TestLU:
         B = A.matvec(X_true, axis=1)
         X_hat = lu.solve(B, axis=1)
         assert X_hat.shape == (3, 5, 4)
-        assert jnp.allclose(X_hat, X_true, atol=1e-5)
+        assert jnp.allclose(X_hat, X_true, atol=ulp(100))
         # Matrix counterpart
-        assert jnp.allclose(a.lu_solve(B, axis=1), X_true, atol=1e-5)
-        assert jnp.allclose(a.solve(B, axis=1), X_true, atol=1e-5)
+        assert jnp.allclose(a.lu_solve(B, axis=1), X_true, atol=ulp(100))
+        assert jnp.allclose(a.solve(B, axis=1), X_true, atol=ulp(100))
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_lu_solve_axis_matches_matvec(self, mat):
@@ -846,13 +848,15 @@ class TestLU:
             B = A.matvec(X, axis=ax)
             X_hat = lu.solve(B, axis=ax)
             assert X_hat.shape == tuple(shape)
-            assert jnp.allclose(X_hat, X, atol=1e-5), f"DiaMatrix failed for axis={ax}"
+            assert jnp.allclose(X_hat, X, atol=ulp(100)), (
+                f"DiaMatrix failed for axis={ax}"
+            )
             # Matrix counterpart: a.matvec then a.solve / a.lu_solve
             B_dense = a.matvec(X, axis=ax)
-            assert jnp.allclose(a.solve(B_dense, axis=ax), X, atol=1e-5), (
+            assert jnp.allclose(a.solve(B_dense, axis=ax), X, atol=ulp(100)), (
                 f"Matrix.solve failed for axis={ax}"
             )
-            assert jnp.allclose(a.lu_solve(B_dense, axis=ax), X, atol=1e-5), (
+            assert jnp.allclose(a.lu_solve(B_dense, axis=ax), X, atol=ulp(100)), (
                 f"Matrix.lu_solve failed for axis={ax}"
             )
 
@@ -972,3 +976,241 @@ class TestGetColumn:
         # vmap over columns produces (m, n); transpose to (n, m) for comparison
         all_cols = jax.vmap(A.get_column)(jnp.arange(5))
         assert jnp.allclose(all_cols.T, A.todense())
+
+
+class TestPin:
+    """Tests for :meth:`DiaMatrix.pin`, :meth:`Matrix.pin`, and :class:`PinnedSystem`."""  # noqa: E501
+
+    # ------------------------------------------------------------------
+    # Construction and metadata
+    # ------------------------------------------------------------------
+
+    def test_pin_returns_pinned_system_dia(self):
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        assert isinstance(sys, PinnedSystem)
+
+    def test_pin_returns_pinned_system_matrix(self):
+        a, _ = _tridiag(5)
+        sys = a.pin({0: 0.0})
+        assert isinstance(sys, PinnedSystem)
+
+    def test_constraints_stored_as_sorted_tuple(self):
+        _, A = _tridiag(6)
+        sys = A.pin({3: 1.0, 0: 0.0})
+        # Must be a tuple of 2-tuples, sorted by index.
+        assert sys.constraints == ((0, 0.0), (3, 1.0))
+
+    def test_negative_index_normalised(self):
+        """pin({-1: v}) should be equivalent to pin({n-1: v})."""
+        _, A = _tridiag(5)
+        sys_neg = A.pin({-1: 2.0})
+        sys_pos = A.pin({4: 2.0})
+        assert sys_neg.constraints == sys_pos.constraints
+
+    def test_shape_preserved(self):
+        _, A = _tridiag(7)
+        sys = A.pin({0: 0.0})
+        assert sys.shape == (7, 7)
+
+    def test_repr(self):
+        _, A = _tridiag(4)
+        sys = A.pin({0: 0.0})
+        r = repr(sys)
+        assert "PinnedSystem" in r
+        assert "0=0.0" in r
+
+    # ------------------------------------------------------------------
+    # Pytree structure
+    # ------------------------------------------------------------------
+
+    def test_is_pytree_registered(self):
+        """PinnedSystem must be a valid JAX pytree."""
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        leaves, treedef = jax.tree_util.tree_flatten(sys)
+        # Only the data array inside the matrix should be a leaf.
+        assert len(leaves) == 1
+        assert isinstance(leaves[0], jax.Array)
+
+    def test_pytree_round_trip(self):
+        """Unflatten should reproduce an identical PinnedSystem."""
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0, 4: 1.0})
+        leaves, treedef = jax.tree_util.tree_flatten(sys)
+        sys2 = jax.tree_util.tree_unflatten(treedef, leaves)
+        assert sys2.constraints == sys.constraints
+        assert sys2.shape == sys.shape
+
+    def test_constraints_are_static(self):
+        """Constraint indices/values must live in the treedef, not leaves."""
+        _, A = _tridiag(5)
+        sys1 = A.pin({0: 0.0})
+        sys2 = A.pin({0: 1.0})
+        _, td1 = jax.tree_util.tree_flatten(sys1)
+        _, td2 = jax.tree_util.tree_flatten(sys2)
+        # Different constraint value → different treedef.
+        assert td1 != td2
+
+    # ------------------------------------------------------------------
+    # Row substitution — modified matrix checks
+    # ------------------------------------------------------------------
+
+    def test_pinned_row_is_identity_dia(self):
+        """After pin({i: v}), row i of the modified DiaMatrix must be e_i."""
+        _, A = _tridiag(5)
+        sys = A.pin({2: 3.0})
+        assert isinstance(sys.matrix, DiaMatrix)
+        row2 = sys.matrix.get_row(2)
+        expected = jnp.zeros(5).at[2].set(1.0)
+        assert jnp.allclose(row2, expected)
+
+    def test_pinned_row_is_identity_matrix(self):
+        """After pin({i: v}), row i of the modified Matrix must be e_i."""
+        a, _ = _tridiag(5)
+        sys = a.pin({2: 3.0})
+        assert isinstance(sys.matrix, Matrix)
+        row2 = sys.matrix.get_row(2)
+        expected = jnp.zeros(5).at[2].set(1.0)
+        assert jnp.allclose(row2, expected)
+
+    def test_other_rows_unchanged_dia(self):
+        """Rows not pinned must remain identical to the original."""
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        for i in (1, 2, 3, 4):
+            assert jnp.allclose(sys.matrix.get_row(i), A.get_row(i))
+
+    def test_pin_adds_main_diagonal_if_missing(self):
+        """pin() must not crash when the main diagonal is not stored."""
+        # Build a matrix with only off-diagonals (no main diagonal).
+        data = jnp.ones((2, 5))
+        A_no_main = DiaMatrix(data=data, offsets=(-1, 1), shape=(5, 5))
+        sys = A_no_main.pin({0: 0.0})
+        row0 = sys.matrix.get_row(0)
+        expected = jnp.zeros(5).at[0].set(1.0)
+        assert jnp.allclose(row0, expected)
+
+    # ------------------------------------------------------------------
+    # fix_rhs
+    # ------------------------------------------------------------------
+
+    def test_fix_rhs_1d(self):
+        _, A = _tridiag(5)
+        sys = A.pin({0: 7.0, 4: -3.0})
+        b = jnp.ones(5)
+        b_mod = sys.fix_rhs(b)
+        assert float(b_mod[0]) == pytest.approx(7.0)
+        assert float(b_mod[4]) == pytest.approx(-3.0)
+        # Interior values unchanged.
+        assert jnp.allclose(b_mod[1:4], jnp.ones(3))
+
+    def test_fix_rhs_2d_axis0(self):
+        """fix_rhs on a (n, k) array with axis=0 pins rows."""
+        _, A = _tridiag(5)
+        sys = A.pin({0: 9.0})
+        B = jnp.ones((5, 3))
+        B_mod = sys.fix_rhs(B, axis=0)
+        assert jnp.allclose(B_mod[0], 9.0 * jnp.ones(3))
+        assert jnp.allclose(B_mod[1:], jnp.ones((4, 3)))
+
+    def test_fix_rhs_2d_axis1(self):
+        """fix_rhs on a (k, n) array with axis=1 pins columns."""
+        _, A = _tridiag(5)
+        sys = A.pin({0: 9.0})
+        B = jnp.ones((3, 5))
+        B_mod = sys.fix_rhs(B, axis=1)
+        assert jnp.allclose(B_mod[:, 0], 9.0 * jnp.ones(3))
+        assert jnp.allclose(B_mod[:, 1:], jnp.ones((3, 4)))
+
+    # ------------------------------------------------------------------
+    # solve — correctness
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize("use_matrix", [False, True])
+    def test_solve_1d_single_pin(self, use_matrix):
+        """Solving a tridiagonal system with one DOF pinned to zero."""
+        a, A = _tridiag(5)
+        mat = a if use_matrix else A
+        sys = mat.pin({0: 0.0})
+        # Build RHS from the true solution with x[0] = 0 imposed.
+        x_true = jnp.array([0.0, 1.0, 2.0, 1.0, 0.0])
+        b = A.matvec(x_true)  # use original A for matvec, not pinned
+        x_hat = sys.solve(b)
+        assert jnp.allclose(x_hat, x_true, atol=ulp(100))
+
+    @pytest.mark.parametrize("use_matrix", [False, True])
+    def test_solve_1d_two_pins(self, use_matrix):
+        """Tridiagonal with both endpoints pinned."""
+        a, A = _tridiag(5)
+        mat = a if use_matrix else A
+        sys = mat.pin({0: 0.0, -1: 0.0})
+        x_true = jnp.array([0.0, 1.0, 1.5, 1.0, 0.0])
+        b = A.matvec(x_true)
+        x_hat = sys.solve(b)
+        assert jnp.allclose(x_hat, x_true, atol=ulp(100))
+
+    @pytest.mark.parametrize("use_matrix", [False, True])
+    def test_solve_dia_matches_matrix(self, use_matrix):
+        """DiaMatrix.pin and Matrix.pin must give the same answer."""
+        a, A = _tridiag(6)
+        rng = np.random.default_rng(42)
+        b = jnp.array(rng.standard_normal(6))
+        x_dia = A.pin({0: 0.0}).solve(b)
+        x_mat = a.pin({0: 0.0}).solve(b)
+        assert jnp.allclose(x_dia, x_mat, atol=ulp(100))
+
+    # ------------------------------------------------------------------
+    # solve — axis argument
+    # ------------------------------------------------------------------
+
+    def test_solve_2d_axis0(self):
+        """solve(B, axis=0): each column of B is an independent RHS."""
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0, 4: 0.0})
+        rng = np.random.default_rng(7)
+        k = 4
+        # Build true solutions with pinned BCs satisfied.
+        X_true = jnp.array(rng.standard_normal((5, k)))
+        X_true = X_true.at[0].set(0.0).at[4].set(0.0)
+        B = jnp.array([A.matvec(X_true[:, j]) for j in range(k)]).T  # (5, k)
+        X_hat = sys.solve(B, axis=0)
+        assert X_hat.shape == (5, k)
+        assert jnp.allclose(X_hat, X_true, atol=ulp(100))
+
+    def test_solve_2d_axis1(self):
+        """solve(B, axis=1): each row of B is an independent RHS."""
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0, 4: 0.0})
+        rng = np.random.default_rng(8)
+        k = 3
+        X_true = jnp.array(rng.standard_normal((k, 5)))
+        X_true = X_true.at[:, 0].set(0.0).at[:, 4].set(0.0)
+        B = jnp.stack([A.matvec(X_true[j]) for j in range(k)])  # (k, 5)
+        X_hat = sys.solve(B, axis=1)
+        assert X_hat.shape == (k, 5)
+        assert jnp.allclose(X_hat, X_true, atol=ulp(100))
+
+    # ------------------------------------------------------------------
+    # LU caching
+    # ------------------------------------------------------------------
+
+    def test_lu_factor_cached(self):
+        """lu_factor() called twice should return the exact same object."""
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        lu1 = sys.lu_factor()
+        lu2 = sys.lu_factor()
+        assert lu1 is lu2
+
+    def test_solve_reuses_lu(self):
+        """Repeated solve() calls must not recompute the LU."""
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0})
+        b = jnp.array([0.0, 1.0, 1.0, 1.0, 0.0])
+        x1 = sys.solve(b)
+        lu_after_first = sys.lu_factor()
+        x2 = sys.solve(b)
+        lu_after_second = sys.lu_factor()
+        assert lu_after_first is lu_after_second
+        assert jnp.allclose(x1, x2)

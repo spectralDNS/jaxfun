@@ -44,7 +44,7 @@ class PinnedSystem(nnx.Pytree):
         A_sys = A.pin({0: 0.0})  # row 0 → identity, pin value 0
         A_sys.lu_factor()  # optional explicit warm-up
 
-        # Repeated solves (hot path)
+        # Repeated solves
         for b in rhs_sequence:
             x = A_sys.solve(b)  # modifies b[0] then solves
 

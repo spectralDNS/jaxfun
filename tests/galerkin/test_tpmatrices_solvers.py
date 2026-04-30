@@ -218,13 +218,12 @@ def test_tpmatrices_solve_fourier_poly2d_l2(poly):
 
 
 # ---------------------------------------------------------------------------
-# 3D: Fourier×Fourier×Legendre
+# 3D: Fourier x Fourier x Legendre
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
 def test_tpmatrices_solve_fourier_fourier_legendre_3d():
-    """3D wavenumber solver: Fourier×Fourier×Legendre Poisson."""
+    """3D wavenumber solver: Fourier x Fourier x Legendre Poisson."""
     N = 8
     F0 = FunctionSpace(N, Fourier)
     F1 = FunctionSpace(N, Fourier)

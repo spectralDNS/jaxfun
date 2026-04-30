@@ -116,7 +116,7 @@ def test_tpmats_wavenumber_factor_solve_agrees_with_kron(poly):
     ref = tpmats_to_kron(A).solve(b.flatten()).reshape(b.shape)
     uh = wn.solve(b)
     assert uh.shape == b.shape
-    assert float(jnp.max(jnp.abs(uh - ref))) < jnp.sqrt(ulp(10))
+    assert float(jnp.max(jnp.abs(uh - ref))) < ulp(10)
 
 
 @POLY_SPACES

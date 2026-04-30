@@ -1923,15 +1923,19 @@ def tpmats_wavenumber_factor(
     shape = tuple(int(tpmats[0].mats[a].shape[0]) for a in range(ndim))
     n_P = shape[poly_axis]
 
+    # Determine working dtype from the polynomial-axis matrices so the solver
+    # honours float64 when JAX is configured for 64-bit precision.
+    _dtype = jnp.result_type(*[tp.mats[poly_axis].data.dtype for tp in tpmats])
+
     # Build weight matrix W[i, k] = scale_i * prod_a(diag(F_i^(a))[k_a]).
     # The flat Fourier index k varies in C-order (last Fourier axis fastest),
     # matching the transposed layout used in TPMatricesWavenumberSolver.solve.
     W_list: list[Array] = []
     for tp in tpmats:
-        w: Array = jnp.asarray(tp.scale, dtype=jnp.float32).reshape(1)
+        w: Array = jnp.asarray(tp.scale, dtype=_dtype).reshape(1)
         for a in fourier_axes:
             # Diagonal DiaMatrix: data has shape (1, n_a); data[0] is the diagonal.
-            diag_a = jnp.asarray(tp.mats[a].data[0], dtype=jnp.float32)  # (n_a,)
+            diag_a = jnp.asarray(tp.mats[a].data[0], dtype=_dtype)  # (n_a,)
             w = jnp.outer(w, diag_a).flatten()  # 1 → n_{a0} → n_{a0}*n_{a1} → …
         W_list.append(w)  # (n_F,)
 
@@ -1957,9 +1961,9 @@ def tpmats_wavenumber_factor(
         for off in poly_offsets:
             if off in mat.offsets:
                 idx = list(mat.offsets).index(off)
-                rows.append(jnp.asarray(mat.data[idx], dtype=jnp.float32))
+                rows.append(jnp.asarray(mat.data[idx], dtype=_dtype))
             else:
-                rows.append(jnp.zeros(n_P, dtype=jnp.float32))
+                rows.append(jnp.zeros(n_P, dtype=_dtype))
         P_data_rows.append(jnp.stack(rows))  # (n_diags, n_P)
 
     P_data_stack = jnp.stack(P_data_rows)  # (n_terms, n_diags, n_P)

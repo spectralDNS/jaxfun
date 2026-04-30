@@ -8,10 +8,10 @@ import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction, x, y
-from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.galerkin.tensorproductspace import TensorProduct, TPMatrices
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
@@ -20,7 +20,7 @@ ue = (1 - y**2) * (sp.cos(2 * x)) * sp.exp(sp.cos(sp.pi * y))
 
 M, N = 80, 20
 bcs = {"left": {"D": ue.subs(y, -1)}, "right": {"D": ue.subs(y, 1)}}
-D = FunctionSpace(M, Chebyshev, bcs, scaling=n + 1, name="D", fun_str="psi")
+D = FunctionSpace(M, Legendre, bcs, scaling=n + 1, name="D", fun_str="psi")
 F = FunctionSpace(N, Fourier, name="F", fun_str="E")
 T = TensorProduct(F, D, name="T")
 v = TestFunction(T, name="v")
@@ -43,7 +43,7 @@ uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
 if "PYTEST" in os.environ:
-    assert error < ulp(1000), error
+    assert error < ulp(100), error
     sys.exit(1)
 
 print("Error =", error)

@@ -16,6 +16,7 @@ from scipy import sparse as scipy_sparse
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol, diakron
+from jaxfun.la.matrix import LUFactors
 from jaxfun.typing import MeshKind
 
 if TYPE_CHECKING:
@@ -1105,28 +1106,44 @@ class TPMatrices(nnx.Pytree):
             jnp.array([mat._rmatmul_array(w) for mat in self.tpmats]), axis=0
         )
 
-    def lu_factor(self) -> TPMatricesLUFactors | TPMatricesWavenumberSolver:
+    def lu_factor(
+        self,
+    ) -> TPMatricesDenseLUFactors | TPMatricesLUFactors | TPMatricesWavenumberSolver:
         """Pre-compute factors for repeated fast solves.
 
-        Tries :func:`tpmats_wavenumber_factor` first (efficient for Fourier ×
-        polynomial problems), then falls back to :func:`tpmats_lu_factor`
-        (diagonalization).
+        Dispatch order:
+
+        1. If all per-axis factor matrices are dense :class:`~jaxfun.la.Matrix`
+           instances, use :func:`tpmats_dense_lu_factor` (simple full Kronecker
+           LU — works for any linear system).
+        2. Otherwise try :func:`tpmats_wavenumber_factor` (efficient for
+           Fourier × polynomial problems).
+        3. Fall back to :func:`tpmats_lu_factor` (diagonalization — requires
+           simultaneously diagonalizable factor matrices per axis).
 
         Returns:
-            :class:`TPMatricesWavenumberSolver` or :class:`TPMatricesLUFactors`
-            for repeated fast solves.
+            :class:`TPMatricesDenseLUFactors`, :class:`TPMatricesWavenumberSolver`,
+            or :class:`TPMatricesLUFactors` for repeated fast solves.
         """
-        cached: TPMatricesLUFactors | TPMatricesWavenumberSolver | None = getattr(
-            self, "_lu_cache", None
-        )
+        cached: (
+            TPMatricesDenseLUFactors
+            | TPMatricesLUFactors
+            | TPMatricesWavenumberSolver
+            | None
+        ) = getattr(self, "_lu_cache", None)
         if cached is not None:
             return cached
-        try:
-            result: TPMatricesLUFactors | TPMatricesWavenumberSolver = (
-                tpmats_wavenumber_factor(list(self.tpmats))
-            )
-        except ValueError:
-            result = tpmats_lu_factor(list(self.tpmats))
+        result: (
+            TPMatricesDenseLUFactors | TPMatricesLUFactors | TPMatricesWavenumberSolver
+        )
+        tpmats_list = list(self.tpmats)
+        if all(isinstance(mat, Matrix) for tp in tpmats_list for mat in tp.mats):
+            result = tpmats_dense_lu_factor(tpmats_list)
+        else:
+            try:
+                result = tpmats_wavenumber_factor(tpmats_list)
+            except ValueError:
+                result = tpmats_lu_factor(tpmats_list)
         object.__setattr__(self, "_lu_cache", result)
         return result
 
@@ -1620,6 +1637,79 @@ class TPMatricesWavenumberSolver:
         for new_pos, old_pos in enumerate(axes_order):
             inv_perm[old_pos] = new_pos
         return jnp.transpose(sol_perm, inv_perm)
+
+
+class TPMatricesDenseLUFactors:
+    """Dense Kronecker-product LU solver for a sum of :class:`TPMatrix`.
+
+    Assembles the full (dense) Kronecker product ``sum_k s_k A_k^(0) ⊗ …``
+    into a single :class:`~jaxfun.la.Matrix`, LU-factorizes it once, and
+    solves by a single triangular-substitution call.
+
+    This is the appropriate solver when all per-axis factor matrices are
+    dense :class:`~jaxfun.la.Matrix` instances.  It imposes no structural
+    requirement on the system (unlike the diagonalization-based
+    :class:`TPMatricesLUFactors` which requires simultaneously diagonalizable
+    factor matrices).
+
+    Attributes:
+        lu: Pre-computed :class:`~jaxfun.la.matrix.LUFactors` of the full
+            assembled Kronecker product.
+        shape: Per-axis sizes ``(n0, n1, …)``.
+    """
+
+    def __init__(self, lu: LUFactors, shape: tuple[int, ...]) -> None:
+        self.lu = lu
+        self.shape = shape
+
+    @jax.jit(static_argnums=(0,))
+    def solve(self, rhs: Array) -> Array:
+        """Solve the summed tensor-product system for RHS ``rhs``.
+
+        Args:
+            rhs: Right-hand side, flat ``(n,)`` or shaped ``(n0, n1, …)``.
+
+        Returns:
+            Solution with the same shape as ``rhs``.
+        """
+        return self.lu.solve(rhs.ravel()).reshape(rhs.shape)
+
+
+def tpmats_dense_lu_factor(
+    A: TPMatrix | list[TPMatrix],
+) -> TPMatricesDenseLUFactors:
+    """Assemble and LU-factorize the dense Kronecker product of a :class:`TPMatrices`.
+
+    Sums all Kronecker-product terms into a single dense
+    :class:`~jaxfun.la.Matrix` and computes its LU factorisation.  This is
+    the simplest solver and is appropriate when all per-axis factor matrices
+    are dense :class:`~jaxfun.la.Matrix` instances.
+
+    Args:
+        A: Single :class:`TPMatrix` or list thereof (as returned by
+           :func:`~jaxfun.galerkin.inner.inner`).
+
+    Returns:
+        :class:`TPMatricesDenseLUFactors` whose :meth:`~TPMatricesDenseLUFactors.solve`
+        method solves the system without re-factorising.
+
+    Raises:
+        TypeError: if any factor matrix is not a :class:`~jaxfun.la.Matrix`.
+    """
+    if isinstance(A, TPMatrix):
+        A = [A]
+    tpmats = list(A)
+    for tp in tpmats:
+        for mat in tp.mats:
+            if not isinstance(mat, Matrix):
+                raise TypeError(
+                    f"tpmats_dense_lu_factor requires all factor matrices to be "
+                    f"Matrix (dense); got {type(mat).__name__}."
+                )
+    mat = tpmats_to_kron(tpmats)
+    assert isinstance(mat, Matrix)
+    shape = tuple(int(tpmats[0].mats[i].shape[0]) for i in range(tpmats[0].dims))
+    return TPMatricesDenseLUFactors(lu=mat.lu_factor(), shape=shape)
 
 
 def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:

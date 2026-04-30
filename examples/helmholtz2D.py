@@ -14,7 +14,7 @@ from jaxfun.galerkin.functionspace import FunctionSpace
 
 # from jaxfun.Jacobi import Jacobi as space
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
+from jaxfun.galerkin.tensorproductspace import TensorProduct, TPMatrices
 
 # from jaxfun.galerkin.Legendre import Legendre as space
 from jaxfun.operators import Div, Grad
@@ -42,8 +42,8 @@ A, L = inner(
     v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True, sparse_tol=1000
 )
 
-A0 = tpmats_to_kron(A)
-un = A0.solve(L.flatten()).reshape(L.shape)
+A0 = TPMatrices(A)
+un = A0.solve(L)
 
 N = 100
 uj = T.backward(un, kind="uniform", N=(N, N))

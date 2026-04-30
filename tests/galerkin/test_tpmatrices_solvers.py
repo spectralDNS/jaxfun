@@ -15,9 +15,11 @@ from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.tensorproductspace import (
     TPLUFactors,
     TPMatrices,
+    TPMatricesDenseLUFactors,
     TPMatricesLUFactors,
     TPMatricesWavenumberSolver,
     TPMatrix,
+    tpmats_dense_lu_factor,
     tpmats_lu_factor,
     tpmats_to_kron,
     tpmats_wavenumber_factor,
@@ -38,7 +40,7 @@ POLY_SPACES = pytest.mark.parametrize(
 )
 
 
-def _poisson_poly2d(N: int, poly):
+def _poisson_poly2d(N: int, poly, sparse: bool = True):
     """Return (T, A, b, ue) for poly x poly Poisson with manufactured solution."""
     F0 = FunctionSpace(N, poly, BCS)
     F1 = FunctionSpace(N, poly, BCS)
@@ -46,11 +48,11 @@ def _poisson_poly2d(N: int, poly):
     v, u = TestFunction(T), TrialFunction(T)
     x, y = T.system.base_scalars()
     ue = (1 - x**2) * (1 - y**2)
-    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
+    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=sparse)
     return T, A, b, ue
 
 
-def _poisson_fourier_poly_2d(N: int, poly):
+def _poisson_fourier_poly_2d(N: int, poly, sparse: bool = True):
     """Return (T, A, b, ue) for Fourier x poly Poisson with manufactured solution."""
     F = FunctionSpace(N, Fourier)
     D = FunctionSpace(N, poly, BCS)
@@ -58,7 +60,7 @@ def _poisson_fourier_poly_2d(N: int, poly):
     v, u = TestFunction(T), TrialFunction(T)
     x, y = T.system.base_scalars()
     ue = sp.cos(2 * x) * (1 - y**2)
-    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
+    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=sparse)
     return T, A, b, ue
 
 
@@ -154,6 +156,60 @@ def test_wavenumber_solver_solve2_agrees_with_solve():
     _, A, b, _ = _poisson_fourier_poly_2d(16, Legendre.Legendre)
     wn = tpmats_wavenumber_factor(A)
     assert float(jnp.max(jnp.abs(wn.solve(b) - wn.solve2(b)))) < float(ulp(100))
+
+
+# ---------------------------------------------------------------------------
+# tpmats_dense_lu_factor / TPMatricesDenseLUFactors
+# ---------------------------------------------------------------------------
+
+
+@POLY_SPACES
+def test_tpmats_dense_lu_factor_returns_correct_type(poly):
+    _, A, _, _ = _poisson_poly2d(8, poly, sparse=False)
+    lu = tpmats_dense_lu_factor(A)
+    assert isinstance(lu, TPMatricesDenseLUFactors)
+
+
+@POLY_SPACES
+def test_tpmats_dense_lu_factor_solve_poly2d(poly):
+    T, A, b, ue = _poisson_poly2d(16, poly, sparse=False)
+    lu = tpmats_dense_lu_factor(A)
+    uh = lu.solve(b)
+    assert uh.shape == b.shape
+    x, y = T.system.base_scalars()
+    N = 40
+    uj = T.backward(uh, N=(N, N))
+    xj = T.mesh(N=(N, N), broadcast=True)
+    uej = lambdify((x, y), ue)(*xj)
+    l2 = float(jnp.linalg.norm(uj - uej)) / N
+    assert l2 < float(ulp(100)), f"L2 error {l2:.2e} too large"
+
+
+@POLY_SPACES
+def test_tpmatrices_solve_dispatches_dense_for_matrix(poly):
+    """TPMatrices.lu_factor() dispatches to TPMatricesDenseLUFactors for dense matrices."""  # noqa: E501
+    _, A, b, _ = _poisson_poly2d(12, poly, sparse=False)
+    mats = TPMatrices(A)
+    lu = mats.lu_factor()
+    assert isinstance(lu, TPMatricesDenseLUFactors)
+    uh = mats.solve(b)
+    assert uh.shape == b.shape
+
+
+@POLY_SPACES
+def test_tpmats_dense_agrees_with_sparse(poly):
+    """Dense and sparse solvers produce the same solution."""
+    _, A_sp, b_sp, _ = _poisson_poly2d(16, poly, sparse=True)
+    _, A_de, b_de, _ = _poisson_poly2d(16, poly, sparse=False)
+    uh_sp = tpmats_lu_factor(A_sp).solve(b_sp)
+    uh_de = tpmats_dense_lu_factor(A_de).solve(b_de)
+    assert float(jnp.max(jnp.abs(uh_sp - uh_de))) < float(ulp(100))
+
+
+def test_tpmats_dense_lu_factor_type_error():
+    _, A, _, _ = _poisson_poly2d(8, Legendre.Legendre, sparse=True)
+    with pytest.raises(TypeError):
+        tpmats_dense_lu_factor(A)
 
 
 # ---------------------------------------------------------------------------

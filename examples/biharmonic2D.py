@@ -11,7 +11,7 @@ from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
+from jaxfun.galerkin.tensorproductspace import TensorProduct, TPMatrices
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -40,8 +40,9 @@ ue = T.system.expr_psi_to_base_scalar(ue)
 
 A, b = inner(Div(Grad(Div(Grad(u)))) * v - Div(Grad(Div(Grad(ue)))) * v, sparse=True)
 
-C = tpmats_to_kron(A)
-uh = C.solve(b.flatten()).reshape(b.shape)
+uh = TPMatrices(A).solve(b)
+# C = tpmats_to_kron(A)
+# uh = C.solve(b.flatten()).reshape(b.shape)
 
 N = 100
 xj = T.mesh(kind="uniform", N=(N, N))
@@ -50,7 +51,7 @@ uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
 if "PYTEST" in os.environ:
-    assert error < ulp(C.data.max()), error
+    assert error < ulp(100), error
     sys.exit(1)
 
 print("Error =", error)

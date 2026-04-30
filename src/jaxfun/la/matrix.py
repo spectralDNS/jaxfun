@@ -311,7 +311,23 @@ class Matrix(nnx.Pytree):
         """Return a copy with data cast to ``dtype``."""
         return Matrix(self.data.astype(dtype))
 
-    def pin(self, constraints: dict[int, float]) -> PinnedSystem:
+    def pin(
+        self, constraints: dict[int, float] | tuple[tuple[int, float], ...]
+    ) -> PinnedSystem:
+        """Return a :class:`PinnedSystem` with the given DOFs fixed."""
+        from jaxfun.la.pinned import PinnedSystem
+
+        if isinstance(constraints, dict):
+            constraints = tuple(sorted(constraints.items()))
+        norm_constraints, data = self._pin(constraints)
+        return PinnedSystem(
+            Matrix(data), tuple((int(i), float(j)) for i, j in norm_constraints)
+        )
+
+    @jax.jit(static_argnums=(1,))
+    def _pin(
+        self, constraints: tuple[tuple[int, float], ...]
+    ) -> tuple[list[tuple[int, float]], Array]:
         """Return a :class:`PinnedSystem` with the given DOFs fixed.
 
         For each ``(row_index, value)`` pair in *constraints* the
@@ -338,29 +354,28 @@ class Matrix(nnx.Pytree):
             A_sys = A.pin({0: 0.0})
             x = A_sys.solve(b)
         """
-        from jaxfun.la.pinned import PinnedSystem
-
         n, _m = self.shape
         # Normalise negative indices (Python-style); reject out-of-range positives.
-        norm_constraints: dict[int, float] = {}
-        for idx, val in constraints.items():
+        norm_constraints: list[tuple[int, float]] = []
+        for idx, val in constraints:
             if idx < -n or idx >= n:
                 raise IndexError(
                     f"Constraint index {idx} is out of range for matrix of size {n}"
                 )
-            norm_constraints[idx % n] = val
+            norm_constraints.append((idx % n, float(val)))
         data = self.data
-        for idx in norm_constraints:
+        for idx, _ in norm_constraints:
             data = data.at[idx].set(0.0)
             data = data.at[idx, idx].set(1.0)
-        return PinnedSystem(Matrix(data), norm_constraints)
+
+        return norm_constraints, data
 
     def __repr__(self) -> str:
         n, m = self.shape
         return f"Matrix(shape=({n}, {m}), dtype={self.dtype})"
 
 
-class LUFactors:
+class LUFactors(nnx.Pytree):
     """Result of :meth:`Matrix.lu_factor`.
 
     Holds the packed LU decomposition as returned by
@@ -383,6 +398,7 @@ class LUFactors:
         self.piv = piv  # (n,) int32 pivot indices
         self.shape = shape
 
+    @jax.jit(static_argnums=(2,))
     def solve(self, b: Array, axis: int = 0) -> Array:
         """Solve ``A x = b`` using the stored LU factorisation.
 

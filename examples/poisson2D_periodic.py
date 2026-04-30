@@ -12,7 +12,7 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
+from jaxfun.galerkin.tensorproductspace import TensorProduct, TPMatrices
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -31,11 +31,10 @@ x, y = T.system.base_scalars()
 ue = T.system.expr_psi_to_base_scalar(ue)
 
 # A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=False)
-A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=False)
+A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 
-# Alternative scipy sparse implementation
-A0 = tpmats_to_kron(A)
-uh = A0.solve(b.flatten()).reshape(b.shape)
+A0 = TPMatrices(A)
+uh = A0.solve(b)
 
 N = 100
 uj = T.backward(uh, N=(N, N))

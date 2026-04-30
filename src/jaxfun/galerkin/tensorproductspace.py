@@ -1299,6 +1299,7 @@ class TPMatricesLUFactors:
         self.scales = scales
         self.shape = shape
 
+    @jax.jit(static_argnums=(0,))
     def solve(self, rhs: Array) -> Array:
         """Solve the summed tensor-product system for RHS ``rhs``.
 
@@ -1516,6 +1517,32 @@ class TPMatricesWavenumberSolver:
             all_L_offsets, all_U_offsets, n_P_local, self.L_data_batch.dtype
         )
 
+        # Rebuild LUFactors with aligned offsets (all_L_offsets / all_U_offsets)
+        # so every element has the same pytree structure.  Then stack their
+        # leaves into a single batched pytree and vmap LUFactors.solve over it.
+        from jaxfun.la.diamatrix import LUFactors as _DiaLUFactors
+
+        n = n_P_local
+        aligned_lu_list = [
+            _DiaLUFactors(
+                L=DiaMatrix(
+                    data=self.L_data_batch[k],
+                    offsets=all_L_offsets,
+                    shape=(n, n),
+                ),
+                U=DiaMatrix(
+                    data=self.U_data_batch[k],
+                    offsets=all_U_offsets,
+                    shape=(n, n),
+                ),
+                shape=(n, n),
+            )
+            for k in range(len(lu_list))
+        ]
+        self._lu_stacked = jax.tree.map(lambda *xs: jnp.stack(xs), *aligned_lu_list)
+        self._vmap_solve2 = jax.jit(jax.vmap(lambda lu, b: lu.solve(b)))
+
+    @jax.jit(static_argnums=(0,))
     def solve(self, rhs: Array) -> Array:
         """Solve the wavenumber-loop system for RHS ``rhs``.
 
@@ -1547,6 +1574,42 @@ class TPMatricesWavenumberSolver:
         sol_2d = self._vmap_solve(self.L_data_batch, self.U_data_batch, rhs_2d)
 
         # Un-permute back to the original axis order.
+        sol_perm = sol_2d.reshape(fourier_shape + (n_P,))
+        inv_perm = [0] * ndim
+        for new_pos, old_pos in enumerate(axes_order):
+            inv_perm[old_pos] = new_pos
+        return jnp.transpose(sol_perm, inv_perm)
+
+    @jax.jit(static_argnums=(0,))
+    def solve2(self, rhs: Array) -> Array:
+        """Alternative solve that vmaps :meth:`~jaxfun.la.diamatrix.LUFactors.solve`
+        directly over a batched :class:`~jaxfun.la.diamatrix.LUFactors` pytree.
+
+        All ``LUFactors`` for the wavenumber batch share the same aligned
+        ``L``/``U`` offsets and ``shape``, so their leaves can be stacked once
+        (in ``__init__``) and ``jax.vmap`` maps ``lu.solve(b)`` over the
+        leading batch axis — no custom scan kernels required.
+
+        Args:
+            rhs: Right-hand side shaped ``self.shape``.
+
+        Returns:
+            Solution with the same shape as ``rhs``.
+        """
+        shape = self.shape
+        ndim = len(shape)
+        poly_axis = self.poly_axis
+        n_P = shape[poly_axis]
+
+        fourier_axes = [a for a in range(ndim) if a != poly_axis]
+        fourier_shape = tuple(shape[a] for a in fourier_axes)
+        n_F = int(np.prod(fourier_shape)) if fourier_shape else 1
+
+        axes_order = fourier_axes + [poly_axis]
+        rhs_2d = jnp.transpose(rhs, axes_order).reshape(n_F, n_P)
+
+        sol_2d = self._vmap_solve2(self._lu_stacked, rhs_2d)
+
         sol_perm = sol_2d.reshape(fourier_shape + (n_P,))
         inv_perm = [0] * ndim
         for new_pos, old_pos in enumerate(axes_order):

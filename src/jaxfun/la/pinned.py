@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import jax
 import jax.numpy as jnp
 from flax import nnx
 
@@ -60,12 +61,10 @@ class PinnedSystem(nnx.Pytree):
     def __init__(
         self,
         matrix: Matrix | DiaMatrix,
-        constraints: dict[int, float],
+        constraints: tuple[tuple[int, float], ...],
     ) -> None:
-        self.matrix = matrix
-        # Store as a sorted tuple so the pytree treedef is deterministic and
-        # hashable (dicts are neither).
-        self.constraints = tuple(sorted(constraints.items()))
+        self.matrix = nnx.data(matrix)
+        self.constraints = nnx.static(constraints)
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -80,6 +79,7 @@ class PinnedSystem(nnx.Pytree):
         """
         return self.matrix.lu_factor()
 
+    @jax.jit(static_argnums=(2,))
     def fix_rhs(self, b: Array, axis: int = 0) -> Array:
         """Return ``b`` with constraint values inserted at pinned positions.
 
@@ -181,7 +181,7 @@ class PinnedSystem(nnx.Pytree):
         """Return a copy with the underlying matrix cast to ``dtype``."""
         from jaxfun.la.pinned import PinnedSystem  # local to avoid re-import issues
 
-        return PinnedSystem(self.matrix.astype(dtype), dict(self.constraints))
+        return PinnedSystem(self.matrix.astype(dtype), self.constraints)
 
     def __len__(self) -> int:
         return min(self.shape)

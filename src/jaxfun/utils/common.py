@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Concatenate, NamedTuple, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Concatenate, NamedTuple, Protocol, cast
 
 import jax
 import jax.numpy as jnp
@@ -28,7 +28,6 @@ __all__ = (
     "jacn",
     "matmat",
     "tosparse",
-    "fromdense",
     "lambdify",
 )
 
@@ -120,16 +119,8 @@ def jacn(fun: Callable[[Array], Array], k: int = 1) -> Callable[[Array], Array]:
     return jax.vmap(fun, in_axes=0, out_axes=0)
 
 
-@overload
-def matmat(a: Array, b: Array) -> Array: ...
-@overload
-def matmat(a: DiaMatrix, b: DiaMatrix) -> DiaMatrix: ...
-@overload
-def matmat(a: Array, b: DiaMatrix) -> Array: ...  # unchecked
-@overload
-def matmat(a: DiaMatrix, b: Array) -> Array: ...  # unchecked
 @jax.jit
-def matmat(a: Array | DiaMatrix, b: Array | DiaMatrix) -> Array | DiaMatrix:
+def matmat(a: Array, b: Array) -> Array:
     return a @ b
 
 
@@ -137,11 +128,6 @@ def matmat(a: Array | DiaMatrix, b: Array | DiaMatrix) -> Array | DiaMatrix:
 def eliminate_near_zeros(a: Array, tol: int = 100) -> Array:
     atol: Array = ulp(jnp.abs(a).max()) * tol
     return jnp.where(jnp.abs(a) < atol, jnp.zeros(a.shape), a)
-
-
-def fromdense(a: Array, tol: int = 100) -> DiaMatrix:
-    a0: Array = eliminate_near_zeros(a, tol=tol)
-    return DiaMatrix.from_dense(a0)
 
 
 def tosparse(a: Array, tol: int = 100) -> DiaMatrix:

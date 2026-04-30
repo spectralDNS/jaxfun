@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, overload
+from typing import TYPE_CHECKING, Any, overload
 
 import jax
 import jax.numpy as jnp
@@ -9,8 +9,8 @@ from flax import nnx
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
-
-    from .matrix import Matrix
+    from jaxfun.la import Matrix, MatrixProtocol
+    from jaxfun.la.pinned import PinnedSystem
 
 Array = jax.Array
 
@@ -106,10 +106,6 @@ class DiaMatrix(nnx.Pytree):
             no-pivot and pivoting factorisations are cached independently.
             Stored via ``object.__setattr__`` so it is invisible to JAX's
             pytree machinery and does not affect JIT tracing or compilation.
-        _T_cache: Private ``_CacheBox`` wrapping the transposed DiaMatrix,
-            populated on the first call to the :attr:`T` property.
-            Stored via ``object.__setattr__``, invisible to JAX's pytree
-            machinery.
 
     Example (tridiagonal 3x3):
     >>> import jax.numpy as jnp
@@ -241,19 +237,69 @@ class DiaMatrix(nnx.Pytree):
         return jnp.moveaxis(y_moved, 0, axis)
 
     @jax.jit(static_argnums=(2,))
-    def matmat(self, x: Array, axis: int = 0) -> Array:
-        """Multiply ``A @ x`` where ``x.shape[axis] == m``.
+    def rmatvec(self, x: Array, axis: int = -1) -> Array:
+        """Multiply ``x @ A`` contracting ``axis`` of ``x`` against rows of ``A``.
 
-        This is a convenience alias for :meth:`matvec` that makes it
-        explicit that ``x`` is treated as a collection of column vectors.
-        Equivalent to ``self.matvec(x, axis=axis)``.
+        Symmetric dual of :meth:`matvec`: where ``matvec`` maps column indices
+        of ``A`` to row indices, ``rmatvec`` maps row indices of ``A`` to
+        column indices.
+
+        Args:
+            x: Input array.  ``x.shape[axis]`` must equal ``n``
+                   (number of rows of ``A``).
+            axis:  The axis of ``x`` to contract.  The output has the same
+                   shape as ``x`` except ``shape[axis]`` becomes ``m``
+                   (number of columns of ``A``).
+
+        For a 1-D ``x`` the ``axis`` argument is ignored.
+
+        Examples::
+
+            A.rmatvec(x)  # x shape (n,)      → (m,)
+            A.rmatvec(X, axis=-1)  # X shape (k, n)    → (k, m)
+            A.rmatvec(X, axis=0)  # X shape (n, k)    → (m, k)
+
+        Implementation note:
+            ``y[j] = Σ_p data[p, j] * x[j - k_p]``.  Pad ``x`` by
+            ``(m-1, m-1)`` zeros so that
+            ``dynamic_slice(x_pad, (m-1) - k, m)`` always lands in-bounds
+            for any offset ``k ∈ [-(n-1), m-1]``.
         """
-        return self.matvec(x, axis=axis)
+        n, m = self.shape
+        offsets_arr = jnp.array(self.offsets, dtype=int)
 
-    @jax.jit(static_argnums=(2,))
-    def apply(self, x: Array, axis: int = 0) -> Array:
-        """Apply ``A`` along ``axis`` of ``x`` (alias for :meth:`matvec`)."""
-        return self.matvec(x, axis=axis)
+        if x.ndim == 1:
+            # y[j] = sum_p data[p,j] * x[j - k_p]
+            x_pad = jnp.pad(x, (m - 1, m - 1))  # length n + 2(m-1)
+
+            def _extract_1d(args: tuple) -> Array:
+                v_row, k = args
+                sliced = jax.lax.dynamic_slice(x_pad, ((m - 1) - k,), (m,))
+                return v_row * sliced
+
+            contribs = jax.vmap(_extract_1d)((self.data, offsets_arr))  # (n_diags, m)
+            return contribs.sum(axis=0)
+
+        axis = axis % x.ndim
+        x_moved = jnp.moveaxis(x, axis, -1)  # (..., n)
+        rest_shape = x_moved.shape[:-1]
+        batch = x_moved.size // n
+        x2d = x_moved.reshape(batch, n)  # (batch, n)
+
+        # Pad last axis: (batch, n) → (batch, n + 2(m-1))
+        x_pad = jnp.pad(x2d, ((0, 0), (m - 1, m - 1)))
+
+        def _extract_nd(args: tuple) -> Array:
+            v_row, k = args  # v_row: (m,), k: scalar
+            sliced = jax.lax.dynamic_slice(x_pad, (0, (m - 1) - k), (batch, m))
+            return v_row[None, :] * sliced  # (batch, m)
+
+        contribs = jax.vmap(_extract_nd)(
+            (self.data, offsets_arr)
+        )  # (n_diags, batch, m)
+        result2d = contribs.sum(axis=0)  # (batch, m)
+        result_moved = result2d.reshape(rest_shape + (m,))
+        return jnp.moveaxis(result_moved, -1, axis)
 
     @jax.jit
     def todense(self) -> Array:
@@ -280,6 +326,12 @@ class DiaMatrix(nnx.Pytree):
 
     # Alias so DiaMatrix satisfies MatrixProtocol (which uses to_dense).
     to_dense = todense
+
+    def to_Matrix(self) -> Matrix:
+        """Convert this DiaMatrix to a dense Matrix."""
+        from .matrix import Matrix
+
+        return Matrix(self.todense())
 
     def lu_factor(self, *, pivot: bool = False) -> LUFactors:
         """Compute a banded LU factorisation of this (square) matrix.
@@ -353,7 +405,11 @@ class DiaMatrix(nnx.Pytree):
             band_lu = _lu_banded_no_pivot_kernel(band, p, q, center)
 
             if float(jnp.min(jnp.abs(band_lu[center]))) == 0.0:
-                raise ValueError("Matrix is singular: zero pivot in LU factorisation.")
+                raise ValueError(
+                    "Matrix is singular: zero pivot in LU factorisation. "
+                    "Consider pinning (:meth:`DiaMatrix.pin`) additional DOFs or "
+                    "enabling pivoting for this matrix."
+                )
 
             l_offsets = tuple(
                 off
@@ -408,7 +464,11 @@ class DiaMatrix(nnx.Pytree):
 
         # Singularity check: the main diagonal of U lives at band row `center`.
         if float(jnp.min(jnp.abs(band_lu[center]))) == 0.0:
-            raise ValueError("Matrix is singular: zero pivot in LU factorisation.")
+            raise ValueError(
+                "Matrix is singular: zero pivot in LU factorisation. "
+                "Consider pinning (:meth:`DiaMatrix.pin`) additional DOFs "
+                "for this matrix."
+            )
 
         # ---------- extract L -------------------------------------------
         # band_lu[center - t, :] is already the column-aligned DIA row for
@@ -503,22 +563,12 @@ class DiaMatrix(nnx.Pytree):
         Shape becomes ``(m, n)``.  Each diagonal at offset ``k`` maps to
         offset ``-k`` in the transpose.  The data is re-aligned to the new
         column count ``n``.
-
-        The result is cached as ``_T_cache`` (a :class:`_CacheBox`) via
-        ``object.__setattr__`` so it is invisible to JAX's pytree machinery.
-        Repeated calls always return the same transposed instance.
         """
-        cached: DiaMatrix | None = getattr(self, "_T_cache", None)
-        if cached is not None:
-            return cached.value
-
         n, m = self.shape
+        new_offsets = tuple(-k for k in self.offsets)
         new_shape = (m, n)
 
         def _transpose_row(d: Array, k: Array) -> Array:
-            # Original: data[d] has length m, valid at columns [max(0,k), max(0,k)+length).  # noqa: E501
-            # Transposed offset is -k; new data has length n.
-            # new_data[i] = old_data[i + k]  for 0 <= i < n and 0 <= i+k < m.
             i = jnp.arange(n)
             j = i + k  # original column index
             valid = (j >= 0) & (j < m)
@@ -526,11 +576,8 @@ class DiaMatrix(nnx.Pytree):
             return jnp.where(valid, d[safe_j], jnp.zeros((), dtype=d.dtype))
 
         offsets_arr = jnp.asarray(self.offsets, dtype=int)
-        new_data = jax.vmap(_transpose_row)(self.data, offsets_arr)  # (n_diags, n)
-        new_offsets = tuple(-k for k in self.offsets)
-        result = DiaMatrix(data=new_data, offsets=new_offsets, shape=new_shape)
-        object.__setattr__(self, "_T_cache", _CacheBox(result))
-        return result
+        new_data = jax.vmap(_transpose_row)(self.data, offsets_arr)
+        return DiaMatrix(data=new_data, offsets=new_offsets, shape=new_shape)
 
     def diagonal(self, k: int = 0) -> Array:
         """Return the ``k``-th diagonal as a 1-D array.
@@ -925,27 +972,38 @@ class DiaMatrix(nnx.Pytree):
         q_offs = other.offsets
 
         # Build all (Q, l) column-index arrays in one shot.
-        # a_cols[q, j] = j - q_off[q]  — the A-column needed at output column j
+        # a_cols[q, j] = j - q_off[q]  — the A-column (= B-row) needed at output col j
         j = jnp.arange(l)
+        p_offs_arr = jnp.array(p_offs)  # (P,)
         a_cols = j[None, :] - jnp.array(q_offs)[:, None]  # (Q, l)
-        valid = (a_cols >= 0) & (a_cols < m)  # (Q, l)
-        safe_a_cols = jnp.where(valid, a_cols, 0)  # (Q, l)
+        col_valid = (a_cols >= 0) & (a_cols < m)  # (Q, l): B-row / A-column in bounds
+        safe_a_cols = jnp.where(col_valid, a_cols, 0)  # (Q, l)
+
+        # Row-validity: self.data[p, a_col] represents A[a_col - p_off, a_col].
+        # That row must also be in [0, n) — padding values outside the band must not
+        # contribute even if they are non-zero.
+        # a_rows[p, q, j] = a_cols[q, j] - p_off[p]  — row index of A accessed
+        a_rows = a_cols[None, :, :] - p_offs_arr[:, None, None]  # (P, Q, l)
+        row_valid = (a_rows >= 0) & (a_rows < n)  # (P, Q, l)
 
         # Gather: contribs[p, q, j] = self.data[p, safe_a_cols[q, j]] * other.data[q, j]
         # self.data[:, safe_a_cols] has shape (P, Q, l) via advanced indexing.
         contribs = jnp.where(
-            valid[None],
+            col_valid[None] & row_valid,
             self.data[:, safe_a_cols] * other.data[None],
             jnp.zeros((), dtype=self.data.dtype),
         )  # (P, Q, l)
 
         # Group output-diagonal offsets in Python (static, no JAX graph nodes).
+        # Only include offsets within the valid range for an (n, l) matrix.
         from collections import defaultdict
 
         groups: dict[int, list[tuple[int, int]]] = defaultdict(list)
         for pi, po in enumerate(p_offs):
             for qi, qo in enumerate(q_offs):
-                groups[po + qo].append((pi, qi))
+                out_off = po + qo
+                if -(n - 1) <= out_off <= l - 1:
+                    groups[out_off].append((pi, qi))
 
         if not groups:
             return jnp.zeros((1, l), dtype=self.data.dtype), (0,), (n, l)
@@ -962,10 +1020,14 @@ class DiaMatrix(nnx.Pytree):
     @overload
     def __matmul__(self, other: Array) -> Array: ...
     @overload
+    def __matmul__(self, other: JAXFunction) -> Array: ...
+    @overload
     def __matmul__(self, other: DiaMatrix) -> DiaMatrix: ...
     @overload
-    def __matmul__(self, other: JAXFunction) -> Array: ...
-    def __matmul__(self, other: Array | DiaMatrix | JAXFunction) -> Array | DiaMatrix:
+    def __matmul__(self, other: Matrix) -> Matrix: ...
+    @overload
+    def __matmul__(self, other: MatrixProtocol) -> MatrixProtocol: ...
+    def __matmul__(self, other: Array | JAXFunction | MatrixProtocol) -> Any:
         """Support ``A @ x`` (vector/matrix) and ``A @ B`` (DiaMatrix).
 
         DiaMatrix x DiaMatrix is computed purely in DIA format without
@@ -973,12 +1035,18 @@ class DiaMatrix(nnx.Pytree):
 
         """
         from jaxfun.galerkin import JAXFunction
+        from jaxfun.la import Matrix
 
         if isinstance(other, JAXFunction):
-            return self.apply(other.array)
+            return self.matvec(other.array)
 
-        if not isinstance(other, DiaMatrix):
-            return self.apply(other)
+        if isinstance(other, Array):
+            return self.matvec(other)
+
+        if isinstance(other, Matrix):
+            return Matrix(self.matvec(other.data))
+
+        assert isinstance(other, DiaMatrix)
 
         data_out, offsets_out, shape_out = self._matmul_compute(other)
         return DiaMatrix(
@@ -987,55 +1055,47 @@ class DiaMatrix(nnx.Pytree):
             shape=(int(shape_out[0]), int(shape_out[1])),
         )
 
-    def __rmatmul__(self, other: Array) -> Array:
+    @overload
+    def __rmatmul__(self, other: Array) -> Array: ...
+    @overload
+    def __rmatmul__(self, other: JAXFunction) -> Array: ...
+    @overload
+    def __rmatmul__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __rmatmul__(self, other: Matrix) -> Matrix: ...
+    @overload
+    def __rmatmul__(self, other: MatrixProtocol) -> MatrixProtocol: ...
+    def __rmatmul__(self, other: Array | JAXFunction | MatrixProtocol) -> Any:
         """Support ``x @ A`` (row-vector or matrix on the left).
 
-        Computes ``x @ A`` directly from DIA storage using the same
-        ``vmap + lax.dynamic_slice`` technique as :meth:`matvec`, avoiding
-        per-diagonal Python loop nodes in the JAX trace.
-
-        For diagonal at offset ``k``:  ``A[j-k, j] = data[k_idx, j]``, so the
-        contribution to output column ``j`` is ``data[k_idx, j] * other[..., j-k]``.
-
-        Padding strategy (dual of matvec):
-            Pad ``other`` (axis ``n``) by ``(m-1)`` zeros on each side so that
-            ``dynamic_slice(other_pad, m-1-k, m)`` always lands in-bounds for
-            any offset ``k ∈ [-(n-1), m-1]``.
-
-        Works for 1-D and N-D ``other`` (contracting axis is the last axis).
+        Delegates to :meth:`rmatvec` which contracts the last axis of ``other``
+        against the rows of ``A`` using the same sparse ``dynamic_slice + vmap``
+        technique as :meth:`matvec`, without materialising a dense matrix or
+        computing the transpose.
         """
-        n, m = self.shape
-        dtype = jnp.result_type(other.dtype, self.data.dtype)
-        offsets_arr = jnp.array(self.offsets, dtype=int)
+        from jaxfun.galerkin import JAXFunction
+        from jaxfun.la import Matrix
 
-        if other.ndim == 1:
-            # other shape (n,) → result shape (m,)
-            # x_pad[m-1-k + j] = other[j-k]  for j in [0, m)
-            x_pad = jnp.pad(other.astype(dtype), (m - 1, m - 1))  # (n + 2m - 2,)
+        if isinstance(other, JAXFunction):
+            return self.rmatvec(other.array, axis=-1)
 
-            def _extract_1d(k: Array) -> Array:
-                x_shifted = jax.lax.dynamic_slice(x_pad, (m - 1 - k,), (m,))
-                return x_shifted  # (m,)
+        if isinstance(other, Array):
+            return self.rmatvec(other, axis=-1)
 
-            x_shifted_all = jax.vmap(_extract_1d)(offsets_arr)  # (n_diags, m)
-            return (x_shifted_all * self.data.astype(dtype)).sum(axis=0)
+        # NOTE: unreachable via @ when both operands are concrete DiaMatrix/Matrix
+        # instances — Matrix.__matmul__ and DiaMatrix.__matmul__ both handle those
+        # cases first. These branches act as fallbacks for subclasses that do not
+        # override __matmul__.
+        if isinstance(other, Matrix):
+            return Matrix(other.data @ self)
 
-        # other shape (..., n) → result shape (..., m)
-        batch_shape = other.shape[:-1]
-        batch = other[..., 0].size
-        x2d = other.reshape(batch, n).astype(dtype)  # (batch, n)
-        x_pad = jnp.pad(x2d, ((0, 0), (m - 1, m - 1)))  # (batch, n+2m-2)
-
-        def _extract_nd(k: Array) -> Array:
-            return jax.lax.dynamic_slice(
-                x_pad, (0, m - 1 - k), (batch, m)
-            )  # (batch, m)
-
-        x_shifted_all = jax.vmap(_extract_nd)(offsets_arr)  # (n_diags, batch, m)
-        res2d = (x_shifted_all * self.data[:, None, :].astype(dtype)).sum(
-            axis=0
-        )  # (batch, m)
-        return res2d.reshape(batch_shape + (m,))
+        assert isinstance(other, DiaMatrix)
+        data_out, offsets_out, shape_out = other._matmul_compute(self)
+        return DiaMatrix(
+            data=data_out,
+            offsets=tuple(int(k) for k in offsets_out),
+            shape=(int(shape_out[0]), int(shape_out[1])),
+        )
 
     def astype(self, dtype: jnp.dtype) -> DiaMatrix:
         """Return a copy with data cast to ``dtype``."""
@@ -1055,6 +1115,77 @@ class DiaMatrix(nnx.Pytree):
     @property
     def dtype(self) -> jnp.dtype:
         return self.data.dtype
+
+    def pin(self, constraints: dict[int, float]) -> PinnedSystem:
+        """Return a :class:`PinnedSystem` with the given DOFs fixed.
+
+        For each ``(row_index, value)`` pair in *constraints* the corresponding
+        row of the matrix is replaced by the identity row ``e_{row_index}``.
+        The original sparsity pattern is preserved; if the main diagonal
+        (offset 0) is not already stored it is added automatically.
+
+        The LU factorisation of the modified matrix is cached on the returned
+        :class:`PinnedSystem` so that repeated :meth:`~PinnedSystem.solve`
+        calls are cheap.
+
+        Args:
+            constraints: Mapping from DOF index to pinned value, e.g.
+                ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0}``.  Negative indices
+                are supported (Python-style, relative to ``n``).  Positive
+                indices must be in ``[0, n)``, otherwise :exc:`IndexError`
+                is raised.
+
+        Returns:
+            :class:`PinnedSystem` whose :meth:`~PinnedSystem.solve` method
+            modifies the RHS and solves in one call.
+
+        Example::
+
+            A_sys = A.pin({0: 0.0})  # singular Fourier system
+            x = A_sys.solve(b)
+        """
+        from jaxfun.la.pinned import PinnedSystem
+
+        n, m = self.shape
+        data = self.data  # keep as JAX array — no device→host transfer
+        offsets: list[int] = list(self.offsets)
+
+        # Ensure the main diagonal is present so we can write A[i,i] = 1.
+        # The structural decision (whether to insert) uses only static ints.
+        if 0 not in offsets:
+            insert_pos = next(
+                (k for k, off in enumerate(offsets) if off > 0), len(offsets)
+            )
+            offsets.insert(insert_pos, 0)
+            zero_row = jnp.zeros((1, m), dtype=data.dtype)
+            data = jnp.concatenate(
+                [data[:insert_pos], zero_row, data[insert_pos:]], axis=0
+            )
+
+        main_idx = offsets.index(0)
+
+        # Normalise negative indices (Python-style); reject out-of-range positives.
+        norm_constraints: dict[int, float] = {}
+        for idx, val in constraints.items():
+            if idx < -n or idx >= n:
+                raise IndexError(
+                    f"Constraint index {idx} is out of range for matrix of size {n}"
+                )
+            norm_constraints[idx % n] = val
+
+        # Zero every stored entry in each pinned row, then set diagonal to 1.
+        # All indices (di, j) are Python ints — static at trace time — so
+        # .at[...].set() is fully traceable under jax.jit / jax.vmap.
+        for row_idx, _val in norm_constraints.items():
+            for di, k in enumerate(offsets):
+                j = row_idx + k
+                if 0 <= j < m:
+                    data = data.at[di, j].set(0.0)
+            data = data.at[main_idx, row_idx].set(1.0)
+
+        new_offsets = tuple(offsets)
+        pinned_matrix = DiaMatrix(data=data, offsets=new_offsets, shape=self.shape)
+        return PinnedSystem(pinned_matrix, norm_constraints)
 
     def __repr__(self) -> str:
         n, m = self.shape
@@ -1356,7 +1487,7 @@ def _forward_elimination(L: DiaMatrix, b: Array) -> Array:
     l_rows: list[Array] = []
     for s in range(1, p + 1):  # s = 1, 2, ..., p
         off = -s
-        if off in offsets:
+        if off in offsets and s < n:
             idx = offsets.index(off)
             d = L.data[idx]
             # d[j] = L[j+s, j]; shift right by s → l_rows[-1][i] = L[i, i-s]
@@ -1421,10 +1552,10 @@ def _backward_substitution(U: DiaMatrix, b: Array) -> Array:
     u_rows: list[Array] = []
     for s in range(1, q + 1):  # s = 1, 2, ..., q
         off = s
-        if off in offsets:
+        if off in offsets and s < n:
             idx = offsets.index(off)
             d = U.data[idx]
-            # d[i+s] = U[i, i+s]; shift left by s: d[s:] ++ zeros(s)
+            # d[i+s] = U[i, i+s]; shift left by s: d[s:n] ++ zeros(s)
             u_rows.append(jnp.concatenate([d[s:n], jnp.zeros(s, dtype=d.dtype)]))
         else:
             u_rows.append(jnp.zeros(n, dtype=U.data.dtype))
@@ -1552,6 +1683,8 @@ def diakron(A: DiaMatrix, B: DiaMatrix) -> DiaMatrix:
     # and result.data[K_idx, j] = A.data[ka_idx, j0] * B.data[kb_idx, j1],
     # i.e. the ravel of the outer product A.data[ka, :] ⊗ B.data[kb, :].
     result_shape = (m * p, n * p)
+    result_rows = m * p  # valid negative-offset bound: -(result_rows - 1)
+    result_cols = n * p  # valid positive-offset bound:  (result_cols - 1)
     accumulated: dict[int, Array] = {}
 
     for ka_idx, k_a in enumerate(A.offsets):
@@ -1559,6 +1692,11 @@ def diakron(A: DiaMatrix, B: DiaMatrix) -> DiaMatrix:
         for kb_idx, k_b in enumerate(B.offsets):
             b_row = B.data[kb_idx]  # shape (p,)
             K = int(k_a) * p + int(k_b)
+            # Skip diagonals entirely outside the result matrix.
+            # The result has shape (result_rows, result_cols), so valid
+            # offsets are [-(result_rows - 1), result_cols - 1].
+            if result_cols <= K or -result_rows >= K:
+                continue
             col_data: Array = (a_row[:, None] * b_row[None, :]).ravel()
             if K in accumulated:
                 accumulated[K] = accumulated[K] + col_data

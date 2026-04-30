@@ -102,8 +102,8 @@ def inner(
     allforms = split(expr * measure)
     a_forms = allforms["bilinear"]
     b_forms = allforms["linear"]
-    aresults = []
-    bresults = []
+    aresults: list[MatrixProtocol | TPMatrix | TensorMatrix] = []
+    bresults: list[Array] = []
     all_linear = not (
         len(a_forms) > 0
         and jnp.any(
@@ -119,7 +119,7 @@ def inner(
         # If the form contains a JAXFunction, then the matrix assembled will
         # be multiplied with the JAXFunction and a vector will be returned
 
-        mats: list[tuple[tuple[Array, Array] | Matrix, tuple[int, int]]] = []
+        mats: list[tuple[tuple[Array, Array] | MatrixProtocol, tuple[int, int]]] = []
         # Split coefficients into linear (JAXFunction) and bilinear (constant
         # coefficients) contributions.
         coeffs = split_coeff(a0["coeff"])
@@ -192,6 +192,7 @@ def inner(
             pass
 
         elif test_space.dims == 1 and "bilinear" in coeffs:
+            assert isinstance(mats[0][0], MatrixProtocol)
             aresults.append(mats[0][0])
 
         elif isinstance(mats[0][0], tuple):
@@ -237,11 +238,10 @@ def inner(
                     aresults.append(TensorMatrix(Am))
 
         elif len(mats) > 1:  # regular separable multivariable form
-            mats_: list[Array] = [cast(Matrix, m[0]).data for m in mats]
+            mats_: list[MatrixProtocol] = [cast(MatrixProtocol, m[0]) for m in mats]
             gi = [m[1] for m in mats]
 
             assert isinstance(test_space, TensorProductSpace | VectorTensorProductSpace)
-
             if has_bcs:
                 assert len(mats_) == 2  # BCs only implemented for 2D at present
                 if trial_space is not None:
@@ -271,18 +271,14 @@ def inner(
             else:
                 if "linear" in coeffs:
                     sign = 1 if all_linear else -1
-                    if test_space.dims == 2:
-                        res = (sign * coeffs["linear"]["scale"]) * (
-                            mats_[0] @ coeffs["linear"]["jaxcoeff"].array @ mats_[1].T
-                        )
-                    else:
-                        res = sign * jnp.einsum(
-                            "il,jm,kn,lmn->ijk",
-                            mats_[0],
-                            mats_[1],
-                            mats_[2],
-                            coeffs["linear"]["jaxcoeff"].array,
-                        )
+                    res = (
+                        sign
+                        * coeffs["linear"].get("scale", 1)
+                        * coeffs["linear"]["jaxcoeff"].array
+                    )
+                    for i, mat in enumerate(mats_):
+                        res = mat.matvec(res, axis=i)
+
                     bresults.append(vectorize_bresult(res, test_space, gi[0][0]))
 
                 if "bilinear" in coeffs:
@@ -402,31 +398,31 @@ def vectorize_bresult(
 
 @overload
 def process_results(
-    aresults: list[Matrix | TPMatrix | TensorMatrix],
+    aresults: list[MatrixProtocol | TPMatrix | TensorMatrix],
     bresults: list[Array],
     return_all_items: Literal[True],
     dims: int,
     sparse: bool,
     sparse_tol: int,
-) -> tuple[list[Matrix | TPMatrix | TensorMatrix], list[Array]]: ...
+) -> tuple[list[MatrixProtocol | TPMatrix | TensorMatrix], list[Array]]: ...
 @overload
 def process_results(
-    aresults: list[Matrix | TPMatrix | TensorMatrix],
+    aresults: list[MatrixProtocol | TPMatrix | TensorMatrix],
     bresults: list[Array],
     return_all_items: Literal[False],
     dims: int,
     sparse: Literal[False],
     sparse_tol: int,
 ) -> (
-    Matrix
+    MatrixProtocol
     | TPMatrix
     | TensorMatrix
     | Array
-    | tuple[Matrix | TPMatrix | TensorMatrix, Array]
+    | tuple[MatrixProtocol | TPMatrix | TensorMatrix, Array]
 ): ...
 @overload
 def process_results(
-    aresults: list[Matrix | TPMatrix | TensorMatrix],
+    aresults: list[MatrixProtocol | TPMatrix | TensorMatrix],
     bresults: list[Array],
     return_all_items: Literal[False],
     dims: int,
@@ -440,7 +436,7 @@ def process_results(
     | tuple[DiaMatrix | TPMatrix | TensorMatrix, Array]
 ): ...
 def process_results(
-    aresults: list[Matrix | TPMatrix | TensorMatrix],
+    aresults: list[MatrixProtocol | TPMatrix | TensorMatrix],
     bresults: list[Array],
     return_all_items: bool,
     dims: int,
@@ -462,21 +458,41 @@ def process_results(
     """
     if return_all_items:
         return aresults, bresults
-    if len(aresults) > 0 and dims == 1:
-        aresults: Matrix = Matrix(
-            jnp.sum(jnp.array([cast(Matrix, a).data for a in aresults]), axis=0)
-        )
-        if sparse:
-            aresults: DiaMatrix = tosparse(aresults.data, tol=sparse_tol)
 
-    if len(aresults) > 0 and dims > 1 and sparse:
+    if len(aresults) > 0 and dims == 1:
+        if not sparse:
+            aresults: Matrix = Matrix(
+                jnp.sum(
+                    jnp.array([cast(MatrixProtocol, a).todense() for a in aresults]),
+                    axis=0,
+                )
+            )
+        else:
+            # Matrices are either Matrix or DiaMatrix. Convert all matrices to DiaMatrix
+            adia = [
+                a
+                if isinstance(a, DiaMatrix)
+                else tosparse(cast(Matrix, a).data, tol=sparse_tol)
+                for a in aresults
+            ]
+            aresults: DiaMatrix = sum(adia[1:], adia[0])
+
+    if len(aresults) > 0 and dims > 1:
         aresults: list[TPMatrix] = cast(list[TPMatrix], aresults)
         for a0 in aresults:
             if isinstance(a0, TPMatrix):
-                a0.mats = nnx.List(
-                    tosparse(cast(Matrix, a0.mats[i]).data, sparse_tol)
-                    for i in range(a0.dims)
-                )
+                if sparse:
+                    a0.mats = nnx.List(
+                        mat
+                        if isinstance(mat, DiaMatrix)
+                        else tosparse(mat.data, tol=sparse_tol)
+                        for mat in a0.mats
+                    )
+                else:
+                    a0.mats = nnx.List(
+                        mat if isinstance(mat, Matrix) else Matrix(mat.todense())
+                        for mat in a0.mats
+                    )
 
     if len(bresults) > 0:
         bresults: Array = jnp.sum(jnp.array(bresults), axis=0)
@@ -500,7 +516,7 @@ def inner_bilinear(
     multivar: Literal[False],
     num_quad_points: int,
     use_precomputed_matrices: bool,
-) -> Matrix: ...
+) -> MatrixProtocol: ...
 @overload
 def inner_bilinear(
     ai: sp.Expr,
@@ -519,7 +535,7 @@ def inner_bilinear(
     multivar: bool,
     num_quad_points: int,
     use_precomputed_matrices: bool,
-) -> Matrix | tuple[Array, Array]:
+) -> MatrixProtocol | tuple[Array, Array]:
     """Assemble single bilinear form contribution term.
 
     Detects derivative orders on test/trial factors, applies optional
@@ -534,7 +550,7 @@ def inner_bilinear(
         multivar: True if coefficient not separable (handled upstream).
         num_quad_points: Number of quadrature points.
     Returns:
-        Matrix, or (Pi, Pj) tuple for multivar separation.
+        MatrixProtocol, or (Pi, Pj) tuple for multivar separation.
     """
     vo = v.orthogonal
     uo = u.orthogonal
@@ -573,18 +589,15 @@ def inner_bilinear(
         else:
             scale *= float(aii)  # ty:ignore[invalid-argument-type]
 
-    z = None
+    z: Matrix | None = None
     if len(scale) == 1 and use_precomputed_matrices and not multivar:
         # Look up matrix
         mod = importlib.import_module(vo.__class__.__module__)
-        z = mod.matrices((vo, i), (uo, j))
-        if z is None:
-            pass
-        else:
+        z: MatrixProtocol | None = mod.matrices((vo, i), (uo, j))
+        if z is not None:
             s = scale * df ** (i + j - 1)
             if s.item() != 1:
                 z.data = z.data * s
-            z = z.todense()
 
     if z is None:
         w = wj * df ** (i + j - 1) * scale
@@ -596,18 +609,19 @@ def inner_bilinear(
             multj: Array = u.apply_stencil_right(jnp.conj(Pj))
             return multi, multj
 
-        z = matmat(Pi.T * w[None, :], jnp.conj(Pj))
+        z: Matrix = Matrix(matmat(Pi.T * w[None, :], jnp.conj(Pj)))
 
-    if u == v and isinstance(u, Composite):
+    z: MatrixProtocol = cast(MatrixProtocol, z)
+    if isinstance(v, Composite) and u == v:
         z = v.apply_stencil_galerkin(z)
     elif isinstance(v, Composite) and isinstance(u, Composite):
-        z = v.apply_stencils_petrovgalerkin(z, u.S)
+        z = v.apply_stencils_petrovgalerkin(z, u.ST)
     elif isinstance(v, Composite):
         z = v.apply_stencil_left(z)
     elif isinstance(u, Composite):
         z = u.apply_stencil_right(z)
 
-    return Matrix(z)
+    return z
 
 
 def inner_linear(

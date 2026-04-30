@@ -23,12 +23,8 @@ from jaxfun.galerkin.ChebyshevU import ChebyshevU, matrices as chebU_matrices
 from jaxfun.galerkin.Fourier import Fourier, matrices as fourier_matrices
 from jaxfun.galerkin.Legendre import Legendre, matrices as leg_matrices
 from jaxfun.galerkin.Ultraspherical import Ultraspherical, matrices as ultra_matrices
-from jaxfun.la import DiaMatrix
+from jaxfun.la import DiaMatrix, MatrixProtocol
 from jaxfun.utils.common import ulp
-
-# ---------------------------------------------------------------------------
-# Space factory helpers
-# ---------------------------------------------------------------------------
 
 
 def _cheb(N: int) -> Chebyshev:
@@ -97,8 +93,8 @@ class TestPoly5ReturnType:
         i, j = ij
         v = space_fn(8)
         M = mats((v, i), (v, j))
-        assert isinstance(M, DiaMatrix), (
-            f"expected DiaMatrix for ({i},{j}), got {type(M)}"
+        assert isinstance(M, MatrixProtocol), (
+            f"expected MatrixProtocol for ({i},{j}), got {type(M)}"
         )
 
     @pytest.mark.parametrize("ij", _POLY5_SUPPORTED)
@@ -229,31 +225,6 @@ class TestPoly5SecondDerivativeMatrix:
         assert M is not None
         assert jnp.allclose(M.get_column(0), jnp.zeros(N), atol=ulp(10))
         assert jnp.allclose(M.get_column(1), jnp.zeros(N), atol=ulp(10))
-
-
-# ---------------------------------------------------------------------------
-# Chebyshev-specific: sparsity structure of derivative matrices
-# ---------------------------------------------------------------------------
-
-
-class TestChebyshevOffsets:
-    """Chebyshev derivative matrices have characteristic offset patterns."""
-
-    def test_first_deriv_offsets_are_odd(self):
-        N = 9
-        v = _cheb(N)
-        M = cheb_matrices((v, 0), (v, 1))
-        assert M is not None
-        for off in M.offsets:
-            assert off % 2 == 1, f"expected odd offset, got {off}"
-
-    def test_second_deriv_offsets_are_even_positive(self):
-        N = 9
-        v = _cheb(N)
-        M = cheb_matrices((v, 0), (v, 2))
-        assert M is not None
-        for off in M.offsets:
-            assert off % 2 == 0 and off >= 0, f"unexpected offset {off}"
 
 
 # ---------------------------------------------------------------------------

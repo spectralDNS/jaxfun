@@ -30,8 +30,8 @@ ue = (1 - x**2) * (1 - y**2)  # * sp.exp(sp.cos(sp.pi * x)) * sp.exp(sp.sin(sp.p
 # A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=False)
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 
-A0 = tpmats_to_kron(A)
-uh = A0.solve(b.flatten()).reshape(b.shape)
+C = tpmats_to_kron(A)
+uh = C.solve(b.flatten()).reshape(b.shape)
 
 N = 100
 uj = T.backward(uh, kind="uniform", N=(N, N))

@@ -8,6 +8,8 @@ from flax import nnx
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
+    from jaxfun.la import DiaMatrix
+    from jaxfun.la.pinned import PinnedSystem
 
 Array = jax.Array
 
@@ -94,16 +96,6 @@ class Matrix(nnx.Pytree):
         y_moved = y2d.reshape((n,) + rest_shape)
         return jnp.moveaxis(y_moved, 0, axis)
 
-    @jax.jit(static_argnums=(2,))
-    def matmat(self, X: Array, axis: int = 0) -> Array:
-        """Alias for :meth:`matvec` — multiply ``A`` along ``axis`` of ``X``."""
-        return self.matvec(X, axis=axis)
-
-    @jax.jit(static_argnums=(2,))
-    def apply(self, x: Array, axis: int = 0) -> Array:
-        """Apply ``A`` along ``axis`` of ``x`` (alias for :meth:`matvec`)."""
-        return self.matvec(x, axis=axis)
-
     def lu_factor(self) -> LUFactors:
         """Compute the LU factorisation of this (square) matrix.
 
@@ -130,6 +122,11 @@ class Matrix(nnx.Pytree):
                 f"lu_factor requires a square matrix, got shape {self.shape}"
             )
         lu, piv = jax.scipy.linalg.lu_factor(self.data)
+        if float(jnp.min(jnp.abs(jnp.diag(lu)))) == 0.0:
+            raise ValueError(
+                "Matrix is singular: zero pivot in LU factorisation. "
+                "Consider pinning (:meth:`Matrix.pin`) additional DOFs."
+            )
         result = LUFactors(lu=lu, piv=piv, shape=(n, n))
         object.__setattr__(self, "_lu_cache", result)
         return result
@@ -155,6 +152,10 @@ class Matrix(nnx.Pytree):
     def solve(self, b: Array, axis: int = 0) -> Array:
         """Solve ``A x = b``.
 
+        The LU factorisation is cached on the first call (via
+        :meth:`lu_factor`) so repeated solves pay the factorisation cost only
+        once.
+
         Args:
             b:    Right-hand side array.  ``b.shape[axis]`` must equal ``n``.
             axis: The axis of ``b`` along which the system is solved.  All
@@ -167,19 +168,7 @@ class Matrix(nnx.Pytree):
             A.solve(B, axis=1)  # B shape (k, n)    → (k, n)
             A.solve(T, axis=2)  # T shape (a, b, n) → (a, b, n)
         """
-        n = self.shape[0]
-
-        if b.ndim == 1:
-            return jnp.linalg.solve(self.data, b)
-
-        axis = axis % b.ndim
-        b_moved = jnp.moveaxis(b, axis, 0)  # (n, *rest)
-        rest_shape = b_moved.shape[1:]
-        batch = b_moved.size // n
-        b2d = b_moved.reshape(n, batch)  # (n, batch)
-        x2d = jnp.linalg.solve(self.data, b2d)  # (n, batch)
-        x_moved = x2d.reshape((n,) + rest_shape)
-        return jnp.moveaxis(x_moved, 0, axis)
+        return self.lu_factor().solve(b, axis=axis)
 
     @property
     def T(self) -> Matrix:
@@ -256,35 +245,115 @@ class Matrix(nnx.Pytree):
     @overload
     def __matmul__(self, other: Array) -> Array: ...
     @overload
+    def __matmul__(self, other: JAXFunction) -> Array: ...
+    @overload
     def __matmul__(self, other: Matrix) -> Matrix: ...
     @overload
-    def __matmul__(self, other: JAXFunction) -> Array: ...
-    def __matmul__(self, other: Array | Matrix | JAXFunction) -> Array | Matrix:
+    def __matmul__(self, other: DiaMatrix) -> Matrix: ...
+    def __matmul__(
+        self, other: Array | JAXFunction | Matrix | DiaMatrix
+    ) -> Array | Matrix:
         """Support ``A @ x`` (vector/array) and ``A @ B`` (Matrix)."""
         from jaxfun.galerkin import JAXFunction
-
-        if isinstance(other, Matrix):
-            n, m = self.shape
-            if m != other.shape[0]:
-                raise ValueError(
-                    f"Shape mismatch for matrix product: ({n}, {m}) @ {other.shape}"
-                )
-            return Matrix(self.data @ other.data)
+        from jaxfun.la import DiaMatrix
+        from jaxfun.utils.common import matmat
 
         if isinstance(other, JAXFunction):
-            return self @ other.array
+            return matmat(self.data, other.array)
 
-        return self.apply(other)
+        if isinstance(other, Array):
+            return matmat(self.data, other)
 
-    def __rmatmul__(self, other: Array) -> Array:
+        if isinstance(other, DiaMatrix):
+            return Matrix((other.T.matvec(self.data.T)).T)  # matvec returns dense array
+
+        assert isinstance(other, Matrix)
+        n, m = self.shape
+        if m != other.shape[0]:
+            raise ValueError(
+                f"Shape mismatch for matrix product: ({n}, {m}) @ {other.shape}"
+            )
+        return Matrix(matmat(self.data, other.data))
+
+    @overload
+    def __rmatmul__(self, other: Array) -> Array: ...
+    @overload
+    def __rmatmul__(self, other: JAXFunction) -> Array: ...
+    @overload
+    def __rmatmul__(self, other: Matrix) -> Matrix: ...
+    @overload
+    def __rmatmul__(self, other: DiaMatrix) -> Matrix: ...
+    def __rmatmul__(
+        self, other: Array | JAXFunction | Matrix | DiaMatrix
+    ) -> Array | Matrix:
         """Support ``x @ A`` (row-vector or 2-D array on the left)."""
-        if other.ndim == 1:
-            return self.data.T @ other
-        return other @ self.data
+        from jaxfun.galerkin import JAXFunction
+        from jaxfun.la import DiaMatrix
+        from jaxfun.utils.common import matmat
+
+        if isinstance(other, JAXFunction):
+            return matmat(other.array, self.data)
+
+        if isinstance(other, Array):
+            return matmat(other, self.data)
+
+        # NOTE: unreachable via @ when both operands are concrete DiaMatrix/Matrix
+        # instances — DiaMatrix.__matmul__ handles DiaMatrix @ Matrix, and
+        # Matrix.__matmul__ handles Matrix @ Matrix. These branches act as
+        # fallbacks for subclasses that do not override __matmul__.
+        if isinstance(other, DiaMatrix):
+            return Matrix(other.matvec(self.data))  # matvec returns dense array
+
+        assert isinstance(other, Matrix)
+        return Matrix(matmat(other.data, self.data))
 
     def astype(self, dtype: jnp.dtype) -> Matrix:
         """Return a copy with data cast to ``dtype``."""
         return Matrix(self.data.astype(dtype))
+
+    def pin(self, constraints: dict[int, float]) -> PinnedSystem:
+        """Return a :class:`PinnedSystem` with the given DOFs fixed.
+
+        For each ``(row_index, value)`` pair in *constraints* the
+        corresponding row of the dense matrix is replaced by the identity
+        row ``e_{row_index}``.
+
+        The LU factorisation of the modified matrix is cached on the returned
+        :class:`PinnedSystem` so that repeated :meth:`~PinnedSystem.solve`
+        calls are cheap.
+
+        Args:
+            constraints: Mapping from DOF index to pinned value, e.g.
+                ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0}``.  Negative indices
+                are supported (Python-style, relative to ``n``).  Positive
+                indices must be in ``[0, n)``, otherwise :exc:`IndexError`
+                is raised.
+
+        Returns:
+            :class:`PinnedSystem` whose :meth:`~PinnedSystem.solve` method
+            modifies the RHS and solves in one call.
+
+        Example::
+
+            A_sys = A.pin({0: 0.0})
+            x = A_sys.solve(b)
+        """
+        from jaxfun.la.pinned import PinnedSystem
+
+        n, _m = self.shape
+        # Normalise negative indices (Python-style); reject out-of-range positives.
+        norm_constraints: dict[int, float] = {}
+        for idx, val in constraints.items():
+            if idx < -n or idx >= n:
+                raise IndexError(
+                    f"Constraint index {idx} is out of range for matrix of size {n}"
+                )
+            norm_constraints[idx % n] = val
+        data = self.data
+        for idx in norm_constraints:
+            data = data.at[idx].set(0.0)
+            data = data.at[idx, idx].set(1.0)
+        return PinnedSystem(Matrix(data), norm_constraints)
 
     def __repr__(self) -> str:
         n, m = self.shape

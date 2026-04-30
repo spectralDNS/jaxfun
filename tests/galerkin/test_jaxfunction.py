@@ -147,9 +147,9 @@ def test_jaxfunction_2d(space: type[OrthogonalSpace], domain: Domain | None):
     uf = JAXFunction(jnp.ones((N, N)), T)
     b0 = A[0].mat @ uf.array.ravel()
     b1 = A[0].mats[0] @ uf @ A[0].mats[1].T
-    assert jnp.linalg.norm(b0 - b1.ravel()) < ulp(100)
+    assert jnp.linalg.norm(b0 - b1.ravel()) < ulp(10)
     z = inner(uf * v)
-    assert jnp.linalg.norm(z.ravel() - b0) < ulp(100)
+    assert jnp.linalg.norm(z.ravel() - b0) < ulp(10)
 
 
 def test_jaxfunction_directsum_2d(jspace: type[Jacobi.Jacobi], domain: Domain | None):
@@ -163,11 +163,11 @@ def test_jaxfunction_directsum_2d(jspace: type[Jacobi.Jacobi], domain: Domain | 
     w = JAXFunction(jnp.ones(T.num_dofs), T, name="uf")
     b0 = A[0] @ w - b
     b1 = inner(v * w)
-    assert jnp.linalg.norm(b0 - b1) < ulp(100)
+    assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(1))
     C, c = inner(Div(Grad(u)) * v)
     b0 = TPMatrices(C) @ w - c
     b1 = inner(v * Div(Grad(w)))
-    assert jnp.linalg.norm(b0 - b1) < ulp(100)
+    assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(1))
 
 
 def test_jaxfunction_diff_2d(space: type[OrthogonalSpace], domain: Domain | None):

@@ -5,7 +5,7 @@ from jax import Array
 from sympy import Expr, Symbol
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.la import DiaMatrix, diags
+from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, dst, jit_vmap
 
@@ -225,7 +225,7 @@ class ChebyshevU(Jacobi):
 
 def matrices(
     test: tuple[ChebyshevU, int], trial: tuple[ChebyshevU, int]
-) -> DiaMatrix | None:
+) -> Matrix | DiaMatrix | None:
     """Sparse operator matrices between test/trial ChebyshevU modes.
 
     Constructs (possibly rectangular) sparse differentiation / mass-like
@@ -239,7 +239,7 @@ def matrices(
         trial: Tuple (u, j) with ChebyshevU space u and number of derivatives j.
 
     Returns:
-        DiaMatrix or None if combination unsupported.
+        Matrix or DiaMatrix or None if combination unsupported.
     """
     v, i = test
     u, j = trial

@@ -12,7 +12,7 @@ from jax import Array
 from sympy import Number
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.la import DiaMatrix, diags
+from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol, diags
 from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, matmat, n
 
@@ -159,7 +159,7 @@ class Composite(OrthogonalSpace):
             stencil = get_stencil_matrix(self.bcs, self.orthogonal)
         self.scaling = scaling
         self.stencil = {(si[0]): si[1] / scaling for si in sorted(stencil.items())}
-        self.S = self.stencil_to_diamatrix()
+        self.S: DiaMatrix = self.stencil_to_diamatrix()
         self.ST: DiaMatrix = self.S.T  # pre-computed transpose; avoids creating
         # a new DiaMatrix inside jax.jit traces (which breaks metadata comparison)
         self._mass_matrix: DiaMatrix = self._compute_mass_matrix()
@@ -259,19 +259,45 @@ class Composite(OrthogonalSpace):
         """Map underlying orthogonal coefficients -> composite coefficients."""
         return a @ self.get_inverse_stencil()
 
-    def apply_stencil_galerkin(self, b: Array) -> Array:
+    @overload
+    def apply_stencil_galerkin(self, b: Matrix) -> Matrix: ...
+    @overload
+    def apply_stencil_galerkin(self, b: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def apply_stencil_galerkin(self, b: MatrixProtocol) -> MatrixProtocol: ...
+    def apply_stencil_galerkin(self, b: MatrixProtocol) -> MatrixProtocol:
         """Apply stencil on both sides (Galerkin mass-like transform)."""
         return self.S @ b @ self.ST
 
-    def apply_stencils_petrovgalerkin(self, b: Array, P: DiaMatrix) -> Array:
+    @overload
+    def apply_stencils_petrovgalerkin(self, b: Matrix, PT: DiaMatrix) -> Matrix: ...
+    @overload
+    def apply_stencils_petrovgalerkin(
+        self, b: DiaMatrix, PT: DiaMatrix
+    ) -> DiaMatrix: ...
+    @overload
+    def apply_stencils_petrovgalerkin(
+        self, b: MatrixProtocol, PT: DiaMatrix
+    ) -> MatrixProtocol: ...
+    def apply_stencils_petrovgalerkin(
+        self, b: MatrixProtocol, PT: DiaMatrix
+    ) -> MatrixProtocol:
         """Apply test (S) and trial (P) stencils (Petrov-Galerkin)."""
-        return self.S @ b @ P.T
+        return self.S @ b @ PT
 
-    def apply_stencil_left(self, b: Array) -> Array:
+    @overload
+    def apply_stencil_left(self, b: Array) -> Array: ...
+    @overload
+    def apply_stencil_left(self, b: MatrixProtocol) -> MatrixProtocol: ...
+    def apply_stencil_left(self, b: Array | MatrixProtocol) -> Array | MatrixProtocol:
         """Left-multiply by stencil (test projection)."""
         return self.S @ b
 
-    def apply_stencil_right(self, a: Array) -> Array:
+    @overload
+    def apply_stencil_right(self, a: Array) -> Array: ...
+    @overload
+    def apply_stencil_right(self, a: MatrixProtocol) -> MatrixProtocol: ...
+    def apply_stencil_right(self, a: Array | MatrixProtocol) -> Array | MatrixProtocol:
         """Right-multiply by stencil transpose (trial projection)."""
         return a @ self.ST
 

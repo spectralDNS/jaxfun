@@ -411,10 +411,16 @@ class DiaMatrix(nnx.Pytree):
                     "enabling pivoting for this matrix."
                 )
 
+            _lu_tol = (
+                float(jnp.finfo(self.data.dtype).eps)
+                * float(jnp.max(jnp.abs(band_lu)))
+                * n
+            )
+
             l_offsets = tuple(
                 off
                 for off in range(-p, 1)
-                if off == 0 or bool(jnp.any(band_lu[center + off] != 0))
+                if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > _lu_tol
             )
             l_data_rows: list[Array] = []
             for off in l_offsets:
@@ -424,9 +430,13 @@ class DiaMatrix(nnx.Pytree):
                     l_data_rows.append(band_lu[center + off].astype(self.data.dtype))
             L = DiaMatrix(data=jnp.stack(l_data_rows), offsets=l_offsets, shape=(n, n))
 
-            u_offsets = tuple(range(0, q + 1))
+            u_offsets = tuple(
+                off
+                for off in range(0, q + 1)
+                if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > _lu_tol
+            )
             u_data_rows = [
-                band_lu[center + u].astype(self.data.dtype) for u in range(q + 1)
+                band_lu[center + u].astype(self.data.dtype) for u in u_offsets
             ]
             U = DiaMatrix(data=jnp.stack(u_data_rows), offsets=u_offsets, shape=(n, n))
 
@@ -472,11 +482,17 @@ class DiaMatrix(nnx.Pytree):
 
         # ---------- extract L -------------------------------------------
         # band_lu[center - t, :] is already the column-aligned DIA row for
-        # offset -t (L[i, i-t] = band_lu[center-t, i-t]).  Skip all-zero rows.
+        # offset -t (L[i, i-t] = band_lu[center-t, i-t]).  Skip near-zero rows
+        # using a relative tolerance (floating-point residuals from elimination
+        # can leave structurally-zero diagonals with tiny non-zero entries).
+        _lu_tol = (
+            float(jnp.finfo(self.data.dtype).eps) * float(jnp.max(jnp.abs(band_lu))) * n
+        )
+
         l_offsets = tuple(
             off
             for off in range(-2 * p, 1)
-            if off == 0 or bool(jnp.any(band_lu[center + off] != 0))
+            if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > _lu_tol
         )
         l_data_rows: list[Array] = []
         for off in l_offsets:
@@ -492,10 +508,12 @@ class DiaMatrix(nnx.Pytree):
 
         # ---------- extract U -------------------------------------------
         # band_lu[center + u, :] is the column-aligned DIA row for offset +u.
-        u_offsets = tuple(range(0, q_eff + 1))
-        u_data_rows = [
-            band_lu[center + u].astype(self.data.dtype) for u in range(q_eff + 1)
-        ]
+        u_offsets = tuple(
+            off
+            for off in range(0, q_eff + 1)
+            if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > _lu_tol
+        )
+        u_data_rows = [band_lu[center + u].astype(self.data.dtype) for u in u_offsets]
         U = DiaMatrix(
             data=jnp.stack(u_data_rows),
             offsets=u_offsets,
@@ -539,18 +557,30 @@ class DiaMatrix(nnx.Pytree):
         p = max((-k for k in offsets if k < 0), default=0)
         q = max((k for k in offsets if k > 0), default=0)
 
+        # If the banded LU is already cached (e.g. from a prior lu_factor()
+        # call), use it regardless of bandwidth — the expensive compilation
+        # already happened.
+        _box: _CacheBox[dict[bool, LUFactors]] | None = getattr(self, "_lu_cache", None)
+        if _box is not None and pivot in _box.value:
+            return _box.value[pivot].solve(b, axis=axis)
+
         if p * (q + 1) > dense_threshold:
             # Dense path: XLA compiles jnp.linalg.solve in milliseconds.
-            n = self.shape[0]
-            axis = axis % b.ndim
-            if b.ndim == 1:
-                return jnp.linalg.solve(self.todense(), b)
-            b_moved = jnp.moveaxis(b, axis, 0)  # (n, *rest)
-            rest_shape = b_moved.shape[1:]
-            batch = b_moved.size // n
-            b2d = b_moved.reshape(n, batch)  # (n, batch)
-            x2d = jnp.linalg.solve(self.todense(), b2d)  # (n, batch)
-            return jnp.moveaxis(x2d.reshape((n,) + rest_shape), 0, axis)
+            # Cache the dense LUFactors so repeated calls pay only the
+            # forward/back substitution cost (same as the banded path).
+            from jaxfun.la.matrix import Matrix  # local import avoids circular
+
+            _box: _CacheBox[dict[bool, LUFactors]] | None = getattr(
+                self, "_lu_cache", None
+            )
+            if _box is None:
+                _box = _CacheBox({})
+                object.__setattr__(self, "_lu_cache", _box)
+            cache: dict[bool, LUFactors] = _box.value
+            _dense_key = "_dense"
+            if _dense_key not in cache:
+                cache[_dense_key] = Matrix(self.todense()).lu_factor()  # type: ignore[index]
+            return cache[_dense_key].solve(b, axis=axis)  # type: ignore[index]
 
         return self.lu_factor(pivot=pivot).solve(b, axis=axis)
 

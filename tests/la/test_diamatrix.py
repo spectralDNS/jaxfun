@@ -701,10 +701,14 @@ class TestLU:
         assert set(lu.L.offsets) == {-2, -1, 0}
 
     def test_lu_U_offsets(self):
-        """For a tridiagonal (no pivoting), U has offsets (0, 1)."""
+        """Structurally-zero diagonals are pruned from U after factorisation.
+
+        _pentadiagO has only even offsets (-4,-2,0,2,4).  No fill-in occurs on
+        odd diagonals, so U should contain only offsets {0, 2, 4}.
+        """
         _, A = _pentadiagO(5)
         lu = A.lu_factor()
-        assert set(lu.U.offsets) == {0, 1, 2, 3, 4}
+        assert set(lu.U.offsets) == {0, 2, 4}
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_lu_product_equals_original(self, mat):

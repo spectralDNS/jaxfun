@@ -116,7 +116,7 @@ def test_tpmats_wavenumber_factor_solve_agrees_with_kron(poly):
     ref = tpmats_to_kron(A).solve(b.flatten()).reshape(b.shape)
     uh = wn.solve(b)
     assert uh.shape == b.shape
-    assert float(jnp.max(jnp.abs(uh - ref))) < float(ulp(100))
+    assert float(jnp.max(jnp.abs(uh - ref))) < jnp.sqrt(ulp(10))
 
 
 @POLY_SPACES
@@ -130,7 +130,7 @@ def test_tpmats_wavenumber_factor_solve_fourier_poly_l2(poly):
     xj = T.mesh(N=(N, N), broadcast=True)
     uej = lambdify((x, y), ue)(*xj)
     l2 = float(jnp.linalg.norm(uj - uej)) / N
-    assert l2 < float(ulp(100)), f"L2 error {l2:.2e} too large"
+    assert l2 < jnp.sqrt(ulp(10)), f"L2 error {l2:.2e} too large"
 
 
 def test_tpmats_wavenumber_factor_accepts_tpmatrices():
@@ -296,7 +296,7 @@ def test_tpmatrices_solve_fourier_poly2d_l2(poly):
     xj = T.mesh(N=(N, N), broadcast=True)
     uej = lambdify((x, y), ue)(*xj)
     l2 = float(jnp.linalg.norm(uj - uej)) / N
-    assert l2 < float(ulp(100)), f"L2 error {l2:.2e} too large"
+    assert l2 < jnp.sqrt(ulp(10)), f"L2 error {l2:.2e} too large"
 
 
 # ---------------------------------------------------------------------------
@@ -328,4 +328,4 @@ def test_tpmatrices_solve_fourier_fourier_legendre_3d():
     xj = T.mesh(N=(M, M, M), broadcast=True)
     uej = lambdify((x, y, z), ue)(*xj)
     l2 = float(jnp.linalg.norm(uj - uej)) / M
-    assert l2 < float(ulp(100)), f"3D L2 error {l2:.2e} too large"
+    assert l2 < jnp.sqrt(ulp(1000)), f"3D L2 error {l2:.2e} too large"

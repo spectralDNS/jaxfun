@@ -1034,7 +1034,6 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
 
         Returns:
             Solution array with the same shape as ``rhs``.
-
         """
         return self.lu_factor().solve(rhs)
 

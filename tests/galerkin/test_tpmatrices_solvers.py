@@ -13,9 +13,11 @@ from jaxfun.galerkin import (
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.tensorproductspace import (
+    TPLUFactors,
     TPMatrices,
     TPMatricesLUFactors,
     TPMatricesWavenumberSolver,
+    TPMatrix,
     tpmats_lu_factor,
     tpmats_to_kron,
     tpmats_wavenumber_factor,
@@ -152,6 +154,30 @@ def test_wavenumber_solver_solve2_agrees_with_solve():
     _, A, b, _ = _poisson_fourier_poly_2d(16, Legendre.Legendre)
     wn = tpmats_wavenumber_factor(A)
     assert float(jnp.max(jnp.abs(wn.solve(b) - wn.solve2(b)))) < float(ulp(100))
+
+
+# ---------------------------------------------------------------------------
+# TPMatrix.solve / TPLUFactors  (single Kronecker-product term)
+# ---------------------------------------------------------------------------
+
+
+@POLY_SPACES
+def test_tpmatrix_lu_factor_returns_tplufactors(poly):
+    """TPMatrix.lu_factor() returns a TPLUFactors instance."""
+    _, A, _, _ = _poisson_poly2d(8, poly)
+    assert isinstance(A[0], TPMatrix)
+    lu = A[0].lu_factor()
+    assert isinstance(lu, TPLUFactors)
+
+
+@POLY_SPACES
+def test_tpmatrix_solve_single_term(poly):
+    """TPMatrix.solve solves a single-term Kronecker system correctly."""
+    T, A, b, ue = _poisson_poly2d(16, poly)
+    # Use the first (and for a pure Laplacian, dominant) term directly
+    tp = A[0]
+    rhs = tp(tp.lu_factor().solve(b))  # round-trip: A*(A^{-1}*b) ≈ b
+    assert float(jnp.max(jnp.abs(rhs - b))) < float(ulp(100))
 
 
 # ---------------------------------------------------------------------------

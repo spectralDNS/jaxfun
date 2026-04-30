@@ -1059,6 +1059,7 @@ class TPLUFactors:
         self.scale = scale
         self.shape = shape
 
+    @jax.jit(static_argnums=(0,))
     def solve(self, rhs: Array) -> Array:
         """Solve ``(scale * A0 ⊗ A1 ⊗ …) x = rhs``.
 
@@ -1440,7 +1441,7 @@ def _make_wavenumber_vmap_solve(
 
 
 class TPMatricesWavenumberSolver:
-    """Per-wavenumber solver for Fourier × polynomial tensor-product systems.
+    """Per-wavenumber solver for Fourier x polynomial tensor-product systems.
 
     Solves
 
@@ -1517,6 +1518,10 @@ class TPMatricesWavenumberSolver:
             all_L_offsets, all_U_offsets, n_P_local, self.L_data_batch.dtype
         )
 
+        # Experimental alternative: instead of custom scan kernels, try rebuilding
+        # usining the aligned data and vmapping lu.solve directly.  This is more
+        # elegant, but initial tests suggest the custom scan kernels are faster
+        # Keep alternative solve2 for now.
         # Rebuild LUFactors with aligned offsets (all_L_offsets / all_U_offsets)
         # so every element has the same pytree structure.  Then stack their
         # leaves into a single batched pytree and vmap LUFactors.solve over it.
@@ -1767,7 +1772,7 @@ def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
 def tpmats_wavenumber_factor(
     A: list[TPMatrix] | TPMatrices,
 ) -> TPMatricesWavenumberSolver:
-    """Pre-factorize a Fourier × polynomial :class:`TPMatrices` system.
+    """Pre-factorize a Fourier x polynomial :class:`TPMatrices` system.
 
     Detects which axes are Fourier (every term has a purely diagonal
     :class:`~jaxfun.la.DiaMatrix` — ``offsets == (0,)`` — on that axis) and

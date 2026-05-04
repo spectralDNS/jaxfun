@@ -7,6 +7,8 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
+from jaxfun.la.matrixprotocol import _CacheBox
+
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
     from jaxfun.la import Matrix, MatrixProtocol
@@ -50,32 +52,6 @@ def _warn_dense_indexing() -> None:
         DenseIndexingWarning,
         stacklevel=3,
     )
-
-
-class _CacheBox[T]:
-    """Thin wrapper that provides identity-based equality and hashing.
-
-    Flax NNX captures all instance ``__dict__`` entries as pytree aux_data
-    (metadata).  Metadata is compared by equality on every JIT cache lookup.
-    Storing a :class:`DiaMatrix` or a :class:`LUFactors` containing JAX arrays
-    directly would trigger array equality checks and crash.  Wrapping the
-    cached value in ``_CacheBox`` makes the comparison use ``is`` (identity),
-    so the same cached object always compares equal to itself.
-    """
-
-    __slots__ = ("value",)
-
-    def __init__(self, value: T) -> None:
-        self.value = value
-
-    def __eq__(self, other: object) -> bool:
-        return type(other) is _CacheBox and self.value is other.value
-
-    def __hash__(self) -> int:
-        return id(self.value)
-
-    def __repr__(self) -> str:
-        return f"_CacheBox({self.value!r})"
 
 
 @nnx.dataclass
@@ -366,11 +342,13 @@ class DiaMatrix(nnx.Pytree):
             ValueError: if the matrix is not square or the system is singular.
         """
         # --- lazy cache -------------------------------------------------
-        _box: _CacheBox[dict[bool, LUFactors]] | None = getattr(self, "_lu_cache", None)
+        _box: _CacheBox[dict[bool | str, LUFactors]] | None = getattr(
+            self, "_lu_cache", None
+        )
         if _box is None:
             _box = _CacheBox({})
             object.__setattr__(self, "_lu_cache", _box)
-        cache: dict[bool, LUFactors] = _box.value
+        cache: dict[bool | str, LUFactors] = _box.value
         if pivot in cache:
             return cache[pivot]
 
@@ -560,7 +538,9 @@ class DiaMatrix(nnx.Pytree):
         # If the banded LU is already cached (e.g. from a prior lu_factor()
         # call), use it regardless of bandwidth — the expensive compilation
         # already happened.
-        _box: _CacheBox[dict[bool, LUFactors]] | None = getattr(self, "_lu_cache", None)
+        _box: _CacheBox[dict[bool | str, LUFactors]] | None = getattr(
+            self, "_lu_cache", None
+        )
         if _box is not None and pivot in _box.value:
             return _box.value[pivot].solve(b, axis=axis)
 
@@ -570,17 +550,17 @@ class DiaMatrix(nnx.Pytree):
             # forward/back substitution cost (same as the banded path).
             from jaxfun.la.matrix import Matrix  # local import avoids circular
 
-            _box: _CacheBox[dict[bool, LUFactors]] | None = getattr(
+            _box: _CacheBox[dict[bool | str, LUFactors]] | None = getattr(
                 self, "_lu_cache", None
             )
             if _box is None:
                 _box = _CacheBox({})
                 object.__setattr__(self, "_lu_cache", _box)
-            cache: dict[bool, LUFactors] = _box.value
+            cache: dict[bool | str, LUFactors] = _box.value
             _dense_key = "_dense"
             if _dense_key not in cache:
                 cache[_dense_key] = Matrix(self.todense()).lu_factor()  # type: ignore[index]
-            return cache[_dense_key].solve(b, axis=axis)  # type: ignore[index]
+            return cache[_dense_key].solve(b, axis=axis)
 
         return self.lu_factor(pivot=pivot).solve(b, axis=axis)
 

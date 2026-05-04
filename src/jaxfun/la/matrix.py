@@ -6,6 +6,8 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
+from jaxfun.la.matrixprotocol import _CacheBox
+
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
     from jaxfun.la import DiaMatrix
@@ -23,11 +25,12 @@ class Matrix(nnx.Pytree):
 
     Attributes:
         data: The underlying ``(n, m)`` JAX array.
-        _lu_cache: Private ``LUFactors | None`` populated on the first call to
-            :meth:`lu_factor`.  Subsequent calls return the cached object at
-            no extra cost.  Stored via ``object.__setattr__`` so it is
-            invisible to JAX's pytree machinery and does not affect JIT
-            tracing or compilation.
+        _lu_cache: Private :class:`~jaxfun.la.matrixprotocol._CacheBox` wrapping
+            a ``LUFactors``, populated on the first call to :meth:`lu_factor`.
+            Subsequent calls return the cached object at no extra cost.  Stored
+            via ``object.__setattr__`` and wrapped in ``_CacheBox`` so it is
+            invisible to JAX's pytree machinery and compares by identity (not
+            by array equality) on every JIT cache lookup.
 
     Example::
 
@@ -113,9 +116,9 @@ class Matrix(nnx.Pytree):
         Raises:
             ValueError: if the matrix is not square.
         """
-        cached: LUFactors | None = getattr(self, "_lu_cache", None)
-        if cached is not None:
-            return cached
+        _box: _CacheBox[LUFactors] | None = getattr(self, "_lu_cache", None)
+        if _box is not None:
+            return _box.value
         n, m = self.shape
         if n != m:
             raise ValueError(
@@ -128,7 +131,7 @@ class Matrix(nnx.Pytree):
                 "Consider pinning (:meth:`Matrix.pin`) additional DOFs."
             )
         result = LUFactors(lu=lu, piv=piv, shape=(n, n))
-        object.__setattr__(self, "_lu_cache", result)
+        object.__setattr__(self, "_lu_cache", _CacheBox(result))
         return result
 
     def lu_solve(self, b: Array, axis: int = 0) -> Array:

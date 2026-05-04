@@ -1117,7 +1117,7 @@ class TPMatrices(nnx.Pytree):
            instances, use :func:`tpmats_dense_lu_factor` (simple full Kronecker
            LU — works for any linear system).
         2. Otherwise try :func:`tpmats_wavenumber_factor` (efficient for
-           Fourier × polynomial problems).
+           Fourier x polynomial problems).
         3. Fall back to :func:`tpmats_lu_factor` (diagonalization — requires
            simultaneously diagonalizable factor matrices per axis).
 
@@ -1152,13 +1152,19 @@ class TPMatrices(nnx.Pytree):
 
         Uses diagonalization (:meth:`lu_factor`) when all factor matrices on
         each axis are simultaneously diagonalizable (e.g. 2D/3D Poisson).
-        Falls back to an explicit Kronecker product solve otherwise.
+        Falls back to an explicit Kronecker product solve otherwise.  The
+        Kronecker matrix is assembled once and cached so that repeated solves
+        pay the assembly cost only on the first call; the matrix's own
+        :meth:`~jaxfun.la.Matrix.solve` caches the LU factorisation as well.
         """
         try:
             return self.lu_factor().solve(rhs)
         except ValueError:
-            A = tpmats_to_kron(list(self.tpmats))
-            return A.solve(rhs.flatten()).reshape(rhs.shape)
+            cached_kron: Matrix | DiaMatrix | None = getattr(self, "_kron_cache", None)
+            if cached_kron is None:
+                cached_kron = tpmats_to_kron(list(self.tpmats))
+                object.__setattr__(self, "_kron_cache", cached_kron)
+            return cached_kron.solve(rhs.flatten()).reshape(rhs.shape)
 
 
 class TensorMatrix(nnx.Pytree):  # noqa: B903
@@ -1536,7 +1542,7 @@ class TPMatricesWavenumberSolver:
         )
 
         # Experimental alternative: instead of custom scan kernels, try rebuilding
-        # usining the aligned data and vmapping lu.solve directly.  This is more
+        # using the aligned data and vmapping lu.solve directly.  This is more
         # elegant, but initial tests suggest the custom scan kernels are faster
         # Keep alternative solve2 for now.
         # Rebuild LUFactors with aligned offsets (all_L_offsets / all_U_offsets)

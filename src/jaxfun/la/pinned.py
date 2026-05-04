@@ -51,8 +51,7 @@ class PinnedSystem(nnx.Pytree):
 
     Args:
         matrix: The row-substituted :class:`Matrix` or :class:`DiaMatrix`.
-        constraints: Mapping from DOF index to pinned value
-            (e.g. ``{0: 0.0, -1: 1.0}``).  Converted to a tuple internally.
+        constraints: tuple of ``(index, value)`` pairs recording the pinned DOFs.
     """
 
     matrix: Matrix | DiaMatrix
@@ -190,5 +189,5 @@ class PinnedSystem(nnx.Pytree):
         return self.matrix[key]
 
     def __repr__(self) -> str:
-        pins = ", ".join(f"{k}={v}" for k, v in self.constraints)
+        pins = ", ".join(f"{k}: {v}" for k, v in self.constraints)
         return f"PinnedSystem(shape={self.shape}, constraints={{{pins}}})"

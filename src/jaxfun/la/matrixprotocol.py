@@ -11,6 +11,33 @@ if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
 
 
+class _CacheBox[T]:
+    """Thin wrapper that provides identity-based equality and hashing.
+
+    Flax NNX captures all instance ``__dict__`` entries as pytree aux_data
+    (metadata).  Metadata is compared by equality on every JIT cache lookup.
+    Storing a :class:`~jaxfun.la.DiaMatrix` or a :class:`LUFactors`
+    containing JAX arrays directly would trigger array equality checks and
+    crash.  Wrapping the cached value in ``_CacheBox`` makes the comparison
+    use ``is`` (identity), so the same cached object always compares equal to
+    itself.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+    def __eq__(self, other: object) -> bool:
+        return type(other) is _CacheBox and self.value is other.value
+
+    def __hash__(self) -> int:
+        return id(self.value)
+
+    def __repr__(self) -> str:
+        return f"_CacheBox({self.value!r})"
+
+
 @runtime_checkable
 class MatrixProtocol(Protocol):
     """Structural interface shared by all matrix types in ``jaxfun.la``.

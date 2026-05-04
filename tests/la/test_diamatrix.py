@@ -1038,7 +1038,7 @@ class TestPin:
         sys = A.pin({0: 0.0})
         r = repr(sys)
         assert "PinnedSystem" in r
-        assert "0=0.0" in r
+        assert "0: 0.0" in r
 
     # ------------------------------------------------------------------
     # Pytree structure

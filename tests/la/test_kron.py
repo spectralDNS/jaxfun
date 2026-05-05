@@ -389,7 +389,7 @@ def _make_tpmatrix_2d(
 ) -> tuple[TPMatrix, np.ndarray]:
     """Return a TPMatrix(A0, A1) and the corresponding dense Kronecker product."""
     a0 = jax.random.normal(jax.random.PRNGKey(7), shape=(m0, n0))
-    a1 = jax.random.normal(jax.random.PRNGKey(7), shape=(m1, n1))
+    a1 = jax.random.normal(jax.random.PRNGKey(8), shape=(m1, n1))
     tp = TPMatrix(
         [Matrix(a0), Matrix(a1)],  # ty:ignore[invalid-argument-type]
         scale,

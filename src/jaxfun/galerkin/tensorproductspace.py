@@ -1030,11 +1030,6 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         Returns:
             Solution array with the same shape as ``rhs``.
 
-        Note:
-            This method is not highly useful, because TPMatrices are not often
-            solved directly by themselves. There is usually a list of them in a
-            :class:`TPMatrices`, and the summed system is then solved without
-            using this solve method.
         """
         return self.lu_factor().solve(rhs)
 

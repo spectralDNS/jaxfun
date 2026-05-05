@@ -1356,6 +1356,8 @@ class DiaMatrix(nnx.Pytree):
             return _box.value
 
         n, m = self.shape
+        if n != m:
+            raise ValueError("RCM permutation is only defined for square matrices.")
         perm = _rcm_scipy(self.data, self.offsets, self.shape)
         new_data, new_offsets = _permute_dia(self.data, self.offsets, (n, m), perm)
 

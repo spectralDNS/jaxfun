@@ -1349,11 +1349,11 @@ class BlockTPMatrix:
 
     def __init__(
         self,
-        tpmats: list[TPMatrix] | TPMatrices,
+        tpmats: list[TPMatrix],
         test_space: VectorTensorProductSpace,
         trial_space: VectorTensorProductSpace,
     ) -> None:
-        self.tpmats = tpmats.tpmats if isinstance(tpmats, TPMatrices) else tpmats
+        self.tpmats = tpmats
         self.test_space = test_space
         self.trial_space = trial_space
         self.shape = (self.test_space.dim, self.trial_space.dim)

@@ -651,7 +651,8 @@ class DiaMatrix(nnx.Pytree):
                 lu_perm.solve(jnp.take(b, perm, axis=ax), axis=ax), inv_perm, axis=ax
             )
 
-            # Bandwidth still too large after RCM: fall back to dense.
+        else:
+            # RCM reduced bandwidth but it still exceeds the threshold.
             warnings.warn(
                 f"DiaMatrix.lu_solve(method='auto'): bandwidth p*(q+1)={p_p * (q_p + 1)} "  # noqa: E501
                 f"exceeds threshold {auto_threshold} even after RCM reordering. ",

@@ -391,7 +391,7 @@ class TestScalarArithmetic:
 
 
 def _indexing_matrix() -> tuple[jax.Array, DiaMatrix]:
-    dense = jnp.arange(1, 21, dtype=jnp.float32).reshape(4, 5)
+    dense = jnp.arange(1, 21, dtype=float).reshape(4, 5)
     return dense, DiaMatrix.from_dense(dense)
 
 
@@ -884,7 +884,7 @@ class TestGetRow:
 
     def test_unstored_diagonal_is_zero(self):
         # Only main diagonal stored; every row should be a one-hot vector.
-        A = diags([jnp.arange(1, 5, dtype=jnp.float32)], offsets=(0,))
+        A = diags([jnp.arange(1, 5, dtype=float)], offsets=(0,))
         for i in range(4):
             row = A.get_row(i)
             expected = jnp.zeros(4).at[i].set(float(i + 1))
@@ -942,7 +942,7 @@ class TestGetColumn:
 
     def test_unstored_diagonal_is_zero(self):
         # Only main diagonal stored; every column should be a one-hot vector.
-        A = diags([jnp.arange(1, 5, dtype=jnp.float32)], offsets=(0,))
+        A = diags([jnp.arange(1, 5, dtype=float)], offsets=(0,))
         for j in range(4):
             col = A.get_column(j)
             expected = jnp.zeros(4).at[j].set(float(j + 1))
@@ -1335,7 +1335,7 @@ class TestRCM:
         for i in range(n - half):
             dense[i, i + half] = -1.0
             dense[i + half, i] = -1.0
-        A = DiaMatrix.from_dense(jnp.array(dense, dtype=jnp.float32))
+        A = DiaMatrix.from_dense(jnp.array(dense, dtype=float))
         A_perm, _, _ = A.rcm()
         bw_before = max(abs(k) for k in A.offsets)
         bw_after = max(abs(k) for k in A_perm.offsets)
@@ -1382,12 +1382,12 @@ class TestRCM:
         for i in range(n - half):
             dense[i, i + half] = -0.5
             dense[i + half, i] = -0.5
-        A = DiaMatrix.from_dense(jnp.array(dense, dtype=jnp.float32))
+        A = DiaMatrix.from_dense(jnp.array(dense, dtype=float))
         bw = max(abs(k) for k in A.offsets)
         # Confirm bandwidth is non-trivial so the rcm path is meaningful
         assert bw > 1
 
-        x_true = jnp.arange(1.0, n + 1.0, dtype=jnp.float32)
+        x_true = jnp.arange(1.0, n + 1.0, dtype=float)
         b = A.matvec(x_true)
         x_hat = A.lu_solve(b, method="rcm")
         assert jnp.allclose(x_hat, x_true, atol=ulp(1000))
@@ -1404,7 +1404,7 @@ class TestRCM:
         # Interleave permutation: [0,4,1,5,2,6,3,7] inflates bandwidth to ~4.
         perm_bad = np.array([0, 4, 1, 5, 2, 6, 3, 7])
         dense_bad = np.array(A0.todense())[perm_bad][:, perm_bad]
-        A = DiaMatrix.from_dense(jnp.array(dense_bad, dtype=jnp.float32))
+        A = DiaMatrix.from_dense(jnp.array(dense_bad, dtype=float))
         # Confirm bandwidth exceeds threshold so the wide path is entered.
         p = max((-k for k in A.offsets if k < 0), default=0)
         q = max((k for k in A.offsets if k > 0), default=0)

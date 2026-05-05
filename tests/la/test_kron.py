@@ -26,7 +26,7 @@ from jaxfun.galerkin import (
     TrialFunction,
 )
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TPMatrix, tpmats_to_kron
+from jaxfun.galerkin.tensorproductspace import TPMatrices, TPMatrix, tpmats_to_kron
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.la.diamatrix import diakron
 from jaxfun.operators import Div, Grad
@@ -179,7 +179,7 @@ class TestDiakron:
         # Valid offsets: [-(12-1), 6-1] = [-11, 5].
         m, n, p = 4, 2, 3
         A_dense = jnp.array(
-            [[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32
+            [[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]], dtype=float
         )
         A = DiaMatrix.from_dense(A_dense)
         B = _diag3(p)
@@ -318,9 +318,9 @@ class TestKronSolve:
             pytest.skip("requires float64 (run with jax_enable_x64=True)")
 
         A, b = _biharmonic_tpmats(N=12)
-        C = tpmats_to_kron(A)
+        C = TPMatrices(A)
         b_flat = b.flatten()
-        x = C.solve(b_flat)  # auto method falls back to dense for wide bandwidth
+        x = C.solve(b_flat, method="kron", kron_method="rcm")
         residual = float(jnp.linalg.norm(C.todense() @ x - b_flat))
         assert residual < ulp(10000)
 

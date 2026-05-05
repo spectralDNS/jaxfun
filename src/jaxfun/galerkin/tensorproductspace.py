@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import itertools
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from enum import StrEnum
 from functools import partial
 from typing import TYPE_CHECKING, Any, NoReturn, TypeGuard, cast, overload
 
@@ -17,6 +18,7 @@ from scipy import sparse as scipy_sparse
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol, diakron
 from jaxfun.la.matrix import LUFactors
+from jaxfun.la.matrixprotocol import DiaMatrixSolveMethod, _CacheBox
 from jaxfun.typing import MeshKind
 
 if TYPE_CHECKING:
@@ -1082,6 +1084,27 @@ class TPLUFactors:
         return (y / jnp.asarray(self.scale)).reshape(rhs.shape)
 
 
+class TPSolveMethod(StrEnum):
+    """High-level solver selection for :meth:`TPMatrices.solve`.
+
+    Attributes:
+        AUTO: Try the factored path (:meth:`TPMatrices.lu_factor`) first;
+            fall back to explicit Kronecker assembly if it raises
+            :exc:`ValueError`.
+        LU: Force the factored path (diagonalization or wavenumber solver).
+            Propagates :exc:`ValueError` if the factor-matrix structure is
+            not suitable.
+        KRON: Force explicit Kronecker product assembly.  The assembled
+            :class:`~jaxfun.la.DiaMatrix` or :class:`~jaxfun.la.Matrix` is
+            cached; the DIA-matrix solver is selected via *kron_method* in
+            :meth:`TPMatrices.solve`.
+    """
+
+    AUTO = "auto"
+    LU = "lu"
+    KRON = "kron"
+
+
 class TPMatrices(nnx.Pytree):
     """Container for list of TPMatrix bilinear operator tensors."""
 
@@ -1112,6 +1135,42 @@ class TPMatrices(nnx.Pytree):
             jnp.array([mat._rmatmul_array(w) for mat in self.tpmats]), axis=0
         )
 
+    def tosparse(self) -> DiaMatrix:
+        sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        if sparse_box is not None:
+            return sparse_box.value
+        kron = tpmats_to_kron(list(self.tpmats))
+        if not isinstance(kron, DiaMatrix):
+            kron = DiaMatrix.from_dense(kron.todense())
+        object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
+        return kron
+
+    def todense(self) -> Array:
+        """Return the dense Kronecker product as a raw array.
+
+        The underlying :class:`~jaxfun.la.Matrix` or
+        :class:`~jaxfun.la.DiaMatrix` is cached for repeated calls.
+
+        Returns:
+            2-D :class:`~jaxfun.Array` of shape ``(N, N)`` where ``N`` is the
+            total number of degrees of freedom.
+        """
+        dense_box: _CacheBox[Matrix] | None = getattr(self, "_kron_cache", None)
+        if dense_box is not None:
+            return dense_box.value.todense()
+        sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        if sparse_box is not None:
+            return sparse_box.value.todense()
+        kron = tpmats_to_kron(list(self.tpmats))
+        if isinstance(kron, Matrix):
+            object.__setattr__(self, "_kron_cache", _CacheBox(kron))
+            return kron.todense()
+        object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
+        return kron.todense()
+
+    def to_Matrix(self) -> Matrix:
+        return Matrix(self.todense())
+
     def lu_factor(
         self,
     ) -> TPMatricesDenseLUFactors | TPMatricesLUFactors | TPMatricesWavenumberSolver:
@@ -1138,7 +1197,7 @@ class TPMatrices(nnx.Pytree):
             | None
         ) = getattr(self, "_lu_cache", None)
         if cached is not None:
-            return cached
+            return cached.value
         result: (
             TPMatricesDenseLUFactors | TPMatricesLUFactors | TPMatricesWavenumberSolver
         )
@@ -1150,27 +1209,80 @@ class TPMatrices(nnx.Pytree):
                 result = tpmats_wavenumber_factor(tpmats_list)
             except ValueError:
                 result = tpmats_lu_factor(tpmats_list)
-        object.__setattr__(self, "_lu_cache", result)
+        object.__setattr__(self, "_lu_cache", _CacheBox(result))
         return result
 
-    def solve(self, rhs: Array) -> Array:
+    def solve(
+        self,
+        rhs: Array,
+        *,
+        method: TPSolveMethod | str = TPSolveMethod.AUTO,
+        kron_method: DiaMatrixSolveMethod | str = DiaMatrixSolveMethod.AUTO,
+    ) -> Array:
         """Solve the summed tensor-product system.
 
-        Uses diagonalization (:meth:`lu_factor`) when all factor matrices on
-        each axis are simultaneously diagonalizable (e.g. 2D/3D Poisson).
-        Falls back to an explicit Kronecker product solve otherwise.  The
-        Kronecker matrix is assembled once and cached so that repeated solves
-        pay the assembly cost only on the first call; the matrix's own
-        :meth:`~jaxfun.la.Matrix.solve` caches the LU factorisation as well.
+        Args:
+            rhs: Right-hand side array.
+            method: High-level solver selection. One of:
+
+                * ``"auto"`` (default) — tries the factored path
+                  (:meth:`lu_factor`) first; falls back to explicit Kronecker
+                  product assembly if the factor-matrix structure is not
+                  suitable (e.g. not simultaneously diagonalizable).
+                * ``"lu"`` — force the factored path (diagonalization or
+                  wavenumber solver). Raises :exc:`ValueError` if the structure
+                  is not suitable.
+                * ``"kron"`` — force explicit Kronecker product assembly.
+                  The assembled matrix is cached for repeated solves.
+
+            kron_method: Solver method forwarded to
+                :meth:`~jaxfun.la.DiaMatrix.lu_solve` when the Kronecker-product
+                path is used and the assembled matrix is a
+                :class:`~jaxfun.la.DiaMatrix` (i.e. all factor matrices are
+                sparse).  One of ``"auto"``, ``"banded"``, ``"rcm"``,
+                ``"dense"``.  Ignored when the assembled matrix is a dense
+                :class:`~jaxfun.la.Matrix`.
+
+        Returns:
+            Solution array with the same shape as *rhs*.
+
+        Raises:
+            ValueError: If ``method="lu"`` but the factor-matrix structure is
+                not suitable for the factored solver.
         """
+        method = TPSolveMethod(method)
+
+        def _kron_solve(r: Array) -> Array:
+            flat = r.flatten()
+            # DiaMatrix path: shared cache with tosparse()
+            sparse_box: _CacheBox[DiaMatrix] | None = getattr(
+                self, "_sparse_cache", None
+            )
+            if sparse_box is not None:
+                return sparse_box.value.lu_solve(flat, method=kron_method).reshape(
+                    r.shape
+                )
+            # Dense Matrix path
+            dense_box: _CacheBox[Matrix] | None = getattr(self, "_kron_cache", None)
+            if dense_box is not None:
+                return dense_box.value.solve(flat).reshape(r.shape)
+            # No cache yet: compute and store
+            kron = tpmats_to_kron(list(self.tpmats))
+            if isinstance(kron, DiaMatrix):
+                object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
+                return kron.lu_solve(flat, method=kron_method).reshape(r.shape)
+            object.__setattr__(self, "_kron_cache", _CacheBox(kron))
+            return kron.solve(flat).reshape(r.shape)
+
+        if method == TPSolveMethod.LU:
+            return self.lu_factor().solve(rhs)
+        if method == TPSolveMethod.KRON:
+            return _kron_solve(rhs)
+        # AUTO: try factored path, fall back to kron
         try:
             return self.lu_factor().solve(rhs)
         except ValueError:
-            cached_kron: Matrix | DiaMatrix | None = getattr(self, "_kron_cache", None)
-            if cached_kron is None:
-                cached_kron = tpmats_to_kron(list(self.tpmats))
-                object.__setattr__(self, "_kron_cache", cached_kron)
-            return cached_kron.solve(rhs.flatten()).reshape(rhs.shape)
+            return _kron_solve(rhs)
 
 
 class TensorMatrix(nnx.Pytree):  # noqa: B903
@@ -1232,11 +1344,11 @@ class BlockTPMatrix:
 
     def __init__(
         self,
-        tpmats: list[TPMatrix] | TPMatrices,
+        tpmats: list[TPMatrix],
         test_space: VectorTensorProductSpace,
         trial_space: VectorTensorProductSpace,
     ) -> None:
-        self.tpmats = tpmats.tpmats if isinstance(tpmats, TPMatrices) else tpmats
+        self.tpmats = tpmats
         self.test_space = test_space
         self.trial_space = trial_space
         self.shape = (self.test_space.dim, self.trial_space.dim)
@@ -1299,9 +1411,9 @@ class BlockTPMatrix:
                         f"got {type(mat).__name__}."
                     )
 
-        cached: DiaMatrix | None = getattr(self, "_sparse_cache", None)
+        cached: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
         if cached is not None:
-            return cached
+            return cached.value
 
         # Group TPMatrix objects by global_indices.
         from collections import defaultdict
@@ -1353,7 +1465,7 @@ class BlockTPMatrix:
         result = DiaMatrix(
             data=global_data, offsets=sorted_offsets, shape=(total_rows, total_cols)
         )
-        object.__setattr__(self, "_sparse_cache", result)
+        object.__setattr__(self, "_sparse_cache", _CacheBox(result))
         return result
 
     def __call__(self, u: Array | JAXFunction) -> Array:
@@ -1367,14 +1479,12 @@ class BlockTPMatrix:
         from jaxfun.galerkin import JAXFunction
 
         w = u.array if isinstance(u, JAXFunction) else u
-        rcm_cache: tuple[DiaMatrix, Array, Array] | None = getattr(
-            self, "_rcm_cache", None
-        )
-        if rcm_cache is not None:
-            A_perm, perm, inv_perm = rcm_cache
-            return A_perm.matvec(w.ravel()[perm])[inv_perm].reshape(w.shape)
-        sparse: DiaMatrix | None = getattr(self, "_sparse_cache", None)
-        if sparse is not None:
+        sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        if sparse_box is not None:
+            sparse = sparse_box.value
+            if getattr(sparse, "_rcm_cache", None) is not None:
+                A_perm, perm, inv_perm = sparse.rcm()
+                return A_perm.matvec(w.ravel()[perm])[inv_perm].reshape(w.shape)
             return sparse.matvec(w.ravel()).reshape(w.shape)
         return self._matmul_array(w)
 
@@ -1394,16 +1504,7 @@ class BlockTPMatrix:
             isinstance(mat, DiaMatrix) for tp in self.tpmats for mat in tp.mats
         )
         if all_dia:
-            rcm_cache: tuple[DiaMatrix, Array, Array] | None = getattr(
-                self, "_rcm_cache", None
-            )
-            if rcm_cache is None:
-                _, perm, inv_perm = self.tosparse().rcm()
-                # tosparse().rcm() caches on the DiaMatrix; mirror here so
-                # __call__ can find it without re-entering tosparse().
-                rcm_cache = self.tosparse().rcm()
-                object.__setattr__(self, "_rcm_cache", rcm_cache)
-            A_perm, perm, inv_perm = rcm_cache
+            A_perm, perm, inv_perm = self.tosparse().rcm()
             x_perm = A_perm.solve(b.ravel()[perm])
             return x_perm[inv_perm].reshape(b.shape)
         M = self.to_Matrix()

@@ -40,10 +40,8 @@ ue = T.system.expr_psi_to_base_scalar(ue)
 
 A, L = inner(v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True)
 
-# C = tpmats_to_kron(A)
-# un = C.solve(L.flatten()).reshape(L.shape)
-A0 = TPMatrices(A)
-un = A0.solve(L)
+B = TPMatrices(A)
+un = B.solve(L, method="kron", kron_method="banded")
 
 N = 100
 uj = T.backward(un, kind="uniform", N=(N, N))

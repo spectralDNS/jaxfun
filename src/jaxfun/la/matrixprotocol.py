@@ -19,6 +19,17 @@ class DiaMatrixSolveMethod(StrEnum):
     DENSE = "dense"
 
 
+class SolverNotApplicable(Exception):
+    """Raised when a solver strategy cannot be applied to the given matrix structure.
+
+    Used by :func:`~jaxfun.galerkin.tensorproductspace.tpmats_lu_factor` and
+    :func:`~jaxfun.galerkin.tensorproductspace.tpmats_wavenumber_factor` to
+    signal that the factor-matrix structure is incompatible with the requested
+    solver.  Caught by :meth:`~jaxfun.galerkin.TPMatrices.lu_factor` and
+    :meth:`~jaxfun.galerkin.TPMatrices.solve` when selecting a fallback.
+    """
+
+
 class _CacheBox[T]:
     """Thin wrapper that provides identity-based equality and hashing.
 

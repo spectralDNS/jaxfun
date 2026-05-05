@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import itertools
+from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from enum import StrEnum
 from functools import partial
@@ -18,7 +19,11 @@ from scipy import sparse as scipy_sparse
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol, diakron
 from jaxfun.la.matrix import LUFactors
-from jaxfun.la.matrixprotocol import DiaMatrixSolveMethod, _CacheBox
+from jaxfun.la.matrixprotocol import (
+    DiaMatrixSolveMethod,
+    SolverNotApplicable,
+    _CacheBox,
+)
 from jaxfun.typing import MeshKind
 
 if TYPE_CHECKING:
@@ -1202,7 +1207,7 @@ class TPMatrices(nnx.Pytree):
         else:
             try:
                 result = tpmats_wavenumber_factor(tpmats_list)
-            except ValueError:
+            except SolverNotApplicable:
                 result = tpmats_lu_factor(tpmats_list)
         object.__setattr__(self, "_lu_cache", _CacheBox(result))
         return result
@@ -1276,7 +1281,7 @@ class TPMatrices(nnx.Pytree):
         # AUTO: try factored path, fall back to kron
         try:
             return self.lu_factor().solve(rhs)
-        except ValueError:
+        except SolverNotApplicable:
             return _kron_solve(rhs)
 
 
@@ -1411,8 +1416,6 @@ class BlockTPMatrix:
             return cached.value
 
         # Group TPMatrix objects by global_indices.
-        from collections import defaultdict
-
         grouped: dict[tuple[int, int], list[TPMatrix]] = defaultdict(list)
         for mat in self.tpmats:
             grouped[mat.global_indices].append(mat)
@@ -1529,9 +1532,9 @@ class TPMatricesLUFactors:
 
     def __init__(
         self,
-        eigvecs: list,
-        per_term_eigenvalues: list,
-        scales: list,
+        eigvecs: list[Array],
+        per_term_eigenvalues: list[list[Array]],
+        scales: list[complex],
         shape: tuple[int, ...],
     ) -> None:
         self.eigvecs = eigvecs  # list of (n_i, n_i) eigenvector matrices
@@ -2039,7 +2042,7 @@ def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
                         _repr(mats_i[1]): jnp.ones_like(evals),
                     },
                 )
-            except Exception:
+            except _scipy_linalg.LinAlgError:
                 evals_np, evecs_np = _scipy_linalg.eigh(A1_np, A0_np)
                 evals = jnp.array(evals_np)
                 evecs = jnp.array(evecs_np)
@@ -2051,7 +2054,7 @@ def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
                     },
                 )
         else:
-            raise ValueError(
+            raise SolverNotApplicable(
                 f"Axis {i} has {len(mats_i)} distinct factor matrices; "
                 "simultaneous diagonalization requires ≤ 2 distinct matrices per axis."
             )
@@ -2071,8 +2074,8 @@ def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
     per_term_eigenvalues = [
         [axis_eigenvalues[_repr(tp.mats[i])] for i in range(ndim)] for tp in tpmats
     ]
-    scales = [tp.scale for tp in tpmats]
-    shape = tuple(int(tpmats[0].mats[i].shape[0]) for i in range(ndim))
+    scales: list[complex] = [tp.scale for tp in tpmats]
+    shape: tuple[int, ...] = tuple(int(tpmats[0].mats[i].shape[0]) for i in range(ndim))
     return TPMatricesLUFactors(
         eigvecs=eigvecs,
         per_term_eigenvalues=per_term_eigenvalues,
@@ -2135,7 +2138,7 @@ def tpmats_wavenumber_factor(
     poly_axes = [a for a in range(ndim) if not _is_diagonal_axis(a)]
 
     if len(poly_axes) != 1:
-        raise ValueError(
+        raise SolverNotApplicable(
             f"tpmats_wavenumber_factor requires exactly 1 polynomial "
             f"(non-diagonal) axis; found {len(poly_axes)}: {poly_axes}. "
             f"Use tpmats_lu_factor for fully-symmetric problems."

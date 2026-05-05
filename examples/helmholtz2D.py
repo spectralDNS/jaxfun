@@ -9,14 +9,14 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from jaxfun.coordinates import x, y
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
-from jaxfun.galerkin.Chebyshev import Chebyshev as space
+
+# from jaxfun.galerkin.Chebyshev import Chebyshev as space
 from jaxfun.galerkin.functionspace import FunctionSpace
 
 # from jaxfun.Jacobi import Jacobi as space
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
-
-# from jaxfun.galerkin.Legendre import Legendre as space
+from jaxfun.galerkin.Legendre import Legendre as space
+from jaxfun.galerkin.tensorproductspace import TensorProduct, TPMatrices
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -38,12 +38,10 @@ u = TrialFunction(T, name="u")
 # Method of manufactured solution
 ue = T.system.expr_psi_to_base_scalar(ue)
 
-A, L = inner(
-    v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True, sparse_tol=1000
-)
+A, L = inner(v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True)
 
-A0 = tpmats_to_kron(A)
-un = A0.solve(L.flatten()).reshape(L.shape)
+B = TPMatrices(A)
+un = B.solve(L, method="kron", kron_method="banded")
 
 N = 100
 uj = T.backward(un, kind="uniform", N=(N, N))

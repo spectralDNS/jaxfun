@@ -8,10 +8,10 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from jaxfun.coordinates import x, y
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
-from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
+from jaxfun.galerkin.Legendre import Legendre
+from jaxfun.galerkin.tensorproductspace import TensorProduct, TPMatrices
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -31,17 +31,16 @@ bcsy = {
     "right": {"D": ue.subs(y, 1), "N": ue.diff(y, 1).subs(y, 1)},
 }
 
-Dx = FunctionSpace(M, Chebyshev, scaling=n + 1, bcs=bcsx, name="Dx", fun_str="psi")
-Dy = FunctionSpace(M, Chebyshev, scaling=n + 1, bcs=bcsy, name="Dy", fun_str="phi")
+Dx = FunctionSpace(M, Legendre, scaling=n + 1, bcs=bcsx, name="Dx", fun_str="psi")
+Dy = FunctionSpace(M, Legendre, scaling=n + 1, bcs=bcsy, name="Dy", fun_str="phi")
 T = TensorProduct(Dx, Dy, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 ue = T.system.expr_psi_to_base_scalar(ue)
 
 A, b = inner(Div(Grad(Div(Grad(u)))) * v - Div(Grad(Div(Grad(ue)))) * v, sparse=True)
-
-C = tpmats_to_kron(A)
-uh = C.solve(b.flatten()).reshape(b.shape)
+B = TPMatrices(A)
+uh = B.solve(b, method="kron", kron_method="rcm")
 
 N = 100
 xj = T.mesh(kind="uniform", N=(N, N))
@@ -50,7 +49,7 @@ uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
 if "PYTEST" in os.environ:
-    assert error < ulp(C.data.max()), error
+    assert error < ulp(100), error
     sys.exit(1)
 
 print("Error =", error)

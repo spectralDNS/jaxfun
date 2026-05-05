@@ -21,7 +21,7 @@ from sympy.core.basic import Basic
 from sympy.core.function import Derivative as sympy_Derivative, diff as df
 from sympy.printing.latex import LatexPrinter
 from sympy.printing.pretty.stringpict import prettyForm
-from sympy.vector import Dot as sympy_Dot, VectorAdd, VectorMul, VectorZero
+from sympy.vector import VectorAdd, VectorMul, VectorZero
 from sympy.vector.basisdependent import BasisDependent, BasisDependentZero
 from sympy.vector.dyadic import Dyadic, DyadicAdd, DyadicMul, DyadicZero
 from sympy.vector.operators import Curl as sympy_Curl, Divergence, Gradient
@@ -677,7 +677,7 @@ class Curl(sympy_Curl):
         return curl(self._expr.doit(**hints))
 
 
-class Dot(sympy_Dot):
+class Dot(Expr):
     """Unevaluated dot product wrapper delegating to custom dot().
 
     Args:
@@ -1072,15 +1072,5 @@ sp.vector.vector.cross = cross  # ty:ignore[possibly-missing-submodule]
 sp.vector.operators.gradient = gradient  # ty:ignore[possibly-missing-submodule]
 sp.vector.operators.curl = curl  # ty:ignore[possibly-missing-submodule]
 sp.vector.operators.divergence = divergence  # ty:ignore[possibly-missing-submodule]
-sp.vector.vector.Cross = Cross  # ty:ignore[possibly-missing-submodule]
-sp.vector.vector.Dot = Dot  # ty:ignore[possibly-missing-submodule]
-sp.vector.operators.Curl = Curl  # ty:ignore[possibly-missing-submodule]
-sp.vector.operators.Gradient = Grad  # ty:ignore[possibly-missing-submodule]
-sp.vector.operators.Divergence = Div  # ty:ignore[possibly-missing-submodule]
-sp.vector.Cross = Cross  # ty:ignore[possibly-missing-submodule]
-sp.vector.Dot = Dot  # ty:ignore[possibly-missing-submodule]
-sp.vector.Curl = Curl  # ty:ignore[possibly-missing-submodule]
-sp.vector.Gradient = Grad  # ty:ignore[possibly-missing-submodule]
-sp.vector.Divergence = Div  # ty:ignore[possibly-missing-submodule]
 sp.vector.basisdependent.BasisDependent.diff = covariant_diff  # ty:ignore[possibly-missing-submodule]
 sp.vector.Dyadic.is_Dyadic = True  # ty:ignore[possibly-missing-submodule]

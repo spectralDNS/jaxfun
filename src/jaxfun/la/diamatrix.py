@@ -7,6 +7,8 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
+from jaxfun.la.matrixprotocol import DiaMatrixSolveMethod, _CacheBox
+
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
     from jaxfun.la import Matrix, MatrixProtocol
@@ -50,32 +52,6 @@ def _warn_dense_indexing() -> None:
         DenseIndexingWarning,
         stacklevel=3,
     )
-
-
-class _CacheBox[T]:
-    """Thin wrapper that provides identity-based equality and hashing.
-
-    Flax NNX captures all instance ``__dict__`` entries as pytree aux_data
-    (metadata).  Metadata is compared by equality on every JIT cache lookup.
-    Storing a :class:`DiaMatrix` or a :class:`LUFactors` containing JAX arrays
-    directly would trigger array equality checks and crash.  Wrapping the
-    cached value in ``_CacheBox`` makes the comparison use ``is`` (identity),
-    so the same cached object always compares equal to itself.
-    """
-
-    __slots__ = ("value",)
-
-    def __init__(self, value: T) -> None:
-        self.value = value
-
-    def __eq__(self, other: object) -> bool:
-        return type(other) is _CacheBox and self.value is other.value
-
-    def __hash__(self) -> int:
-        return id(self.value)
-
-    def __repr__(self) -> str:
-        return f"_CacheBox({self.value!r})"
 
 
 @nnx.dataclass
@@ -333,6 +309,16 @@ class DiaMatrix(nnx.Pytree):
 
         return Matrix(self.todense())
 
+    def to_scipy(self):
+        """Return a ``scipy.sparse.dia_matrix`` equivalent of this matrix."""
+        import numpy as np
+        from scipy.sparse import dia_matrix
+
+        return dia_matrix(
+            (np.asarray(self.data), np.array(self.offsets, dtype=np.int32)),
+            shape=self.shape,
+        )
+
     def lu_factor(self, *, pivot: bool = False) -> LUFactors:
         """Compute a banded LU factorisation of this (square) matrix.
 
@@ -366,11 +352,13 @@ class DiaMatrix(nnx.Pytree):
             ValueError: if the matrix is not square or the system is singular.
         """
         # --- lazy cache -------------------------------------------------
-        _box: _CacheBox[dict[bool, LUFactors]] | None = getattr(self, "_lu_cache", None)
+        _box: _CacheBox[dict[bool | str, LUFactors]] | None = getattr(
+            self, "_lu_cache", None
+        )
         if _box is None:
             _box = _CacheBox({})
             object.__setattr__(self, "_lu_cache", _box)
-        cache: dict[bool, LUFactors] = _box.value
+        cache: dict[bool | str, LUFactors] = _box.value
         if pivot in cache:
             return cache[pivot]
 
@@ -411,10 +399,16 @@ class DiaMatrix(nnx.Pytree):
                     "enabling pivoting for this matrix."
                 )
 
+            _lu_tol = (
+                float(jnp.finfo(self.data.dtype).eps)
+                * float(jnp.max(jnp.abs(band_lu)))
+                * n
+            )
+
             l_offsets = tuple(
                 off
                 for off in range(-p, 1)
-                if off == 0 or bool(jnp.any(band_lu[center + off] != 0))
+                if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > _lu_tol
             )
             l_data_rows: list[Array] = []
             for off in l_offsets:
@@ -424,9 +418,13 @@ class DiaMatrix(nnx.Pytree):
                     l_data_rows.append(band_lu[center + off].astype(self.data.dtype))
             L = DiaMatrix(data=jnp.stack(l_data_rows), offsets=l_offsets, shape=(n, n))
 
-            u_offsets = tuple(range(0, q + 1))
+            u_offsets = tuple(
+                off
+                for off in range(0, q + 1)
+                if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > _lu_tol
+            )
             u_data_rows = [
-                band_lu[center + u].astype(self.data.dtype) for u in range(q + 1)
+                band_lu[center + u].astype(self.data.dtype) for u in u_offsets
             ]
             U = DiaMatrix(data=jnp.stack(u_data_rows), offsets=u_offsets, shape=(n, n))
 
@@ -472,11 +470,17 @@ class DiaMatrix(nnx.Pytree):
 
         # ---------- extract L -------------------------------------------
         # band_lu[center - t, :] is already the column-aligned DIA row for
-        # offset -t (L[i, i-t] = band_lu[center-t, i-t]).  Skip all-zero rows.
+        # offset -t (L[i, i-t] = band_lu[center-t, i-t]).  Skip near-zero rows
+        # using a relative tolerance (floating-point residuals from elimination
+        # can leave structurally-zero diagonals with tiny non-zero entries).
+        _lu_tol = (
+            float(jnp.finfo(self.data.dtype).eps) * float(jnp.max(jnp.abs(band_lu))) * n
+        )
+
         l_offsets = tuple(
             off
             for off in range(-2 * p, 1)
-            if off == 0 or bool(jnp.any(band_lu[center + off] != 0))
+            if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > _lu_tol
         )
         l_data_rows: list[Array] = []
         for off in l_offsets:
@@ -492,10 +496,12 @@ class DiaMatrix(nnx.Pytree):
 
         # ---------- extract U -------------------------------------------
         # band_lu[center + u, :] is the column-aligned DIA row for offset +u.
-        u_offsets = tuple(range(0, q_eff + 1))
-        u_data_rows = [
-            band_lu[center + u].astype(self.data.dtype) for u in range(q_eff + 1)
-        ]
+        u_offsets = tuple(
+            off
+            for off in range(0, q_eff + 1)
+            if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > _lu_tol
+        )
+        u_data_rows = [band_lu[center + u].astype(self.data.dtype) for u in u_offsets]
         U = DiaMatrix(
             data=jnp.stack(u_data_rows),
             offsets=u_offsets,
@@ -514,45 +520,153 @@ class DiaMatrix(nnx.Pytree):
         axis: int = 0,
         *,
         pivot: bool = False,
-        dense_threshold: int = 100,
+        method: DiaMatrixSolveMethod | str = DiaMatrixSolveMethod.AUTO,
+        auto_threshold: int = 100,
     ) -> Array:
         """Solve ``A x = b``.
 
-        Uses the banded LU factorisation (:meth:`lu_factor`) when the
-        bandwidth is narrow enough that the JIT-compiled kernel compiles
-        quickly.  Falls back to ``jnp.linalg.solve`` on the dense matrix when
-        the product ``p * (q + 1)`` (number of unrolled loop iterations in the
-        LU kernel) exceeds ``dense_threshold``, avoiding multi-minute XLA
-        compile times for wide-banded matrices.
+        Three solver paths are available, selected via *method*:
+
+        * ``"banded"`` — banded LU factorisation (:meth:`lu_factor`).  Fast
+          when the matrix bandwidth ``p * (q + 1)`` is small, but XLA compile
+          time grows with bandwidth.
+        * ``"rcm"`` — apply reverse Cuthill-McKee reordering (:meth:`rcm`),
+          then banded LU on the permuted system.  Useful when the original
+          bandwidth is large but RCM can reduce it.
+        * ``"dense"`` — ``jnp.linalg.solve`` on the dense matrix.  Suitable
+          for small or nearly full matrices where the banded structure offers
+          no advantage.
+        * ``"auto"`` (default) — heuristic that checks cached factorisations
+          first, then chooses ``"banded"`` when ``p * (q + 1) <= auto_threshold``,
+          ``"rcm"`` when RCM reduces the bandwidth to ``<= auto_threshold``, and
+          ``"dense"`` otherwise.
 
         Args:
             b: Right-hand side array.
             axis: Axis of ``b`` along which the system is solved.
-            pivot: Passed to :meth:`lu_factor` (banded path only).
-            dense_threshold: Maximum bandwidth ``p * (q + 1)`` before
-                switching to a dense solver. Default 100.
+            pivot: Passed to :meth:`lu_factor` (banded and RCM paths only).
+            method: One of ``"auto"``, ``"banded"``, ``"rcm"``, or
+                ``"dense"``.  Default ``"auto"``.
+            auto_threshold: Threshold for the ``"auto"`` method, trading off
+                banded/RCM solvers against dense.  The banded solver is usually
+                faster for small bandwidth, but compile time grows with bandwidth.
+                RCM can reduce bandwidth and enable the banded solver, but adds
+                overhead and is not guaranteed to help.  Default is 100.
 
         Returns:
             Solution array with the same shape as ``b``.
+
+        Raises:
+            ValueError: If *method* is not one of the recognised values.
         """
+        _METHODS = {"auto", "banded", "rcm", "dense"}
+        if method not in _METHODS:
+            raise ValueError(
+                f"method must be one of {sorted(_METHODS)!r}, got {method!r}"
+            )
+        method = DiaMatrixSolveMethod(method)
+
+        # ------------------------------------------------------------------
+        # "banded" path (and cache hit for banded)
+        # ------------------------------------------------------------------
+        _box: _CacheBox[dict[bool | str, LUFactors]] | None = getattr(
+            self, "_lu_cache", None
+        )
+        if method == DiaMatrixSolveMethod.BANDED or (
+            method == DiaMatrixSolveMethod.AUTO
+            and _box is not None
+            and pivot in _box.value
+        ):
+            return self.lu_factor(pivot=pivot).solve(b, axis=axis)
+
+        # ------------------------------------------------------------------
+        # "rcm" path (and cache hit for rcm)
+        # ------------------------------------------------------------------
+        _rcm_box: _CacheBox[dict[bool, tuple[LUFactors, Array, Array]]] | None = (
+            getattr(self, "_rcm_solve_cache", None)
+        )
+        if method == DiaMatrixSolveMethod.RCM or (
+            method == DiaMatrixSolveMethod.AUTO
+            and _rcm_box is not None
+            and pivot in _rcm_box.value
+        ):
+            if _rcm_box is None or pivot not in _rcm_box.value:
+                A_perm, perm, inv_perm = self.rcm()
+                lu_perm = A_perm.lu_factor(pivot=pivot)
+                if _rcm_box is None:
+                    _rcm_box = _CacheBox({})
+                    object.__setattr__(self, "_rcm_solve_cache", _rcm_box)
+                _rcm_box.value[pivot] = (lu_perm, perm, inv_perm)
+            lu_perm, perm, inv_perm = _rcm_box.value[pivot]
+            ax = axis % b.ndim
+            return jnp.take(
+                lu_perm.solve(jnp.take(b, perm, axis=ax), axis=ax), inv_perm, axis=ax
+            )
+
+        # ------------------------------------------------------------------
+        # "dense" path (and cache hit for dense)
+        # ------------------------------------------------------------------
+        if method == DiaMatrixSolveMethod.DENSE:
+            from jaxfun.la.matrix import Matrix  # local import avoids circular
+
+            if _box is None:
+                _box = _CacheBox({})
+                object.__setattr__(self, "_lu_cache", _box)
+            _dense_key = "_dense"
+            if _dense_key not in _box.value:
+                _box.value[_dense_key] = Matrix(self.todense()).lu_factor()  # type: ignore[index]
+            return _box.value[_dense_key].solve(b, axis=axis)
+
+        # ------------------------------------------------------------------
+        # "auto": choose based on bandwidth
+        # ------------------------------------------------------------------
         offsets = self.offsets
         p = max((-k for k in offsets if k < 0), default=0)
         q = max((k for k in offsets if k > 0), default=0)
 
-        if p * (q + 1) > dense_threshold:
-            # Dense path: XLA compiles jnp.linalg.solve in milliseconds.
-            n = self.shape[0]
-            axis = axis % b.ndim
-            if b.ndim == 1:
-                return jnp.linalg.solve(self.todense(), b)
-            b_moved = jnp.moveaxis(b, axis, 0)  # (n, *rest)
-            rest_shape = b_moved.shape[1:]
-            batch = b_moved.size // n
-            b2d = b_moved.reshape(n, batch)  # (n, batch)
-            x2d = jnp.linalg.solve(self.todense(), b2d)  # (n, batch)
-            return jnp.moveaxis(x2d.reshape((n,) + rest_shape), 0, axis)
+        if p * (q + 1) <= auto_threshold:
+            return self.lu_factor(pivot=pivot).solve(b, axis=axis)
 
-        return self.lu_factor(pivot=pivot).solve(b, axis=axis)
+        # Try RCM: may reduce bandwidth enough for banded LU.
+        A_perm, perm, inv_perm = self.rcm()
+        offsets_p = A_perm.offsets
+        p_p = max((-k for k in offsets_p if k < 0), default=0)
+        q_p = max((k for k in offsets_p if k > 0), default=0)
+        if p_p * (q_p + 1) > p * (q + 1):
+            # RCM made it worse: skip it and go straight to dense.
+            warnings.warn(
+                f"DiaMatrix.lu_solve(method='auto'): RCM reordering increased bandwidth "  # noqa: E501
+                f"from p*(q+1)={p * (q + 1)} to p'*(q'+1)={p_p * (q_p + 1)}. ",
+                stacklevel=2,
+            )
+
+        elif p_p * (q_p + 1) <= auto_threshold:
+            lu_perm = A_perm.lu_factor(pivot=pivot)
+            if _rcm_box is None:
+                _rcm_box = _CacheBox({})
+                object.__setattr__(self, "_rcm_solve_cache", _rcm_box)
+            _rcm_box.value[pivot] = (lu_perm, perm, inv_perm)
+            ax = axis % b.ndim
+            return jnp.take(
+                lu_perm.solve(jnp.take(b, perm, axis=ax), axis=ax), inv_perm, axis=ax
+            )
+
+        else:
+            # RCM reduced bandwidth but it still exceeds the threshold.
+            warnings.warn(
+                f"DiaMatrix.lu_solve(method='auto'): bandwidth p*(q+1)={p_p * (q_p + 1)} "  # noqa: E501
+                f"exceeds threshold {auto_threshold} even after RCM reordering. ",
+                stacklevel=2,
+            )
+
+        warnings.warn(
+            "Falling back to dense solver. Consider using a larger auto_threshold "
+            "or method='dense' to suppress this warning.",
+            stacklevel=2,
+        )
+        return self.lu_solve(
+            b, axis=axis, pivot=pivot, method=DiaMatrixSolveMethod.DENSE
+        )
 
     solve = lu_solve
 
@@ -1116,7 +1230,26 @@ class DiaMatrix(nnx.Pytree):
     def dtype(self) -> jnp.dtype:
         return self.data.dtype
 
-    def pin(self, constraints: dict[int, float]) -> PinnedSystem:
+    def pin(
+        self, constraints: dict[int, float] | tuple[tuple[int, float], ...]
+    ) -> PinnedSystem:
+        """Return a :class:`PinnedSystem` with the given DOFs fixed."""
+        from jaxfun.la.pinned import PinnedSystem
+
+        if isinstance(constraints, dict):
+            constraints = tuple(sorted(constraints.items()))
+        norm_constraints, new_offsets, data = self._pin(constraints)
+        pinned_matrix = DiaMatrix(
+            data=data, offsets=tuple(int(i) for i in new_offsets), shape=self.shape
+        )
+        return PinnedSystem(
+            pinned_matrix, tuple((int(i), float(j)) for i, j in norm_constraints)
+        )
+
+    @jax.jit(static_argnums=(1,))
+    def _pin(
+        self, constraints: tuple[tuple[int, float], ...]
+    ) -> tuple[list[tuple[int, float]], list[int], Array]:
         """Return a :class:`PinnedSystem` with the given DOFs fixed.
 
         For each ``(row_index, value)`` pair in *constraints* the corresponding
@@ -1144,8 +1277,6 @@ class DiaMatrix(nnx.Pytree):
             A_sys = A.pin({0: 0.0})  # singular Fourier system
             x = A_sys.solve(b)
         """
-        from jaxfun.la.pinned import PinnedSystem
-
         n, m = self.shape
         data = self.data  # keep as JAX array — no device→host transfer
         offsets: list[int] = list(self.offsets)
@@ -1165,27 +1296,25 @@ class DiaMatrix(nnx.Pytree):
         main_idx = offsets.index(0)
 
         # Normalise negative indices (Python-style); reject out-of-range positives.
-        norm_constraints: dict[int, float] = {}
-        for idx, val in constraints.items():
+        norm_constraints: list[tuple[int, float]] = []
+        for idx, val in constraints:
             if idx < -n or idx >= n:
                 raise IndexError(
                     f"Constraint index {idx} is out of range for matrix of size {n}"
                 )
-            norm_constraints[idx % n] = val
+            norm_constraints.append((idx % n, float(val)))
 
         # Zero every stored entry in each pinned row, then set diagonal to 1.
         # All indices (di, j) are Python ints — static at trace time — so
         # .at[...].set() is fully traceable under jax.jit / jax.vmap.
-        for row_idx, _val in norm_constraints.items():
+        for row_idx, _val in norm_constraints:
             for di, k in enumerate(offsets):
                 j = row_idx + k
                 if 0 <= j < m:
                     data = data.at[di, j].set(0.0)
             data = data.at[main_idx, row_idx].set(1.0)
 
-        new_offsets = tuple(offsets)
-        pinned_matrix = DiaMatrix(data=data, offsets=new_offsets, shape=self.shape)
-        return PinnedSystem(pinned_matrix, norm_constraints)
+        return norm_constraints, offsets, data
 
     def __repr__(self) -> str:
         n, m = self.shape
@@ -1194,6 +1323,193 @@ class DiaMatrix(nnx.Pytree):
             f"DiaMatrix(shape=({n}, {m}), dtype={self.dtype}, "
             f"n_diags={nd}, nnz={self.nnz}, offsets={self.offsets})"
         )
+
+    def rcm(self) -> tuple[DiaMatrix, Array, Array]:
+        """Apply the reverse Cuthill-McKee algorithm to reduce bandwidth.
+
+        Computes a symmetric row/column permutation ``perm`` using the
+        Scipy :func:`_rcm_scipy` implementation and returns the permuted
+        matrix ``A[perm][:, perm]`` together with the forward and inverse
+        permutation arrays.
+
+        The result is a setup-time host operation (not JIT'd) and is cached
+        on the instance via :class:`_CacheBox`.
+
+        Returns:
+            ``(A_perm, perm, inv_perm)`` where
+
+            * ``A_perm`` — :class:`DiaMatrix` with reduced bandwidth.
+            * ``perm`` — 1-D int array: ``A_perm[i, j] = A[perm[i], perm[j]]``.
+            * ``inv_perm`` — 1-D int array satisfying
+              ``inv_perm[perm[i]] == i``, used to un-permute the solution.
+
+        Example::
+
+            A_perm, perm, inv_perm = A.rcm()
+            x_perm = A_perm.solve(b[perm])
+            x = x_perm[inv_perm]
+        """
+        _box: _CacheBox[tuple[DiaMatrix, Array, Array]] | None = getattr(
+            self, "_rcm_cache", None
+        )
+        if _box is not None:
+            return _box.value
+
+        n, m = self.shape
+        if n != m:
+            raise ValueError("RCM permutation is only defined for square matrices.")
+        perm = _rcm_scipy(self.data, self.offsets, self.shape)
+        new_data, new_offsets = _permute_dia(self.data, self.offsets, (n, m), perm)
+
+        A_perm = DiaMatrix(
+            data=new_data,
+            offsets=new_offsets,
+            shape=(n, n),
+        )
+        inv_perm = jnp.argsort(perm).astype(jnp.int32)
+        result = (A_perm, perm, inv_perm)
+        object.__setattr__(self, "_rcm_cache", _CacheBox(result))
+        return result
+
+
+@jax.jit(static_argnums=(1, 2, 3))
+def _permute_dia_kernel(
+    data: Array,
+    offsets: tuple[int, ...],
+    shape: tuple[int, int],
+    new_offsets: tuple[int, ...],
+    perm: Array,
+) -> Array:
+    """JIT-compiled scatter kernel for :func:`_permute_dia`.
+
+    Takes the output offset set as a static argument so the output shape
+    ``(len(new_offsets), m)`` is known at compile time.  An extra scratch
+    row (index ``len(new_offsets)``) absorbs writes for structural zeros
+    whose new diagonal is not in *new_offsets*.
+
+    Args:
+        data: Column-aligned DIA data of shape ``(n_diags, n_cols)``.
+        offsets: Static diagonal offsets of *data*.
+        shape: Static ``(n, m)`` matrix shape.
+        new_offsets: Static sorted diagonal offsets of the output matrix.
+        perm: Permutation array of length ``n``.
+
+    Returns:
+        New DIA data array of shape ``(len(new_offsets), m)``.
+    """
+    n, m = shape
+    n_new = len(new_offsets)
+    inv_perm = jnp.argsort(perm).astype(jnp.int32)
+
+    # Build lookup: offset value → row index in new_data.
+    # Offsets range from -(n-1) to (n-1); shift so index 0 = offset -(n-1).
+    # Entries absent from new_offsets map to n_new (scratch row).
+    shift = n - 1
+    lookup = jnp.full(2 * n - 1, jnp.int32(n_new), dtype=jnp.int32)
+    for ri, nk in enumerate(new_offsets):
+        lookup = lookup.at[nk + shift].set(jnp.int32(ri))
+
+    # Allocate output with one extra scratch row.
+    new_data = jnp.zeros((n_new + 1, m), dtype=data.dtype)
+
+    for ki, k in enumerate(offsets):
+        col_start = max(0, k)
+        length = min(m - col_start, n - max(0, -k))
+        if length <= 0:
+            continue
+        col_idx = jnp.arange(col_start, col_start + length, dtype=jnp.int32)
+        new_cs = inv_perm[col_idx]
+        new_rs = inv_perm[col_idx - jnp.int32(k)]
+        row_indices = lookup[new_cs - new_rs + shift]
+        new_data = new_data.at[row_indices, new_cs].set(
+            data[ki, col_start : col_start + length]
+        )
+
+    return new_data[:n_new]
+
+
+def _permute_dia(
+    data: Array,
+    offsets: tuple[int, ...],
+    shape: tuple[int, int],
+    perm: Array,
+) -> tuple[Array, tuple[int, ...]]:
+    """Symmetrically permute a DIA matrix.
+
+    Computes ``A_perm[i, j] = A[perm[i], perm[j]]`` and returns the result in
+    column-aligned DIA format.
+
+    The output diagonal set is determined at Python level using NumPy on the
+    concrete arrays (since ``perm`` is always materialised at setup time), then
+    passed as a static argument to the JIT-compiled :func:`_permute_dia_kernel`
+    which performs the actual gather/scatter.
+
+    Args:
+        data: Column-aligned DIA data array of shape ``(n_diags, n_cols)``.
+        offsets: Diagonal offsets corresponding to rows of *data*.
+        shape: ``(n_rows, n_cols)`` of the original matrix.
+        perm: Permutation array of length ``n``.
+
+    Returns:
+        ``(new_data, new_offsets)`` in column-aligned DIA format with the same
+        dtype as *data*.
+    """
+    import numpy as np
+
+    n, m = shape
+    perm_np = np.asarray(perm)
+    inv_perm_np = np.argsort(perm_np)
+    data_np = np.asarray(data)
+
+    # Determine new_offsets from concrete values — pure NumPy, no JIT needed.
+    new_ks: set[int] = set()
+    for ki, k in enumerate(offsets):
+        col_start = max(0, k)
+        length = min(m - col_start, n - max(0, -k))
+        if length <= 0:
+            continue
+        col_idx = np.arange(col_start, col_start + length)
+        row_idx = col_idx - k
+        nz = data_np[ki, col_start : col_start + length] != 0
+        if not nz.any():
+            continue
+        new_cs = inv_perm_np[col_idx[nz]]
+        new_rs = inv_perm_np[row_idx[nz]]
+        new_ks.update(map(int, new_cs - new_rs))
+
+    if not new_ks:
+        return jnp.zeros((0, m), dtype=data.dtype), ()
+
+    new_offsets = tuple(sorted(new_ks))
+    new_data = _permute_dia_kernel(data, offsets, shape, new_offsets, perm)
+    return new_data, new_offsets
+
+
+def _rcm_scipy(
+    data: Array,
+    offsets: tuple[int, ...],
+    shape: tuple[int, int],
+) -> Array:
+    """Compute the RCM permutation via :func:`scipy.sparse.csgraph.reverse_cuthill_mckee`.
+
+    Args:
+        data: Column-aligned DIA data array.
+        offsets: Diagonal offsets.
+        shape: ``(n, m)`` matrix shape.
+
+    Returns:
+        1-D ``int32`` JAX array ``perm`` of length ``n``.
+    """  # noqa: E501
+    import numpy as np
+    import scipy.sparse as sp_sparse
+    from scipy.sparse.csgraph import reverse_cuthill_mckee
+
+    n, m = shape
+    sp_dia = sp_sparse.dia_matrix(
+        (np.asarray(data), list(offsets)), shape=(n, m)
+    ).tocsr()
+    perm_np = reverse_cuthill_mckee(sp_dia, symmetric_mode=False).astype(np.int32)
+    return jnp.array(perm_np)
 
 
 @jax.jit(static_argnums=(2, 3, 4))
@@ -1233,7 +1549,7 @@ def _merge_jit_kernel(
     return jnp.stack(rows)  # (n_out, m)
 
 
-class LUFactors:
+class LUFactors(nnx.Pytree):
     """Result of :meth:`DiaMatrix.lu_factor`.
 
     Holds the unit-lower-triangular factor ``L`` and the upper-triangular
@@ -1253,13 +1569,14 @@ class LUFactors:
         shape: tuple[int, int],
         perm: Array | None = None,
     ):
-        self.L = L
-        self.U = U
+        self.L = nnx.data(L)
+        self.U = nnx.data(U)
         self.shape = shape
         # perm[i] = original row index that was placed at row i after pivoting.
         # None means the identity permutation (no row swaps occurred).
         self.perm = perm
 
+    @jax.jit(static_argnums=(2,))
     def solve(self, b: Array, axis: int = 0) -> Array:
         """Solve ``A x = b`` using forward then backward substitution.
 

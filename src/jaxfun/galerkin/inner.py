@@ -789,7 +789,7 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
     v = TestFunction(V)
     if V.rank == 0:
         M, b = inner(v * (u - ue))
-        uh = M[0].solve(b.flatten()).reshape(V.num_dofs)
+        uh = M[0].solve(b)
 
     elif V.rank == 1:
         assert isinstance(ue, sp.Mul | sp.Add | JAXFunction), (
@@ -798,7 +798,6 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
         assert isinstance(V, VectorTensorProductSpace)
         M, b = inner(Dot(v, (u - ue)))
         A = BlockTPMatrix(M, V, V)
-        C = A.block_array()
-        uh = C.solve(b.ravel()).reshape(b.shape)
+        uh = A.solve(b)
 
     return uh

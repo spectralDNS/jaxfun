@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import jax
@@ -9,6 +10,51 @@ Array = jax.Array
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
+
+
+class DiaMatrixSolveMethod(StrEnum):
+    AUTO = "auto"
+    BANDED = "banded"
+    RCM = "rcm"
+    DENSE = "dense"
+
+
+class SolverNotApplicable(Exception):
+    """Raised when a solver strategy cannot be applied to the given matrix structure.
+
+    Used by :func:`~jaxfun.galerkin.tensorproductspace.tpmats_lu_factor` and
+    :func:`~jaxfun.galerkin.tensorproductspace.tpmats_wavenumber_factor` to
+    signal that the factor-matrix structure is incompatible with the requested
+    solver.  Caught by :meth:`~jaxfun.galerkin.TPMatrices.lu_factor` and
+    :meth:`~jaxfun.galerkin.TPMatrices.solve` when selecting a fallback.
+    """
+
+
+class _CacheBox[T]:
+    """Thin wrapper that provides identity-based equality and hashing.
+
+    Flax NNX captures all instance ``__dict__`` entries as pytree aux_data
+    (metadata).  Metadata is compared by equality on every JIT cache lookup.
+    Storing a :class:`~jaxfun.la.DiaMatrix` or a :class:`LUFactors`
+    containing JAX arrays directly would trigger array equality checks and
+    crash.  Wrapping the cached value in ``_CacheBox`` makes the comparison
+    use ``is`` (identity), so the same cached object always compares equal to
+    itself.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+    def __eq__(self, other: object) -> bool:
+        return type(other) is _CacheBox and self.value is other.value
+
+    def __hash__(self) -> int:
+        return id(self.value)
+
+    def __repr__(self) -> str:
+        return f"_CacheBox({self.value!r})"
 
 
 @runtime_checkable

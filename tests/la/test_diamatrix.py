@@ -232,8 +232,7 @@ class TestMatvec:
     @pytest.mark.parametrize("mat", allmatrices)
     def test_matmat_vs_dense(self, mat):
         a, A = mat(6)
-        rng = np.random.default_rng(1)
-        X = jnp.array(rng.standard_normal((6, 3)))
+        X = jax.random.normal(jax.random.PRNGKey(1), shape=(6, 3))
         assert jnp.allclose(A @ X, a @ X, atol=1e-6)
 
     @pytest.mark.parametrize("mat", allmatrices)
@@ -272,8 +271,7 @@ class TestMatvec:
     def test_rmatmul_2d_array_x_matrix(self, mat):
         """Array (2-D) @ Matrix → Matrix.__rmatmul__(Array) 2-D path."""
         a, A = mat(6)
-        rng = np.random.default_rng(42)
-        X = jnp.array(rng.standard_normal((4, 6)))
+        X = jax.random.normal(jax.random.PRNGKey(42), shape=(4, 6))
         expected = X @ a.data
         assert jnp.allclose(X @ a, expected, atol=1e-6)
 
@@ -281,8 +279,7 @@ class TestMatvec:
     def test_matmul_dia_x_matrix(self, mat):
         """DiaMatrix @ Matrix → DiaMatrix.__matmul__(Matrix) path."""
         a, A = mat(6)
-        rng = np.random.default_rng(43)
-        B = Matrix(jnp.array(rng.standard_normal((6, 4))))
+        B = Matrix(jax.random.normal(jax.random.PRNGKey(43), shape=(6, 4)))
         result = A @ B
         expected = A.todense() @ B.data
         assert isinstance(result, Matrix)
@@ -292,8 +289,7 @@ class TestMatvec:
     def test_matmul_matrix_x_dia(self, mat):
         """Matrix @ DiaMatrix → Matrix.__matmul__(DiaMatrix) path."""
         a, A = mat(6)
-        rng = np.random.default_rng(44)
-        B = Matrix(jnp.array(rng.standard_normal((4, 6))))
+        B = Matrix(jax.random.normal(jax.random.PRNGKey(44), shape=(4, 6)))
         result = B @ A
         expected = B.data @ A.todense()
         assert isinstance(result, Matrix)
@@ -395,7 +391,7 @@ class TestScalarArithmetic:
 
 
 def _indexing_matrix() -> tuple[jax.Array, DiaMatrix]:
-    dense = jnp.arange(1, 21, dtype=jnp.float32).reshape(4, 5)
+    dense = jnp.arange(1, 21, dtype=float).reshape(4, 5)
     return dense, DiaMatrix.from_dense(dense)
 
 
@@ -492,8 +488,7 @@ class TestMatvecAxis:
     def test_axis0_2d_equals_matmat(self, mat):
         """matvec(X, axis=0) should equal the classic A @ X product."""
         a, A = mat(6)
-        rng = np.random.default_rng(7)
-        X = jnp.array(rng.standard_normal((6, 5)))
+        X = jax.random.normal(jax.random.PRNGKey(7), shape=(6, 5))
         expected = a @ X
         assert jnp.allclose(A.matvec(X, axis=0), expected, atol=ulp(100))
         assert jnp.allclose(a.matvec(X, axis=0), expected, atol=ulp(100))
@@ -502,8 +497,7 @@ class TestMatvecAxis:
     def test_axis1_2d(self, mat):
         """matvec(X, axis=1) contracts along columns: each row of X gets multiplied."""
         a, A = mat(6)
-        rng = np.random.default_rng(8)
-        X = jnp.array(rng.standard_normal((5, 6)))  # (batch, m)
+        X = jax.random.normal(jax.random.PRNGKey(8), shape=(5, 6))  # (batch, m)
         expected = (a @ X.T).T  # (n, batch) → (batch, n)
         assert jnp.allclose(A.matvec(X, axis=1), expected, atol=ulp(100))
         assert jnp.allclose(a.matvec(X, axis=1), expected, atol=ulp(100))
@@ -518,8 +512,7 @@ class TestMatvecAxis:
     def test_axis0_3d(self):
         """matvec(T, axis=0): T shape (m, b1, b2) → (n, b1, b2)."""
         a, A = _tridiag(4)
-        rng = np.random.default_rng(9)
-        T = jnp.array(rng.standard_normal((4, 3, 2)))
+        T = jax.random.normal(jax.random.PRNGKey(9), shape=(4, 3, 2))
         # Expected: contract axis 0 with A
         # result[i, j, k] = sum_l A[i, l] * T[l, j, k]
         expected = jnp.einsum("il,ljk->ijk", a.data, T)
@@ -529,8 +522,7 @@ class TestMatvecAxis:
     def test_axis1_3d(self):
         """matvec(T, axis=1): T shape (b0, m, b2) → (b0, n, b2)."""
         a, A = _tridiag(4)
-        rng = np.random.default_rng(10)
-        T = jnp.array(rng.standard_normal((3, 4, 2)))
+        T = jax.random.normal(jax.random.PRNGKey(10), shape=(3, 4, 2))
         expected = jnp.einsum("il,jlk->jik", a.data, T)
         assert jnp.allclose(A.matvec(T, axis=1), expected, atol=ulp(100))
         assert jnp.allclose(a.matvec(T, axis=1), expected, atol=ulp(100))
@@ -538,8 +530,7 @@ class TestMatvecAxis:
     def test_axis2_3d(self):
         """matvec(T, axis=2): T shape (b0, b1, m) → (b0, b1, n)."""
         a, A = _tridiag(4)
-        rng = np.random.default_rng(11)
-        T = jnp.array(rng.standard_normal((3, 2, 4)))
+        T = jax.random.normal(jax.random.PRNGKey(11), shape=(3, 2, 4))
         expected = jnp.einsum("il,jkl->jki", a.data, T)
         assert jnp.allclose(A.matvec(T, axis=2), expected, atol=ulp(100))
         assert jnp.allclose(a.matvec(T, axis=2), expected, atol=ulp(100))
@@ -547,8 +538,7 @@ class TestMatvecAxis:
     def test_negative_axis(self):
         """Negative axis should work like numpy convention."""
         a, A = _tridiag(4)
-        rng = np.random.default_rng(12)
-        T = jnp.array(rng.standard_normal((3, 2, 4)))
+        T = jax.random.normal(jax.random.PRNGKey(12), shape=(3, 2, 4))
         assert jnp.allclose(A.matvec(T, axis=-1), A.matvec(T, axis=2), atol=1e-6)
 
     def test_output_shape_axis0(self):
@@ -634,8 +624,7 @@ class TestSolve:
     @pytest.mark.parametrize("mat", allmatrices)
     def test_solve_residual(self, mat):
         a, A = mat(8)
-        rng = np.random.default_rng(42)
-        b = jnp.array(rng.standard_normal(8))
+        b = jax.random.normal(jax.random.PRNGKey(42), shape=(8,))
         x = A.solve(b)
         assert float(jnp.linalg.norm(A.matvec(x) - b)) < ulp(100)
 
@@ -643,8 +632,7 @@ class TestSolve:
     def test_solve_axis1(self, mat):
         """A.solve(B, axis=1): each row of B is a separate RHS."""
         a, A = mat(6)
-        rng = np.random.default_rng(55)
-        X_true = jnp.array(rng.standard_normal((4, 6)))
+        X_true = jax.random.normal(jax.random.PRNGKey(55), shape=(4, 6))
         B = (a @ X_true.T).T  # (4, 6)
         X_hat = A.solve(B, axis=1)
         assert X_hat.shape == (4, 6)
@@ -655,11 +643,10 @@ class TestSolve:
     def test_solve_axis_matches_matvec(self, mat):
         """A.solve(A.matvec(X, axis=k), axis=k) == X for k in 0,1,2."""
         a, A = mat(7)
-        rng = np.random.default_rng(66)
         for ax in (0, 1, 2):
             shape = [3, 7, 4]
             shape[ax] = 7
-            X = jnp.array(rng.standard_normal(shape))
+            X = jax.random.normal(jax.random.PRNGKey(66), shape=tuple(shape))
             B = A.matvec(X, axis=ax)
             X_hat = A.solve(B, axis=ax)
             assert X_hat.shape == tuple(shape)
@@ -701,10 +688,14 @@ class TestLU:
         assert set(lu.L.offsets) == {-2, -1, 0}
 
     def test_lu_U_offsets(self):
-        """For a tridiagonal (no pivoting), U has offsets (0, 1)."""
+        """Structurally-zero diagonals are pruned from U after factorisation.
+
+        _pentadiagO has only even offsets (-4,-2,0,2,4).  No fill-in occurs on
+        odd diagonals, so U should contain only offsets {0, 2, 4}.
+        """
         _, A = _pentadiagO(5)
         lu = A.lu_factor()
-        assert set(lu.U.offsets) == {0, 1, 2, 3, 4}
+        assert set(lu.U.offsets) == {0, 2, 4}
 
     @pytest.mark.parametrize("mat", allmatrices)
     def test_lu_product_equals_original(self, mat):
@@ -729,8 +720,7 @@ class TestLU:
     @pytest.mark.parametrize("mat", allmatrices)
     def test_lu_solve_random_rhs(self, mat):
         a, A = mat(8)
-        rng = np.random.default_rng(99)
-        b = jnp.array(rng.standard_normal(8))
+        b = jax.random.normal(jax.random.PRNGKey(99), shape=(8,))
         lu = A.lu_factor()
         x = lu.solve(b)
         assert float(jnp.linalg.norm(A.matvec(x) - b)) < ulp(100)
@@ -739,8 +729,7 @@ class TestLU:
     def test_lu_solve_multiple_rhs(self, mat):
         """solve() should work for 2-D right-hand sides (n, k)."""
         a, A = mat(6)
-        rng = np.random.default_rng(7)
-        X_true = jnp.array(rng.standard_normal((6, 4)))
+        X_true = jax.random.normal(jax.random.PRNGKey(7), shape=(6, 4))
         B = a @ X_true
         lu = A.lu_factor()
         X_hat = lu.solve(B)
@@ -810,8 +799,7 @@ class TestLU:
         """solve(B, axis=1) solves each row of B as a separate RHS."""
         a, A = mat(6)
         lu = A.lu_factor()
-        rng = np.random.default_rng(11)
-        X_true = jnp.array(rng.standard_normal((4, 6)))  # (batch, n)
+        X_true = jax.random.normal(jax.random.PRNGKey(11), shape=(4, 6))  # (batch, n)
         B = a @ X_true.T  # (n, batch)
         B_T = B.T  # (batch, n)
         X_hat = lu.solve(B_T, axis=1)
@@ -824,8 +812,7 @@ class TestLU:
         """solve on a 3-D array along a non-zero axis."""
         a, A = mat(5)
         lu = A.lu_factor()
-        rng = np.random.default_rng(22)
-        X_true = jnp.array(rng.standard_normal((3, 5, 4)))  # (a, n, b)
+        X_true = jax.random.normal(jax.random.PRNGKey(22), shape=(3, 5, 4))  # (a, n, b)
         # Build RHS: apply A along axis 1
         B = A.matvec(X_true, axis=1)
         X_hat = lu.solve(B, axis=1)
@@ -840,11 +827,10 @@ class TestLU:
         """lu.solve(A.matvec(X, axis=k), axis=k) == X for any axis."""
         a, A = mat(5)
         lu = A.lu_factor()
-        rng = np.random.default_rng(33)
         for ax in (0, 1, 2):
             shape = [3, 5, 4]
             shape[ax] = 5
-            X = jnp.array(rng.standard_normal(shape))
+            X = jax.random.normal(jax.random.PRNGKey(33), shape=tuple(shape))
             B = A.matvec(X, axis=ax)
             X_hat = lu.solve(B, axis=ax)
             assert X_hat.shape == tuple(shape)
@@ -898,7 +884,7 @@ class TestGetRow:
 
     def test_unstored_diagonal_is_zero(self):
         # Only main diagonal stored; every row should be a one-hot vector.
-        A = diags([jnp.arange(1, 5, dtype=jnp.float32)], offsets=(0,))
+        A = diags([jnp.arange(1, 5, dtype=float)], offsets=(0,))
         for i in range(4):
             row = A.get_row(i)
             expected = jnp.zeros(4).at[i].set(float(i + 1))
@@ -956,7 +942,7 @@ class TestGetColumn:
 
     def test_unstored_diagonal_is_zero(self):
         # Only main diagonal stored; every column should be a one-hot vector.
-        A = diags([jnp.arange(1, 5, dtype=jnp.float32)], offsets=(0,))
+        A = diags([jnp.arange(1, 5, dtype=float)], offsets=(0,))
         for j in range(4):
             col = A.get_column(j)
             expected = jnp.zeros(4).at[j].set(float(j + 1))
@@ -1034,7 +1020,7 @@ class TestPin:
         sys = A.pin({0: 0.0})
         r = repr(sys)
         assert "PinnedSystem" in r
-        assert "0=0.0" in r
+        assert "0: 0.0" in r
 
     # ------------------------------------------------------------------
     # Pytree structure
@@ -1186,8 +1172,7 @@ class TestPin:
     def test_solve_dia_matches_matrix(self, use_matrix):
         """DiaMatrix.pin and Matrix.pin must give the same answer."""
         a, A = _tridiag(6)
-        rng = np.random.default_rng(42)
-        b = jnp.array(rng.standard_normal(6))
+        b = jax.random.normal(jax.random.PRNGKey(42), shape=(6,))
         x_dia = A.pin({0: 0.0}).solve(b)
         x_mat = a.pin({0: 0.0}).solve(b)
         assert jnp.allclose(x_dia, x_mat, atol=ulp(100))
@@ -1200,10 +1185,9 @@ class TestPin:
         """solve(B, axis=0): each column of B is an independent RHS."""
         _, A = _tridiag(5)
         sys = A.pin({0: 0.0, 4: 0.0})
-        rng = np.random.default_rng(7)
         k = 4
         # Build true solutions with pinned BCs satisfied.
-        X_true = jnp.array(rng.standard_normal((5, k)))
+        X_true = jax.random.normal(jax.random.PRNGKey(7), shape=(5, k))
         X_true = X_true.at[0].set(0.0).at[4].set(0.0)
         B = jnp.array([A.matvec(X_true[:, j]) for j in range(k)]).T  # (5, k)
         X_hat = sys.solve(B, axis=0)
@@ -1214,9 +1198,8 @@ class TestPin:
         """solve(B, axis=1): each row of B is an independent RHS."""
         _, A = _tridiag(5)
         sys = A.pin({0: 0.0, 4: 0.0})
-        rng = np.random.default_rng(8)
         k = 3
-        X_true = jnp.array(rng.standard_normal((k, 5)))
+        X_true = jax.random.normal(jax.random.PRNGKey(8), shape=(k, 5))
         X_true = X_true.at[:, 0].set(0.0).at[:, 4].set(0.0)
         B = jnp.stack([A.matvec(X_true[j]) for j in range(k)])  # (k, 5)
         X_hat = sys.solve(B, axis=1)
@@ -1312,3 +1295,129 @@ class TestPin:
         sys64 = sys.astype(jnp.float64)
         assert sys64.constraints == sys.constraints
         assert sys64.shape == sys.shape
+
+
+class TestRCM:
+    """Tests for DiaMatrix.rcm() — reverse Cuthill-McKee reordering."""
+
+    def test_returns_correct_types(self):
+        _, A = _pentadiag(8)
+        A_perm, perm, inv_perm = A.rcm()
+        assert isinstance(A_perm, DiaMatrix)
+        assert perm.dtype == jnp.int32
+        assert inv_perm.dtype == jnp.int32
+        assert perm.shape == (8,)
+        assert inv_perm.shape == (8,)
+
+    def test_perm_is_valid_permutation(self):
+        _, A = _pentadiag(8)
+        _, perm, inv_perm = A.rcm()
+        # perm must contain every index exactly once
+        assert jnp.allclose(jnp.sort(perm), jnp.arange(8))
+        # inv_perm is the inverse: inv_perm[perm[i]] == i
+        assert jnp.allclose(inv_perm[perm], jnp.arange(8))
+
+    def test_dense_roundtrip(self):
+        """A_perm.todense() should equal A.todense()[perm][:, perm]."""
+        _, A = _pentadiag(8)
+        A_perm, perm, inv_perm = A.rcm()
+        dense_A = np.array(A.todense())
+        perm_np = np.array(perm)
+        expected = jnp.array(dense_A[perm_np][:, perm_np])
+        assert jnp.allclose(A_perm.todense(), expected, atol=ulp(100))
+
+    def test_reduces_bandwidth_on_large_offset_matrix(self):
+        """A matrix with artificially large bandwidth should shrink after RCM."""
+        n = 16
+        # Build a matrix with off-diagonal entries at offset ±(n//2)
+        dense = np.diag(4 * np.ones(n))
+        half = n // 2
+        for i in range(n - half):
+            dense[i, i + half] = -1.0
+            dense[i + half, i] = -1.0
+        A = DiaMatrix.from_dense(jnp.array(dense, dtype=float))
+        A_perm, _, _ = A.rcm()
+        bw_before = max(abs(k) for k in A.offsets)
+        bw_after = max(abs(k) for k in A_perm.offsets)
+        assert bw_after <= bw_before
+
+    def test_permuted_solve_matches_original(self):
+        _, A = _pentadiag(8)
+        A_perm, perm, inv_perm = A.rcm()
+        x_true = jnp.arange(1.0, 9.0)
+        b = A.matvec(x_true)
+        # Solve via RCM: A_perm x_perm = b[perm], then x = x_perm[inv_perm]
+        x_hat = A_perm.solve(b[perm])[inv_perm]
+        assert jnp.allclose(x_hat, x_true, atol=ulp(100))
+
+    def test_tridiag_permuted_solve(self):
+        _, A = _tridiag(10)
+        A_perm, perm, inv_perm = A.rcm()
+        x_true = jnp.ones(10) * 3.0
+        b = A.matvec(x_true)
+        x_hat = A_perm.solve(b[perm])[inv_perm]
+        assert jnp.allclose(x_hat, x_true, atol=ulp(100))
+
+    def test_cached_returns_same_objects(self):
+        _, A = _tridiag(6)
+        result1 = A.rcm()
+        result2 = A.rcm()
+        # All three tuple elements must be the exact same objects
+        assert result1[0] is result2[0]
+        assert result1[1] is result2[1]
+        assert result1[2] is result2[2]
+
+    def test_lu_solve_uses_rcm_for_wide_bandwidth(self):
+        """lu_solve with wide bandwidth should take the RCM path, not dense."""
+        n = 24
+        # Build a block-diagonal-like matrix with a large offset that RCM
+        # can compress: two n/2 tridiagonal blocks connected by off-diagonals
+        # at offset ±(n//2).  Bandwidth = n//2 → p*(q+1) = (n//2)²  >> 100.
+        dense = np.diag(4 * np.ones(n))
+        half = n // 2
+        for i in range(n - 1):
+            dense[i, i + 1] = -1.0
+            dense[i + 1, i] = -1.0
+        # Remove direct neighbors and add inter-block coupling at ±half
+        for i in range(n - half):
+            dense[i, i + half] = -0.5
+            dense[i + half, i] = -0.5
+        A = DiaMatrix.from_dense(jnp.array(dense, dtype=float))
+        bw = max(abs(k) for k in A.offsets)
+        # Confirm bandwidth is non-trivial so the rcm path is meaningful
+        assert bw > 1
+
+        x_true = jnp.arange(1.0, n + 1.0, dtype=float)
+        b = A.matvec(x_true)
+        x_hat = A.lu_solve(b, method="rcm")
+        assert jnp.allclose(x_hat, x_true, atol=ulp(1000))
+
+    def test_lu_solve_rcm_path_cached(self):
+        """Second lu_solve via the RCM path must populate _rcm_solve_cache.
+
+        Build a tridiagonal that has been deliberately badly ordered (every
+        other node swapped) to inflate bandwidth.  RCM can collapse it back to
+        a narrow matrix, so the RCM path — not the dense fallback — is used.
+        """
+        n = 8
+        _, A0 = _tridiag(n)
+        # Interleave permutation: [0,4,1,5,2,6,3,7] inflates bandwidth to ~4.
+        perm_bad = np.array([0, 4, 1, 5, 2, 6, 3, 7])
+        dense_bad = np.array(A0.todense())[perm_bad][:, perm_bad]
+        A = DiaMatrix.from_dense(jnp.array(dense_bad, dtype=float))
+        # Confirm bandwidth exceeds threshold so the wide path is entered.
+        p = max((-k for k in A.offsets if k < 0), default=0)
+        q = max((k for k in A.offsets if k > 0), default=0)
+        assert p * (q + 1) > 10
+
+        x_true = jnp.arange(1.0, n + 1.0)
+        b = A.matvec(x_true)
+        # First call — should take RCM path and populate _rcm_solve_cache.
+        x1 = A.lu_solve(b, method="rcm")
+        assert hasattr(A, "_rcm_solve_cache"), (
+            "_rcm_solve_cache not set after first call"
+        )
+        # Second call — should hit the cache and return the same result.
+        x2 = A.lu_solve(b, method="rcm")
+        assert jnp.allclose(x1, x2, atol=ulp(10))
+        assert jnp.allclose(x1, x_true, atol=ulp(100))

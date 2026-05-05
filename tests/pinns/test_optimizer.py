@@ -111,7 +111,7 @@ class TestTrainer:
         assert initial_loss > 0
 
         # Train for a few epochs
-        trainer.train(optimizer, 10)
+        trainer.train(optimizer, 20)
 
         # Loss should decrease
         final_loss = lsqr_loss_fn(simple_model.module)

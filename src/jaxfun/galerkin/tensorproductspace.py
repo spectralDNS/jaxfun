@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import copy
 import itertools
-from collections.abc import Iterable, Iterator, Sequence
+from collections import defaultdict
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from enum import StrEnum
 from functools import partial
-from typing import TYPE_CHECKING, NoReturn, TypeGuard, cast, overload
+from typing import TYPE_CHECKING, Any, NoReturn, TypeGuard, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -16,6 +18,12 @@ from scipy import sparse as scipy_sparse
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol, diakron
+from jaxfun.la.matrix import LUFactors
+from jaxfun.la.matrixprotocol import (
+    DiaMatrixSolveMethod,
+    SolverNotApplicable,
+    _CacheBox,
+)
 from jaxfun.typing import MeshKind
 
 if TYPE_CHECKING:
@@ -1007,9 +1015,94 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         return self._rmatmul_array(w)
 
     def solve(self, rhs: Array) -> Array:
-        """Solve linear system"""
-        A = self.mat
-        return A.solve(rhs.flatten()).reshape(rhs.shape)
+        """Solve ``(scale * A0 ⊗ A1 ⊗ …) x = rhs`` using Kronecker-factored LU.
+
+        Exploits the mixed-product property
+
+        .. math::
+
+            (A_0 \\otimes A_1 \\otimes \\cdots)^{-1}
+            = A_0^{-1} \\otimes A_1^{-1} \\otimes \\cdots
+
+        to avoid forming the full Kronecker product.  Each factor's LU is
+        computed once and cached on the factor matrix itself, so repeated
+        ``solve`` calls pay only the substitution cost.
+
+        Args:
+            rhs: Right-hand side array.  May be flat ``(n,)`` or have the
+                multidimensional shape ``(n0, n1, …)``.
+
+        Returns:
+            Solution array with the same shape as ``rhs``.
+
+        """
+        return self.lu_factor().solve(rhs)
+
+    def lu_factor(self) -> TPLUFactors:
+        """Pre-compute LU factors for every Kronecker factor.
+
+        Returns a :class:`TPLUFactors` whose :meth:`~TPLUFactors.solve` method
+        solves the Kronecker system without rebuilding the factorisation.
+        """
+        lu_factors = [mat.lu_factor() for mat in self.mats]
+        shape = tuple(int(m.shape[0]) for m in self.mats)
+        return TPLUFactors(lu_factors=lu_factors, scale=self.scale, shape=shape)
+
+
+class TPLUFactors:
+    """LU factorisation of a :class:`TPMatrix` (Kronecker product).
+
+    Holds the per-factor LU objects and applies them sequentially on their
+    respective axes to solve the full tensor-product system.
+
+    Attributes:
+        lu_factors: Per-axis LU factorisation objects (DiaMatrix or Matrix).
+        scale: Scalar from the parent :class:`TPMatrix`.
+        shape: Tuple of per-factor sizes ``(n0, n1, …)``.
+    """
+
+    def __init__(
+        self, lu_factors: list, scale: complex, shape: tuple[int, ...]
+    ) -> None:
+        self.lu_factors = lu_factors
+        self.scale = scale
+        self.shape = shape
+
+    @jax.jit(static_argnums=(0,))
+    def solve(self, rhs: Array) -> Array:
+        """Solve ``(scale * A0 ⊗ A1 ⊗ …) x = rhs``.
+
+        Args:
+            rhs: Right-hand side.  Flat ``(n,)`` or shaped ``(n0, n1, …)``.
+
+        Returns:
+            Solution with the same shape as ``rhs``.
+        """
+        y = rhs.reshape(self.shape)
+        for i, lu in enumerate(self.lu_factors):
+            y = lu.solve(y, axis=i)
+        return (y / jnp.asarray(self.scale)).reshape(rhs.shape)
+
+
+class TPSolveMethod(StrEnum):
+    """High-level solver selection for :meth:`TPMatrices.solve`.
+
+    Attributes:
+        AUTO: Try the factored path (:meth:`TPMatrices.lu_factor`) first;
+            fall back to explicit Kronecker assembly if it raises
+            :exc:`ValueError`.
+        LU: Force the factored path (diagonalization or wavenumber solver).
+            Propagates :exc:`ValueError` if the factor-matrix structure is
+            not suitable.
+        KRON: Force explicit Kronecker product assembly.  The assembled
+            :class:`~jaxfun.la.DiaMatrix` or :class:`~jaxfun.la.Matrix` is
+            cached; the DIA-matrix solver is selected via *kron_method* in
+            :meth:`TPMatrices.solve`.
+    """
+
+    AUTO = "auto"
+    LU = "lu"
+    KRON = "kron"
 
 
 class TPMatrices(nnx.Pytree):
@@ -1042,10 +1135,154 @@ class TPMatrices(nnx.Pytree):
             jnp.array([mat._rmatmul_array(w) for mat in self.tpmats]), axis=0
         )
 
-    def solve(self, rhs: Array) -> Array:
-        """Solve linear system"""
-        A = tpmats_to_kron(list(self.tpmats))
-        return A.solve(rhs.flatten()).reshape(rhs.shape)
+    def tosparse(self) -> DiaMatrix:
+        sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        if sparse_box is not None:
+            return sparse_box.value
+        kron = tpmats_to_kron(list(self.tpmats))
+        if not isinstance(kron, DiaMatrix):
+            kron = DiaMatrix.from_dense(kron.todense())
+        object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
+        return kron
+
+    def todense(self) -> Array:
+        """Return the dense Kronecker product as a raw array.
+
+        The underlying :class:`~jaxfun.la.Matrix` or
+        :class:`~jaxfun.la.DiaMatrix` is cached for repeated calls.
+
+        Returns:
+            2-D :class:`~jaxfun.Array` of shape ``(N, N)`` where ``N`` is the
+            total number of degrees of freedom.
+        """
+        dense_box: _CacheBox[Matrix] | None = getattr(self, "_kron_cache", None)
+        if dense_box is not None:
+            return dense_box.value.todense()
+        sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        if sparse_box is not None:
+            return sparse_box.value.todense()
+        kron = tpmats_to_kron(list(self.tpmats))
+        if isinstance(kron, Matrix):
+            object.__setattr__(self, "_kron_cache", _CacheBox(kron))
+            return kron.todense()
+        object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
+        return kron.todense()
+
+    def to_Matrix(self) -> Matrix:
+        return Matrix(self.todense())
+
+    def lu_factor(
+        self,
+    ) -> TPMatricesDenseLUFactors | TPMatricesLUFactors | TPMatricesWavenumberSolver:
+        """Pre-compute factors for repeated fast solves.
+
+        Dispatch order:
+
+        1. If all per-axis factor matrices are dense :class:`~jaxfun.la.Matrix`
+           instances, use :func:`tpmats_dense_lu_factor` (simple full Kronecker
+           LU — works for any linear system).
+        2. Otherwise try :func:`tpmats_wavenumber_factor` (efficient for
+           Fourier x polynomial problems).
+        3. Fall back to :func:`tpmats_lu_factor` (diagonalization — requires
+           simultaneously diagonalizable factor matrices per axis).
+
+        Returns:
+            :class:`TPMatricesDenseLUFactors`, :class:`TPMatricesWavenumberSolver`,
+            or :class:`TPMatricesLUFactors` for repeated fast solves.
+        """
+        cached: (
+            TPMatricesDenseLUFactors
+            | TPMatricesLUFactors
+            | TPMatricesWavenumberSolver
+            | None
+        ) = getattr(self, "_lu_cache", None)
+        if cached is not None:
+            return cached.value
+        result: (
+            TPMatricesDenseLUFactors | TPMatricesLUFactors | TPMatricesWavenumberSolver
+        )
+        tpmats_list = list(self.tpmats)
+        if all(isinstance(mat, Matrix) for tp in tpmats_list for mat in tp.mats):
+            result = tpmats_dense_lu_factor(tpmats_list)
+        else:
+            try:
+                result = tpmats_wavenumber_factor(tpmats_list)
+            except SolverNotApplicable:
+                result = tpmats_lu_factor(tpmats_list)
+        object.__setattr__(self, "_lu_cache", _CacheBox(result))
+        return result
+
+    def solve(
+        self,
+        rhs: Array,
+        *,
+        method: TPSolveMethod | str = TPSolveMethod.AUTO,
+        kron_method: DiaMatrixSolveMethod | str = DiaMatrixSolveMethod.AUTO,
+    ) -> Array:
+        """Solve the summed tensor-product system.
+
+        Args:
+            rhs: Right-hand side array.
+            method: High-level solver selection. One of:
+
+                * ``"auto"`` (default) — tries the factored path
+                  (:meth:`lu_factor`) first; falls back to explicit Kronecker
+                  product assembly if the factor-matrix structure is not
+                  suitable (e.g. not simultaneously diagonalizable).
+                * ``"lu"`` — force the factored path (diagonalization or
+                  wavenumber solver). Raises :exc:`ValueError` if the structure
+                  is not suitable.
+                * ``"kron"`` — force explicit Kronecker product assembly.
+                  The assembled matrix is cached for repeated solves.
+
+            kron_method: Solver method forwarded to
+                :meth:`~jaxfun.la.DiaMatrix.lu_solve` when the Kronecker-product
+                path is used and the assembled matrix is a
+                :class:`~jaxfun.la.DiaMatrix` (i.e. all factor matrices are
+                sparse).  One of ``"auto"``, ``"banded"``, ``"rcm"``,
+                ``"dense"``.  Ignored when the assembled matrix is a dense
+                :class:`~jaxfun.la.Matrix`.
+
+        Returns:
+            Solution array with the same shape as *rhs*.
+
+        Raises:
+            ValueError: If ``method="lu"`` but the factor-matrix structure is
+                not suitable for the factored solver.
+        """
+        method = TPSolveMethod(method)
+
+        def _kron_solve(r: Array) -> Array:
+            flat = r.flatten()
+            # DiaMatrix path: shared cache with tosparse()
+            sparse_box: _CacheBox[DiaMatrix] | None = getattr(
+                self, "_sparse_cache", None
+            )
+            if sparse_box is not None:
+                return sparse_box.value.lu_solve(flat, method=kron_method).reshape(
+                    r.shape
+                )
+            # Dense Matrix path
+            dense_box: _CacheBox[Matrix] | None = getattr(self, "_kron_cache", None)
+            if dense_box is not None:
+                return dense_box.value.solve(flat).reshape(r.shape)
+            # No cache yet: compute and store
+            kron = tpmats_to_kron(list(self.tpmats))
+            if isinstance(kron, DiaMatrix):
+                object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
+                return kron.lu_solve(flat, method=kron_method).reshape(r.shape)
+            object.__setattr__(self, "_kron_cache", _CacheBox(kron))
+            return kron.solve(flat).reshape(r.shape)
+
+        if method == TPSolveMethod.LU:
+            return self.lu_factor().solve(rhs)
+        if method == TPSolveMethod.KRON:
+            return _kron_solve(rhs)
+        # AUTO: try factored path, fall back to kron
+        try:
+            return self.lu_factor().solve(rhs)
+        except SolverNotApplicable:
+            return _kron_solve(rhs)
 
 
 class TensorMatrix(nnx.Pytree):  # noqa: B903
@@ -1130,15 +1367,6 @@ class BlockTPMatrix:
             out = out.at[indices[0]].add(mat @ w[indices[1]])
         return out
 
-    @jax.jit(static_argnums=0)
-    def mat(self) -> Array:
-        """Return explicit block matrix (dense)."""
-        out = jnp.zeros(self.shape)
-        for m in self.tpmats:
-            indices = m.global_indices
-            out = out.at[self.slice(indices)].add(m.mat)
-        return out
-
     def slice(self, indices: tuple[int, ...]) -> tuple[slice, ...]:  # ty:ignore[invalid-type-form]
         """Return slice object for block matrix indices."""
         N = self.test_block_sizes
@@ -1148,27 +1376,844 @@ class BlockTPMatrix:
             slice(jnp.sum(M[: indices[1]]), jnp.sum(M[: indices[1] + 1])),
         )
 
-    def block_array(self) -> Matrix:
-        """Return dense block matrix assembled from Kronecker products."""
+    def todense(self) -> Array:
+        """Return dense array."""
         out = jnp.zeros(self.shape)
         for m in self.tpmats:
             indices = m.global_indices
             block = m.mat
             dense = block.todense()
             out = out.at[self.slice(indices)].add(dense)
-        return Matrix(out)
+        return out
+
+    def to_Matrix(self) -> Matrix:
+        """Return dense matrix object."""
+        return Matrix(self.todense())
+
+    def tosparse(self) -> DiaMatrix:
+        """Assemble global :class:`~jaxfun.la.DiaMatrix` from DiaMatrix-factor blocks.
+
+        The assembled matrix is cached on the instance so repeated calls are
+        free.
+
+        Returns:
+            :class:`~jaxfun.la.DiaMatrix` of shape ``(total_rows, total_cols)``.
+
+        Raises:
+            TypeError: if any factor matrix is not a
+                :class:`~jaxfun.la.DiaMatrix`.
+        """
+        for tp in self.tpmats:
+            for mat in tp.mats:
+                if not isinstance(mat, DiaMatrix):
+                    raise TypeError(
+                        f"tosparse requires all factor matrices to be DiaMatrix; "
+                        f"got {type(mat).__name__}."
+                    )
+
+        cached: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        if cached is not None:
+            return cached.value
+
+        # Group TPMatrix objects by global_indices.
+        grouped: dict[tuple[int, int], list[TPMatrix]] = defaultdict(list)
+        for mat in self.tpmats:
+            grouped[mat.global_indices].append(mat)
+
+        test_block_sizes = [int(s) for s in self.test_block_sizes]
+        trial_block_sizes = [int(s) for s in self.trial_block_sizes]
+        test_starts = [sum(test_block_sizes[:i]) for i in range(len(test_block_sizes))]
+        trial_starts = [
+            sum(trial_block_sizes[:i]) for i in range(len(trial_block_sizes))
+        ]
+        total_rows = sum(test_block_sizes)
+        total_cols = sum(trial_block_sizes)
+
+        # Build per-block DiaMatrix and collect all global diagonal offsets.
+        block_dias: dict[tuple[int, int], DiaMatrix] = {}
+        global_offsets: set[int] = set()
+        for (bi, bj), mats in grouped.items():
+            block_dia = tpmats_to_kron(mats)
+            if not isinstance(block_dia, DiaMatrix):
+                raise TypeError(
+                    f"tpmats_to_kron returned {type(block_dia).__name__} for block "
+                    f"({bi},{bj}); expected DiaMatrix."
+                )
+            block_dias[(bi, bj)] = block_dia
+            shift = trial_starts[bj] - test_starts[bi]
+            for k in block_dia.offsets:
+                global_offsets.add(int(k) + shift)
+
+        sorted_offsets = tuple(sorted(global_offsets))
+        offset_to_idx = {k: i for i, k in enumerate(sorted_offsets)}
+
+        # Allocate global DIA data array and scatter each block's diagonals.
+        dtype = jnp.result_type(*[d.data.dtype for d in block_dias.values()])
+        global_data = jnp.zeros((len(sorted_offsets), total_cols), dtype=dtype)
+        for (bi, bj), block_dia in block_dias.items():
+            col_start = trial_starts[bj]
+            shift = col_start - test_starts[bi]
+            n_cols_block = trial_block_sizes[bj]
+            for d_b, k_b in enumerate(block_dia.offsets):
+                d_g = offset_to_idx[int(k_b) + shift]
+                global_data = global_data.at[
+                    d_g, col_start : col_start + n_cols_block
+                ].add(block_dia.data[d_b])
+
+        result = DiaMatrix(
+            data=global_data, offsets=sorted_offsets, shape=(total_rows, total_cols)
+        )
+        object.__setattr__(self, "_sparse_cache", _CacheBox(result))
+        return result
 
     def __call__(self, u: Array | JAXFunction) -> Array:
-        """Apply block matrix to coefficient array u."""
+        """Apply block matrix to coefficient array u.
+
+        Uses the RCM-permuted :class:`~jaxfun.la.DiaMatrix` for a single
+        global matvec when the sparse cache has been populated (e.g. after
+        :meth:`solve` or an explicit :meth:`tosparse` call); otherwise falls
+        back to the per-block path.
+        """
         from jaxfun.galerkin import JAXFunction
 
         w = u.array if isinstance(u, JAXFunction) else u
+        sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        if sparse_box is not None:
+            sparse = sparse_box.value
+            if getattr(sparse, "_rcm_cache", None) is not None:
+                A_perm, perm, inv_perm = sparse.rcm()
+                return A_perm.matvec(w.ravel()[perm])[inv_perm].reshape(w.shape)
+            return sparse.matvec(w.ravel()).reshape(w.shape)
         return self._matmul_array(w)
 
     def solve(self, b: Array) -> Array:
-        """Solve M x = b using a dense factorisation of the block matrix."""
-        M = self.block_array()
+        """Solve ``M x = b``.
+
+        When all factor matrices are :class:`~jaxfun.la.DiaMatrix` instances,
+        assembles the global sparse matrix via :meth:`tosparse`, applies the
+        reverse Cuthill-McKee permutation to minimise bandwidth, and solves
+        with the banded LU.  The permuted matrix and permutation vectors are
+        cached so repeated solves are cheap.
+
+        Falls back to a dense factorisation when any factor is a
+        :class:`~jaxfun.la.Matrix`.
+        """
+        all_dia = all(
+            isinstance(mat, DiaMatrix) for tp in self.tpmats for mat in tp.mats
+        )
+        if all_dia:
+            A_perm, perm, inv_perm = self.tosparse().rcm()
+            x_perm = A_perm.solve(b.ravel()[perm])
+            return x_perm[inv_perm].reshape(b.shape)
+        M = self.to_Matrix()
         return M.solve(b.ravel()).reshape(b.shape)
+
+
+class TPMatricesLUFactors:
+    """Diagonalization-based solver for a sum of tensor-product operators.
+
+    Solves
+
+    .. math::
+
+        \\sum_k s_k \\, (A_k^{(0)} \\otimes A_k^{(1)} \\otimes \\cdots)\\, x = f
+
+    by simultaneously diagonalizing the factor matrices on each axis.
+
+    Given a shared eigenbasis :math:`V` satisfying
+    :math:`V^T A V = \\Lambda` (diagonal) and :math:`V^T B V = I`, the system
+    reduces to element-wise division in the transformed space — :math:`O(n^d)`
+    work after the :math:`O(n^3)` per-axis factorisation.
+
+    For 2D Poisson (``K⊗M + M⊗K``): the denominator is
+    :math:`D_{ij} = \\lambda_i + \\lambda_j` and the back-transform is
+    :math:`U = V \\tilde{U} V^T`.
+    """
+
+    def __init__(
+        self,
+        eigvecs: list[Array],
+        per_term_eigenvalues: list[list[Array]],
+        scales: list[complex],
+        shape: tuple[int, ...],
+    ) -> None:
+        self.eigvecs = eigvecs  # list of (n_i, n_i) eigenvector matrices
+        self.per_term_eigenvalues = per_term_eigenvalues  # [term][axis] -> (n_axis,)
+        self.scales = scales
+        self.shape = shape
+
+    @jax.jit(static_argnums=(0,))
+    def solve(self, rhs: Array) -> Array:
+        """Solve the summed tensor-product system for RHS ``rhs``.
+
+        Args:
+            rhs: Right-hand side, flat ``(n,)`` or shaped ``(n0, n1, ...)``.
+
+        Returns:
+            Solution with the same shape as ``rhs``.
+        """
+        shape = self.shape
+        ndim = len(shape)
+        F = rhs.reshape(shape)
+
+        # Forward transform: apply V_i^T along each axis i.
+        # jnp.tensordot(V.T, X, axes=[[1],[i]]) contracts V^T with axis i of X,
+        # placing the result at position 0; moveaxis restores it to position i.
+        Ftilde = F
+        for i, V in enumerate(self.eigvecs):
+            Ftilde = jnp.tensordot(V.T, Ftilde, axes=[[1], [i]])
+            Ftilde = jnp.moveaxis(Ftilde, 0, i)
+
+        # Denominator: D[i0,i1,...] = sum_k s_k * Λ_k[0][i0] * Λ_k[1][i1] * ...
+        dtype = jnp.result_type(rhs.dtype, jnp.float32)
+        D = jnp.zeros(shape, dtype=dtype)
+        for evals_k, s_k in zip(self.per_term_eigenvalues, self.scales):
+            term = jnp.ones(shape, dtype=dtype)
+            for i, ev in enumerate(evals_k):
+                idx: list = [None] * ndim
+                idx[i] = slice(None)
+                term = term * ev[tuple(idx)]
+            D = D + jnp.asarray(s_k, dtype=dtype) * term
+
+        # Solve in the transformed space (element-wise division).
+        Utilde = Ftilde / D
+
+        # Back-transform: apply V_i along each axis i.
+        U = Utilde
+        for i, V in enumerate(self.eigvecs):
+            U = jnp.tensordot(V, U, axes=[[1], [i]])
+            U = jnp.moveaxis(U, 0, i)
+
+        return U.reshape(rhs.shape)
+
+
+def _make_wavenumber_vmap_solve(
+    L_offsets: tuple[int, ...],
+    U_offsets: tuple[int, ...],
+    n_P: int,
+    dtype: Any,
+) -> Callable[..., Array]:
+    """Build a ``jax.vmap``-compiled batch solver for the wavenumber loop.
+
+    Returns a function ``f(L_data_batch, U_data_batch, rhs_2d) -> sol_2d``
+    that solves each 1-D banded system ``B_k x = b_k`` using forward and
+    backward substitution compiled via :func:`jax.lax.scan`.  DIA offsets are
+    captured as static Python values in the closure so :func:`jax.vmap` only
+    traces over the array data — avoiding any pytree-metadata issues that
+    would arise from constructing :class:`~jaxfun.la.DiaMatrix` instances
+    with traced arrays.
+
+    Args:
+        L_offsets: Sub-diagonal offsets of the L factor (shared across all k).
+        U_offsets: Super-diagonal offsets of the U factor (shared across all k).
+        n_P: Length of each 1-D polynomial system.
+        dtype: JAX dtype used for zero-padding of missing diagonals.
+
+    Returns:
+        A vmapped callable ``(L_data_batch, U_data_batch, rhs_2d) -> sol_2d``
+        where each batch dimension corresponds to one Fourier wavenumber.
+    """
+    p = max((-o for o in L_offsets if o < 0), default=0)
+    q = max((o for o in U_offsets if o > 0), default=0)
+
+    # Index of each sub/super-diagonal in the data array, or None if absent.
+    l_indices: list[int | None] = [
+        L_offsets.index(-s) if -s in L_offsets else None for s in range(1, p + 1)
+    ]
+    U_main_idx: int = U_offsets.index(0)
+    u_indices: list[int | None] = [
+        U_offsets.index(s) if s in U_offsets else None for s in range(1, q + 1)
+    ]
+
+    # Reversal index for backward substitution — static since n_P is fixed.
+    rev = jnp.arange(n_P - 1, -1, -1)
+
+    def _fwd_elim(L_data: Array, b: Array) -> Array:
+        """Solve L y = b (unit lower-triangular) via forward scan."""
+        if p == 0:
+            return b
+        l_rows: list[Array] = []
+        for s, idx in enumerate(l_indices, start=1):
+            if idx is not None:
+                d = L_data[idx]
+                l_rows.append(
+                    jnp.concatenate([jnp.zeros(s, dtype=d.dtype), d[: n_P - s]])
+                )
+            else:
+                l_rows.append(jnp.zeros(n_P, dtype=dtype))
+        l_mat = jnp.stack(l_rows)  # (p, n_P); l_mat[j, i] = L[i, i-(j+1)]
+
+        def step(window: Array, xs: tuple) -> tuple[Array, Array]:
+            bi, l_i = xs  # scalar, (p,)
+            yi = bi - jnp.dot(l_i, window)
+            return jnp.concatenate([yi[None], window[:-1]]), yi
+
+        _, ys = jax.lax.scan(step, jnp.zeros(p, dtype=b.dtype), (b, l_mat.T))
+        return ys
+
+    def _bwd_sub(U_data: Array, y: Array) -> Array:
+        """Solve U x = y (upper-triangular) via backward scan."""
+        diag_d = U_data[U_main_idx]
+        if q == 0:
+            return y / diag_d
+        u_rows: list[Array] = []
+        for s, idx in enumerate(u_indices, start=1):
+            if idx is not None:
+                d = U_data[idx]
+                u_rows.append(jnp.concatenate([d[s:n_P], jnp.zeros(s, dtype=d.dtype)]))
+            else:
+                u_rows.append(jnp.zeros(n_P, dtype=dtype))
+        u_mat = jnp.stack(u_rows)  # (q, n_P)
+        y_rev, diag_rev, u_mat_rev = y[rev], diag_d[rev], u_mat[:, rev].T  # (n_P, q)
+
+        def step(window: Array, xs: tuple) -> tuple[Array, Array]:
+            yi, u_i, dii = xs  # scalar, (q,), scalar
+            xi = (yi - jnp.dot(u_i, window)) / dii
+            return jnp.concatenate([xi[None], window[:-1]]), xi
+
+        _, xs_out = jax.lax.scan(
+            step, jnp.zeros(q, dtype=y.dtype), (y_rev, u_mat_rev, diag_rev)
+        )
+        return xs_out[rev]
+
+    def _solve_one(L_data: Array, U_data: Array, b: Array) -> Array:
+        return _bwd_sub(U_data, _fwd_elim(L_data, b))
+
+    return jax.jit(jax.vmap(_solve_one))
+
+
+class TPMatricesWavenumberSolver:
+    """Per-wavenumber solver for Fourier x polynomial tensor-product systems.
+
+    Solves
+
+    .. math::
+
+        \\sum_i s_i \\bigl(A_i^{(0)} \\otimes \\cdots\\bigr)\\, x = f
+
+    where all axes except one are *Fourier* (every per-axis matrix is diagonal)
+    and exactly one axis is *polynomial* (banded but not purely diagonal).
+
+    For each combination of Fourier wavenumber indices the 1-D polynomial
+    problem
+
+    .. math::
+
+        B_k\\, \\hat{u}_k = \\hat{f}_k, \\quad
+        B_k = \\sum_i s_i \\Bigl(\\prod_{a \\in \\text{Fourier}}
+        F_i^{(a)}[k_a]\\Bigr)\\, P_i
+
+    is assembled using banded :class:`~jaxfun.la.DiaMatrix` arithmetic and
+    pre-factorised with :meth:`~jaxfun.la.DiaMatrix.lu_factor` (result
+    cached on each matrix).
+
+    Args:
+        poly_axis: Index of the polynomial axis in the full tensor.
+        B_matrices: Per-wavenumber :class:`~jaxfun.la.DiaMatrix` objects,
+            length ``n_F`` (product of all Fourier-axis sizes), each
+            carrying a warm :meth:`~jaxfun.la.DiaMatrix.lu_factor` cache.
+        shape: Full solution shape ``(n_0, n_1, ...)``.
+    """
+
+    def __init__(
+        self,
+        poly_axis: int,
+        B_matrices: list,
+        shape: tuple[int, ...],
+    ) -> None:
+        self.poly_axis = poly_axis
+        self.B_matrices = B_matrices
+        self.shape = shape
+        # Pre-stack L and U data for vmapped solving.
+        # lu_factor prunes structurally-zero diagonals per-wavenumber, so
+        # different B_k may yield L/U with different offsets.  Compute the
+        # union of offsets and pad missing diagonals with zeros so all rows
+        # have the same shape before stacking.
+        lu_list = [B.lu_factor() for B in B_matrices]
+        n_P_local = B_matrices[0].shape[0]
+
+        all_L_offsets: tuple[int, ...] = tuple(
+            sorted({off for lu in lu_list for off in lu.L.offsets})
+        )
+        all_U_offsets: tuple[int, ...] = tuple(
+            sorted({off for lu in lu_list for off in lu.U.offsets})
+        )
+
+        def _align_data(dia_mat: DiaMatrix, target_offsets: tuple[int, ...]) -> Array:
+            rows: list[Array] = []
+            for off in target_offsets:
+                if off in dia_mat.offsets:
+                    rows.append(dia_mat.data[list(dia_mat.offsets).index(off)])
+                else:
+                    rows.append(jnp.zeros(n_P_local, dtype=dia_mat.data.dtype))
+            return jnp.stack(rows)
+
+        self.L_data_batch: Array = jnp.stack(
+            [_align_data(lu.L, all_L_offsets) for lu in lu_list]
+        )
+        self.U_data_batch: Array = jnp.stack(
+            [_align_data(lu.U, all_U_offsets) for lu in lu_list]
+        )
+        self.L_offsets: tuple[int, ...] = all_L_offsets
+        self.U_offsets: tuple[int, ...] = all_U_offsets
+        self._vmap_solve = _make_wavenumber_vmap_solve(
+            all_L_offsets, all_U_offsets, n_P_local, self.L_data_batch.dtype
+        )
+
+        # Experimental alternative: instead of custom scan kernels, try rebuilding
+        # using the aligned data and vmapping lu.solve directly.  This is more
+        # elegant, but initial tests suggest the custom scan kernels are faster
+        # Keep alternative solve2 for now.
+        # Rebuild LUFactors with aligned offsets (all_L_offsets / all_U_offsets)
+        # so every element has the same pytree structure.  Then stack their
+        # leaves into a single batched pytree and vmap LUFactors.solve over it.
+        from jaxfun.la.diamatrix import LUFactors as _DiaLUFactors
+
+        n = n_P_local
+        aligned_lu_list = [
+            _DiaLUFactors(
+                L=DiaMatrix(
+                    data=self.L_data_batch[k],
+                    offsets=all_L_offsets,
+                    shape=(n, n),
+                ),
+                U=DiaMatrix(
+                    data=self.U_data_batch[k],
+                    offsets=all_U_offsets,
+                    shape=(n, n),
+                ),
+                shape=(n, n),
+            )
+            for k in range(len(lu_list))
+        ]
+        self._lu_stacked = jax.tree.map(lambda *xs: jnp.stack(xs), *aligned_lu_list)
+        self._vmap_solve2 = jax.jit(jax.vmap(lambda lu, b: lu.solve(b)))
+
+    @jax.jit(static_argnums=(0,))
+    def solve(self, rhs: Array) -> Array:
+        """Solve the wavenumber-loop system for RHS ``rhs``.
+
+        All per-wavenumber 1-D banded polynomial solves are executed in a
+        single :func:`jax.vmap` call over the stacked ``L`` / ``U`` factor
+        data arrays.  The scan kernels are compiled once on the first call
+        and reused for subsequent solves.
+
+        Args:
+            rhs: Right-hand side shaped ``self.shape``.
+
+        Returns:
+            Solution with the same shape as ``rhs``.
+        """
+        shape = self.shape
+        ndim = len(shape)
+        poly_axis = self.poly_axis
+        n_P = shape[poly_axis]
+
+        fourier_axes = [a for a in range(ndim) if a != poly_axis]
+        fourier_shape = tuple(shape[a] for a in fourier_axes)
+        n_F = int(np.prod(fourier_shape)) if fourier_shape else 1
+
+        # Permute so all Fourier axes come first, polynomial axis last, then
+        # flatten to (n_F, n_P) for vectorised solving.
+        axes_order = fourier_axes + [poly_axis]
+        rhs_2d = jnp.transpose(rhs, axes_order).reshape(n_F, n_P)
+
+        sol_2d = self._vmap_solve(self.L_data_batch, self.U_data_batch, rhs_2d)
+
+        # Un-permute back to the original axis order.
+        sol_perm = sol_2d.reshape(fourier_shape + (n_P,))
+        inv_perm = [0] * ndim
+        for new_pos, old_pos in enumerate(axes_order):
+            inv_perm[old_pos] = new_pos
+        return jnp.transpose(sol_perm, inv_perm)
+
+    @jax.jit(static_argnums=(0,))
+    def solve2(self, rhs: Array) -> Array:
+        """Alternative solve that vmaps :meth:`~jaxfun.la.diamatrix.LUFactors.solve`
+        directly over a batched :class:`~jaxfun.la.diamatrix.LUFactors` pytree.
+
+        All ``LUFactors`` for the wavenumber batch share the same aligned
+        ``L``/``U`` offsets and ``shape``, so their leaves can be stacked once
+        (in ``__init__``) and ``jax.vmap`` maps ``lu.solve(b)`` over the
+        leading batch axis — no custom scan kernels required.
+
+        Args:
+            rhs: Right-hand side shaped ``self.shape``.
+
+        Returns:
+            Solution with the same shape as ``rhs``.
+        """
+        shape = self.shape
+        ndim = len(shape)
+        poly_axis = self.poly_axis
+        n_P = shape[poly_axis]
+
+        fourier_axes = [a for a in range(ndim) if a != poly_axis]
+        fourier_shape = tuple(shape[a] for a in fourier_axes)
+        n_F = int(np.prod(fourier_shape)) if fourier_shape else 1
+
+        axes_order = fourier_axes + [poly_axis]
+        rhs_2d = jnp.transpose(rhs, axes_order).reshape(n_F, n_P)
+
+        sol_2d = self._vmap_solve2(self._lu_stacked, rhs_2d)
+
+        sol_perm = sol_2d.reshape(fourier_shape + (n_P,))
+        inv_perm = [0] * ndim
+        for new_pos, old_pos in enumerate(axes_order):
+            inv_perm[old_pos] = new_pos
+        return jnp.transpose(sol_perm, inv_perm)
+
+
+class TPMatricesDenseLUFactors:
+    """Dense Kronecker-product LU solver for a sum of :class:`TPMatrix`.
+
+    Assembles the full (dense) Kronecker product ``sum_k s_k A_k^(0) ⊗ …``
+    into a single :class:`~jaxfun.la.Matrix`, LU-factorizes it once, and
+    solves by a single triangular-substitution call.
+
+    This is the appropriate solver when all per-axis factor matrices are
+    dense :class:`~jaxfun.la.Matrix` instances.  It imposes no structural
+    requirement on the system (unlike the diagonalization-based
+    :class:`TPMatricesLUFactors` which requires simultaneously diagonalizable
+    factor matrices).
+
+    Attributes:
+        lu: Pre-computed :class:`~jaxfun.la.matrix.LUFactors` of the full
+            assembled Kronecker product.
+        shape: Per-axis sizes ``(n0, n1, …)``.
+    """
+
+    def __init__(self, lu: LUFactors, shape: tuple[int, ...]) -> None:
+        self.lu = lu
+        self.shape = shape
+
+    @jax.jit(static_argnums=(0,))
+    def solve(self, rhs: Array) -> Array:
+        """Solve the summed tensor-product system for RHS ``rhs``.
+
+        Args:
+            rhs: Right-hand side, flat ``(n,)`` or shaped ``(n0, n1, …)``.
+
+        Returns:
+            Solution with the same shape as ``rhs``.
+        """
+        return self.lu.solve(rhs.ravel()).reshape(rhs.shape)
+
+
+def tpmats_dense_lu_factor(
+    A: TPMatrix | list[TPMatrix],
+) -> TPMatricesDenseLUFactors:
+    """Assemble and LU-factorize the dense Kronecker product of a :class:`TPMatrices`.
+
+    Sums all Kronecker-product terms into a single dense
+    :class:`~jaxfun.la.Matrix` and computes its LU factorisation.  This is
+    the simplest solver and is appropriate when all per-axis factor matrices
+    are dense :class:`~jaxfun.la.Matrix` instances.
+
+    Args:
+        A: Single :class:`TPMatrix` or list thereof (as returned by
+           :func:`~jaxfun.galerkin.inner.inner`).
+
+    Returns:
+        :class:`TPMatricesDenseLUFactors` whose :meth:`~TPMatricesDenseLUFactors.solve`
+        method solves the system without re-factorising.
+
+    Raises:
+        TypeError: if any factor matrix is not a :class:`~jaxfun.la.Matrix`.
+    """
+    if isinstance(A, TPMatrix):
+        A = [A]
+    tpmats = list(A)
+    for tp in tpmats:
+        for mat in tp.mats:
+            if not isinstance(mat, Matrix):
+                raise TypeError(
+                    f"tpmats_dense_lu_factor requires all factor matrices to be "
+                    f"Matrix (dense); got {type(mat).__name__}."
+                )
+    mat = tpmats_to_kron(tpmats)
+    assert isinstance(mat, Matrix)
+    shape = tuple(int(tpmats[0].mats[i].shape[0]) for i in range(tpmats[0].dims))
+    return TPMatricesDenseLUFactors(lu=mat.lu_factor(), shape=shape)
+
+
+def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
+    """Compute diagonalization-based LU factors for a sum of :class:`TPMatrix`.
+
+    Simultaneously diagonalizes the factor matrices on each axis so that the
+    full Kronecker-sum system reduces to element-wise division in the
+    transformed space.
+
+    **Algorithm** (2D, generalises to any number of dims):
+
+    Given a list of TPMatrices representing :math:`\\sum_k s_k A_k \\otimes B_k`,
+    find :math:`V` such that :math:`V^T A V = \\Lambda_A` and
+    :math:`V^T B V = I` (generalized eigenproblem :math:`A v = \\lambda B v`).
+    Then:
+
+    .. math::
+
+        \\tilde{F} = V^T F V, \\quad
+        D_{ij} = \\textstyle\\sum_k s_k \\lambda_k^{(0)}{}_i \\lambda_k^{(1)}{}_j,
+        \\quad U = V (\\tilde{F} / D) V^T.
+
+    **Requirement**: all factor matrices on each axis must be simultaneously
+    diagonalizable — true whenever each axis has at most 2 distinct matrices
+    that form a symmetric-definite pair (e.g. stiffness K and mass M from the
+    same 1D function space).  Axes that share the same unordered matrix pair
+    automatically reuse the same eigenvectors.
+
+    Args:
+        A: Single :class:`TPMatrix` or list of :class:`TPMatrix` objects (as
+            returned by :func:`~jaxfun.galerkin.inner.inner`).
+
+    Returns:
+        :class:`TPMatricesLUFactors` whose :meth:`~TPMatricesLUFactors.solve`
+        method solves the system without re-factorising.
+
+    Raises:
+        ValueError: if any axis has more than 2 distinct factor matrices.
+    """
+    if isinstance(A, TPMatrix):
+        A = [A]
+    tpmats = list(A)
+    ndim = tpmats[0].dims
+
+    # --- value-based deduplication of factor matrices ----------------------
+    # Matrices that are numerically equal but have different Python ids (e.g.
+    # M from K⊗M and M from the M⊗M term in a Helmholtz problem) are treated
+    # as the same matrix.  All ids are mapped to a single representative id.
+    _mat_by_id: dict[int, object] = {}
+    _dense_by_id: dict[int, Array] = {}
+    for tp in tpmats:
+        for mat in tp.mats:
+            mid = id(mat)
+            if mid not in _mat_by_id:
+                _mat_by_id[mid] = mat
+                _dense_by_id[mid] = mat.todense()
+
+    _seen_repr: list[int] = []  # canonical ids in first-seen order
+    _id_to_repr: dict[int, int] = {}
+    for mid in _mat_by_id:
+        for rid in _seen_repr:
+            if _dense_by_id[mid].shape == _dense_by_id[rid].shape and jnp.allclose(
+                _dense_by_id[mid], _dense_by_id[rid], rtol=1e-5, atol=1e-8
+            ):
+                _id_to_repr[mid] = rid
+                break
+        else:
+            _id_to_repr[mid] = mid
+            _seen_repr.append(mid)
+
+    def _repr(mat) -> int:
+        return _id_to_repr[id(mat)]
+
+    # --- per-axis pair → (eigvecs, {repr_id: eigenvalues}) ----------------
+    # Axes that share the same unordered pair of matrices reuse eigenvectors.
+    pair_cache: dict[frozenset, tuple[Array, dict[int, Array]]] = {}
+
+    for i in range(ndim):
+        mats_i = list(
+            {_repr(tp.mats[i]): _mat_by_id[_repr(tp.mats[i])] for tp in tpmats}.values()
+        )
+        pair_key = frozenset(_repr(m) for m in mats_i)
+        if pair_key in pair_cache:
+            continue
+        if len(mats_i) == 1:
+            A_dense = cast(MatrixProtocol, mats_i[0]).todense()
+            evals, evecs = jnp.linalg.eigh(A_dense)
+            pair_cache[pair_key] = (evecs, {_repr(mats_i[0]): evals})
+        elif len(mats_i) == 2:
+            import numpy as _np
+            import scipy.linalg as _scipy_linalg
+
+            A0_np = _np.array(cast(MatrixProtocol, mats_i[0]).todense())
+            A1_np = _np.array(cast(MatrixProtocol, mats_i[1]).todense())
+            # Generalized eigenproblem: try A0 v = λ A1 v (A1 must be PD).
+            # If that fails (A1 not PD), swap to A1 v = λ A0 v.
+            try:
+                evals_np, evecs_np = _scipy_linalg.eigh(A0_np, A1_np)
+                evals = jnp.array(evals_np)
+                evecs = jnp.array(evecs_np)
+                pair_cache[pair_key] = (
+                    evecs,
+                    {
+                        _repr(mats_i[0]): evals,
+                        _repr(mats_i[1]): jnp.ones_like(evals),
+                    },
+                )
+            except _scipy_linalg.LinAlgError:
+                evals_np, evecs_np = _scipy_linalg.eigh(A1_np, A0_np)
+                evals = jnp.array(evals_np)
+                evecs = jnp.array(evecs_np)
+                pair_cache[pair_key] = (
+                    evecs,
+                    {
+                        _repr(mats_i[1]): evals,
+                        _repr(mats_i[0]): jnp.ones_like(evals),
+                    },
+                )
+        else:
+            raise SolverNotApplicable(
+                f"Axis {i} has {len(mats_i)} distinct factor matrices; "
+                "simultaneous diagonalization requires ≤ 2 distinct matrices per axis."
+            )
+
+    # Build per-axis eigenvector list and global repr_id→eigenvalues map.
+    eigvecs: list[Array] = []
+    axis_eigenvalues: dict[int, Array] = {}
+    for i in range(ndim):
+        mats_i = list(
+            {_repr(tp.mats[i]): _mat_by_id[_repr(tp.mats[i])] for tp in tpmats}.values()
+        )
+        pair_key = frozenset(_repr(m) for m in mats_i)
+        evecs, evals_map = pair_cache[pair_key]
+        eigvecs.append(evecs)
+        axis_eigenvalues.update(evals_map)
+
+    per_term_eigenvalues = [
+        [axis_eigenvalues[_repr(tp.mats[i])] for i in range(ndim)] for tp in tpmats
+    ]
+    scales: list[complex] = [tp.scale for tp in tpmats]
+    shape: tuple[int, ...] = tuple(int(tpmats[0].mats[i].shape[0]) for i in range(ndim))
+    return TPMatricesLUFactors(
+        eigvecs=eigvecs,
+        per_term_eigenvalues=per_term_eigenvalues,
+        scales=scales,
+        shape=shape,
+    )
+
+
+def tpmats_wavenumber_factor(
+    A: list[TPMatrix] | TPMatrices,
+) -> TPMatricesWavenumberSolver:
+    """Pre-factorize a Fourier x polynomial :class:`TPMatrices` system.
+
+    Detects which axes are Fourier (every term has a purely diagonal
+    :class:`~jaxfun.la.DiaMatrix` — ``offsets == (0,)`` — on that axis) and
+    which is the polynomial axis (banded but not purely diagonal).
+
+    For each Fourier wavenumber index ``k`` assembles the 1-D banded
+    polynomial system
+
+    .. math::
+
+        B_k = \\sum_i s_i \\Bigl(\\prod_{a \\in \\text{Fourier}}
+        F_i^{(a)}[k_a]\\Bigr)\\, P_i
+
+    as a :class:`~jaxfun.la.DiaMatrix` (preserving the banded sparsity
+    pattern of the polynomial matrices) and warms its
+    :meth:`~jaxfun.la.DiaMatrix.lu_factor` cache.
+
+    Args:
+        A: :class:`list` of :class:`TPMatrix` (as returned by
+            :func:`~jaxfun.galerkin.inner.inner`) or a
+            :class:`TPMatrices` instance.
+
+    Returns:
+        :class:`TPMatricesWavenumberSolver` for repeated fast solves.
+
+    Raises:
+        TypeError: If ``A`` is not a ``list[TPMatrix]`` or
+            :class:`TPMatrices`.
+        ValueError: If the structure does not have exactly one non-diagonal
+            (polynomial) axis, e.g. for fully symmetric problems where
+            :func:`tpmats_lu_factor` should be used instead.
+    """
+    if isinstance(A, TPMatrices):
+        tpmats: list[TPMatrix] = list(A.tpmats)
+    elif isinstance(A, list):
+        tpmats = A
+    else:
+        raise TypeError(
+            f"tpmats_wavenumber_factor expects a list[TPMatrix] or TPMatrices, "
+            f"got {type(A).__name__!r}."
+        )
+    ndim: int = tpmats[0].dims
+
+    def _is_diagonal_axis(axis: int) -> bool:
+        return all(set(cast(DiaMatrix, tp.mats[axis]).offsets) == {0} for tp in tpmats)
+
+    fourier_axes = [a for a in range(ndim) if _is_diagonal_axis(a)]
+    poly_axes = [a for a in range(ndim) if not _is_diagonal_axis(a)]
+
+    if len(poly_axes) != 1:
+        raise SolverNotApplicable(
+            f"tpmats_wavenumber_factor requires exactly 1 polynomial "
+            f"(non-diagonal) axis; found {len(poly_axes)}: {poly_axes}. "
+            f"Use tpmats_lu_factor for fully-symmetric problems."
+        )
+
+    poly_axis = poly_axes[0]
+    shape = tuple(int(tpmats[0].mats[a].shape[0]) for a in range(ndim))
+    n_P = shape[poly_axis]
+
+    # Determine working dtype from the polynomial-axis matrices so the solver
+    # honours float64 when JAX is configured for 64-bit precision.
+    _dtype = jnp.result_type(*[tp.mats[poly_axis].data.dtype for tp in tpmats])
+
+    # Build weight matrix W[i, k] = scale_i * prod_a(diag(F_i^(a))[k_a]).
+    # The flat Fourier index k varies in C-order (last Fourier axis fastest),
+    # matching the transposed layout used in TPMatricesWavenumberSolver.solve.
+    W_list: list[Array] = []
+    for tp in tpmats:
+        w: Array = jnp.asarray(tp.scale, dtype=_dtype).reshape(1)
+        for a in fourier_axes:
+            # Diagonal DiaMatrix: data has shape (1, n_a); data[0] is the diagonal.
+            diag_a = jnp.asarray(tp.mats[a].data[0], dtype=_dtype)  # (n_a,)
+            w = jnp.outer(w, diag_a).flatten()  # 1 → n_{a0} → n_{a0}*n_{a1} → …
+        W_list.append(w)  # (n_F,)
+
+    W = jnp.stack(W_list)  # (n_terms, n_F)
+
+    # Union of offsets across all polynomial matrices, in sorted order.
+    poly_offsets: tuple[int, ...] = tuple(
+        sorted(
+            {
+                int(off)
+                for tp in tpmats
+                for off in cast(DiaMatrix, tp.mats[poly_axis]).offsets
+            }
+        )
+    )
+
+    # Stack polynomial DIA data aligned to poly_offsets.
+    # P_data_stack[i, d, :] = data of term i for offset poly_offsets[d].
+    P_data_rows: list[Array] = []
+    for tp in tpmats:
+        mat = cast(DiaMatrix, tp.mats[poly_axis])
+        rows: list[Array] = []
+        for off in poly_offsets:
+            if off in mat.offsets:
+                idx = list(mat.offsets).index(off)
+                rows.append(jnp.asarray(mat.data[idx], dtype=_dtype))
+            else:
+                rows.append(jnp.zeros(n_P, dtype=_dtype))
+        P_data_rows.append(jnp.stack(rows))  # (n_diags, n_P)
+
+    P_data_stack = jnp.stack(P_data_rows)  # (n_terms, n_diags, n_P)
+
+    # Assemble per-wavenumber DIA data:
+    # B_data_batch[k, d, :] = sum_i W[i,k] * P_data_stack[i, d, :].
+    B_data_batch = jnp.einsum("tf,tdp->fdp", W, P_data_stack)  # (n_F, n_diags, n_P)
+    n_F = B_data_batch.shape[0]
+
+    # Build per-wavenumber DiaMatrix objects and warm their lu_factor caches.
+    B_matrices: list[DiaMatrix] = []
+    for k in range(n_F):
+        B_k = DiaMatrix(
+            data=B_data_batch[k],
+            offsets=poly_offsets,
+            shape=(n_P, n_P),
+        )
+        B_k.lu_factor()  # warms the cache stored on B_k
+        B_matrices.append(B_k)
+
+    return TPMatricesWavenumberSolver(
+        poly_axis=poly_axis,
+        B_matrices=B_matrices,
+        shape=shape,
+    )
 
 
 def tpmats_to_kron(A: TPMatrix | list[TPMatrix], tol: int = 100) -> Matrix | DiaMatrix:

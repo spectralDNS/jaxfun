@@ -21,6 +21,10 @@ from sympy.vector import (
 from typing_extensions import TypedDict
 
 from jaxfun.la import MatrixProtocol
+from jaxfun.la.matrixprotocol import (
+    DiaMatrixSolveMethod as DiaMatrixSolveMethod,
+    SolverNotApplicable as SolverNotApplicable,
+)
 
 if TYPE_CHECKING:
     from jaxfun.coordinates import BaseDyadic, BaseScalar, BaseVector

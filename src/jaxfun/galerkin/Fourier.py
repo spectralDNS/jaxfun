@@ -213,6 +213,22 @@ class Fourier(OrthogonalSpace):
         m = self.wavenumbers(eliminate_highest_freq=k % 2 == 1)
         return (1j * m) ** k * c
 
+    @jax.jit(static_argnums=(0, 1, 2))
+    def mesh(
+        self, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
+    ) -> Array:
+        """Return (periodic) sampling mesh in true domain.
+
+        Args:
+            kind: Mesh type for backward evaluation (MeshKind.QUADRATURE or
+                MeshKind.UNIFORM).
+            N: Number of points (defaults to self.num_quad_points).
+        """
+        # Both quadrature and uniform meshes are equispaced for Fourier, so ignore kind.
+        a, b = self.domain
+        M = N if N is not None else self.num_quad_points
+        return jnp.linspace(float(a), float(b), M, endpoint=False)
+
 
 def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> DiaMatrix:
     """Return sparse operator matrix for Fourier test/trial derivatives.

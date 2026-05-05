@@ -156,3 +156,20 @@ def test_inner_returns_matrix_and_vector_with_bcs():
     # A is dense matrix, b vector
     assert A.shape[0] == A.shape[1]
     assert b.shape[0] == A.shape[0]
+
+
+def test_vectortensorproductspace_project():
+    N: int = 8
+
+    C = Chebyshev.Chebyshev(N)
+    T = TensorProduct(C, C)
+    V = VectorTensorProductSpace(T, name="V")
+    x, y = T.system.base_scalars()
+    i, j = T.system.base_vectors()
+
+    u = JAXFunction(y * i + x * j, V)
+
+    ua = V.backward(u.array)
+    xi, yj = T.mesh()
+    assert jnp.linalg.norm(ua[0] - yj) < ulp(1000)
+    assert jnp.linalg.norm(ua[1] - xi) < ulp(1000)

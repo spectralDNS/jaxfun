@@ -1027,6 +1027,12 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
 
         Returns:
             Solution array with the same shape as ``rhs``.
+
+        Note:
+            This method is not highly useful, because TPMatrices are not often
+            solved directly by themselves. There is usually a list of them in a
+            :class:`TPMatrices`, and the summed system is then solved without
+            using this solve method.
         """
         return self.lu_factor().solve(rhs)
 
@@ -1226,11 +1232,11 @@ class BlockTPMatrix:
 
     def __init__(
         self,
-        tpmats: list[TPMatrix],
+        tpmats: list[TPMatrix] | TPMatrices,
         test_space: VectorTensorProductSpace,
         trial_space: VectorTensorProductSpace,
     ) -> None:
-        self.tpmats = tpmats
+        self.tpmats = tpmats.tpmats if isinstance(tpmats, TPMatrices) else tpmats
         self.test_space = test_space
         self.trial_space = trial_space
         self.shape = (self.test_space.dim, self.trial_space.dim)
@@ -1249,15 +1255,6 @@ class BlockTPMatrix:
             out = out.at[indices[0]].add(mat @ w[indices[1]])
         return out
 
-    @jax.jit(static_argnums=0)
-    def mat(self) -> Array:
-        """Return explicit block matrix (dense)."""
-        out = jnp.zeros(self.shape)
-        for m in self.tpmats:
-            indices = m.global_indices
-            out = out.at[self.slice(indices)].add(m.mat)
-        return out
-
     def slice(self, indices: tuple[int, ...]) -> tuple[slice, ...]:  # ty:ignore[invalid-type-form]
         """Return slice object for block matrix indices."""
         N = self.test_block_sizes
@@ -1267,26 +1264,149 @@ class BlockTPMatrix:
             slice(jnp.sum(M[: indices[1]]), jnp.sum(M[: indices[1] + 1])),
         )
 
-    def block_array(self) -> Matrix:
-        """Return dense block matrix assembled from Kronecker products."""
+    def todense(self) -> Array:
+        """Return dense array."""
         out = jnp.zeros(self.shape)
         for m in self.tpmats:
             indices = m.global_indices
             block = m.mat
             dense = block.todense()
             out = out.at[self.slice(indices)].add(dense)
-        return Matrix(out)
+        return out
+
+    def to_Matrix(self) -> Matrix:
+        """Return dense matrix object."""
+        return Matrix(self.todense())
+
+    def tosparse(self) -> DiaMatrix:
+        """Assemble global :class:`~jaxfun.la.DiaMatrix` from DiaMatrix-factor blocks.
+
+        The assembled matrix is cached on the instance so repeated calls are
+        free.
+
+        Returns:
+            :class:`~jaxfun.la.DiaMatrix` of shape ``(total_rows, total_cols)``.
+
+        Raises:
+            TypeError: if any factor matrix is not a
+                :class:`~jaxfun.la.DiaMatrix`.
+        """
+        for tp in self.tpmats:
+            for mat in tp.mats:
+                if not isinstance(mat, DiaMatrix):
+                    raise TypeError(
+                        f"tosparse requires all factor matrices to be DiaMatrix; "
+                        f"got {type(mat).__name__}."
+                    )
+
+        cached: DiaMatrix | None = getattr(self, "_sparse_cache", None)
+        if cached is not None:
+            return cached
+
+        # Group TPMatrix objects by global_indices.
+        from collections import defaultdict
+
+        grouped: dict[tuple[int, int], list[TPMatrix]] = defaultdict(list)
+        for mat in self.tpmats:
+            grouped[mat.global_indices].append(mat)
+
+        test_block_sizes = [int(s) for s in self.test_block_sizes]
+        trial_block_sizes = [int(s) for s in self.trial_block_sizes]
+        test_starts = [sum(test_block_sizes[:i]) for i in range(len(test_block_sizes))]
+        trial_starts = [
+            sum(trial_block_sizes[:i]) for i in range(len(trial_block_sizes))
+        ]
+        total_rows = sum(test_block_sizes)
+        total_cols = sum(trial_block_sizes)
+
+        # Build per-block DiaMatrix and collect all global diagonal offsets.
+        block_dias: dict[tuple[int, int], DiaMatrix] = {}
+        global_offsets: set[int] = set()
+        for (bi, bj), mats in grouped.items():
+            block_dia = tpmats_to_kron(mats)
+            if not isinstance(block_dia, DiaMatrix):
+                raise TypeError(
+                    f"tpmats_to_kron returned {type(block_dia).__name__} for block "
+                    f"({bi},{bj}); expected DiaMatrix."
+                )
+            block_dias[(bi, bj)] = block_dia
+            shift = trial_starts[bj] - test_starts[bi]
+            for k in block_dia.offsets:
+                global_offsets.add(int(k) + shift)
+
+        sorted_offsets = tuple(sorted(global_offsets))
+        offset_to_idx = {k: i for i, k in enumerate(sorted_offsets)}
+
+        # Allocate global DIA data array and scatter each block's diagonals.
+        dtype = jnp.result_type(*[d.data.dtype for d in block_dias.values()])
+        global_data = jnp.zeros((len(sorted_offsets), total_cols), dtype=dtype)
+        for (bi, bj), block_dia in block_dias.items():
+            col_start = trial_starts[bj]
+            shift = col_start - test_starts[bi]
+            n_cols_block = trial_block_sizes[bj]
+            for d_b, k_b in enumerate(block_dia.offsets):
+                d_g = offset_to_idx[int(k_b) + shift]
+                global_data = global_data.at[
+                    d_g, col_start : col_start + n_cols_block
+                ].add(block_dia.data[d_b])
+
+        result = DiaMatrix(
+            data=global_data, offsets=sorted_offsets, shape=(total_rows, total_cols)
+        )
+        object.__setattr__(self, "_sparse_cache", result)
+        return result
 
     def __call__(self, u: Array | JAXFunction) -> Array:
-        """Apply block matrix to coefficient array u."""
+        """Apply block matrix to coefficient array u.
+
+        Uses the RCM-permuted :class:`~jaxfun.la.DiaMatrix` for a single
+        global matvec when the sparse cache has been populated (e.g. after
+        :meth:`solve` or an explicit :meth:`tosparse` call); otherwise falls
+        back to the per-block path.
+        """
         from jaxfun.galerkin import JAXFunction
 
         w = u.array if isinstance(u, JAXFunction) else u
+        rcm_cache: tuple[DiaMatrix, Array, Array] | None = getattr(
+            self, "_rcm_cache", None
+        )
+        if rcm_cache is not None:
+            A_perm, perm, inv_perm = rcm_cache
+            return A_perm.matvec(w.ravel()[perm])[inv_perm].reshape(w.shape)
+        sparse: DiaMatrix | None = getattr(self, "_sparse_cache", None)
+        if sparse is not None:
+            return sparse.matvec(w.ravel()).reshape(w.shape)
         return self._matmul_array(w)
 
     def solve(self, b: Array) -> Array:
-        """Solve M x = b using a dense factorisation of the block matrix."""
-        M = self.block_array()
+        """Solve ``M x = b``.
+
+        When all factor matrices are :class:`~jaxfun.la.DiaMatrix` instances,
+        assembles the global sparse matrix via :meth:`tosparse`, applies the
+        reverse Cuthill-McKee permutation to minimise bandwidth, and solves
+        with the banded LU.  The permuted matrix and permutation vectors are
+        cached so repeated solves are cheap.
+
+        Falls back to a dense factorisation when any factor is a
+        :class:`~jaxfun.la.Matrix`.
+        """
+        all_dia = all(
+            isinstance(mat, DiaMatrix) for tp in self.tpmats for mat in tp.mats
+        )
+        if all_dia:
+            rcm_cache: tuple[DiaMatrix, Array, Array] | None = getattr(
+                self, "_rcm_cache", None
+            )
+            if rcm_cache is None:
+                _, perm, inv_perm = self.tosparse().rcm()
+                # tosparse().rcm() caches on the DiaMatrix; mirror here so
+                # __call__ can find it without re-entering tosparse().
+                rcm_cache = self.tosparse().rcm()
+                object.__setattr__(self, "_rcm_cache", rcm_cache)
+            A_perm, perm, inv_perm = rcm_cache
+            x_perm = A_perm.solve(b.ravel()[perm])
+            return x_perm[inv_perm].reshape(b.shape)
+        M = self.to_Matrix()
         return M.solve(b.ravel()).reshape(b.shape)
 
 

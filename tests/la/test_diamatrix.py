@@ -1316,3 +1316,129 @@ class TestPin:
         sys64 = sys.astype(jnp.float64)
         assert sys64.constraints == sys.constraints
         assert sys64.shape == sys.shape
+
+
+class TestRCM:
+    """Tests for DiaMatrix.rcm() — reverse Cuthill-McKee reordering."""
+
+    def test_returns_correct_types(self):
+        _, A = _pentadiag(8)
+        A_perm, perm, inv_perm = A.rcm()
+        assert isinstance(A_perm, DiaMatrix)
+        assert perm.dtype == jnp.int32
+        assert inv_perm.dtype == jnp.int32
+        assert perm.shape == (8,)
+        assert inv_perm.shape == (8,)
+
+    def test_perm_is_valid_permutation(self):
+        _, A = _pentadiag(8)
+        _, perm, inv_perm = A.rcm()
+        # perm must contain every index exactly once
+        assert jnp.allclose(jnp.sort(perm), jnp.arange(8))
+        # inv_perm is the inverse: inv_perm[perm[i]] == i
+        assert jnp.allclose(inv_perm[perm], jnp.arange(8))
+
+    def test_dense_roundtrip(self):
+        """A_perm.todense() should equal A.todense()[perm][:, perm]."""
+        _, A = _pentadiag(8)
+        A_perm, perm, inv_perm = A.rcm()
+        dense_A = np.array(A.todense())
+        perm_np = np.array(perm)
+        expected = jnp.array(dense_A[perm_np][:, perm_np])
+        assert jnp.allclose(A_perm.todense(), expected, atol=ulp(100))
+
+    def test_reduces_bandwidth_on_large_offset_matrix(self):
+        """A matrix with artificially large bandwidth should shrink after RCM."""
+        n = 16
+        # Build a matrix with off-diagonal entries at offset ±(n//2)
+        dense = np.diag(4 * np.ones(n))
+        half = n // 2
+        for i in range(n - half):
+            dense[i, i + half] = -1.0
+            dense[i + half, i] = -1.0
+        A = DiaMatrix.from_dense(jnp.array(dense, dtype=jnp.float32))
+        A_perm, _, _ = A.rcm()
+        bw_before = max(abs(k) for k in A.offsets)
+        bw_after = max(abs(k) for k in A_perm.offsets)
+        assert bw_after <= bw_before
+
+    def test_permuted_solve_matches_original(self):
+        _, A = _pentadiag(8)
+        A_perm, perm, inv_perm = A.rcm()
+        x_true = jnp.arange(1.0, 9.0)
+        b = A.matvec(x_true)
+        # Solve via RCM: A_perm x_perm = b[perm], then x = x_perm[inv_perm]
+        x_hat = A_perm.solve(b[perm])[inv_perm]
+        assert jnp.allclose(x_hat, x_true, atol=ulp(100))
+
+    def test_tridiag_permuted_solve(self):
+        _, A = _tridiag(10)
+        A_perm, perm, inv_perm = A.rcm()
+        x_true = jnp.ones(10) * 3.0
+        b = A.matvec(x_true)
+        x_hat = A_perm.solve(b[perm])[inv_perm]
+        assert jnp.allclose(x_hat, x_true, atol=ulp(100))
+
+    def test_cached_returns_same_objects(self):
+        _, A = _tridiag(6)
+        result1 = A.rcm()
+        result2 = A.rcm()
+        # All three tuple elements must be the exact same objects
+        assert result1[0] is result2[0]
+        assert result1[1] is result2[1]
+        assert result1[2] is result2[2]
+
+    def test_lu_solve_uses_rcm_for_wide_bandwidth(self):
+        """lu_solve with wide bandwidth should take the RCM path, not dense."""
+        n = 24
+        # Build a block-diagonal-like matrix with a large offset that RCM
+        # can compress: two n/2 tridiagonal blocks connected by off-diagonals
+        # at offset ±(n//2).  Bandwidth = n//2 → p*(q+1) = (n//2)²  >> 100.
+        dense = np.diag(4 * np.ones(n))
+        half = n // 2
+        for i in range(n - 1):
+            dense[i, i + 1] = -1.0
+            dense[i + 1, i] = -1.0
+        # Remove direct neighbors and add inter-block coupling at ±half
+        for i in range(n - half):
+            dense[i, i + half] = -0.5
+            dense[i + half, i] = -0.5
+        A = DiaMatrix.from_dense(jnp.array(dense, dtype=jnp.float32))
+        bw = max(abs(k) for k in A.offsets)
+        # Confirm bandwidth exceeds default dense_threshold
+        assert bw > 10
+
+        x_true = jnp.arange(1.0, n + 1.0, dtype=jnp.float32)
+        b = A.matvec(x_true)
+        x_hat = A.lu_solve(b, dense_threshold=10)
+        assert jnp.allclose(x_hat, x_true, atol=ulp(1000))
+
+    def test_lu_solve_rcm_path_cached(self):
+        """Second lu_solve via the RCM path must populate _rcm_solve_cache.
+
+        Build a tridiagonal that has been deliberately badly ordered (every
+        other node swapped) to inflate bandwidth.  RCM can collapse it back to
+        a narrow matrix, so the RCM path — not the dense fallback — is used.
+        """
+        n = 8
+        _, A0 = _tridiag(n)
+        # Interleave permutation: [0,4,1,5,2,6,3,7] inflates bandwidth to ~4.
+        perm_bad = np.array([0, 4, 1, 5, 2, 6, 3, 7])
+        dense_bad = np.array(A0.todense())[perm_bad][:, perm_bad]
+        A = DiaMatrix.from_dense(jnp.array(dense_bad, dtype=jnp.float32))
+        # Confirm bandwidth exceeds threshold so the wide path is entered.
+        p = max((-k for k in A.offsets if k < 0), default=0)
+        q = max((k for k in A.offsets if k > 0), default=0)
+        assert p * (q + 1) > 10
+
+        x_true = jnp.arange(1.0, n + 1.0)
+        b = A.matvec(x_true)
+        # First call — should take RCM path and populate _rcm_solve_cache.
+        x1 = A.lu_solve(b, dense_threshold=10)
+        assert hasattr(A, "_rcm_solve_cache"), (
+            "_rcm_solve_cache not set after first call"
+        )
+        # Second call — should hit the cache and return the same result.
+        x2 = A.lu_solve(b, dense_threshold=10)
+        assert jnp.allclose(x1, x2, atol=ulp(10))
+        assert jnp.allclose(x1, x_true, atol=ulp(100))

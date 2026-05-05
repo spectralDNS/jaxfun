@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+import numpy as np
 import pytest
 import sympy as sp
 
@@ -9,10 +10,12 @@ from jaxfun.galerkin import (
     TensorProduct,
     TestFunction,
     TrialFunction,
+    VectorTensorProductSpace,
 )
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.tensorproductspace import (
+    BlockTPMatrix,
     TPLUFactors,
     TPMatrices,
     TPMatricesDenseLUFactors,
@@ -24,7 +27,8 @@ from jaxfun.galerkin.tensorproductspace import (
     tpmats_to_kron,
     tpmats_wavenumber_factor,
 )
-from jaxfun.operators import Div, Grad
+from jaxfun.la.diamatrix import DiaMatrix
+from jaxfun.operators import Div, Dot, Grad
 from jaxfun.utils.common import lambdify, ulp
 
 # ---------------------------------------------------------------------------
@@ -329,3 +333,79 @@ def test_tpmatrices_solve_fourier_fourier_legendre_3d():
     uej = lambdify((x, y, z), ue)(*xj)
     l2 = float(jnp.linalg.norm(uj - uej)) / M
     assert l2 < jnp.sqrt(ulp(1000)), f"3D L2 error {l2:.2e} too large"
+
+
+# ---------------------------------------------------------------------------
+# BlockTPMatrix
+# ---------------------------------------------------------------------------
+
+BCS_VEC = {"left": {"D": 0}, "right": {"D": 0}}
+
+
+def _vector_block_system(N: int, poly):
+    """Two-component vector mass system in 2D.
+
+    Uses inner(Dot(v, u)) to assemble a block-diagonal mass matrix
+    (two decoupled identical blocks).  Returns (A, b, x_true) where b is
+    a manufactured RHS consistent with the dense system.
+    """
+    F0 = FunctionSpace(N, poly, BCS_VEC)
+    F1 = FunctionSpace(N, poly, BCS_VEC)
+    T = TensorProduct(F0, F1)
+    V = VectorTensorProductSpace(T, name="V")
+    u = TrialFunction(V)
+    v = TestFunction(V)
+    M = inner(Dot(v, u), sparse=True)
+    A = BlockTPMatrix(M, V, V)
+    rng = np.random.default_rng(0)
+    x_true = jnp.array(rng.standard_normal(A.shape[1]), dtype=jnp.float32)
+    b = A.to_Matrix().matvec(x_true)
+    return A, b, x_true
+
+
+@POLY_SPACES
+def test_blocktpmatrix_tosparse_returns_diamatrix(poly):
+    A, b, _ = _vector_block_system(8, poly)
+    sparse = A.tosparse()
+    assert isinstance(sparse, DiaMatrix)
+    assert sparse.shape == A.shape
+
+
+@POLY_SPACES
+def test_blocktpmatrix_solve_sparse_matches_dense(poly):
+    A, b, x_true = _vector_block_system(8, poly)
+    # Dense reference
+    x_dense = A.to_Matrix().solve(b.ravel()).reshape(b.shape)
+    # Sparse / RCM path
+    x_sparse = A.solve(b)
+    assert x_sparse.shape == b.shape
+    assert jnp.allclose(x_sparse.ravel(), x_dense.ravel(), atol=ulp(1000))
+
+
+@POLY_SPACES
+def test_blocktpmatrix_rcm_reduces_bandwidth(poly):
+    A, _, _ = _vector_block_system(8, poly)
+    sparse = A.tosparse()
+    A_perm, _, _ = sparse.rcm()
+    bw_before = max(abs(k) for k in sparse.offsets)
+    bw_after = max(abs(k) for k in A_perm.offsets)
+    assert bw_after <= bw_before
+
+
+@POLY_SPACES
+def test_blocktpmatrix_call_matches_dense_matvec(poly):
+    A, b, x_true = _vector_block_system(8, poly)
+    # Warm the RCM cache via solve
+    _ = A.solve(b)
+    y_block = A(x_true)
+    y_dense = A.to_Matrix().matvec(x_true.ravel()).reshape(x_true.shape)
+    assert jnp.allclose(y_block.ravel(), y_dense.ravel(), atol=ulp(1000))
+
+
+@POLY_SPACES
+def test_blocktpmatrix_solve_cached_rcm(poly):
+    """Second solve reuses cached RCM without reassembly."""
+    A, b, _ = _vector_block_system(8, poly)
+    x1 = A.solve(b)
+    x2 = A.solve(b)
+    assert jnp.allclose(x1.ravel(), x2.ravel(), atol=ulp(10))

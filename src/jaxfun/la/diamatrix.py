@@ -309,6 +309,16 @@ class DiaMatrix(nnx.Pytree):
 
         return Matrix(self.todense())
 
+    def to_scipy(self):
+        """Return a ``scipy.sparse.dia_matrix`` equivalent of this matrix."""
+        import numpy as np
+        from scipy.sparse import dia_matrix
+
+        return dia_matrix(
+            (np.asarray(self.data), np.array(self.offsets, dtype=np.int32)),
+            shape=self.shape,
+        )
+
     def lu_factor(self, *, pivot: bool = False) -> LUFactors:
         """Compute a banded LU factorisation of this (square) matrix.
 
@@ -516,17 +526,19 @@ class DiaMatrix(nnx.Pytree):
 
         Uses the banded LU factorisation (:meth:`lu_factor`) when the
         bandwidth is narrow enough that the JIT-compiled kernel compiles
-        quickly.  Falls back to ``jnp.linalg.solve`` on the dense matrix when
-        the product ``p * (q + 1)`` (number of unrolled loop iterations in the
-        LU kernel) exceeds ``dense_threshold``, avoiding multi-minute XLA
-        compile times for wide-banded matrices.
+        quickly.  When the product ``p * (q + 1)`` exceeds ``dense_threshold``,
+        first attempts to reduce bandwidth via :meth:`rcm`; if the permuted
+        matrix fits within the threshold the banded solve is applied on the
+        permuted system.  Only if RCM cannot reduce the bandwidth enough does
+        the method fall back to ``jnp.linalg.solve`` on the dense matrix,
+        avoiding multi-minute XLA compile times for wide-banded matrices.
 
         Args:
             b: Right-hand side array.
             axis: Axis of ``b`` along which the system is solved.
             pivot: Passed to :meth:`lu_factor` (banded path only).
             dense_threshold: Maximum bandwidth ``p * (q + 1)`` before
-                switching to a dense solver. Default 100.
+                trying RCM / switching to a dense solver. Default 100.
 
         Returns:
             Solution array with the same shape as ``b``.
@@ -544,10 +556,40 @@ class DiaMatrix(nnx.Pytree):
         if _box is not None and pivot in _box.value:
             return _box.value[pivot].solve(b, axis=axis)
 
+        # If the RCM-path factorisation is cached, use it directly.
+        _rcm_box: _CacheBox[dict[bool, tuple[LUFactors, Array, Array]]] | None = (
+            getattr(self, "_rcm_solve_cache", None)
+        )
+        if _rcm_box is not None and pivot in _rcm_box.value:
+            lu_perm, perm, inv_perm = _rcm_box.value[pivot]
+            ax = axis % b.ndim
+            return jnp.take(
+                lu_perm.solve(jnp.take(b, perm, axis=ax), axis=ax), inv_perm, axis=ax
+            )
+
         if p * (q + 1) > dense_threshold:
-            # Dense path: XLA compiles jnp.linalg.solve in milliseconds.
-            # Cache the dense LUFactors so repeated calls pay only the
-            # forward/back substitution cost (same as the banded path).
+            # Try RCM reordering first: may reduce bandwidth enough for the
+            # banded LU kernel, avoiding both the dense-solve cost and the
+            # dense-matrix allocation.
+            A_perm, perm, inv_perm = self.rcm()
+            offsets_p = A_perm.offsets
+            p_p = max((-k for k in offsets_p if k < 0), default=0)
+            q_p = max((k for k in offsets_p if k > 0), default=0)
+            if p_p * (q_p + 1) <= dense_threshold:
+                # Permute b along the solve axis, solve, un-permute.
+                lu_perm = A_perm.lu_factor(pivot=pivot)
+                # Cache so future calls short-circuit above.
+                _rcm_box = getattr(self, "_rcm_solve_cache", None)
+                if _rcm_box is None:
+                    _rcm_box = _CacheBox({})
+                    object.__setattr__(self, "_rcm_solve_cache", _rcm_box)
+                _rcm_box.value[pivot] = (lu_perm, perm, inv_perm)
+                ax = axis % b.ndim
+                b_perm = jnp.take(b, perm, axis=ax)
+                x_perm = lu_perm.solve(b_perm, axis=ax)
+                return jnp.take(x_perm, inv_perm, axis=ax)
+
+            # Bandwidth still too large after RCM: fall back to dense.
             from jaxfun.la.matrix import Matrix  # local import avoids circular
 
             _box: _CacheBox[dict[bool | str, LUFactors]] | None = getattr(
@@ -1219,6 +1261,191 @@ class DiaMatrix(nnx.Pytree):
             f"DiaMatrix(shape=({n}, {m}), dtype={self.dtype}, "
             f"n_diags={nd}, nnz={self.nnz}, offsets={self.offsets})"
         )
+
+    def rcm(self) -> tuple[DiaMatrix, Array, Array]:
+        """Apply the reverse Cuthill-McKee algorithm to reduce bandwidth.
+
+        Computes a symmetric row/column permutation ``perm`` using the
+        Scipy :func:`_rcm_scipy` implementation and returns the permuted
+        matrix ``A[perm][:, perm]`` together with the forward and inverse
+        permutation arrays.
+
+        The result is a setup-time host operation (not JIT'd) and is cached
+        on the instance via :class:`_CacheBox`.
+
+        Returns:
+            ``(A_perm, perm, inv_perm)`` where
+
+            * ``A_perm`` — :class:`DiaMatrix` with reduced bandwidth.
+            * ``perm`` — 1-D int array: ``A_perm[i, j] = A[perm[i], perm[j]]``.
+            * ``inv_perm`` — 1-D int array satisfying
+              ``inv_perm[perm[i]] == i``, used to un-permute the solution.
+
+        Example::
+
+            A_perm, perm, inv_perm = A.rcm()
+            x_perm = A_perm.solve(b[perm])
+            x = x_perm[inv_perm]
+        """
+        _box: _CacheBox[tuple[DiaMatrix, Array, Array]] | None = getattr(
+            self, "_rcm_cache", None
+        )
+        if _box is not None:
+            return _box.value
+
+        n, m = self.shape
+        perm = _rcm_scipy(self.data, self.offsets, self.shape)
+        new_data, new_offsets = _permute_dia(self.data, self.offsets, (n, m), perm)
+
+        A_perm = DiaMatrix(
+            data=new_data,
+            offsets=new_offsets,
+            shape=(n, n),
+        )
+        inv_perm = jnp.argsort(perm).astype(jnp.int32)
+        result = (A_perm, perm, inv_perm)
+        object.__setattr__(self, "_rcm_cache", _CacheBox(result))
+        return result
+
+
+@jax.jit(static_argnums=(1, 2, 3))
+def _permute_dia_kernel(
+    data: Array,
+    offsets: tuple[int, ...],
+    shape: tuple[int, int],
+    new_offsets: tuple[int, ...],
+    perm: Array,
+) -> Array:
+    """JIT-compiled scatter kernel for :func:`_permute_dia`.
+
+    Takes the output offset set as a static argument so the output shape
+    ``(len(new_offsets), m)`` is known at compile time.  An extra scratch
+    row (index ``len(new_offsets)``) absorbs writes for structural zeros
+    whose new diagonal is not in *new_offsets*.
+
+    Args:
+        data: Column-aligned DIA data of shape ``(n_diags, n_cols)``.
+        offsets: Static diagonal offsets of *data*.
+        shape: Static ``(n, m)`` matrix shape.
+        new_offsets: Static sorted diagonal offsets of the output matrix.
+        perm: Permutation array of length ``n``.
+
+    Returns:
+        New DIA data array of shape ``(len(new_offsets), m)``.
+    """
+    n, m = shape
+    n_new = len(new_offsets)
+    inv_perm = jnp.argsort(perm).astype(jnp.int32)
+
+    # Build lookup: offset value → row index in new_data.
+    # Offsets range from -(n-1) to (n-1); shift so index 0 = offset -(n-1).
+    # Entries absent from new_offsets map to n_new (scratch row).
+    shift = n - 1
+    lookup = jnp.full(2 * n - 1, jnp.int32(n_new), dtype=jnp.int32)
+    for ri, nk in enumerate(new_offsets):
+        lookup = lookup.at[nk + shift].set(jnp.int32(ri))
+
+    # Allocate output with one extra scratch row.
+    new_data = jnp.zeros((n_new + 1, m), dtype=data.dtype)
+
+    for ki, k in enumerate(offsets):
+        col_start = max(0, k)
+        length = min(m - col_start, n - max(0, -k))
+        if length <= 0:
+            continue
+        col_idx = jnp.arange(col_start, col_start + length, dtype=jnp.int32)
+        new_cs = inv_perm[col_idx]
+        new_rs = inv_perm[col_idx - jnp.int32(k)]
+        row_indices = lookup[new_cs - new_rs + shift]
+        new_data = new_data.at[row_indices, new_cs].set(
+            data[ki, col_start : col_start + length]
+        )
+
+    return new_data[:n_new]
+
+
+def _permute_dia(
+    data: Array,
+    offsets: tuple[int, ...],
+    shape: tuple[int, int],
+    perm: Array,
+) -> tuple[Array, tuple[int, ...]]:
+    """Symmetrically permute a DIA matrix.
+
+    Computes ``A_perm[i, j] = A[perm[i], perm[j]]`` and returns the result in
+    column-aligned DIA format.
+
+    The output diagonal set is determined at Python level using NumPy on the
+    concrete arrays (since ``perm`` is always materialised at setup time), then
+    passed as a static argument to the JIT-compiled :func:`_permute_dia_kernel`
+    which performs the actual gather/scatter.
+
+    Args:
+        data: Column-aligned DIA data array of shape ``(n_diags, n_cols)``.
+        offsets: Diagonal offsets corresponding to rows of *data*.
+        shape: ``(n_rows, n_cols)`` of the original matrix.
+        perm: Permutation array of length ``n``.
+
+    Returns:
+        ``(new_data, new_offsets)`` in column-aligned DIA format with the same
+        dtype as *data*.
+    """
+    import numpy as np
+
+    n, m = shape
+    perm_np = np.asarray(perm)
+    inv_perm_np = np.argsort(perm_np)
+    data_np = np.asarray(data)
+
+    # Determine new_offsets from concrete values — pure NumPy, no JIT needed.
+    new_ks: set[int] = set()
+    for ki, k in enumerate(offsets):
+        col_start = max(0, k)
+        length = min(m - col_start, n - max(0, -k))
+        if length <= 0:
+            continue
+        col_idx = np.arange(col_start, col_start + length)
+        row_idx = col_idx - k
+        nz = data_np[ki, col_start : col_start + length] != 0
+        if not nz.any():
+            continue
+        new_cs = inv_perm_np[col_idx[nz]]
+        new_rs = inv_perm_np[row_idx[nz]]
+        new_ks.update(map(int, new_cs - new_rs))
+
+    if not new_ks:
+        return jnp.zeros((0, m), dtype=data.dtype), ()
+
+    new_offsets = tuple(sorted(new_ks))
+    new_data = _permute_dia_kernel(data, offsets, shape, new_offsets, perm)
+    return new_data, new_offsets
+
+
+def _rcm_scipy(
+    data: Array,
+    offsets: tuple[int, ...],
+    shape: tuple[int, int],
+) -> Array:
+    """Compute the RCM permutation via :func:`scipy.sparse.csgraph.reverse_cuthill_mckee`.
+
+    Args:
+        data: Column-aligned DIA data array.
+        offsets: Diagonal offsets.
+        shape: ``(n, m)`` matrix shape.
+
+    Returns:
+        1-D ``int32`` JAX array ``perm`` of length ``n``.
+    """  # noqa: E501
+    import numpy as np
+    import scipy.sparse as sp_sparse
+    from scipy.sparse.csgraph import reverse_cuthill_mckee
+
+    n, m = shape
+    sp_dia = sp_sparse.dia_matrix(
+        (np.asarray(data), list(offsets)), shape=(n, m)
+    ).tocsr()
+    perm_np = reverse_cuthill_mckee(sp_dia, symmetric_mode=False).astype(np.int32)
+    return jnp.array(perm_np)
 
 
 @jax.jit(static_argnums=(2, 3, 4))

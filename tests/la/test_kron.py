@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import cast
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -288,21 +289,20 @@ class TestKronSolve:
         assert jnp.allclose(x_lu, x_dense, atol=ulp(100))
 
     def test_poisson_dense_fallback(self):
-        """Forcing the dense-fallback path (dense_threshold=0) must give same answer."""
+        """Forcing the dense-fallback path must give same answer as banded path."""
         A, b = _poisson_tpmats(N=8)
         C = cast(DiaMatrix, tpmats_to_kron(A))
         b_flat = b.flatten()
-        x_banded = C.solve(b_flat, dense_threshold=10_000)
-        x_dense = C.solve(b_flat, dense_threshold=0)
+        x_banded = C.solve(b_flat, method="rcm")
+        x_dense = C.solve(b_flat, method="dense")
         assert jnp.allclose(x_banded, x_dense, atol=ulp(1000))
 
     def test_kron_solve_multiple_rhs(self):
         """solve() on a kron matrix must work for 2-D right-hand sides."""
         A, b = _poisson_tpmats(N=6)
         C = cast(DiaMatrix, tpmats_to_kron(A))
-        rng = np.random.default_rng(42)
         n = C.shape[0]
-        X_true = jnp.array(rng.standard_normal((n, 3)))
+        X_true = jax.random.normal(jax.random.PRNGKey(42), shape=(n, 3))
         B = C.todense() @ X_true
         X_hat = C.solve(B)
         assert X_hat.shape == (n, 3)
@@ -320,7 +320,7 @@ class TestKronSolve:
         A, b = _biharmonic_tpmats(N=12)
         C = tpmats_to_kron(A)
         b_flat = b.flatten()
-        x = C.solve(b_flat)  # hits dense_threshold automatically
+        x = C.solve(b_flat)  # auto method falls back to dense for wide bandwidth
         residual = float(jnp.linalg.norm(C.todense() @ x - b_flat))
         assert residual < ulp(10000)
 
@@ -347,8 +347,7 @@ class TestManualKronSolve:
         """LU solve on I⊗T + T⊗I must match dense solve."""
         n = 7
         L = self._build_laplacian(n)
-        rng = np.random.default_rng(0)
-        b = jnp.array(rng.standard_normal(n * n))
+        b = jax.random.normal(jax.random.PRNGKey(0), shape=(n * n,))
         x_lu = L.solve(b)
         x_dense = jnp.linalg.solve(L.todense(), b)
         assert jnp.allclose(x_lu, x_dense, atol=ulp(100))
@@ -358,8 +357,7 @@ class TestManualKronSolve:
         A = _diag3(4)
         B = _diag3(5)
         K = diakron(A, B)
-        rng = np.random.default_rng(1)
-        b = jnp.array(rng.standard_normal(20))
+        b = jax.random.normal(jax.random.PRNGKey(1), shape=(20,))
         x = K.solve(b)
         assert float(jnp.linalg.norm(K.todense() @ x - b)) < ulp(1000)
 
@@ -368,18 +366,16 @@ class TestManualKronSolve:
         A = _diag5(6)
         B = _diag5(5)
         K = diakron(A, B)
-        rng = np.random.default_rng(2)
-        b = jnp.array(rng.standard_normal(30))
-        x = K.solve(b)
+        b = jax.random.normal(jax.random.PRNGKey(2), shape=(30,))
+        x = K.solve(b, method="banded")
         assert float(jnp.linalg.norm(K.todense() @ x - b)) < ulp(1000)
 
     def test_lu_vs_dense_on_kron(self):
         """LU and dense paths must agree for a manually built kron matrix."""
         L = self._build_laplacian(5)
-        rng = np.random.default_rng(3)
-        b = jnp.array(rng.standard_normal(25))
-        x_banded = L.solve(b, dense_threshold=10_000)
-        x_dense = L.solve(b, dense_threshold=0)
+        b = jax.random.normal(jax.random.PRNGKey(3), shape=(25,))
+        x_banded = L.solve(b, method="rcm")
+        x_dense = L.solve(b, method="dense")
         assert jnp.allclose(x_banded, x_dense, atol=ulp(100))
 
 
@@ -392,11 +388,10 @@ def _make_tpmatrix_2d(
     m0: int, n0: int, m1: int, n1: int, scale: float = 1.0
 ) -> tuple[TPMatrix, np.ndarray]:
     """Return a TPMatrix(A0, A1) and the corresponding dense Kronecker product."""
-    rng = np.random.default_rng(7)
-    a0 = rng.standard_normal((m0, n0)).astype(np.float32)
-    a1 = rng.standard_normal((m1, n1)).astype(np.float32)
+    a0 = jax.random.normal(jax.random.PRNGKey(7), shape=(m0, n0))
+    a1 = jax.random.normal(jax.random.PRNGKey(7), shape=(m1, n1))
     tp = TPMatrix(
-        [Matrix(jnp.array(a0)), Matrix(jnp.array(a1))],  # ty:ignore[invalid-argument-type]
+        [Matrix(a0), Matrix(a1)],  # ty:ignore[invalid-argument-type]
         scale,
     )
     K = np.kron(a0, a1) * scale
@@ -407,8 +402,7 @@ def _make_tpmatrix_3d(
     sizes: tuple[int, int, int], scale: float = 1.0, seed: int = 11
 ) -> tuple[TPMatrix, np.ndarray]:
     """Return a square TPMatrix(A0, A1, A2) and matching dense Kronecker product."""
-    rng = np.random.default_rng(seed)
-    mats_np = [rng.standard_normal((s, s)).astype(np.float32) for s in sizes]
+    mats_np = [np.random.default_rng(seed).standard_normal((s, s)) for s in sizes]
     K = mats_np[0]
     for a in mats_np[1:]:
         K = np.kron(K, a)
@@ -428,8 +422,7 @@ class TestTPMatrixMatmul:
         """(A0⊗A1) @ vec(w) == vec(A0 @ w @ A1.T) for square factors."""
         n0, n1 = 5, 4
         tp, K = _make_tpmatrix_2d(n0, n0, n1, n1)
-        rng = np.random.default_rng(0)
-        w = jnp.array(rng.standard_normal((n0, n1)).astype(np.float32))
+        w = jax.random.normal(jax.random.PRNGKey(0), shape=(n0, n1))
         result = tp(w)
         expected = (K @ np.array(w).ravel()).reshape(n0, n1)
         assert jnp.allclose(result, jnp.array(expected), atol=1e-5)
@@ -438,8 +431,7 @@ class TestTPMatrixMatmul:
         """vec(w) @ (A0⊗A1) == vec(A0.T @ w @ A1)."""
         n0, n1 = 5, 4
         tp, K = _make_tpmatrix_2d(n0, n0, n1, n1)
-        rng = np.random.default_rng(1)
-        w = jnp.array(rng.standard_normal((n0, n1)).astype(np.float32))
+        w = jax.random.normal(jax.random.PRNGKey(1), shape=(n0, n1))
         result = w @ tp  # calls __rmatmul__
         expected = (np.array(w).ravel() @ K).reshape(n0, n1)
         assert jnp.allclose(result, jnp.array(expected), atol=1e-5)
@@ -451,8 +443,7 @@ class TestTPMatrixMatmul:
         I = diags([jnp.ones(n)], offsets=(0,))
         K_dia = diakron(T, I)  # symmetric
         tp = TPMatrix([T, I], 1.0)  # ty:ignore[invalid-argument-type]
-        rng = np.random.default_rng(2)
-        w = jnp.array(rng.standard_normal((n, n)).astype(np.float32))
+        w = jax.random.normal(jax.random.PRNGKey(2), shape=(n, n))
         # A @ w (flattened) and w @ A (flattened) differ only by interpretation:
         # check against kron dense product
         K_dense = np.array(K_dia.todense())
@@ -468,8 +459,7 @@ class TestTPMatrixMatmul:
     def test_2d_matmul_nonsquare(self):
         """Works when A0 is m0×n0 with m0 ≠ n0."""
         tp, K = _make_tpmatrix_2d(3, 5, 4, 6)  # (12, 30) Kronecker product
-        rng = np.random.default_rng(3)
-        w = jnp.array(rng.standard_normal((5, 6)).astype(np.float32))
+        w = jax.random.normal(jax.random.PRNGKey(3), shape=(5, 6))
         result = tp(w)
         expected = (K @ np.array(w).ravel()).reshape(3, 4)
         assert result.shape == (3, 4)
@@ -478,8 +468,7 @@ class TestTPMatrixMatmul:
     def test_2d_rmatmul_nonsquare(self):
         """vec(w) @ kron for non-square factors."""
         tp, K = _make_tpmatrix_2d(3, 5, 4, 6)
-        rng = np.random.default_rng(4)
-        w = jnp.array(rng.standard_normal((3, 4)).astype(np.float32))
+        w = jax.random.normal(jax.random.PRNGKey(4), shape=(3, 4))
         result = w @ tp
         expected = (np.array(w).ravel() @ K).reshape(5, 6)
         assert result.shape == (5, 6)
@@ -495,8 +484,7 @@ class TestTPMatrixMatmul:
         tp1, _ = _make_tpmatrix_2d(n0, n0, n1, n1, scale=1.0)
         # same matrices, tripled scale
         tp3 = TPMatrix(list(tp1.mats), scale=3.0)
-        rng = np.random.default_rng(5)
-        w = jnp.array(rng.standard_normal((n0, n1)).astype(np.float32))
+        w = jax.random.normal(jax.random.PRNGKey(5), shape=(n0, n1))
         assert jnp.allclose(tp3(w), 3.0 * tp1(w), atol=1e-5)
 
     def test_2d_rmatmul_scale_applied(self):
@@ -504,8 +492,7 @@ class TestTPMatrixMatmul:
         tp1, _ = _make_tpmatrix_2d(n0, n0, n1, n1, scale=1.0)
         # same matrices, double scale
         tp2 = TPMatrix(list(tp1.mats), scale=2.0)
-        rng = np.random.default_rng(6)
-        w = jnp.array(rng.standard_normal((n0, n1)).astype(np.float32))
+        w = jax.random.normal(jax.random.PRNGKey(6), shape=(n0, n1))
         assert jnp.allclose(w @ tp2, 2.0 * (w @ tp1), atol=1e-5)
 
     # ------------------------------------------------------------------
@@ -516,8 +503,7 @@ class TestTPMatrixMatmul:
         """(A0⊗A1⊗A2) @ vec(w) == result from sequential matvec."""
         # Use uniform sizes to avoid JIT pytree shape mismatch across tests
         tp, K = _make_tpmatrix_3d((4, 4, 4))
-        rng = np.random.default_rng(8)
-        w = jnp.array(rng.standard_normal((4, 4, 4)).astype(np.float32))
+        w = jax.random.normal(jax.random.PRNGKey(8), shape=(4, 4, 4))
         result = tp(w)
         expected = (K @ np.array(w).ravel()).reshape(4, 4, 4)
         assert result.shape == (4, 4, 4)
@@ -526,8 +512,7 @@ class TestTPMatrixMatmul:
     def test_3d_rmatmul_vs_kron(self):
         """vec(w) @ (A0⊗A1⊗A2) via __rmatmul__."""
         tp, K = _make_tpmatrix_3d((4, 4, 4), seed=99)
-        rng = np.random.default_rng(9)
-        w = jnp.array(rng.standard_normal((4, 4, 4)).astype(np.float32))
+        w = jax.random.normal(jax.random.PRNGKey(9), shape=(4, 4, 4))
         result = w @ tp
         expected = (np.array(w).ravel() @ K).reshape(4, 4, 4)
         assert result.shape == (4, 4, 4)
@@ -537,8 +522,7 @@ class TestTPMatrixMatmul:
         """scale propagates correctly in 3-D."""
         tp1, _ = _make_tpmatrix_3d((4, 4, 4), scale=1.0)
         tp4 = TPMatrix(list(tp1.mats), scale=4.0)
-        rng = np.random.default_rng(10)
-        w = jnp.array(rng.standard_normal((4, 4, 4)).astype(np.float32))
+        w = jax.random.normal(jax.random.PRNGKey(10), shape=(4, 4, 4))
         assert jnp.allclose(tp4(w), 4.0 * tp1(w), atol=1e-4)
 
     # ------------------------------------------------------------------
@@ -549,9 +533,8 @@ class TestTPMatrixMatmul:
         """TPMatrix from inner() with DIA factors: A@u matches tpmats_to_kron @ u."""
         A, _ = _poisson_tpmats(N=8)
         C = tpmats_to_kron(A)
-        rng = np.random.default_rng(20)
         shape = tuple(m.shape[1] for m in A[0].mats)
-        w = jnp.array(rng.standard_normal(shape).astype(np.float32))
+        w = jax.random.normal(jax.random.PRNGKey(20), shape=tuple(shape))
         result = sum(tpm(w) for tpm in A)
         expected = (C.todense() @ np.array(w).ravel()).reshape(shape)
         assert jnp.allclose(result, jnp.array(expected), atol=1e-4)
@@ -560,9 +543,8 @@ class TestTPMatrixMatmul:
         """w @ TPMatrix from inner() matches w @ tpmats_to_kron."""
         A, _ = _poisson_tpmats(N=8)
         C = tpmats_to_kron(A)
-        rng = np.random.default_rng(21)
         shape = tuple(m.shape[0] for m in A[0].mats)
-        w = jnp.array(rng.standard_normal(shape).astype(np.float32))
+        w = jax.random.normal(jax.random.PRNGKey(21), shape=tuple(shape))
         result = sum(w @ tpm for tpm in A)
         expected = (np.array(w).ravel() @ C.todense()).reshape(shape)
         assert jnp.allclose(result, jnp.array(expected), atol=1e-4)
@@ -624,5 +606,5 @@ class TestTpmatsToScipySparse:
         A, b = _poisson_tpmats(N=8)
         K_sp = tpmats_to_scipy_kron(A)
         K_jax = tpmats_to_kron(A)
-        x = np.random.default_rng(42).standard_normal(K_sp.shape[1]).astype(np.float32)
+        x = jax.random.normal(jax.random.PRNGKey(42), shape=(K_sp.shape[1],))
         assert np.allclose(K_sp @ x, np.array(K_jax.todense()) @ x, atol=1e-4)

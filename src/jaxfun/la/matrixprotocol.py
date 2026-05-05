@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import jax
@@ -9,6 +10,13 @@ Array = jax.Array
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
+
+
+class DiaMatrixSolveMethod(StrEnum):
+    AUTO = "auto"
+    BANDED = "banded"
+    RCM = "rcm"
+    DENSE = "dense"
 
 
 class _CacheBox[T]:

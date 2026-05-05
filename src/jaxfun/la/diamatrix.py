@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from jaxfun.la.matrixprotocol import _CacheBox
+from jaxfun.la.matrixprotocol import DiaMatrixSolveMethod, _CacheBox
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
@@ -520,91 +520,152 @@ class DiaMatrix(nnx.Pytree):
         axis: int = 0,
         *,
         pivot: bool = False,
-        dense_threshold: int = 100,
+        method: DiaMatrixSolveMethod | str = DiaMatrixSolveMethod.AUTO,
+        auto_threshold: int = 100,
     ) -> Array:
         """Solve ``A x = b``.
 
-        Uses the banded LU factorisation (:meth:`lu_factor`) when the
-        bandwidth is narrow enough that the JIT-compiled kernel compiles
-        quickly.  When the product ``p * (q + 1)`` exceeds ``dense_threshold``,
-        first attempts to reduce bandwidth via :meth:`rcm`; if the permuted
-        matrix fits within the threshold the banded solve is applied on the
-        permuted system.  Only if RCM cannot reduce the bandwidth enough does
-        the method fall back to ``jnp.linalg.solve`` on the dense matrix,
-        avoiding multi-minute XLA compile times for wide-banded matrices.
+        Three solver paths are available, selected via *method*:
+
+        * ``"banded"`` — banded LU factorisation (:meth:`lu_factor`).  Fast
+          when the matrix bandwidth ``p * (q + 1)`` is small, but XLA compile
+          time grows with bandwidth.
+        * ``"rcm"`` — apply reverse Cuthill-McKee reordering (:meth:`rcm`),
+          then banded LU on the permuted system.  Useful when the original
+          bandwidth is large but RCM can reduce it.
+        * ``"dense"`` — ``jnp.linalg.solve`` on the dense matrix.  Suitable
+          for small or nearly full matrices where the banded structure offers
+          no advantage.
+        * ``"auto"`` (default) — heuristic that checks cached factorisations
+          first, then chooses ``"banded"`` when ``p * (q + 1) <= auto_threshold``,
+          ``"rcm"`` when RCM reduces the bandwidth to ``<= auto_threshold``, and
+          ``"dense"`` otherwise.
 
         Args:
             b: Right-hand side array.
             axis: Axis of ``b`` along which the system is solved.
-            pivot: Passed to :meth:`lu_factor` (banded path only).
-            dense_threshold: Maximum bandwidth ``p * (q + 1)`` before
-                trying RCM / switching to a dense solver. Default 100.
+            pivot: Passed to :meth:`lu_factor` (banded and RCM paths only).
+            method: One of ``"auto"``, ``"banded"``, ``"rcm"``, or
+                ``"dense"``.  Default ``"auto"``.
+            auto_threshold: Threshold for the ``"auto"`` method, trading off
+                banded/RCM solvers against dense.  The banded solver is usually
+                faster for small bandwidth, but compile time grows with bandwidth.
+                RCM can reduce bandwidth and enable the banded solver, but adds
+                overhead and is not guaranteed to help.  Default is 100.
 
         Returns:
             Solution array with the same shape as ``b``.
-        """
-        offsets = self.offsets
-        p = max((-k for k in offsets if k < 0), default=0)
-        q = max((k for k in offsets if k > 0), default=0)
 
-        # If the banded LU is already cached (e.g. from a prior lu_factor()
-        # call), use it regardless of bandwidth — the expensive compilation
-        # already happened.
+        Raises:
+            ValueError: If *method* is not one of the recognised values.
+        """
+        _METHODS = {"auto", "banded", "rcm", "dense"}
+        if method not in _METHODS:
+            raise ValueError(
+                f"method must be one of {sorted(_METHODS)!r}, got {method!r}"
+            )
+        method = DiaMatrixSolveMethod(method)
+
+        # ------------------------------------------------------------------
+        # "banded" path (and cache hit for banded)
+        # ------------------------------------------------------------------
         _box: _CacheBox[dict[bool | str, LUFactors]] | None = getattr(
             self, "_lu_cache", None
         )
-        if _box is not None and pivot in _box.value:
-            return _box.value[pivot].solve(b, axis=axis)
+        if method == DiaMatrixSolveMethod.BANDED or (
+            method == DiaMatrixSolveMethod.AUTO
+            and _box is not None
+            and pivot in _box.value
+        ):
+            return self.lu_factor(pivot=pivot).solve(b, axis=axis)
 
-        # If the RCM-path factorisation is cached, use it directly.
+        # ------------------------------------------------------------------
+        # "rcm" path (and cache hit for rcm)
+        # ------------------------------------------------------------------
         _rcm_box: _CacheBox[dict[bool, tuple[LUFactors, Array, Array]]] | None = (
             getattr(self, "_rcm_solve_cache", None)
         )
-        if _rcm_box is not None and pivot in _rcm_box.value:
+        if method == DiaMatrixSolveMethod.RCM or (
+            method == DiaMatrixSolveMethod.AUTO
+            and _rcm_box is not None
+            and pivot in _rcm_box.value
+        ):
+            if _rcm_box is None or pivot not in _rcm_box.value:
+                A_perm, perm, inv_perm = self.rcm()
+                lu_perm = A_perm.lu_factor(pivot=pivot)
+                if _rcm_box is None:
+                    _rcm_box = _CacheBox({})
+                    object.__setattr__(self, "_rcm_solve_cache", _rcm_box)
+                _rcm_box.value[pivot] = (lu_perm, perm, inv_perm)
             lu_perm, perm, inv_perm = _rcm_box.value[pivot]
             ax = axis % b.ndim
             return jnp.take(
                 lu_perm.solve(jnp.take(b, perm, axis=ax), axis=ax), inv_perm, axis=ax
             )
 
-        if p * (q + 1) > dense_threshold:
-            # Try RCM reordering first: may reduce bandwidth enough for the
-            # banded LU kernel, avoiding both the dense-solve cost and the
-            # dense-matrix allocation.
-            A_perm, perm, inv_perm = self.rcm()
-            offsets_p = A_perm.offsets
-            p_p = max((-k for k in offsets_p if k < 0), default=0)
-            q_p = max((k for k in offsets_p if k > 0), default=0)
-            if p_p * (q_p + 1) <= dense_threshold:
-                # Permute b along the solve axis, solve, un-permute.
-                lu_perm = A_perm.lu_factor(pivot=pivot)
-                # Cache so future calls short-circuit above.
-                _rcm_box = getattr(self, "_rcm_solve_cache", None)
-                if _rcm_box is None:
-                    _rcm_box = _CacheBox({})
-                    object.__setattr__(self, "_rcm_solve_cache", _rcm_box)
-                _rcm_box.value[pivot] = (lu_perm, perm, inv_perm)
-                ax = axis % b.ndim
-                b_perm = jnp.take(b, perm, axis=ax)
-                x_perm = lu_perm.solve(b_perm, axis=ax)
-                return jnp.take(x_perm, inv_perm, axis=ax)
-
-            # Bandwidth still too large after RCM: fall back to dense.
+        # ------------------------------------------------------------------
+        # "dense" path (and cache hit for dense)
+        # ------------------------------------------------------------------
+        if method == DiaMatrixSolveMethod.DENSE:
             from jaxfun.la.matrix import Matrix  # local import avoids circular
 
-            _box: _CacheBox[dict[bool | str, LUFactors]] | None = getattr(
-                self, "_lu_cache", None
-            )
             if _box is None:
                 _box = _CacheBox({})
                 object.__setattr__(self, "_lu_cache", _box)
-            cache: dict[bool | str, LUFactors] = _box.value
             _dense_key = "_dense"
-            if _dense_key not in cache:
-                cache[_dense_key] = Matrix(self.todense()).lu_factor()  # type: ignore[index]
-            return cache[_dense_key].solve(b, axis=axis)
+            if _dense_key not in _box.value:
+                _box.value[_dense_key] = Matrix(self.todense()).lu_factor()  # type: ignore[index]
+            return _box.value[_dense_key].solve(b, axis=axis)
 
-        return self.lu_factor(pivot=pivot).solve(b, axis=axis)
+        # ------------------------------------------------------------------
+        # "auto": choose based on bandwidth
+        # ------------------------------------------------------------------
+        offsets = self.offsets
+        p = max((-k for k in offsets if k < 0), default=0)
+        q = max((k for k in offsets if k > 0), default=0)
+
+        if p * (q + 1) <= auto_threshold:
+            return self.lu_factor(pivot=pivot).solve(b, axis=axis)
+
+        # Try RCM: may reduce bandwidth enough for banded LU.
+        A_perm, perm, inv_perm = self.rcm()
+        offsets_p = A_perm.offsets
+        p_p = max((-k for k in offsets_p if k < 0), default=0)
+        q_p = max((k for k in offsets_p if k > 0), default=0)
+        if p_p * (q_p + 1) > p * (q + 1):
+            # RCM made it worse: skip it and go straight to dense.
+            warnings.warn(
+                f"DiaMatrix.lu_solve(method='auto'): RCM reordering increased bandwidth "  # noqa: E501
+                f"from p*(q+1)={p * (q + 1)} to p'*(q'+1)={p_p * (q_p + 1)}. ",
+                stacklevel=2,
+            )
+
+        elif p_p * (q_p + 1) <= auto_threshold:
+            lu_perm = A_perm.lu_factor(pivot=pivot)
+            if _rcm_box is None:
+                _rcm_box = _CacheBox({})
+                object.__setattr__(self, "_rcm_solve_cache", _rcm_box)
+            _rcm_box.value[pivot] = (lu_perm, perm, inv_perm)
+            ax = axis % b.ndim
+            return jnp.take(
+                lu_perm.solve(jnp.take(b, perm, axis=ax), axis=ax), inv_perm, axis=ax
+            )
+
+            # Bandwidth still too large after RCM: fall back to dense.
+            warnings.warn(
+                f"DiaMatrix.lu_solve(method='auto'): bandwidth p*(q+1)={p_p * (q_p + 1)} "  # noqa: E501
+                f"exceeds threshold {auto_threshold} even after RCM reordering. ",
+                stacklevel=2,
+            )
+
+        warnings.warn(
+            "Falling back to dense solver. Consider using a larger auto_threshold "
+            "or method='dense' to suppress this warning.",
+            stacklevel=2,
+        )
+        return self.lu_solve(
+            b, axis=axis, pivot=pivot, method=DiaMatrixSolveMethod.DENSE
+        )
 
     solve = lu_solve
 

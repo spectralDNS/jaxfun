@@ -1260,10 +1260,10 @@ class TestPin:
         sys = A.pin({0: 0.0})
         assert jnp.allclose(sys.diagonal(), sys.matrix.diagonal())
 
-    def test_to_dense_delegates(self):
+    def test_todense_delegates(self):
         _, A = _tridiag(5)
         sys = A.pin({0: 0.0})
-        assert jnp.allclose(sys.to_dense(), sys.matrix.to_dense())
+        assert jnp.allclose(sys.todense(), sys.matrix.todense())
         assert jnp.allclose(sys.todense(), sys.matrix.todense())
 
     def test_get_row_delegates(self):

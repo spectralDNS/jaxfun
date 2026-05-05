@@ -965,6 +965,9 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
     def dims(self) -> int:
         return len(self.mats)
 
+    def __len__(self) -> int:
+        return len(self.mats)
+
     @property
     def mat(self) -> DiaMatrix | Matrix:
         """Return explicit Kronecker product.
@@ -1121,6 +1124,10 @@ class TPMatrices(nnx.Pytree):
 
         w = u.array if isinstance(u, JAXFunction) else u
         return self._apply_array(w)
+
+    def __len__(self) -> int:
+        """Return number of TPMatrix terms."""
+        return len(self.tpmats)
 
     def __matmul__(self, u: Array | JAXFunction) -> Array:
         """Alias to __call__ for @ operator."""
@@ -1306,6 +1313,9 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
 
     def __init__(self, mat: Array) -> None:
         self.mat = mat  # mat is A_ikjl
+
+    def __len__(self) -> int:
+        return self.mat.shape[0]
 
     @jax.jit(static_argnums=0)
     def _matmul_array(self, w: Array) -> Array:

@@ -162,11 +162,13 @@ class PinnedSystem(nnx.Pytree):
         """Return the ``k``-th diagonal of the modified matrix."""
         return self.matrix.diagonal(k)
 
-    def to_dense(self) -> Array:
+    def todense(self) -> Array:
         """Return the modified matrix as a dense array."""
-        return self.matrix.to_dense()
+        return self.matrix.todense()
 
-    todense = to_dense
+    def tosparse(self) -> DiaMatrix:
+        """Return the modified matrix as a sparse matrix."""
+        return self.matrix.tosparse()
 
     def get_row(self, i: int | Array) -> Array:
         """Return row ``i`` of the modified matrix."""

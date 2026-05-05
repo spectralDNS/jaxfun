@@ -9,7 +9,7 @@ from jax import Array
 from jaxfun.galerkin import JAXFunction
 from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol
 from jaxfun.typing import TrialSpaceType
-from jaxfun.utils.common import lambdify, matmat, tosparse
+from jaxfun.utils.common import lambdify, matmat
 
 from .arguments import (
     ArgumentTag,
@@ -34,6 +34,7 @@ from .tensorproductspace import (
     DirectSumTPS,
     TensorMatrix,
     TensorProductSpace,
+    TPMatrices,
     TPMatrix,
     VectorTensorProductSpace,
 )
@@ -416,9 +417,10 @@ def process_results(
 ) -> (
     MatrixProtocol
     | TPMatrix
+    | TPMatrices
     | TensorMatrix
     | Array
-    | tuple[MatrixProtocol | TPMatrix | TensorMatrix, Array]
+    | tuple[MatrixProtocol | TPMatrix | TPMatrices | TensorMatrix, Array]
 ): ...
 @overload
 def process_results(
@@ -431,9 +433,10 @@ def process_results(
 ) -> (
     DiaMatrix
     | TPMatrix
+    | TPMatrices
     | TensorMatrix
     | Array
-    | tuple[DiaMatrix | TPMatrix | TensorMatrix, Array]
+    | tuple[DiaMatrix | TPMatrix | TPMatrices | TensorMatrix, Array]
 ): ...
 def process_results(
     aresults: list[MatrixProtocol | TPMatrix | TensorMatrix],
@@ -459,9 +462,13 @@ def process_results(
     if return_all_items:
         return aresults, bresults
 
+    if len(bresults) > 0:
+        bresults: Array = jnp.sum(jnp.array(bresults), axis=0)
+
+    ares1D = None
     if len(aresults) > 0 and dims == 1:
         if not sparse:
-            aresults: Matrix = Matrix(
+            ares1D: Matrix = Matrix(
                 jnp.sum(
                     jnp.array([cast(MatrixProtocol, a).todense() for a in aresults]),
                     axis=0,
@@ -469,40 +476,53 @@ def process_results(
             )
         else:
             # Matrices are either Matrix or DiaMatrix. Convert all matrices to DiaMatrix
-            adia = [
-                a
-                if isinstance(a, DiaMatrix)
-                else tosparse(cast(Matrix, a).data, tol=sparse_tol)
-                for a in aresults
-            ]
-            aresults: DiaMatrix = sum(adia[1:], adia[0])
+            adia = [cast(MatrixProtocol, a).tosparse(tol=sparse_tol) for a in aresults]
+            ares1D: DiaMatrix = sum(adia[1:], adia[0])
+
+    if ares1D and len(bresults) == 0:
+        return ares1D
+
+    if not ares1D and len(bresults) > 0:
+        return bresults
+
+    if ares1D and len(bresults) > 0:
+        return ares1D, bresults
 
     if len(aresults) > 0 and dims > 1:
-        aresults: list[TPMatrix] = cast(list[TPMatrix], aresults)
-        for a0 in aresults:
-            if isinstance(a0, TPMatrix):
-                if sparse:
-                    a0.mats = nnx.List(
-                        mat
-                        if isinstance(mat, DiaMatrix)
-                        else tosparse(mat.data, tol=sparse_tol)
-                        for mat in a0.mats
-                    )
-                else:
-                    a0.mats = nnx.List(
-                        mat if isinstance(mat, Matrix) else Matrix(mat.todense())
-                        for mat in a0.mats
-                    )
+        # aresults is a list of TPMatrix or TensorMatrix objects.
+        aresults: list[TPMatrix] | list[TensorMatrix] = cast(list[TPMatrix], aresults)
 
-    if len(bresults) > 0:
-        bresults: Array = jnp.sum(jnp.array(bresults), axis=0)
+        if all(isinstance(a, TPMatrix) for a in aresults):
+            for a0 in aresults:
+                if isinstance(a0, TPMatrix):
+                    if sparse:
+                        a0.mats = nnx.List(
+                            mat.tosparse(tol=sparse_tol) for mat in a0.mats
+                        )
+                    else:
+                        a0.mats = nnx.List(mat.to_Matrix() for mat in a0.mats)
 
-    # Return just the one matrix/vector if 1D and only bilinear or linear forms
-    if len(aresults) > 0 and len(bresults) == 0:
-        return aresults
+            aresults: TPMatrix | TPMatrices = (
+                aresults[0] if len(aresults) == 1 else TPMatrices(aresults)
+            )
+
+        elif all(isinstance(a, TensorMatrix) for a in aresults):
+            array = jnp.sum(
+                jnp.array([cast(TensorMatrix, a).mat for a in aresults]),
+                axis=0,
+            )
+            aresults: TensorMatrix = TensorMatrix(array)
+
+        else:
+            raise ValueError("Inconsistent matrix types in aresults")
+
+    assert isinstance(aresults, TPMatrix | TPMatrices | TensorMatrix)
 
     if len(aresults) == 0 and len(bresults) > 0:
         return bresults
+
+    if len(aresults) > 0 and len(bresults) == 0:
+        return aresults
 
     return aresults, bresults
 

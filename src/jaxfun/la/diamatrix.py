@@ -300,8 +300,10 @@ class DiaMatrix(nnx.Pytree):
         )
         return A
 
-    # Alias so DiaMatrix satisfies MatrixProtocol (which uses to_dense).
-    to_dense = todense
+    def tosparse(self, *, tol: int = 100) -> DiaMatrix:  # noqa: ARG002
+        """Return self. The *tol* parameter is accepted for API uniformity with
+        :meth:`~jaxfun.la.Matrix.tosparse` but has no effect."""
+        return self
 
     def to_Matrix(self) -> Matrix:
         """Convert this DiaMatrix to a dense Matrix."""

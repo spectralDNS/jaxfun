@@ -10,6 +10,7 @@ Array = jax.Array
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
+    from jaxfun.la import DiaMatrix, Matrix
 
 
 class DiaMatrixSolveMethod(StrEnum):
@@ -128,12 +129,16 @@ class MatrixProtocol(Protocol):
         """Return the ``k``-th diagonal as a 1-D array."""
         ...
 
-    def to_dense(self) -> Array:
+    def todense(self) -> Array:
         """Return or compute the equivalent dense ``(n, m)`` array."""
         ...
 
-    def todense(self) -> Array:
-        """Return or compute the equivalent dense ``(n, m)`` array."""
+    def tosparse(self, *, tol: int = 100) -> DiaMatrix:
+        """Return a sparse representation of the matrix."""
+        ...
+
+    def to_Matrix(self) -> Matrix:
+        """Return a Matrix representation of the matrix."""
         ...
 
     def get_row(self, i: int | Array) -> Array:

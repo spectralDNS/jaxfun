@@ -7,7 +7,7 @@ from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
+from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -23,10 +23,9 @@ x, y, z = T.system.base_scalars()
 ue = (1 - x**2) * (1 - y**2) * (1 - z**2)
 
 # A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
-A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=False)
+A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 
-A0 = tpmats_to_kron(A)
-uh = A0.solve(b.flatten()).reshape(b.shape)
+uh = A.solve(b, method="lu")
 
 uj = T.backward(uh, kind="uniform", N=(20, 20, 20))
 xj = T.mesh(kind="uniform", N=(20, 20, 20))

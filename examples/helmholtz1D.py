@@ -32,7 +32,6 @@ A, L = inner(
     v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue),
     sparse=True,
     sparse_tol=1000,
-    return_all_items=False,
 )
 
 xj = D.mesh(kind="uniform", N=100)

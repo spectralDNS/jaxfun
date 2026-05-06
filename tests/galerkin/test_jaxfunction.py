@@ -20,7 +20,6 @@ from jaxfun.galerkin import (
 )
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
-from jaxfun.galerkin.tensorproductspace import TPMatrices
 from jaxfun.operators import Div, Dot, Grad
 from jaxfun.utils.common import ulp
 
@@ -145,8 +144,8 @@ def test_jaxfunction_2d(space: type[OrthogonalSpace], domain: Domain | None):
     v = TestFunction(T)
     A = inner(u * v)
     uf = JAXFunction(jnp.ones((N, N)), T)
-    b0 = A[0].mat @ uf.array.ravel()
-    b1 = A[0].mats[0] @ uf @ A[0].mats[1].T
+    b0 = A.todense() @ uf.array.ravel()
+    b1 = A.mats[0] @ uf @ A.mats[1].T
     assert jnp.linalg.norm(b0 - b1.ravel()) < ulp(10)
     z = inner(uf * v)
     assert jnp.linalg.norm(z.ravel() - b0) < ulp(10)
@@ -161,11 +160,11 @@ def test_jaxfunction_directsum_2d(jspace: type[Jacobi.Jacobi], domain: Domain | 
     v = TestFunction(T)
     A, b = inner(u * v)
     w = JAXFunction(jnp.ones(T.num_dofs), T, name="uf")
-    b0 = A[0] @ w - b
+    b0 = A @ w - b
     b1 = inner(v * w)
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(1))
     C, c = inner(Div(Grad(u)) * v)
-    b0 = TPMatrices(C) @ w - c
+    b0 = C @ w - c
     b1 = inner(v * Div(Grad(w)))
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(1))
 
@@ -178,7 +177,7 @@ def test_jaxfunction_diff_2d(space: type[OrthogonalSpace], domain: Domain | None
     v = TestFunction(T)
     A = inner(Div(Grad(u)) * v)
     w = JAXFunction(jnp.ones(T.num_dofs), T, name="w")
-    b0 = TPMatrices(A) @ w
+    b0 = A @ w
     b1 = inner(v * Div(Grad(w)))
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(10))
 
@@ -191,7 +190,7 @@ def test_jaxfunction_nonlin_2d(space: type[OrthogonalSpace], domain: Domain | No
     v = TestFunction(T)
     w = JAXFunction(jnp.ones(T.num_dofs), T, name="w")
     A = inner(u * v * w)
-    b0 = A[0] @ w
+    b0 = A @ w
     b1 = inner(v * w**2)
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(1000))
 
@@ -207,7 +206,7 @@ def test_jaxfunction_nonlingrad_2d(
     v = TestFunction(T)
     w = JAXFunction(jnp.ones(T.num_dofs), T, name="w")
     A = inner(w * Dot(Grad(v), Grad(u)))
-    b0 = A[0] @ w + A[1] @ w
+    b0 = A @ w
     b1 = inner(0.5 * Dot(Grad(v), Grad(w**2)))
     assert jnp.linalg.norm(b0 - b1) / jnp.linalg.norm(b0) < jnp.sqrt(ulp(10))
 
@@ -221,12 +220,7 @@ def test_jaxfunction_2d_vector(space: type[OrthogonalSpace], domain: Domain | No
     v = TestFunction(V)
     A = inner(Dot(u, v))
     uf = JAXFunction(jnp.ones((2, N, N)), V)
-    b0 = jnp.stack(
-        (
-            A[1] @ uf.array[A[1].global_indices[1]],
-            A[0] @ uf.array[A[0].global_indices[1]],
-        )
-    )
+    b0 = A @ uf.array
     b1 = inner(Dot(uf, v))
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(10))
 
@@ -264,13 +258,13 @@ def test_jaxfunction_vector(jspace: type[OrthogonalSpace], domain: Domain | None
     V = VectorTensorProductSpace(T, name="V")
     x, y = T.system.base_scalars()
     R = T.system
-    ue = sp.Mul(x, R.i) + sp.Mul(y, R.j)
+    ue = x * R.i + y * R.j
     w = JAXFunction(ue, V, name="w")
     uj = w.backward()
     assert jnp.linalg.norm(uj[0] - T.mesh()[0]) < jnp.sqrt(ulp(10))
     assert jnp.linalg.norm(uj[1] - T.mesh()[1]) < jnp.sqrt(ulp(10))
 
-    ue = sp.Mul((1 - x**2) * (1 - y**2), R.i + R.j)
+    ue = (1 - x**2) * (1 - y**2) * (R.i + R.j)
     w = JAXFunction(ue, V, name="w")
     uj = w.backward()
     xj, yj = T.mesh()

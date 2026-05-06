@@ -17,7 +17,6 @@ from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.tensorproductspace import (
     BlockTPMatrix,
     TPLUFactors,
-    TPMatrices,
     TPMatricesDenseLUFactors,
     TPMatricesLUFactors,
     TPMatricesWavenumberSolver,
@@ -75,14 +74,14 @@ def _poisson_fourier_poly_2d(N: int, poly, sparse: bool = True):
 
 def test_tpmats_lu_factor_returns_correct_type():
     _, A, b, _ = _poisson_poly2d(8, Legendre.Legendre)
-    lu = tpmats_lu_factor(A)
+    lu = tpmats_lu_factor(A.tpmats)
     assert isinstance(lu, TPMatricesLUFactors)
 
 
 @POLY_SPACES
 def test_tpmats_lu_factor_solve_poly2d(poly):
     T, A, b, ue = _poisson_poly2d(16, poly)
-    lu = tpmats_lu_factor(A)
+    lu = tpmats_lu_factor(A.tpmats)
     assert isinstance(lu, TPMatricesLUFactors)
     uh = lu.solve(b)
     assert uh.shape == b.shape
@@ -98,7 +97,7 @@ def test_tpmats_lu_factor_solve_poly2d(poly):
 def test_tpmats_lu_factor_accepts_tpmatrix_single():
     """tpmats_lu_factor accepts a single TPMatrix as well as a list."""
     _, A, b, _ = _poisson_poly2d(8, Legendre.Legendre)
-    lu = tpmats_lu_factor([A[0]])
+    lu = tpmats_lu_factor(A.tpmats[0])
     assert isinstance(lu, TPMatricesLUFactors)
 
 
@@ -117,7 +116,7 @@ def test_tpmats_wavenumber_factor_returns_correct_type():
 def test_tpmats_wavenumber_factor_solve_agrees_with_kron(poly):
     _, A, b, _ = _poisson_fourier_poly_2d(16, poly)
     wn = tpmats_wavenumber_factor(A)
-    ref = tpmats_to_kron(A).solve(b.flatten()).reshape(b.shape)
+    ref = tpmats_to_kron(A.tpmats).solve(b.flatten()).reshape(b.shape)
     uh = wn.solve(b)
     assert uh.shape == b.shape
     assert float(jnp.max(jnp.abs(uh - ref))) < ulp(10)
@@ -140,7 +139,7 @@ def test_tpmats_wavenumber_factor_solve_fourier_poly_l2(poly):
 def test_tpmats_wavenumber_factor_accepts_tpmatrices():
     """tpmats_wavenumber_factor accepts a TPMatrices object as well as a list."""
     _, A, b, _ = _poisson_fourier_poly_2d(8, Legendre.Legendre)
-    wn = tpmats_wavenumber_factor(TPMatrices(A))
+    wn = tpmats_wavenumber_factor(A)
     assert isinstance(wn, TPMatricesWavenumberSolver)
     uh = wn.solve(b)
     assert uh.shape == b.shape
@@ -170,14 +169,14 @@ def test_wavenumber_solver_solve2_agrees_with_solve():
 @POLY_SPACES
 def test_tpmats_dense_lu_factor_returns_correct_type(poly):
     _, A, _, _ = _poisson_poly2d(8, poly, sparse=False)
-    lu = tpmats_dense_lu_factor(A)
+    lu = tpmats_dense_lu_factor(A.tpmats)
     assert isinstance(lu, TPMatricesDenseLUFactors)
 
 
 @POLY_SPACES
 def test_tpmats_dense_lu_factor_solve_poly2d(poly):
     T, A, b, ue = _poisson_poly2d(16, poly, sparse=False)
-    lu = tpmats_dense_lu_factor(A)
+    lu = tpmats_dense_lu_factor(A.tpmats)
     uh = lu.solve(b)
     assert uh.shape == b.shape
     x, y = T.system.base_scalars()
@@ -193,10 +192,9 @@ def test_tpmats_dense_lu_factor_solve_poly2d(poly):
 def test_tpmatrices_solve_dispatches_dense_for_matrix(poly):
     """TPMatrices.lu_factor() dispatches to TPMatricesDenseLUFactors for dense matrices."""  # noqa: E501
     _, A, b, _ = _poisson_poly2d(12, poly, sparse=False)
-    mats = TPMatrices(A)
-    lu = mats.lu_factor()
+    lu = A.lu_factor()
     assert isinstance(lu, TPMatricesDenseLUFactors)
-    uh = mats.solve(b)
+    uh = A.solve(b)
     assert uh.shape == b.shape
 
 
@@ -205,15 +203,15 @@ def test_tpmats_dense_agrees_with_sparse(poly):
     """Dense and sparse solvers produce the same solution."""
     _, A_sp, b_sp, _ = _poisson_poly2d(16, poly, sparse=True)
     _, A_de, b_de, _ = _poisson_poly2d(16, poly, sparse=False)
-    uh_sp = tpmats_lu_factor(A_sp).solve(b_sp)
-    uh_de = tpmats_dense_lu_factor(A_de).solve(b_de)
+    uh_sp = tpmats_lu_factor(A_sp.tpmats).solve(b_sp)
+    uh_de = tpmats_dense_lu_factor(A_de.tpmats).solve(b_de)
     assert float(jnp.max(jnp.abs(uh_sp - uh_de))) < float(ulp(100))
 
 
 def test_tpmats_dense_lu_factor_type_error():
     _, A, _, _ = _poisson_poly2d(8, Legendre.Legendre, sparse=True)
     with pytest.raises(TypeError):
-        tpmats_dense_lu_factor(A)
+        tpmats_dense_lu_factor(A.tpmats)
 
 
 # ---------------------------------------------------------------------------
@@ -225,8 +223,8 @@ def test_tpmats_dense_lu_factor_type_error():
 def test_tpmatrix_lu_factor_returns_tplufactors(poly):
     """TPMatrix.lu_factor() returns a TPLUFactors instance."""
     _, A, _, _ = _poisson_poly2d(8, poly)
-    assert isinstance(A[0], TPMatrix)
-    lu = A[0].lu_factor()
+    assert isinstance(A.tpmats[0], TPMatrix)
+    lu = A.tpmats[0].lu_factor()
     assert isinstance(lu, TPLUFactors)
 
 
@@ -235,7 +233,7 @@ def test_tpmatrix_solve_single_term(poly):
     """TPMatrix.solve solves a single-term Kronecker system correctly."""
     T, A, b, ue = _poisson_poly2d(16, poly)
     # Use the first (and for a pure Laplacian, dominant) term directly
-    tp = A[0]
+    tp = A.tpmats[0]
     rhs = tp(tp.lu_factor().solve(b))  # round-trip: A*(A^{-1}*b) ≈ b
     assert float(jnp.max(jnp.abs(rhs - b))) < float(ulp(100))
 
@@ -248,10 +246,9 @@ def test_tpmatrix_solve_single_term(poly):
 def test_tpmatrices_solve_dispatches_wavenumber_for_fourier():
     """TPMatrices.solve should dispatch to TPMatricesWavenumberSolver for Fourier x poly."""  # noqa: E501
     _, A, b, _ = _poisson_fourier_poly_2d(12, Legendre.Legendre)
-    mats = TPMatrices(A)
-    lu = mats.lu_factor()
+    lu = A.lu_factor()
     assert isinstance(lu, TPMatricesWavenumberSolver)
-    uh = mats.solve(b)
+    uh = A.solve(b)
     assert uh.shape == b.shape
 
 
@@ -259,26 +256,24 @@ def test_tpmatrices_solve_dispatches_wavenumber_for_fourier():
 def test_tpmatrices_solve_dispatches_lu_for_poly(poly):
     """TPMatrices.solve should dispatch to TPMatricesLUFactors for all-polynomial."""
     _, A, b, _ = _poisson_poly2d(12, poly)
-    mats = TPMatrices(A)
-    lu = mats.lu_factor()
+    lu = A.lu_factor()
     assert isinstance(lu, TPMatricesLUFactors)
-    uh = mats.solve(b)
+    uh = A.solve(b)
     assert uh.shape == b.shape
 
 
 def test_tpmatrices_lu_factor_caching():
     """lu_factor called twice returns the same cached object."""
     _, A, _, _ = _poisson_fourier_poly_2d(8, Legendre.Legendre)
-    mats = TPMatrices(A)
-    lu1 = mats.lu_factor()
-    lu2 = mats.lu_factor()
+    lu1 = A.lu_factor()
+    lu2 = A.lu_factor()
     assert lu1 is lu2
 
 
 @POLY_SPACES
 def test_tpmatrices_solve_poly2d_l2(poly):
     T, A, b, ue = _poisson_poly2d(16, poly)
-    uh = TPMatrices(A).solve(b)
+    uh = A.solve(b)
     assert uh.shape == b.shape
     x, y = T.system.base_scalars()
     N = 40
@@ -292,7 +287,7 @@ def test_tpmatrices_solve_poly2d_l2(poly):
 @POLY_SPACES
 def test_tpmatrices_solve_fourier_poly2d_l2(poly):
     T, A, b, ue = _poisson_fourier_poly_2d(16, poly)
-    uh = TPMatrices(A).solve(b)
+    uh = A.solve(b)
     assert uh.shape == b.shape
     x, y = T.system.base_scalars()
     N = 40
@@ -320,11 +315,10 @@ def test_tpmatrices_solve_fourier_fourier_legendre_3d():
     ue = sp.cos(2 * x) * sp.cos(2 * y) * (1 - z**2)
     A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 
-    mats = TPMatrices(A)
-    lu = mats.lu_factor()
+    lu = A.lu_factor()
     assert isinstance(lu, TPMatricesWavenumberSolver)
 
-    uh = mats.solve(b)
+    uh = A.solve(b)
     assert uh.shape == b.shape
 
     M = 20
@@ -355,8 +349,8 @@ def _vector_block_system(N: int, poly):
     V = VectorTensorProductSpace(T, name="V")
     u = TrialFunction(V)
     v = TestFunction(V)
-    M = inner(Dot(v, u), sparse=True)
-    A = BlockTPMatrix(M, V, V)
+    A = inner(Dot(v, u), sparse=True)
+    assert isinstance(A, BlockTPMatrix)
     rng = np.random.default_rng(0)
     x_true = jnp.array(rng.standard_normal(A.shape[1]), dtype=jnp.float32)
     b = A.to_Matrix().matvec(x_true)

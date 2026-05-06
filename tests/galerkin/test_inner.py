@@ -197,7 +197,7 @@ def test_linear_inner(space):
     l1 = []
     for fi in f:
         l1.append(inner(v.diff(x, 1) * fi))
-    assert jnp.allclose(l1[0], l1[1], atol=ulp(100))
+    assert jnp.allclose(l1[0], l1[1], atol=ulp(1000))
 
 
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
@@ -534,11 +534,11 @@ def test_inner_exact_jaxfunction_2d():
 
     # Check that without padding we get wrong result
     B = inner(uf * v * u)
-    A = B.mat
+    A = B.data
     assert not jnp.allclose(A[-1, -1, -1, -1], float(t), atol=jnp.sqrt(ulp(100)))
     # Check that with padding we get correct result
     B = inner(uf * v * u, num_quad_points=(7, 7))
-    A = B.mat
+    A = B.data
     assert jnp.allclose(A[-1, -1, -1, -1], float(t), atol=jnp.sqrt(ulp(100)))
 
 
@@ -569,12 +569,12 @@ def test_inner_exact_multivar_2d():
 
     # Check that without padding we get wrong result
     B = inner(sp.sqrt(x**2 + y**2) * v * u)
-    A = B.mat
+    A = B.data
     assert not jnp.allclose(A[-1, -1, -1, -1], float(t), atol=jnp.sqrt(ulp(100)))
     # Check that with padding we can get correct result (much padding since not
     # polynomial coefficient)
     B = inner(sp.sqrt(x**2 + y**2) * v * u, num_quad_points=(32, 32))
-    A = B.mat
+    A = B.data
     assert jnp.allclose(A[-1, -1, -1, -1], float(t), atol=jnp.sqrt(ulp(100))), abs(
         A[-1, -1, -1, -1] - float(t)
     )

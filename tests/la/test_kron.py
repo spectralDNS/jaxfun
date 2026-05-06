@@ -55,7 +55,7 @@ def _diag5(n: int) -> DiaMatrix:
     )
 
 
-def _poisson_tpmats(N: int = 8) -> tuple[list[TPMatrix], jnp.ndarray]:
+def _poisson_tpmats(N: int = 8) -> tuple[TPMatrices, jnp.ndarray]:
     """Return (A, b) for a 2-D Poisson problem on a Legendre composite space."""
     bcs = {"left": {"D": 0}, "right": {"D": 0}}
     D = FunctionSpace(N, Legendre.Legendre, bcs=bcs)
@@ -67,7 +67,7 @@ def _poisson_tpmats(N: int = 8) -> tuple[list[TPMatrix], jnp.ndarray]:
     return A, b
 
 
-def _biharmonic_tpmats(N: int = 8) -> tuple[list[TPMatrix], jnp.ndarray]:
+def _biharmonic_tpmats(N: int = 8) -> tuple[TPMatrices, jnp.ndarray]:
     """Return (A, b) for a 2-D biharmonic problem on a Chebyshev composite space."""
     from jaxfun.coordinates import x, y
     from jaxfun.galerkin import Chebyshev
@@ -193,10 +193,9 @@ class TestTpmatsToKron:
     def test_poisson_matches_numpy_kron(self):
         """tpmats_to_kron must agree with np.kron applied to raw factor matrices."""
         A, _ = _poisson_tpmats(N=8)
-        C = tpmats_to_kron(A)
 
         result_np = None
-        for tpm in A:
+        for tpm in A.tpmats:
             a0 = np.array(
                 tpm.mats[0].todense()
                 if isinstance(tpm.mats[0], DiaMatrix)
@@ -210,21 +209,21 @@ class TestTpmatsToKron:
             a0 = a0 * float(tpm.scale)  # ty:ignore[invalid-argument-type]
             result_np = a0 if result_np is None else result_np + a0
 
-        assert np.max(np.abs(np.array(C.todense()) - result_np)) < 1e-5
+        assert np.max(np.abs(np.array(A.todense()) - result_np)) < 1e-5
 
     def test_poisson_returns_diamatrix(self):
         A, _ = _poisson_tpmats(N=8)
-        C = tpmats_to_kron(A)
+        C = A.tosparse()
         assert isinstance(C, DiaMatrix)
 
     def test_scale_applied_once(self):
         """Doubling tpm.scale and halving the factor matrices must give same result."""
         A, _ = _poisson_tpmats(N=6)
-        C_ref = tpmats_to_kron(A)
+        C_ref = A.todense()
 
         # Build a modified list where scale is doubled but first factor halved
         modified = []
-        for tpm in A:
+        for tpm in A.tpmats:
             from jaxfun.galerkin.tensorproductspace import TPMatrix
             from jaxfun.la import Matrix
 
@@ -242,7 +241,7 @@ class TestTpmatsToKron:
                 )
             )
         C_mod = tpmats_to_kron(modified)
-        assert jnp.allclose(C_ref.todense(), C_mod.todense(), atol=1e-5)
+        assert jnp.allclose(C_ref, C_mod.todense(), atol=1e-5)
 
     def test_biharmonic_matches_numpy_kron(self):
         """Same correctness check for higher-order (biharmonic) problem."""
@@ -253,10 +252,10 @@ class TestTpmatsToKron:
             pytest.skip("requires float64 (run with jax_enable_x64=True)")
 
         A, _ = _biharmonic_tpmats(N=10)
-        C = tpmats_to_kron(A)
+        C = A.tosparse()
 
         result_np = None
-        for tpm in A:
+        for tpm in A.tpmats:
             a0 = np.array(tpm.mats[0].todense())
             for m in tpm.mats[1:]:
                 a1 = np.array(m.todense())
@@ -273,37 +272,34 @@ class TestKronSolve:
     def test_poisson_lu_solve(self):
         """LU solver should recover the PDE solution to near machine precision."""
         A, b = _poisson_tpmats(N=10)
-        C = tpmats_to_kron(A)
         b_flat = b.flatten()
-        x = C.solve(b_flat)
-        residual = float(jnp.linalg.norm(C.todense() @ x - b_flat))
+        x = A.solve(b_flat)
+        residual = float(jnp.linalg.norm(A.todense() @ x - b_flat))
         assert residual < ulp(1000)
 
     def test_poisson_lu_vs_dense(self):
         """DIA LU solve and jnp.linalg.solve must agree."""
         A, b = _poisson_tpmats(N=8)
-        C = tpmats_to_kron(A)
         b_flat = b.flatten()
-        x_lu = C.solve(b_flat)
-        x_dense = jnp.linalg.solve(C.todense(), b_flat)
+        x_lu = A.solve(b_flat)
+        x_dense = jnp.linalg.solve(A.todense(), b_flat)
         assert jnp.allclose(x_lu, x_dense, atol=ulp(100))
 
     def test_poisson_dense_fallback(self):
         """Forcing the dense-fallback path must give same answer as banded path."""
         A, b = _poisson_tpmats(N=8)
-        C = cast(DiaMatrix, tpmats_to_kron(A))
         b_flat = b.flatten()
-        x_banded = C.solve(b_flat, method="rcm")
-        x_dense = C.solve(b_flat, method="dense")
+        x_banded = A.solve(b_flat, method="kron", kron_method="rcm")
+        x_dense = A.solve(b_flat, method="kron", kron_method="dense")
         assert jnp.allclose(x_banded, x_dense, atol=ulp(1000))
 
     def test_kron_solve_multiple_rhs(self):
         """solve() on a kron matrix must work for 2-D right-hand sides."""
         A, b = _poisson_tpmats(N=6)
-        C = cast(DiaMatrix, tpmats_to_kron(A))
+        C = A.tosparse()
         n = C.shape[0]
         X_true = jax.random.normal(jax.random.PRNGKey(42), shape=(n, 3))
-        B = C.todense() @ X_true
+        B = A.todense() @ X_true
         X_hat = C.solve(B)
         assert X_hat.shape == (n, 3)
         assert jnp.allclose(X_hat, X_true, atol=ulp(1000))
@@ -318,10 +314,9 @@ class TestKronSolve:
             pytest.skip("requires float64 (run with jax_enable_x64=True)")
 
         A, b = _biharmonic_tpmats(N=12)
-        C = TPMatrices(A)
         b_flat = b.flatten()
-        x = C.solve(b_flat, method="kron", kron_method="rcm")
-        residual = float(jnp.linalg.norm(C.todense() @ x - b_flat))
+        x = A.solve(b_flat, method="kron", kron_method="rcm")
+        residual = float(jnp.linalg.norm(A.todense() @ x - b_flat))
         assert residual < ulp(10000)
 
 
@@ -532,20 +527,20 @@ class TestTPMatrixMatmul:
     def test_galerkin_2d_matmul_vs_kron(self):
         """TPMatrix from inner() with DIA factors: A@u matches tpmats_to_kron @ u."""
         A, _ = _poisson_tpmats(N=8)
-        C = tpmats_to_kron(A)
-        shape = tuple(m.shape[1] for m in A[0].mats)
+        C = A.tosparse()
+        shape = tuple(m.shape[1] for m in A.tpmats[0].mats)
         w = jax.random.normal(jax.random.PRNGKey(20), shape=tuple(shape))
-        result = sum(tpm(w) for tpm in A)
+        result = sum(tpm(w) for tpm in A.tpmats)
         expected = (C.todense() @ np.array(w).ravel()).reshape(shape)
         assert jnp.allclose(result, jnp.array(expected), atol=1e-4)
 
     def test_galerkin_2d_rmatmul_vs_kron(self):
         """w @ TPMatrix from inner() matches w @ tpmats_to_kron."""
         A, _ = _poisson_tpmats(N=8)
-        C = tpmats_to_kron(A)
-        shape = tuple(m.shape[0] for m in A[0].mats)
+        C = A.tosparse()
+        shape = tuple(m.shape[0] for m in A.tpmats[0].mats)
         w = jax.random.normal(jax.random.PRNGKey(21), shape=tuple(shape))
-        result = sum(w @ tpm for tpm in A)
+        result = sum(w @ tpm for tpm in A.tpmats)
         expected = (np.array(w).ravel() @ C.todense()).reshape(shape)
         assert jnp.allclose(result, jnp.array(expected), atol=1e-4)
 
@@ -558,9 +553,9 @@ class TestTpmatsToScipySparse:
         from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_sparse
 
         A, _ = _poisson_tpmats(N=8)
-        result = tpmats_to_scipy_sparse(A)
-        assert len(result) == len(A)
-        for tpm, (f0, f1) in zip(A, result):
+        result = tpmats_to_scipy_sparse(list(A.tpmats))
+        assert len(result) == len(A.tpmats)
+        for tpm, (f0, f1) in zip(A.tpmats, result):
             scale = complex(tpm.scale).real
             assert np.allclose(
                 f0.toarray(), np.array(tpm.mats[0].todense()) * scale, atol=1e-6
@@ -573,8 +568,8 @@ class TestTpmatsToScipySparse:
 
         A, _ = _poisson_tpmats(N=8)
         # Build a scaled copy
-        scaled = [TPMatrix(list(tpm.mats), scale=tpm.scale * 3) for tpm in A]
-        orig = tpmats_to_scipy_sparse(A)
+        scaled = [TPMatrix(list(tpm.mats), scale=tpm.scale * 3) for tpm in A.tpmats]
+        orig = tpmats_to_scipy_sparse(list(A.tpmats))
         scl = tpmats_to_scipy_sparse(scaled)
         for (o0, o1), (s0, s1) in zip(orig, scl):
             assert np.allclose(s0.toarray(), 3 * o0.toarray(), atol=1e-6)
@@ -585,8 +580,8 @@ class TestTpmatsToScipySparse:
         from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_kron
 
         A, _ = _poisson_tpmats(N=8)
-        K_jax = np.array(tpmats_to_kron(A).todense())
-        K_sp = tpmats_to_scipy_kron(A).toarray()
+        K_jax = np.array(tpmats_to_kron(list(A.tpmats)).todense())
+        K_sp = tpmats_to_scipy_kron(list(A.tpmats)).toarray()
         assert np.allclose(K_jax, K_sp, atol=1e-5)
 
     def test_scipy_kron_scale_matches_tpmats_to_kron(self):
@@ -594,7 +589,7 @@ class TestTpmatsToScipySparse:
         from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_kron
 
         A, _ = _poisson_tpmats(N=8)
-        scaled = [TPMatrix(list(tpm.mats), scale=tpm.scale * 2) for tpm in A]
+        scaled = [TPMatrix(list(tpm.mats), scale=tpm.scale * 2) for tpm in A.tpmats]
         K_jax = np.array(tpmats_to_kron(scaled).todense())
         K_sp = tpmats_to_scipy_kron(scaled).toarray()
         assert np.allclose(K_jax, K_sp, atol=1e-5)
@@ -604,7 +599,7 @@ class TestTpmatsToScipySparse:
         from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_kron
 
         A, b = _poisson_tpmats(N=8)
-        K_sp = tpmats_to_scipy_kron(A)
-        K_jax = tpmats_to_kron(A)
+        K_sp = tpmats_to_scipy_kron(list(A.tpmats))
+        K_jax = tpmats_to_kron(list(A.tpmats))
         x = jax.random.normal(jax.random.PRNGKey(42), shape=(K_sp.shape[1],))
         assert np.allclose(K_sp @ x, np.array(K_jax.todense()) @ x, atol=1e-4)

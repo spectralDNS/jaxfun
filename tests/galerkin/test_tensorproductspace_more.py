@@ -1,21 +1,21 @@
-from typing import cast
-
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 import sympy as sp
 
 from jaxfun.galerkin import (
     Chebyshev,
+    DirectSum,
     FunctionSpace,
     Legendre,
     TensorProduct,
     TestFunction,
     TrialFunction,
+    tpmats_to_kron,
 )
 from jaxfun.galerkin.inner import inner, project
 from jaxfun.galerkin.tensorproductspace import (
-    TPMatrices,
     TPMatrix,
     tpmats_to_scipy_kron,
 )
@@ -42,12 +42,7 @@ def test_tensorproductspace_broadcast_and_evaluate_2d():
 def test_tensorproductspace_forward_directsum():
     bcs = {"left": {"D": 1}, "right": {"D": 2}}
     F = Legendre.Legendre(5)
-    # Chebyshev.Chebyshev(5)
-    from jaxfun.galerkin import FunctionSpace
-
     DS = FunctionSpace(5, Legendre.Legendre, bcs=bcs)
-    from jaxfun.galerkin.composite import DirectSum
-
     assert isinstance(DS, DirectSum)
     T = TensorProduct(DS, F)
     # Make a simple physical array in homogeneous shape (first subspace dim,
@@ -66,14 +61,15 @@ def test_tpmatrices_call_and_kron_3d():
     v = TestFunction(T3)
     u = TrialFunction(T3)
     A = inner(v * u)
-    assert isinstance(A, list)
-    A = cast(list[TPMatrix], A)
-    kron = tpmats_to_scipy_kron(A)
-    # Build TPMatrices and apply to random u
-    mats = TPMatrices(A)
+    assert isinstance(A, TPMatrix)
+    kron = tpmats_to_scipy_kron([A])
+    kron2 = tpmats_to_kron(A)
+
     X = jax.random.normal(jax.random.PRNGKey(4), shape=T3.num_dofs)
-    Y = mats(X)
-    assert Y.shape == X.shape and kron.shape[0] == kron.shape[1]
+    Y = kron @ np.array(X).flatten()
+    Z = kron2 @ X.flatten()
+    assert Y.shape == Z.shape
+    assert jnp.linalg.norm(Z - jnp.array(Y)) < ulp(100)
 
 
 def test_inner_linear_form_3d_outer_products():
@@ -85,23 +81,6 @@ def test_inner_linear_form_3d_outer_products():
     b = inner((x + y + z) * v)
     assert isinstance(b, jax.Array)
     assert b.shape == T3.num_dofs
-
-
-def test_inner_sparse_multivar_path():
-    # multivar coeff with sparse=True to trigger sparse conversion in process_results
-    C = Chebyshev.Chebyshev(4)
-    L = Legendre.Legendre(4)
-    T = TensorProduct(C, L)
-    v = TestFunction(T)
-    u = TrialFunction(T)
-    x, y = T.system.base_scalars()
-    # Use plain bilinear form to ensure TPMatrix objects (with dims attr) returned
-    A = inner(u * v, sparse=True)
-    assert isinstance(A, list)
-    A_tp = cast(list[TPMatrix], A)
-    # Expect list of TPMatrix with sparse mats
-    for tp in A_tp:
-        assert all(hasattr(m, "data") for m in tp.mats)
 
 
 @pytest.mark.slow

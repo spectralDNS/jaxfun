@@ -968,24 +968,41 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
     def __len__(self) -> int:
         return len(self.mats)
 
-    @property
-    def mat(self) -> DiaMatrix | Matrix:
-        """Return explicit Kronecker product.
+    def tosparse(self) -> DiaMatrix:
+        sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        if sparse_box is not None:
+            return sparse_box.value
+        kron = tpmats_to_kron(self)
+        if not isinstance(kron, DiaMatrix):
+            kron = DiaMatrix.from_dense(kron.todense())
+        object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
+        return kron
 
-        Returns a :class:`~jaxfun.la.DiaMatrix` when all factor matrices are
-        DIA sparse; otherwise falls back to a dense :class:`jax.Array` via
-        :func:`jnp.kron`.
+    def todense(self) -> Array:
+        """Return the dense Kronecker product as a raw array.
+
+        The underlying :class:`~jaxfun.la.Matrix` or
+        :class:`~jaxfun.la.DiaMatrix` is cached for repeated calls.
+
+        Returns:
+            2-D :class:`~jaxfun.Array` of shape ``(N, N)`` where ``N`` is the
+            total number of degrees of freedom.
         """
-        if all(isinstance(m, DiaMatrix) for m in self.mats):
-            result: DiaMatrix = self.mats[0]  # type: ignore[assignment]
-            for m in self.mats[1:]:
-                result = diakron(result, m)  # type: ignore[arg-type]
-            return result
-        arrays = [m.todense() for m in self.mats]
-        out = arrays[0]
-        for a in arrays[1:]:
-            out = jnp.kron(out, a)
-        return Matrix(out)
+        dense_box: _CacheBox[Matrix] | None = getattr(self, "_dense_cache", None)
+        if dense_box is not None:
+            return dense_box.value.todense()
+        sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        if sparse_box is not None:
+            return sparse_box.value.todense()
+        kron = tpmats_to_kron(self)
+        if isinstance(kron, Matrix):
+            object.__setattr__(self, "_dense_cache", _CacheBox(kron))
+            return kron.todense()
+        object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
+        return kron.todense()
+
+    def to_Matrix(self) -> Matrix:
+        return Matrix(self.todense())
 
     def _matmul_array(self, w: Array) -> Array:
         result = w
@@ -1048,7 +1065,7 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         solves the Kronecker system without rebuilding the factorisation.
         """
         lu_factors = [mat.lu_factor() for mat in self.mats]
-        shape = tuple(int(m.shape[0]) for m in self.mats)
+        shape = tuple(int(mat.shape[0]) for mat in self.mats)
         return TPLUFactors(lu_factors=lu_factors, scale=self.scale, shape=shape)
 
 
@@ -1162,7 +1179,7 @@ class TPMatrices(nnx.Pytree):
             2-D :class:`~jaxfun.Array` of shape ``(N, N)`` where ``N`` is the
             total number of degrees of freedom.
         """
-        dense_box: _CacheBox[Matrix] | None = getattr(self, "_kron_cache", None)
+        dense_box: _CacheBox[Matrix] | None = getattr(self, "_dense_cache", None)
         if dense_box is not None:
             return dense_box.value.todense()
         sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
@@ -1170,7 +1187,7 @@ class TPMatrices(nnx.Pytree):
             return sparse_box.value.todense()
         kron = tpmats_to_kron(list(self.tpmats))
         if isinstance(kron, Matrix):
-            object.__setattr__(self, "_kron_cache", _CacheBox(kron))
+            object.__setattr__(self, "_dense_cache", _CacheBox(kron))
             return kron.todense()
         object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
         return kron.todense()
@@ -1270,7 +1287,7 @@ class TPMatrices(nnx.Pytree):
                     r.shape
                 )
             # Dense Matrix path
-            dense_box: _CacheBox[Matrix] | None = getattr(self, "_kron_cache", None)
+            dense_box: _CacheBox[Matrix] | None = getattr(self, "_dense_cache", None)
             if dense_box is not None:
                 return dense_box.value.solve(flat).reshape(r.shape)
             # No cache yet: compute and store
@@ -1278,7 +1295,7 @@ class TPMatrices(nnx.Pytree):
             if isinstance(kron, DiaMatrix):
                 object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
                 return kron.lu_solve(flat, method=kron_method).reshape(r.shape)
-            object.__setattr__(self, "_kron_cache", _CacheBox(kron))
+            object.__setattr__(self, "_dense_cache", _CacheBox(kron))
             return kron.solve(flat).reshape(r.shape)
 
         if method == TPSolveMethod.LU:
@@ -1311,15 +1328,15 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
         mat: Dense (or sparse) global matrix.
     """
 
-    def __init__(self, mat: Array) -> None:
-        self.mat = mat  # mat is A_ikjl
+    def __init__(self, data: Array) -> None:
+        self.data = data  # mat is A_ikjl
 
     def __len__(self) -> int:
-        return self.mat.shape[0]
+        return self.data.shape[0]
 
     @jax.jit(static_argnums=0)
     def _matmul_array(self, w: Array) -> Array:
-        return jnp.einsum("ikjl,kl->ij", self.mat, w)
+        return jnp.einsum("ikjl,kl->ij", self.data, w)
 
     def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply matrix to coefficient array u."""
@@ -1334,7 +1351,7 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
 
     @jax.jit(static_argnums=0)
     def _rmatmul_array(self, w: Array) -> Array:
-        return jnp.einsum("ij,ikjl->kl", w, self.mat)
+        return jnp.einsum("ij,ikjl->kl", w, self.data)
 
     def __rmatmul__(self, u: Array | JAXFunction) -> Array:
         """Right matmul (u @ A) treating u as left factor."""
@@ -1342,6 +1359,16 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
 
         w = u.array if isinstance(u, JAXFunction) else u
         return self._rmatmul_array(w)
+
+    def solve(self, rhs: Array) -> Array:
+        """Solve A x = rhs for x."""
+        AT = jnp.transpose(self.data, (0, 2, 1, 3)).reshape(
+            (
+                self.data.shape[0] * self.data.shape[2],
+                self.data.shape[1] * self.data.shape[3],
+            )
+        )  # AT_{i*k,j*l}
+        return jnp.linalg.solve(AT, rhs.flatten()).reshape(rhs.shape)
 
 
 class BlockTPMatrix:
@@ -1391,8 +1418,7 @@ class BlockTPMatrix:
         out = jnp.zeros(self.shape)
         for m in self.tpmats:
             indices = m.global_indices
-            block = m.mat
-            dense = block.todense()
+            dense = m.todense()
             out = out.at[self.slice(indices)].add(dense)
         return out
 
@@ -1495,6 +1521,14 @@ class BlockTPMatrix:
                 return A_perm.matvec(w.ravel()[perm])[inv_perm].reshape(w.shape)
             return sparse.matvec(w.ravel()).reshape(w.shape)
         return self._matmul_array(w)
+
+    def __matmul__(self, u: Array | JAXFunction) -> Array:
+        """Alias to __call__ for @ operator."""
+        return self.__call__(u)
+
+    def __len__(self) -> int:
+        """Return number of rows (test space dimension)."""
+        return self.shape[0]
 
     def solve(self, b: Array) -> Array:
         """Solve ``M x = b``.

@@ -12,7 +12,7 @@ from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.galerkin.tensorproductspace import TensorProduct, TPMatrices
+from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -38,8 +38,7 @@ ue = (1 - r) * (sp.S.Half - r) * theta * (sp.pi / 2 - theta)
 # A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
 A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue))), sparse=True)
 
-A0 = TPMatrices(A)
-uh = A0.solve(b)
+uh = A.solve(b)
 
 rj, tj = T.mesh(kind="uniform", N=(100, 100))
 xc, yc = T.cartesian_mesh(kind="uniform", N=(100, 100))

@@ -596,13 +596,6 @@ class TestProperties:
         _, A = _tridiag(3)
         assert A.ndim == 2
 
-    def test_astype(self):
-        # float16 is always available regardless of x64 mode.
-        _, A = _tridiag(3)
-        B = A.astype(jnp.float16)
-        assert B.dtype == jnp.float16
-        assert jnp.allclose(B.todense().astype(jnp.float32), A.todense(), atol=1e-2)
-
     def test_repr(self):
         _, A = _tridiag(3)
         r = repr(A)
@@ -1288,13 +1281,6 @@ class TestPin:
         # Pinned row i=0: only diagonal entry should be 1.
         assert float(sys[0, 0]) == pytest.approx(1.0)
         assert float(sys[0, 1]) == pytest.approx(0.0)
-
-    def test_astype_preserves_constraints(self):
-        _, A = _tridiag(5)
-        sys = A.pin({0: 0.0, 4: 1.0})
-        sys64 = sys.astype(jnp.float64)
-        assert sys64.constraints == sys.constraints
-        assert sys64.shape == sys.shape
 
 
 class TestRCM:

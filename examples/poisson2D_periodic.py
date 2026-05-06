@@ -12,7 +12,7 @@ from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.galerkin.tensorproductspace import TensorProduct, TPMatrices
+from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -30,11 +30,10 @@ u = TrialFunction(T, name="u")
 x, y = T.system.base_scalars()
 ue = T.system.expr_psi_to_base_scalar(ue)
 
-# A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=False)
+# A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=True)
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 
-A0 = TPMatrices(A)
-uh = A0.solve(b)
+uh = A.solve(b)
 
 N = 100
 uj = T.backward(uh, N=(N, N))

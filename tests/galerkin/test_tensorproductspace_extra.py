@@ -18,7 +18,8 @@ from jaxfun.galerkin import (
     VectorTensorProductSpace,
 )
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import DirectSumTPS, TPMatrix
+from jaxfun.galerkin.tensorproductspace import DirectSumTPS
+from jaxfun.la import TPMatrix
 from jaxfun.utils.common import ulp
 
 

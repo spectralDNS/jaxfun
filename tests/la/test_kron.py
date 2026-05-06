@@ -26,8 +26,16 @@ from jaxfun.galerkin import (
     TrialFunction,
 )
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TPMatrices, TPMatrix, tpmats_to_kron
-from jaxfun.la import DiaMatrix, Matrix, diags
+from jaxfun.la import (
+    DiaMatrix,
+    Matrix,
+    TPMatrices,
+    TPMatrix,
+    diags,
+    tpmats_to_kron,
+    tpmats_to_scipy_kron,
+    tpmats_to_scipy_sparse,
+)
 from jaxfun.la.diamatrix import diakron
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import n as sym_n, ulp
@@ -224,9 +232,6 @@ class TestTpmatsToKron:
         # Build a modified list where scale is doubled but first factor halved
         modified = []
         for tpm in A.tpmats:
-            from jaxfun.galerkin.tensorproductspace import TPMatrix
-            from jaxfun.la import Matrix
-
             mats_new = list(tpm.mats)
             first = mats_new[0]
             if isinstance(first, DiaMatrix):
@@ -550,8 +555,6 @@ class TestTpmatsToScipySparse:
 
     def test_scipy_sparse_factors_match_dense(self):
         """Each factor in tpmats_to_scipy_sparse matches the TPMatrix dense factor."""
-        from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_sparse
-
         A, _ = _poisson_tpmats(N=8)
         result = tpmats_to_scipy_sparse(list(A.tpmats))
         assert len(result) == len(A.tpmats)
@@ -564,8 +567,6 @@ class TestTpmatsToScipySparse:
 
     def test_scipy_sparse_scale_applied(self):
         """Scale is folded into first factor, not applied twice."""
-        from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_sparse
-
         A, _ = _poisson_tpmats(N=8)
         # Build a scaled copy
         scaled = [TPMatrix(list(tpm.mats), scale=tpm.scale * 3) for tpm in A.tpmats]
@@ -577,8 +578,6 @@ class TestTpmatsToScipySparse:
 
     def test_scipy_kron_matches_tpmats_to_kron(self):
         """tpmats_to_scipy_kron assembles the same global matrix as tpmats_to_kron."""
-        from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_kron
-
         A, _ = _poisson_tpmats(N=8)
         K_jax = np.array(tpmats_to_kron(list(A.tpmats)).todense())
         K_sp = tpmats_to_scipy_kron(list(A.tpmats)).toarray()
@@ -586,8 +585,6 @@ class TestTpmatsToScipySparse:
 
     def test_scipy_kron_scale_matches_tpmats_to_kron(self):
         """Scaled tpmats_to_scipy_kron matches scaled tpmats_to_kron."""
-        from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_kron
-
         A, _ = _poisson_tpmats(N=8)
         scaled = [TPMatrix(list(tpm.mats), scale=tpm.scale * 2) for tpm in A.tpmats]
         K_jax = np.array(tpmats_to_kron(scaled).todense())
@@ -596,8 +593,6 @@ class TestTpmatsToScipySparse:
 
     def test_scipy_kron_matvec_matches_solve_rhs(self):
         """Scipy kron matrix applied to known vector matches JAX kron result."""
-        from jaxfun.galerkin.tensorproductspace import tpmats_to_scipy_kron
-
         A, b = _poisson_tpmats(N=8)
         K_sp = tpmats_to_scipy_kron(list(A.tpmats))
         K_jax = tpmats_to_kron(list(A.tpmats))

@@ -18,10 +18,9 @@ from jaxfun.galerkin.forms import split_coeff
 from jaxfun.galerkin.inner import inner, project
 from jaxfun.galerkin.tensorproductspace import (
     DirectSumTPS,
-    TPMatrix,
     VectorTensorProductSpace,
 )
-from jaxfun.la import DiaMatrix
+from jaxfun.la import DiaMatrix, TPMatrix
 from jaxfun.utils.common import Domain, ulp
 
 

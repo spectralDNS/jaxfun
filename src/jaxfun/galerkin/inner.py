@@ -6,7 +6,15 @@ import sympy as sp
 from flax import nnx
 from jax import Array
 
-from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol
+from jaxfun.la import (
+    BlockTPMatrix,
+    DiaMatrix,
+    Matrix,
+    MatrixProtocol,
+    TensorMatrix,
+    TPMatrices,
+    TPMatrix,
+)
 from jaxfun.typing import TestSpaceType, TrialSpaceType
 from jaxfun.utils.common import lambdify, matmat
 
@@ -29,12 +37,8 @@ from .forms import (
 )
 from .orthogonal import OrthogonalSpace
 from .tensorproductspace import (
-    BlockTPMatrix,
     DirectSumTPS,
-    TensorMatrix,
     TensorProductSpace,
-    TPMatrices,
-    TPMatrix,
     VectorTensorProductSpace,
 )
 

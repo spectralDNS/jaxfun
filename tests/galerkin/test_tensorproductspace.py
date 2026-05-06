@@ -17,7 +17,7 @@ from jaxfun.galerkin import (
 )
 from jaxfun.galerkin.composite import DirectSum
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
+from jaxfun.la import TensorMatrix, TPMatrices, TPMatrix
 from jaxfun.utils.common import ulp
 
 

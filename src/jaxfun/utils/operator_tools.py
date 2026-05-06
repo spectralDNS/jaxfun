@@ -7,8 +7,7 @@ import jax.numpy as jnp
 import sympy as sp
 
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
-from jaxfun.la import DiaMatrix, Matrix
+from jaxfun.la import DiaMatrix, Matrix, TensorMatrix, TPMatrices, TPMatrix
 from jaxfun.typing import (
     Array,
     GalerkinAssembledForm,

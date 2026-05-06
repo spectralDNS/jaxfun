@@ -12,13 +12,9 @@ from jaxfun.galerkin import (
     TensorProduct,
     TestFunction,
     TrialFunction,
-    tpmats_to_kron,
 )
 from jaxfun.galerkin.inner import inner, project
-from jaxfun.galerkin.tensorproductspace import (
-    TPMatrix,
-    tpmats_to_scipy_kron,
-)
+from jaxfun.la import TPMatrix, tpmats_to_kron, tpmats_to_scipy_kron
 from jaxfun.utils.common import ulp
 
 

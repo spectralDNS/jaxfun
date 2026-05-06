@@ -14,19 +14,21 @@ from jaxfun.galerkin import (
 )
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import (
+from jaxfun.la import (
     BlockTPMatrix,
+    TPMatrix,
+    tpmats_to_kron,
+)
+from jaxfun.la.diamatrix import DiaMatrix
+from jaxfun.la.tpmatrix import (
     TPLUFactors,
     TPMatricesDenseLUFactors,
     TPMatricesLUFactors,
     TPMatricesWavenumberSolver,
-    TPMatrix,
     tpmats_dense_lu_factor,
     tpmats_lu_factor,
-    tpmats_to_kron,
     tpmats_wavenumber_factor,
 )
-from jaxfun.la.diamatrix import DiaMatrix
 from jaxfun.operators import Div, Dot, Grad
 from jaxfun.utils.common import lambdify, ulp
 

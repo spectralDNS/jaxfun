@@ -79,7 +79,7 @@ def operator_diagonal(obj: GalerkinOperatorLike | None) -> Array | None:
     if isinstance(obj, TPMatrix):
         return _tpmatrix_diagonal(obj)
     if isinstance(obj, TensorMatrix):
-        return operator_diagonal(obj.mat)
+        return operator_diagonal(obj.data)
     arr = jnp.asarray(obj)
     if arr.ndim == 2 and arr.shape[0] == arr.shape[1]:
         diag = jnp.diag(arr)
@@ -99,7 +99,7 @@ def apply_operator(op: GalerkinOperatorLike | None, u: Array) -> Array:
     if isinstance(op, TPMatrices | TPMatrix):
         return op(u)
     if isinstance(op, TensorMatrix):
-        return apply_operator(op.mat, u)
+        return apply_operator(op.data, u)
     if isinstance(op, DiaMatrix | Matrix):
         return op @ u
     arr = jnp.asarray(op)
@@ -141,7 +141,7 @@ def operator_to_dense(op: GalerkinOperatorLike) -> Array:
     if isinstance(op, TPMatrix):
         return _tpmatrix_to_dense(op)
     if isinstance(op, TensorMatrix):
-        return operator_to_dense(op.mat)
+        return operator_to_dense(op.data)
     return jnp.asarray(op)
 
 

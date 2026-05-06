@@ -4,6 +4,11 @@
 # Avoid bloating the repo
 *.gif
 
+# Sandbox — local experiments, not for the repo (exceptions tracked explicitly)
+sandbox/*
+!sandbox/poisson1D_multi.py
+!sandbox/poisson2D_polygon.py
+
 ### JupyterNotebooks ###
 # gitignore template for Jupyter Notebooks
 # website: http://jupyter.org/

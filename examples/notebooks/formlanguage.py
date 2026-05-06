@@ -257,9 +257,9 @@ def _(mo):
 
 
 @app.cell
-def _(display, f, g, inner):
+def _(f, g, inner):
     B = inner(f * g)
-    display(B)
+    B
     return
 
 

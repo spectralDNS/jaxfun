@@ -3,16 +3,15 @@ import jax
 
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import optax
 import sympy as sp
 from flax import nnx
 
-from jaxfun import Cross, Curl, Div, Dot, Grad
+from jaxfun import Div, Dot, Grad
 from jaxfun.arguments import Constant
 from jaxfun.pinns.bcs import DirichletBC
 from jaxfun.pinns.mesh import Annulus
-from jaxfun.pinns.module import Loss, Comp, FlaxFunction, MLPSpace, run_optimizer
+from jaxfun.pinns.module import Comp, FlaxFunction, Loss, MLPSpace, run_optimizer
 
 V = MLPSpace([8], dims=2, rank=1, name="V")  # Vector space for velocity
 Q = MLPSpace([8], dims=2, rank=0, name="Q")  # Scalar space for pressure
@@ -68,4 +67,6 @@ optlbfgs = optax.lbfgs(
     linesearch=optax.scale_by_zoom_linesearch(20, max_learning_rate=1.0),
 )
 opt_lbfgs = nnx.Optimizer(module, optlbfgs)
-run_optimizer(loss_fn, module, opt_lbfgs, 10000, "LBFGS", 1000, update_global_weights=10)
+run_optimizer(
+    loss_fn, module, opt_lbfgs, 10000, "LBFGS", 1000, update_global_weights=10
+)

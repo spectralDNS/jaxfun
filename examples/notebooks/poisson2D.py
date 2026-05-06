@@ -98,7 +98,7 @@ def _(mo):
 
     which can be solved for the flattened $\text{vec}(U)$.
 
-    We are now ready to solve the Poisson problem using Jaxfun. With Jaxfun we choose functionspaces first and the assemble the matrices $S, A$ and $F$ from above. The entire problem is solved in the function `poisson()` below and should be pretty self-explanatory.
+    We are now ready to solve the Poisson problem using Jaxfun. With Jaxfun we choose functionspaces first and the assemble the matrices $S, A$ and $F$ from above. The entire problem is solved in the function `poisson()` below and should be pretty self-explanatory. We choose a matrix diagonalization method (method="lu") to directly solve the second to last linear system of equation shown above (SUA + AUS = F). Alternatively, we could choose method="kron" and use Kronecker product matrices in order to solve the last form of the linear systems.
     """)
     return
 
@@ -118,8 +118,6 @@ def _():
         TensorProduct,
         TrialFunction,
     )
-    from jaxfun.galerkin.tensorproductspace import vec
-    from scipy import sparse as scipy_sparse
 
     def poisson(N: int) -> Array:
         V = FunctionSpace(
@@ -135,8 +133,7 @@ def _():
         v = TestFunction(T, name="v")
         A = inner(Div(Grad(u)) * v)
         F = inner(2 * v)
-        A0 = vec(A)
-        h = jnp.array(scipy_sparse.linalg.spsolve(A0, F.flatten()).reshape(F.shape))
+        h = A.solve(F, method="lu")
         xj = T.mesh(kind="uniform", N=(50, 50), broadcast=False)
         plt.contourf(xj[0], xj[1], T.backward(h, kind="uniform", N=(50, 50)))
         plt.colorbar()

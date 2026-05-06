@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.19.8"
+__generated_with = "0.19.11"
 app = marimo.App()
 
 
@@ -23,7 +23,7 @@ def _():
     from jaxfun.galerkin import (
         FunctionSpace,
         Legendre,
-        TensorProductSpace,
+        TensorProduct,
         TestFunction,
         TrialFunction,
     )
@@ -52,7 +52,7 @@ def _():
             name="T",
             fun_str="psi",
         )
-        P = TensorProductSpace((R, T), system=C, name="P")
+        P = TensorProduct(R, T, system=C, name="P")
     elif system == "cylindrical":
         # system = 'polar'
         C = get_CoordSys(
@@ -78,7 +78,7 @@ def _():
         Z = FunctionSpace(
             20, Legendre.Legendre, domain=Domain(0, 1), name="Z", fun_str="L"
         )
-        P = TensorProductSpace((R, T, Z), system=C, name="P")
+        P = TensorProduct(R, T, Z, system=C, name="P")
     return C, Cross, Curl, Div, Dot, Grad, P, TestFunction, TrialFunction, sp
 
 

@@ -137,7 +137,7 @@ class MatrixProtocol(Protocol):
         """Return a sparse representation of the matrix."""
         ...
 
-    def to_Matrix(self) -> Matrix:
+    def to_matrix(self) -> Matrix:
         """Return a Matrix representation of the matrix."""
         ...
 

@@ -97,9 +97,9 @@ def apply_operator(op: GalerkinOperatorLike | None, u: Array) -> Array:
         applied = [apply_operator(item, u) for item in items]
         return jnp.sum(jnp.stack(applied), axis=0)
     if isinstance(op, TPMatrices | TPMatrix):
-        return op(u)
+        return op @ u
     if isinstance(op, TensorMatrix):
-        return apply_operator(op.data, u)
+        return op @ u
     if isinstance(op, DiaMatrix | Matrix):
         return op @ u
     arr = jnp.asarray(op)

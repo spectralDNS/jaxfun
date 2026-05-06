@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import itertools
-from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from enum import StrEnum
 from functools import partial
@@ -968,13 +967,15 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
     def __len__(self) -> int:
         return len(self.mats)
 
-    def tosparse(self) -> DiaMatrix:
+    def tosparse(self, *, tol: int = 100) -> DiaMatrix:
+        from jaxfun.utils import ulp
+
         sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
         if sparse_box is not None:
             return sparse_box.value
         kron = tpmats_to_kron(self)
         if not isinstance(kron, DiaMatrix):
-            kron = DiaMatrix.from_dense(kron.todense())
+            kron = DiaMatrix.from_dense(kron.todense(), tol=float(ulp(tol)))
         object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
         return kron
 
@@ -1001,7 +1002,7 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
         return kron.todense()
 
-    def to_Matrix(self) -> Matrix:
+    def to_matrix(self) -> Matrix:
         return Matrix(self.todense())
 
     def _matmul_array(self, w: Array) -> Array:
@@ -1159,13 +1160,15 @@ class TPMatrices(nnx.Pytree):
             jnp.array([mat._rmatmul_array(w) for mat in self.tpmats]), axis=0
         )
 
-    def tosparse(self) -> DiaMatrix:
+    def tosparse(self, *, tol: int = 100) -> DiaMatrix:
+        from jaxfun.utils import ulp
+
         sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
         if sparse_box is not None:
             return sparse_box.value
         kron = tpmats_to_kron(list(self.tpmats))
         if not isinstance(kron, DiaMatrix):
-            kron = DiaMatrix.from_dense(kron.todense())
+            kron = DiaMatrix.from_dense(kron.todense(), tol=float(ulp(tol)))
         object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
         return kron
 
@@ -1192,7 +1195,7 @@ class TPMatrices(nnx.Pytree):
         object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
         return kron.todense()
 
-    def to_Matrix(self) -> Matrix:
+    def to_matrix(self) -> Matrix:
         return Matrix(self.todense())
 
     def lu_factor(
@@ -1325,7 +1328,7 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
     factorization is unavailable.
 
     Attributes:
-        mat: Dense (or sparse) global matrix.
+        data: Dense (or sparse) global matrix.
     """
 
     def __init__(self, data: Array) -> None:
@@ -1371,8 +1374,13 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
         return jnp.linalg.solve(AT, rhs.flatten()).reshape(rhs.shape)
 
 
-class BlockTPMatrix:
+class BlockTPMatrix(nnx.Pytree):
     """Block matrix of TPMatrix objects.
+
+    Args:
+        tpmats: List of TPMatrix objects.
+        test_space: VectorTensorProductSpace descriptor for the test space.
+        trial_space: VectorTensorProductSpace descriptor for the trial space.
 
     Attributes:
         blocks: list of TPMatrix objects.
@@ -1385,23 +1393,36 @@ class BlockTPMatrix:
         test_space: VectorTensorProductSpace,
         trial_space: VectorTensorProductSpace,
     ) -> None:
-        self.tpmats = tpmats
+        self.tpmats = nnx.List(tpmats)
         self.test_space = test_space
         self.trial_space = trial_space
         self.shape = (self.test_space.dim, self.trial_space.dim)
-        self.test_block_sizes = jnp.array(
-            [self.test_space[i].dim for i in range(self.test_space.dims)]
+        self.test_block_sizes: tuple[int, ...] = tuple(
+            int(self.test_space[i].dim) for i in range(self.test_space.dims)
         )
-        self.trial_block_sizes = jnp.array(
-            [self.trial_space[i].dim for i in range(self.trial_space.dims)]
+        self.trial_block_sizes: tuple[int, ...] = tuple(
+            int(self.trial_space[i].dim) for i in range(self.trial_space.dims)
+        )
+        # Pre-compute one combined matrix per (test_block, trial_block) pair so
+        # that matvec, todense and tosparse each iterate over at most one entry
+        # per block instead of one entry per contributing TPMatrix.
+        _grouped: dict[str, TPMatrices] = {}
+        for mat in tpmats:
+            idx = f"{mat.global_indices[0]},{mat.global_indices[1]}"
+            if idx not in _grouped:
+                _grouped[idx] = TPMatrices([mat])
+            else:
+                _grouped[idx].tpmats.append(mat)
+        self._combined_blocks = nnx.Dict(
+            {idx: tpmats_to_kron(list(tpm.tpmats)) for idx, tpm in _grouped.items()}
         )
 
-    @jax.jit(static_argnums=0)
+    @jax.jit
     def _matmul_array(self, w: Array) -> Array:
         out = jnp.zeros_like(w)
-        for mat in self.tpmats:
-            indices = mat.global_indices
-            out = out.at[indices[0]].add(mat @ w[indices[1]])
+        for s, block_mat in self._combined_blocks.items():
+            bi, bj = map(int, s.split(","))
+            out = out.at[bi].add((block_mat @ w[bj].ravel()).reshape(out[bi].shape))
         return out
 
     def slice(self, indices: tuple[int, ...]) -> tuple[slice, ...]:  # ty:ignore[invalid-type-form]
@@ -1409,52 +1430,47 @@ class BlockTPMatrix:
         N = self.test_block_sizes
         M = self.trial_block_sizes
         return (
-            slice(jnp.sum(N[: indices[0]]), jnp.sum(N[: indices[0] + 1])),
-            slice(jnp.sum(M[: indices[1]]), jnp.sum(M[: indices[1] + 1])),
+            slice(sum(N[: indices[0]]), sum(N[: indices[0] + 1])),
+            slice(sum(M[: indices[1]]), sum(M[: indices[1] + 1])),
         )
 
     def todense(self) -> Array:
         """Return dense array."""
         out = jnp.zeros(self.shape)
-        for m in self.tpmats:
-            indices = m.global_indices
-            dense = m.todense()
-            out = out.at[self.slice(indices)].add(dense)
+        for s, block_mat in self._combined_blocks.items():
+            bi, bj = map(int, s.split(","))
+            out = out.at[self.slice((bi, bj))].add(block_mat.todense())
         return out
 
-    def to_Matrix(self) -> Matrix:
+    def to_matrix(self) -> Matrix:
         """Return dense matrix object."""
         return Matrix(self.todense())
 
-    def tosparse(self) -> DiaMatrix:
-        """Assemble global :class:`~jaxfun.la.DiaMatrix` from DiaMatrix-factor blocks.
+    def tosparse(self, *, tol: int = 100) -> DiaMatrix:
+        """Assemble global :class:`~jaxfun.la.DiaMatrix` from all blocks.
+
+        Works for both :class:`~jaxfun.la.DiaMatrix` and dense
+        :class:`~jaxfun.la.Matrix` factor blocks.  Dense blocks are converted
+        to :class:`~jaxfun.la.DiaMatrix` via
+        :meth:`~jaxfun.la.DiaMatrix.from_dense` before assembly.
 
         The assembled matrix is cached on the instance so repeated calls are
         free.
 
+        Args:
+            tol: Near-zero elimination tolerance passed to
+                :meth:`~jaxfun.la.DiaMatrix.from_dense` when any block is
+                dense.  Entries smaller than ``ulp(tol)`` times the maximum
+                entry are treated as zero.  Default 100.
+
         Returns:
             :class:`~jaxfun.la.DiaMatrix` of shape ``(total_rows, total_cols)``.
-
-        Raises:
-            TypeError: if any factor matrix is not a
-                :class:`~jaxfun.la.DiaMatrix`.
         """
-        for tp in self.tpmats:
-            for mat in tp.mats:
-                if not isinstance(mat, DiaMatrix):
-                    raise TypeError(
-                        f"tosparse requires all factor matrices to be DiaMatrix; "
-                        f"got {type(mat).__name__}."
-                    )
+        from jaxfun.utils import ulp
 
         cached: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
         if cached is not None:
             return cached.value
-
-        # Group TPMatrix objects by global_indices.
-        grouped: dict[tuple[int, int], list[TPMatrix]] = defaultdict(list)
-        for mat in self.tpmats:
-            grouped[mat.global_indices].append(mat)
 
         test_block_sizes = [int(s) for s in self.test_block_sizes]
         trial_block_sizes = [int(s) for s in self.trial_block_sizes]
@@ -1468,13 +1484,14 @@ class BlockTPMatrix:
         # Build per-block DiaMatrix and collect all global diagonal offsets.
         block_dias: dict[tuple[int, int], DiaMatrix] = {}
         global_offsets: set[int] = set()
-        for (bi, bj), mats in grouped.items():
-            block_dia = tpmats_to_kron(mats)
-            if not isinstance(block_dia, DiaMatrix):
-                raise TypeError(
-                    f"tpmats_to_kron returned {type(block_dia).__name__} for block "
-                    f"({bi},{bj}); expected DiaMatrix."
+        for s, block_kron in self._combined_blocks.items():
+            bi, bj = map(int, s.split(","))
+            if isinstance(block_kron, Matrix):
+                block_dia = DiaMatrix.from_dense(
+                    block_kron.todense(), tol=float(ulp(tol))
                 )
+            else:
+                block_dia = block_kron
             block_dias[(bi, bj)] = block_dia
             shift = trial_starts[bj] - test_starts[bi]
             for k in block_dia.offsets:
@@ -1542,14 +1559,12 @@ class BlockTPMatrix:
         Falls back to a dense factorisation when any factor is a
         :class:`~jaxfun.la.Matrix`.
         """
-        all_dia = all(
-            isinstance(mat, DiaMatrix) for tp in self.tpmats for mat in tp.mats
-        )
+        all_dia = all(isinstance(m, DiaMatrix) for m in self._combined_blocks.values())
         if all_dia:
             A_perm, perm, inv_perm = self.tosparse().rcm()
             x_perm = A_perm.solve(b.ravel()[perm])
             return x_perm[inv_perm].reshape(b.shape)
-        M = self.to_Matrix()
+        M = self.to_matrix()
         return M.solve(b.ravel()).reshape(b.shape)
 
 

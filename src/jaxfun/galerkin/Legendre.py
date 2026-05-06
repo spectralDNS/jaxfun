@@ -218,7 +218,7 @@ def matrices(
             [jnp.full(v.N - k, 2.0) for k in jnp.arange(1, v.N, 2).tolist()],
             offsets=tuple(jnp.arange(1, v.N, 2).tolist()),
             shape=(v.N, u.N),
-        ).to_Matrix()  # Matrix is upper triangular, better and faster to use dense.
+        ).to_matrix()  # Matrix is upper triangular, better and faster to use dense.
 
     if i == 1 and j == 0:
         m = matrices(trial, test)
@@ -244,7 +244,7 @@ def matrices(
             [_getkey(j) for j in offsets],
             offsets=tuple(offsets),
             shape=(v.N, u.N),
-        ).to_Matrix()  # Matrix is upper triangular, better and faster to use dense.
+        ).to_matrix()  # Matrix is upper triangular, better and faster to use dense.
     if i == 2 and j == 0:
         m = matrices(trial, test)
         if m is not None:

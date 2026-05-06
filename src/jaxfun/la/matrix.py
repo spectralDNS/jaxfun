@@ -194,8 +194,7 @@ class Matrix(nnx.Pytree):
         """Return a :class:`~jaxfun.la.DiaMatrix` representation.
 
         Near-zero entries (relative to the largest element) are dropped before
-        conversion.  The threshold is ``tol``-fold: an entry is kept only if
-        ``|a_ij| * tol >= max|a|``.
+        conversion.  An entry is kept only if ``ulp(max|a|) * tol >= max|a|``.
 
         Args:
             tol: Sparsity tolerance passed to
@@ -209,7 +208,7 @@ class Matrix(nnx.Pytree):
 
         return tosparse(self.data, tol=tol)
 
-    def to_Matrix(self) -> Matrix:
+    def to_matrix(self) -> Matrix:
         """Return self (identity — already a Matrix)."""
         return self
 

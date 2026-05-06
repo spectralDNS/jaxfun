@@ -519,7 +519,7 @@ def process_results(
                 if sparse:
                     a0.mats = nnx.List(mat.tosparse(tol=sparse_tol) for mat in a0.mats)
                 else:
-                    a0.mats = nnx.List(mat.to_Matrix() for mat in a0.mats)
+                    a0.mats = nnx.List(mat.to_matrix() for mat in a0.mats)
 
             if rank == 0:
                 aresults: TPMatrix | TPMatrices = (

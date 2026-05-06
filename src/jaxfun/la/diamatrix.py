@@ -305,7 +305,7 @@ class DiaMatrix(nnx.Pytree):
         :meth:`~jaxfun.la.Matrix.tosparse` but has no effect."""
         return self
 
-    def to_Matrix(self) -> Matrix:
+    def to_matrix(self) -> Matrix:
         """Convert this DiaMatrix to a dense Matrix."""
         from .matrix import Matrix
 

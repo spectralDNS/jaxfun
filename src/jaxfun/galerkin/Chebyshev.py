@@ -415,4 +415,4 @@ def matrices(
 
     return diags(
         [_getkey(m) for m in offsets], tuple(offsets.tolist()), (v.N, u.N)
-    ).to_Matrix()  # Matrix is upper triangular, better and faster to use dense.
+    ).to_matrix()  # Matrix is upper triangular, better and faster to use dense.

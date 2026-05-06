@@ -353,7 +353,7 @@ def _vector_block_system(N: int, poly):
     assert isinstance(A, BlockTPMatrix)
     rng = np.random.default_rng(0)
     x_true = jnp.array(rng.standard_normal(A.shape[1]), dtype=jnp.float32)
-    b = A.to_Matrix().matvec(x_true)
+    b = A.to_matrix().matvec(x_true)
     return A, b, x_true
 
 
@@ -369,7 +369,7 @@ def test_blocktpmatrix_tosparse_returns_diamatrix(poly):
 def test_blocktpmatrix_solve_sparse_matches_dense(poly):
     A, b, x_true = _vector_block_system(8, poly)
     # Dense reference
-    x_dense = A.to_Matrix().solve(b.ravel()).reshape(b.shape)
+    x_dense = A.to_matrix().solve(b.ravel()).reshape(b.shape)
     # Sparse / RCM path
     x_sparse = A.solve(b)
     assert x_sparse.shape == b.shape
@@ -392,7 +392,7 @@ def test_blocktpmatrix_call_matches_dense_matvec(poly):
     # Warm the RCM cache via solve
     _ = A.solve(b)
     y_block = A(x_true)
-    y_dense = A.to_Matrix().matvec(x_true.ravel()).reshape(x_true.shape)
+    y_dense = A.to_matrix().matvec(x_true.ravel()).reshape(x_true.shape)
     assert jnp.allclose(y_block.ravel(), y_dense.ravel(), atol=ulp(1000))
 
 

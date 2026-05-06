@@ -166,9 +166,9 @@ class PinnedSystem(nnx.Pytree):
         """Return the modified matrix as a dense array."""
         return self.matrix.todense()
 
-    def tosparse(self) -> DiaMatrix:
+    def tosparse(self, *, tol: int = 100) -> DiaMatrix:
         """Return the modified matrix as a sparse matrix."""
-        return self.matrix.tosparse()
+        return self.matrix.tosparse(tol=tol)
 
     def get_row(self, i: int | Array) -> Array:
         """Return row ``i`` of the modified matrix."""

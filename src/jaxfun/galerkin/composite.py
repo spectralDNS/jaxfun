@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterator
-from typing import Literal, overload
+from typing import Literal, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -16,9 +16,7 @@ from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol, diags
 from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, matmat, n
 
-from .Chebyshev import Chebyshev
 from .Jacobi import Jacobi
-from .Legendre import Legendre
 from .orthogonal import OrthogonalSpace
 
 direct_sum_symbol = "\u2295"
@@ -572,6 +570,99 @@ class DirectSum:
         return self[0]
 
 
+class PGComposite(Composite):
+    """Composite basis with Petrov-Galerkin test functions (stencil on test side).
+
+    Args:
+        N: Target (unconstrained) number of modes of underlying orthogonal.
+        orthogonal: Underlying orthogonal basis class (e.g. Chebyshev).
+        bcs: BoundaryConditions specification.
+        domain: Physical domain (defaults to [-1, 1]).
+        name: Space name.
+        fun_str: Symbol stem for basis functions.
+        system: Optional coordinate system.
+        stencil: Optional custom stencil dict {shift: sympy_expr}.
+        alpha: Jacobi alpha (for Jacobi-based bases).
+        beta: Jacobi beta.
+        scaling: SymPy expression scaling the stencil diagonals.
+        order: Highest derivative order for trial function.
+
+    Attributes:
+        orthogonal: Instance of underlying orthogonal basis.
+        stencil: Ordered dict of diagonal shift -> expression / scaling.
+        S_test: Sparse (DiaMatrix) stencil matrix for test functions.
+        scaling: Scaling expression applied to user stencil.
+        order: Highest derivative order for trial functions.
+    """
+
+    def __init__(
+        self,
+        N: int,
+        orthogonal: type[Jacobi],
+        bcs: BoundaryConditions | dict,
+        domain: Domain | None = None,
+        name: str = "PGComposite",
+        fun_str: str = "phi",
+        system: CoordSys | None = None,
+        stencil: dict | None = None,
+        alpha: Number | float = 0,
+        beta: Number | float = 0,
+        scaling: sp.Expr = sp.S.One,
+        order: int = 1,
+    ) -> None:
+        super().__init__(
+            N,
+            orthogonal,
+            bcs,
+            domain=domain,
+            name=name,
+            fun_str=fun_str,
+            system=system,
+            stencil=stencil,
+            alpha=alpha,
+            beta=beta,
+            scaling=scaling,
+        )
+        self.order = order
+
+    def matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
+    ) -> DiaMatrix | Matrix | None:
+        """Return (sparse) operator matrices for Petrov-Galerkin method.
+
+        Args:
+            i: Derivative order for test function. Should be 0.
+            trial: Tuple (u, j) with trial space u and derivative order j.
+
+        """
+        u, j = trial
+
+        assert isinstance(u, Jacobi | Composite), (
+            "Trial space must be Jacobi or Composite."
+        )  # noqa: E501
+
+        def Bkl(k: int, l: int, V: Jacobi | Composite) -> DiaMatrix:
+            B = V.orthogonal.B(V.N + 2 * (k - l))
+            BN = B.power(k - l).crop(V.N + k - l, V.N)
+            DI = diags([jnp.array([1.0])], offsets=(k,), shape=(V.N, V.N + k - l))
+            return DI @ BN
+
+        def Akq(k: int, q: int, V: Jacobi | Composite) -> DiaMatrix:
+            return V.orthogonal.A_(k=k).power(q)
+
+        if i == 0 and j <= self.order and q == 0:
+            B: DiaMatrix = Bkl(self.order, j, u.orthogonal).crop(self.num_dofs, u.N)
+            return B @ u.ST if isinstance(u, Composite) else B
+        elif i == 0 and j <= self.order and q > 0:
+            A: DiaMatrix = Akq(self.order, q, cast(Composite, u)).crop(
+                self.num_dofs, u.N
+            )
+            B: DiaMatrix = Bkl(self.order, j, cast(Composite, u))
+            return A @ B @ u.ST if isinstance(u, Composite) else A @ B
+
+        return None
+
+
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
     """Derive symbolic stencil mapping orthogonal -> constrained basis.
 
@@ -590,6 +681,9 @@ def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
         Neumann Chebyshev:
             ψ_i = T_i - i^2/(i^2+4i+4) T_{i+2}
     """
+    from .Chebyshev import Chebyshev
+    from .Legendre import Legendre
+
     if "".join(bcs.orderednames()) == "LDRD" and isinstance(
         orthogonal, Chebyshev | Legendre
     ):

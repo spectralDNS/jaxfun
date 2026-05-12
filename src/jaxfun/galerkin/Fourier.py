@@ -229,28 +229,34 @@ class Fourier(OrthogonalSpace):
         M = N if N is not None else self.num_quad_points
         return jnp.linspace(float(a), float(b), M, endpoint=False)
 
+    def matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
+    ) -> DiaMatrix | None:
+        """Return sparse operator matrix for Fourier test/trial derivatives.
 
-def matrices(test: tuple[Fourier, int], trial: tuple[Fourier, int]) -> DiaMatrix:
-    """Return sparse operator matrix for Fourier test/trial derivatives.
+        Builds diagonal matrix with entries:
+            (i k)^{j} * (-i k)^{i} * norm_squared
+        where i, j are derivative orders for test/trial functions.
 
-    Builds diagonal matrix with entries:
-        (i k)^{j} * (-i k)^{i} * norm_squared
-    where i, j are derivative orders for test/trial functions.
+        Args:
+            i: Derivative order for test function.
+            trial: Tuple (u, j) with space u and trial derivative order j.
+            q: polynomial degree of coefficient.
 
-    Args:
-        test: Tuple (v, i) with space v and test derivative order i.
-        trial: Tuple (u, j) with space u and trial derivative order j.
-
-    Returns:
-        DiaMatrix diagonal matrix shape (v.N, u.N).
-    """
-    v, i = test
-    u, j = trial
-    k = (1j * v.wavenumbers()) ** j * (-1j * u.wavenumbers()) ** i
-    if (i + j) % 2 == 0:
-        k = k.real
-    return diags(
-        [k * v.norm_squared()],
-        offsets=(0,),
-        shape=(v.N, u.N),
-    )
+        Returns:
+            DiaMatrix diagonal matrix or None if combination unsupported.
+        """
+        u, j = trial
+        assert isinstance(u, Fourier), (
+            "Trial spaces must be Fourier for Fourier matrices"
+        )
+        k = (1j * self.wavenumbers()) ** j * (-1j * u.wavenumbers()) ** i
+        if (i + j) % 2 == 0:
+            k = k.real
+        if q == 0:
+            return diags(
+                [k * self.norm_squared()],
+                offsets=(0,),
+                shape=(self.N, u.N),
+            )
+        return None

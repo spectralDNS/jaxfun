@@ -1,4 +1,3 @@
-import importlib
 from typing import Any, Literal, TypeGuard, cast, overload
 
 import jax.numpy as jnp
@@ -25,7 +24,7 @@ from .arguments import (
     evaluate_jaxfunction_expr_quad,
     get_arg,
 )
-from .composite import BCGeneric, Composite, DirectSum
+from .composite import BCGeneric, Composite, DirectSum, PGComposite
 from .forms import (
     _has_functionspace,
     _has_globalindex,
@@ -610,6 +609,7 @@ def inner_bilinear(
     df = float(vo.domain_factor)
     i, j = 0, 0
     scale = jnp.array([sc])
+    poly_scale = None
     for aii in ai.args:
         found_basis = False
         for p in sp.core.traversal.preorder_traversal(aii):
@@ -636,15 +636,35 @@ def inner_bilinear(
 
         if len(aii.free_symbols) > 0:
             s = aii.free_symbols.pop()
-            scale *= lambdify(s, uo.map_expr_true_domain(aii), modules="jax")(xj)
+            aii = cast(sp.Expr, aii)
+            if aii.is_polynomial(s) and sp.degree(aii, s) > 0:
+                poly_scale = aii
+            else:
+                scale *= lambdify(s, uo.map_expr_true_domain(aii), modules="jax")(xj)
+
         else:
             scale *= float(aii)  # ty:ignore[invalid-argument-type]
 
     z: Matrix | None = None
+    if isinstance(v, PGComposite) and use_precomputed_matrices and not multivar:
+        q = int(sp.degree(poly_scale)) if poly_scale is not None else 0
+        if getattr(v, "matrices", None):
+            z: Matrix | DiaMatrix | None = v.matrices(i, (u, j), q=q)
+        if z is not None:
+            s = scale * df ** (i + j - 1)
+            if s.item() != 1:
+                z.data = z.data * s
+            return cast(MatrixProtocol, z)
+
+    if poly_scale is not None:
+        # Fallback to evaluating the polynomial at quadrature points
+        s = poly_scale.free_symbols.pop()
+        scale *= lambdify(s, uo.map_expr_true_domain(poly_scale))(xj)
+
     if len(scale) == 1 and use_precomputed_matrices and not multivar:
-        # Look up matrix
-        mod = importlib.import_module(vo.__class__.__module__)
-        z: MatrixProtocol | None = mod.matrices((vo, i), (uo, j))
+        # Look up matrix for constant scale and given derivative orders.
+
+        z: Matrix | DiaMatrix | None = vo.matrices(i, (uo, j))
         if z is not None:
             s = scale * df ** (i + j - 1)
             if s.item() != 1:

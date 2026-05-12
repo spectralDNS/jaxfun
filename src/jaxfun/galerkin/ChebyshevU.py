@@ -5,6 +5,7 @@ from jax import Array
 from sympy import Expr, Symbol
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, dst, jit_vmap
@@ -222,28 +223,27 @@ class ChebyshevU(Jacobi):
         """
         return (n + 1) / sp.jacobi(n, self.alpha, self.beta, 1)
 
+    def matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
+    ) -> Matrix | DiaMatrix | None:
+        """Sparse operator matrices between test/trial ChebyshevU modes.
 
-def matrices(
-    test: tuple[ChebyshevU, int], trial: tuple[ChebyshevU, int]
-) -> Matrix | DiaMatrix | None:
-    """Sparse operator matrices between test/trial ChebyshevU modes.
+        Constructs (possibly rectangular) sparse differentiation / mass-like
+        matrices for combinations of test index i and trial index j flags:
 
-    Constructs (possibly rectangular) sparse differentiation / mass-like
-    matrices for combinations of test index i and trial index j flags:
+            (i, j):
+              (0,0): Diagonal mass-matrix.
 
-        (i, j):
-          (0,0): Diagonal mass-matrix.
+        Args:
+            i: Derivative order for test function.
+            trial: Tuple (u, j) with ChebyshevU space u and number of derivatives j.
+            q: polynomial degree of coefficient.
 
-    Args:
-        test: Tuple (v, i) with ChebyshevU space v and number of derivatives i.
-        trial: Tuple (u, j) with ChebyshevU space u and number of derivatives j.
+        Returns:
+            Matrix or DiaMatrix or None if combination unsupported.
+        """
+        u, j = trial
+        if i == 0 and j == 0 and q == 0:
+            return diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
 
-    Returns:
-        Matrix or DiaMatrix or None if combination unsupported.
-    """
-    v, i = test
-    u, j = trial
-    if i == 0 and j == 0:
-        return diags([v.norm_squared()], offsets=(0,), shape=(v.N, u.N))
-
-    return None
+        return None

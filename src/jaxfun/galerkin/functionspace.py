@@ -146,6 +146,10 @@ def FunctionSpace(
         )
         C.name += "0"
         return DirectSum(C, B)
+
+    if isinstance(space, Composite):
+        return space(N, domain=domain, system=system, name=name, fun_str=fun_str, **kw)
+
     return space(
         N,
         domain=domain,

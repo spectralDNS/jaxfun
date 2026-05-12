@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from collections.abc import Callable
+from typing import cast
 
 import jax
 import jax.numpy as jnp
@@ -8,7 +11,7 @@ from scipy.special import roots_jacobi
 from sympy import Expr, Number, Symbol
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.la import DiaMatrix, diags
+from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.utils.common import Domain, jit_vmap, n
 
 from .orthogonal import OrthogonalSpace
@@ -439,19 +442,102 @@ class Jacobi(OrthogonalSpace):
             return sp.simplify(factor * f)
         return factor * f
 
+    def a_(self, k: int, i: Symbol | int, j: Symbol | int) -> Expr | float:
+        J = Jacobi(
+            self.N,
+            domain=self.domain,
+            system=self.system,
+            alpha=cast(Number, self.alpha + k),
+            beta=cast(Number, self.beta + k),
+        )
 
-def matrices(test: tuple[Jacobi, int], trial: tuple[Jacobi, int]) -> DiaMatrix | None:
-    """Return sparse mass matrix for (i,j)=(0,0) else None.
+        return (
+            J._a(i, j)
+            * self.psi(j + k, k)
+            / self.psi(i + k, k)
+            * self.gn(j + k)
+            / self.gn(i + k)
+        )
 
-    Args:
-        test: (space, derivative order) for test function.
-        trial: (space, derivative order) for trial function.
+    def A(self, N: int | None = None) -> DiaMatrix:
+        """Return matrix A for normalized Jacobi polynomials.
 
-    Returns:
-        DiaMatrix diagonal mass matrix or None if derivative combo unsupported.
-    """
-    v, i = test
-    u, j = trial
-    if i == 0 and j == 0:
-        return diags([v.norm_squared()], offsets=(0,), shape=(v.N, u.N))
-    return None
+        The recursion is x Q = A^T Q where Q_n = g_n P_n^{(α,β)}.
+
+        Args:
+            N: Number of modes (None -> self.num_quad_points).
+        Returns:
+            DiaMatrix for A.
+        """
+        N = self.num_quad_points if N is None else N
+        d = [
+            sp.lambdify(n, self.a(n, n - 1))(jnp.arange(1, N)),
+            sp.lambdify(n, self.a(n, n))(jnp.arange(0, N)),
+            sp.lambdify(n, self.a(n, n + 1))(jnp.arange(0, N - 1)),
+        ]
+        if d[1] == 0:
+            d = [d[0], d[2]]
+        return diags(
+            d,
+            offsets=(-1, 0, 1) if len(d) == 3 else (-1, 1),
+            shape=(N, N),
+        )
+
+    def B(self, N: int | None = None) -> DiaMatrix:
+        """Return matrix B for normalized Jacobi polynomials.
+
+        The recursion is ∂ Q = B^T Q where Q_n = g_n P_n^{(α,β)}.
+
+        Args:
+            N: Number of modes (None -> self.num_quad_points).
+
+        Returns:
+            DiaMatrix for B.
+        """
+        N = self.num_quad_points if N is None else N
+        d = [
+            sp.lambdify(n, self.b(n, n - 1))(jnp.arange(1, N)),
+            sp.lambdify(n, self.b(n, n))(jnp.arange(0, N)),
+            sp.lambdify(n, self.b(n, n + 1))(jnp.arange(0, N - 1)),
+        ]
+        if d[1] == 0:
+            d = [d[0], d[2]]
+        return diags(
+            d,
+            offsets=(-1, 0, 1) if len(d) == 3 else (-1, 1),
+            shape=(N, N),
+        )
+
+    def A_(self, N: int | None = None, k: int = 0) -> DiaMatrix:
+        N = self.num_quad_points if N is None else N
+        d = [
+            sp.lambdify(n, self.a_(k, n, n - 1))(jnp.arange(1, N)),
+            sp.lambdify(n, self.a_(k, n, n))(jnp.arange(0, N)),
+            sp.lambdify(n, self.a_(k, n, n + 1))(jnp.arange(0, N - 1)),
+        ]
+        if d[1] == 0:
+            d = [d[0], d[2]]
+        return diags(
+            d,
+            offsets=(-1, 0, 1) if len(d) == 3 else (-1, 1),
+            shape=(N, N),
+        )
+
+    def matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
+    ) -> Matrix | DiaMatrix | None:
+        """Return square sparse mass matrix for (i,j)=(0,0) else None.
+
+        Args:
+            i: Derivative order for test function.
+            trial: (space, derivative order) for trial function.
+            q: polynomial degree of coefficient.
+
+        Returns:
+            DiaMatrix diagonal mass matrix or None if derivative combo unsupported.
+        """
+        u, j = trial
+        assert isinstance(u, Jacobi), "Trial space must be Jacobi for Jacobi matrices"
+        if i == 0 and j == 0 and q == 0:
+            return diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
+        return None

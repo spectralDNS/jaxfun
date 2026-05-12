@@ -430,3 +430,8 @@ class OrthogonalSpace(BaseSpace):
         if self.S_inv is None:
             self.S_inv = jnp.linalg.pinv(self.S.todense())
         return self.S_inv
+
+    def matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
+    ) -> Matrix | DiaMatrix | None:
+        return None

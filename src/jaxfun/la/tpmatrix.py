@@ -54,14 +54,12 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         return len(self.mats)
 
     def tosparse(self, *, tol: int = 100) -> DiaMatrix:
-        from jaxfun.utils import ulp
-
         sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
         if sparse_box is not None:
             return sparse_box.value
         kron = tpmats_to_kron(self)
         if not isinstance(kron, DiaMatrix):
-            kron = DiaMatrix.from_dense(kron.todense(), tol=float(ulp(tol)))
+            kron = DiaMatrix.from_dense(kron.todense(), tol=tol)
         object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
         return kron
 
@@ -247,14 +245,12 @@ class TPMatrices(nnx.Pytree):
         )
 
     def tosparse(self, *, tol: int = 100) -> DiaMatrix:
-        from jaxfun.utils import ulp
-
         sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
         if sparse_box is not None:
             return sparse_box.value
         kron = tpmats_to_kron(list(self.tpmats))
         if not isinstance(kron, DiaMatrix):
-            kron = DiaMatrix.from_dense(kron.todense(), tol=float(ulp(tol)))
+            kron = DiaMatrix.from_dense(kron.todense(), tol=tol)
         object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
         return kron
 
@@ -1118,7 +1114,6 @@ def tpmats_to_kron(A: TPMatrix | list[TPMatrix], tol: int = 100) -> Matrix | Dia
         :class:`~jaxfun.la.DiaMatrix` or :class:`~jaxfun.la.Matrix` representing
             the summed Kronecker expansion of the input TPMatrix objects.
     """
-    from jaxfun.utils.common import eliminate_near_zeros
 
     if isinstance(A, TPMatrix):
         A = [A]
@@ -1129,17 +1124,17 @@ def tpmats_to_kron(A: TPMatrix | list[TPMatrix], tol: int = 100) -> Matrix | Dia
     if isinstance(A[0].mats[0], Matrix):
         result: Array | None = None
         for tpm in A:
-            a0 = eliminate_near_zeros(tpm.mats[0].todense(), tol)
+            a0 = tpm.mats[0].todense()
             a0 = a0 * jnp.asarray(tpm.scale)
             for m in tpm.mats[1:]:
-                a0 = jnp.kron(a0, eliminate_near_zeros(m.todense(), tol))
+                a0 = jnp.kron(a0, m.todense())
             result = a0 if result is None else result + a0
         assert result is not None
         return Matrix(result)
 
     def _get_dia(mat: MatrixProtocol) -> DiaMatrix:
         if isinstance(mat, Matrix):
-            return DiaMatrix.from_dense(eliminate_near_zeros(mat, tol))
+            return DiaMatrix.from_dense(mat.todense(), tol=tol)
         assert isinstance(mat, DiaMatrix)
         return mat
 
@@ -1181,7 +1176,7 @@ def vec(
 
 
 def tpmats_to_scipy_sparse(
-    A: list[TPMatrix], tol: int = 100
+    A: list[TPMatrix], tol: int = 1
 ) -> list[tuple[scipy_sparse.csc_array, ...]]:
     """Convert list of separable TPMatrix to scipy CSC factors.
 
@@ -1209,7 +1204,7 @@ def tpmats_to_scipy_sparse(
     return result
 
 
-def tpmats_to_scipy_kron(A: list[TPMatrix], tol: int = 100) -> scipy_sparse.csc_matrix:
+def tpmats_to_scipy_kron(A: list[TPMatrix], tol: int = 1) -> scipy_sparse.csc_matrix:
     """Return summed global scipy sparse matrix (Kronecker expansion).
 
     Args:
@@ -1219,7 +1214,7 @@ def tpmats_to_scipy_kron(A: list[TPMatrix], tol: int = 100) -> scipy_sparse.csc_
     Returns:
         scipy.sparse.csc_matrix representing Σ kron(factors).
     """
-    a = tpmats_to_scipy_sparse(A)
+    a = tpmats_to_scipy_sparse(A, tol=tol)
     if len(a[0]) == 2:
         return np.sum([scipy_sparse.kron(b[0], b[1], format="csc") for b in a])
     else:

@@ -630,11 +630,23 @@ class PGComposite(Composite):
     ) -> DiaMatrix | Matrix | None:
         """Return (sparse) operator matrices for Petrov-Galerkin method.
 
+        .. math::
+            \\langle \\psi_m^{(i)}, x^q \phi_n^{(trial[1])} \\rangle
+
+        where \psi_m^{(i)} are i'th derivative of test functions and
+        \phi_n^{(trial[1])} are trial functions with derivative order
+        trial[1].
+
         Args:
             i: Derivative order for test function. Should be 0.
             trial: Tuple (u, j) with trial space u and derivative order j.
+            q: polynomial order for scaling.
 
         """
+
+        if i != 0:
+            return None
+
         u, j = trial
 
         assert isinstance(u, Jacobi | Composite), (
@@ -650,10 +662,11 @@ class PGComposite(Composite):
         def Akq(k: int, q: int, V: Jacobi | Composite) -> DiaMatrix:
             return V.orthogonal.A_(k=k).power(q)
 
-        if i == 0 and j <= self.order and q == 0:
+        if j <= self.order and q == 0:
             B: DiaMatrix = Bkl(self.order, j, u.orthogonal).crop(self.num_dofs, u.N)
             return B @ u.ST if isinstance(u, Composite) else B
-        elif i == 0 and j <= self.order and q > 0:
+
+        elif j <= self.order and q > 0:
             A: DiaMatrix = Akq(self.order, q, cast(Composite, u)).crop(
                 self.num_dofs, u.N
             )

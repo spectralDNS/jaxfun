@@ -16,12 +16,12 @@ def test_legendre_short_series_and_matrices_branches():
     assert jnp.isclose(v2, expected, atol=ulp(2.0))
     # matrices lookup branches
 
-    _ = L.matrices((L, 0), (L, 0))
-    _ = L.matrices((L, 0), (L, 1))
-    _ = L.matrices((L, 1), (L, 0))
-    _ = L.matrices((L, 0), (L, 2))
-    _ = L.matrices((L, 2), (L, 0))
-    assert L.matrices((L, 3), (L, 3)) is None
+    _ = L.matrices(0, (L, 0))
+    _ = L.matrices(0, (L, 1))
+    _ = L.matrices(1, (L, 0))
+    _ = L.matrices(0, (L, 2))
+    _ = L.matrices(2, (L, 0))
+    assert L.matrices(3, (L, 3)) is None
 
 
 def test_jacobi_edge_matrices_and_evaluate_short():

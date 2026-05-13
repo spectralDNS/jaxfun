@@ -837,15 +837,16 @@ class DiaMatrix(nnx.Pytree):
         if q == 0:
             return diags([jnp.array([1.0])], offsets=(0,), shape=(n, n))
 
-        result = self
-        power = 1
-        while power < q:
-            result = result @ result
-            power *= 2
+        result: DiaMatrix | None = None
+        base: DiaMatrix = self
+        remaining = q
+        while remaining > 0:
+            if remaining % 2 == 1:
+                result = base if result is None else result @ base
+            base = base @ base
+            remaining //= 2
 
-        if power > q:
-            result = result @ self
-
+        assert result is not None
         return result
 
     def crop(self, n: int, m: int) -> DiaMatrix:

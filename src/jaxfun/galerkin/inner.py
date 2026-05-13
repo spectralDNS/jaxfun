@@ -656,19 +656,21 @@ def inner_bilinear(
                 z.data = z.data * s
             return cast(MatrixProtocol, z)
 
-    if poly_scale is not None:
-        # Fallback to evaluating the polynomial at quadrature points
-        s = poly_scale.free_symbols.pop()
-        scale *= lambdify(s, uo.map_expr_true_domain(poly_scale))(xj)
-
     if len(scale) == 1 and use_precomputed_matrices and not multivar:
         # Look up matrix for constant scale and given derivative orders.
+        q = int(sp.degree(poly_scale)) if poly_scale is not None else 0
 
-        z: Matrix | DiaMatrix | None = vo.matrices(i, (uo, j))
+        z: Matrix | DiaMatrix | None = vo.matrices(i, (uo, j), q=q)
         if z is not None:
             s = scale * df ** (i + j - 1)
             if s.item() != 1:
                 z.data = z.data * s
+            poly_scale = None  # Avoid applying scale again below
+
+    if poly_scale is not None:
+        # Fallback to evaluating the polynomial at quadrature points
+        s = poly_scale.free_symbols.pop()
+        scale *= lambdify(s, uo.map_expr_true_domain(poly_scale))(xj)
 
     if z is None:
         w = wj * df ** (i + j - 1) * scale

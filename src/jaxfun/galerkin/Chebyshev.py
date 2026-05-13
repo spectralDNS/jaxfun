@@ -362,7 +362,7 @@ class Chebyshev(Jacobi):
             return sp.Piecewise((0, sp.Eq(i, 0)), (-1 / (2 * i), True))
         return 0
 
-    def a_(self, k: int, i: Symbol | int, j: Symbol | int) -> Expr | float:
+    def a_(self, i: Symbol | int, j: Symbol | int, k: int = 0) -> Expr | float:
         from .Ultraspherical import Ultraspherical
 
         U = Ultraspherical(self.N, domain=self.domain, system=self.system, lambda_=k)
@@ -405,8 +405,13 @@ class Chebyshev(Jacobi):
         if (i, j) not in ((0, 0), (0, 1), (1, 0), (0, 2), (2, 0)):
             return None
 
+        A = None
+        if q != 0:
+            A = self.A().power(q)
+
         if i == 0 and j == 0:
-            return diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
+            M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
+            return M if A is None else A.T @ M
 
         if i in (1, 2) and j == 0:
             m = u.matrices(j, (self, i), q=q)
@@ -434,9 +439,10 @@ class Chebyshev(Jacobi):
 
         _getkey = _getkey1 if j == 1 else _getkey2
 
-        return diags(
+        M = diags(
             [_getkey(m) for m in offsets], tuple(offsets.tolist()), (self.N, u.N)
         ).to_matrix()  # Matrix is upper triangular, better and faster to use dense.
+        return M if A is None else A.T @ M
 
 
 ##### Predefined Composite spaces #####

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 from typing import cast
 
 import jax
@@ -12,6 +13,7 @@ from sympy import Expr, Number, Symbol
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
+from jaxfun.typing import TriDiagMatrixFun
 from jaxfun.utils.common import Domain, jit_vmap, n
 
 from .orthogonal import OrthogonalSpace
@@ -353,7 +355,7 @@ class Jacobi(OrthogonalSpace):
         return sp.S.One
 
     def _a(self, i: Symbol | int, j: Symbol | int) -> Expr | float:
-        """Matrix A for non-normalized Jacobi polynomials"""
+        """Symbolic matrix A for non-normalized Jacobi polynomials"""
         a, b = self.alpha, self.beta
         return (
             2
@@ -370,7 +372,7 @@ class Jacobi(OrthogonalSpace):
         )
 
     def _b(self, i: Symbol | int, j: Symbol | int) -> Expr | float:
-        """Matrix B for non-normalized Jacobi polynomials"""
+        """Symbolic matrix B for non-normalized Jacobi polynomials"""
         a, b = self.alpha, self.beta
         delta = lambda m, n: int(m == n)
 
@@ -387,7 +389,7 @@ class Jacobi(OrthogonalSpace):
         return f
 
     def b(self, i: Symbol | int, j: Symbol | int) -> Expr | float:
-        r"""Recursion matrix :math:`B` for normalized Jacobi polynomials
+        r"""Symbolic recursion matrix :math:`B` for normalized Jacobi polynomials
 
         The recursion is
 
@@ -415,7 +417,7 @@ class Jacobi(OrthogonalSpace):
         return factor * f
 
     def a(self, i: Symbol | int, j: Symbol | int) -> Expr | float:
-        r"""Recursion matrix :math:`A` for normalized Jacobi polynomials
+        r"""Symbolic recursion matrix :math:`A` for normalized Jacobi polynomials
 
         The recursion is
 
@@ -442,7 +444,31 @@ class Jacobi(OrthogonalSpace):
             return sp.simplify(factor * f)
         return factor * f
 
-    def a_(self, k: int, i: Symbol | int, j: Symbol | int) -> Expr | float:
+    def a_(self, i: Symbol | int, j: Symbol | int, k: int = 0) -> Expr | float:
+        r"""Symbolic recursion matrix for k-th derivative of normalized Jacobi
+        polynomials.
+
+        The recursion is
+
+        .. math::
+
+            x  ∂^k \boldsymbol{Q} = {A}^T  ∂^k \boldsymbol{Q}
+
+        where
+
+        .. math::
+
+            Q_n(x) = g_n^{(\alpha,\beta)} P^{(\alpha,\beta)}_n(x) \\
+            \boldsymbol{Q} = (Q_0, Q_1, \ldots, Q_{N})^T
+
+        The derivative is related to shifted-parameter Jacobi by
+        ∂^k P_n^{(α,β)} = ψ^{(k,α,β)}_n P_{n-k}^{(α+k,β+k)}.
+
+        Args:
+            i, j: Row and column indices.
+            k: Derivative order.
+        """
+
         J = Jacobi(
             self.N,
             domain=self.domain,
@@ -460,68 +486,57 @@ class Jacobi(OrthogonalSpace):
         )
 
     def A(self, N: int | None = None) -> DiaMatrix:
-        """Return matrix A for normalized Jacobi polynomials.
+        """Return recursion matrix A for normalized Jacobi polynomials.
 
         The recursion is x Q = A^T Q where Q_n = g_n P_n^{(α,β)}.
 
         Args:
-            N: Number of modes (None -> self.num_quad_points).
+            N: Number of modes.
         Returns:
             DiaMatrix for A.
         """
-        N = self.num_quad_points if N is None else N
-        d = [
-            sp.lambdify(n, self.a(n, n - 1))(jnp.arange(1, N)),
-            sp.lambdify(n, self.a(n, n))(jnp.arange(0, N)),
-            sp.lambdify(n, self.a(n, n + 1))(jnp.arange(0, N - 1)),
-        ]
-        if d[1] == 0:
-            d = [d[0], d[2]]
-        return diags(
-            d,
-            offsets=(-1, 0, 1) if len(d) == 3 else (-1, 1),
-            shape=(N, N),
-        )
+        return self._get_tridiagonal(cast(TriDiagMatrixFun, self.a))
 
     def B(self, N: int | None = None) -> DiaMatrix:
-        """Return matrix B for normalized Jacobi polynomials.
+        """Return recursion matrix B for normalized Jacobi polynomials.
 
         The recursion is ∂ Q = B^T Q where Q_n = g_n P_n^{(α,β)}.
 
         Args:
-            N: Number of modes (None -> self.num_quad_points).
+            N: Number of modes.
 
         Returns:
             DiaMatrix for B.
         """
-        N = self.num_quad_points if N is None else N
-        d = [
-            sp.lambdify(n, self.b(n, n - 1))(jnp.arange(1, N)),
-            sp.lambdify(n, self.b(n, n))(jnp.arange(0, N)),
-            sp.lambdify(n, self.b(n, n + 1))(jnp.arange(0, N - 1)),
-        ]
-        if d[1] == 0:
-            d = [d[0], d[2]]
-        return diags(
-            d,
-            offsets=(-1, 0, 1) if len(d) == 3 else (-1, 1),
-            shape=(N, N),
-        )
+        return self._get_tridiagonal(cast(TriDiagMatrixFun, self.b))
 
     def A_(self, N: int | None = None, k: int = 0) -> DiaMatrix:
+        """Return recursion matrix A_ for k-th derivative of normalized Jacobi polynomials.
+
+        The recursion is x ∂^k Q = A^T ∂^k Q where Q_n = g_n P_n^{(α,β)}.
+
+        Args:
+            N: Number of modes.
+            k: Derivative order.
+
+        Returns:
+            DiaMatrix for A_.
+        """  # noqa: E501
+        return self._get_tridiagonal(cast(TriDiagMatrixFun, partial(self.a_, k=k)))
+
+    def _get_tridiagonal(
+        self, mat: TriDiagMatrixFun, N: int | None = None
+    ) -> DiaMatrix:
         N = self.num_quad_points if N is None else N
-        d = [
-            sp.lambdify(n, self.a_(k, n, n - 1))(jnp.arange(1, N)),
-            sp.lambdify(n, self.a_(k, n, n))(jnp.arange(0, N)),
-            sp.lambdify(n, self.a_(k, n, n + 1))(jnp.arange(0, N - 1)),
+        d: list[Array | complex] = [
+            sp.lambdify(n, mat(n, n - 1))(jnp.arange(1, N)),
+            sp.lambdify(n, mat(n, n))(jnp.arange(0, N)),
+            sp.lambdify(n, mat(n, n + 1))(jnp.arange(0, N - 1)),
         ]
         if d[1] == 0:
             d = [d[0], d[2]]
-        return diags(
-            d,
-            offsets=(-1, 0, 1) if len(d) == 3 else (-1, 1),
-            shape=(N, N),
-        )
+        d: list[Array] = [jnp.atleast_1d(di) for di in d]
+        return diags(d, offsets=(-1, 0, 1) if len(d) == 3 else (-1, 1), shape=(N, N))
 
     def matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0

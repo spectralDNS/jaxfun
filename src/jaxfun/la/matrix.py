@@ -204,9 +204,9 @@ class Matrix(nnx.Pytree):
             :class:`~jaxfun.la.DiaMatrix` with the same non-near-zero
             diagonals as this matrix.
         """
-        from jaxfun.utils.common import tosparse
+        from .diamatrix import DiaMatrix
 
-        return tosparse(self.data, tol=tol)
+        return DiaMatrix.from_dense(self.data, tol=tol)
 
     def to_matrix(self) -> Matrix:
         """Return self (identity — already a Matrix)."""
@@ -239,6 +239,39 @@ class Matrix(nnx.Pytree):
     def scale(self, alpha: float | Array) -> Matrix:
         """Return ``alpha * A`` as a new :class:`Matrix`."""
         return Matrix(self.data * alpha)
+
+    def power(self, q: int) -> Matrix:
+        """Return ``A^q`` for integer ``q >= 0``."""
+        if q < 0:
+            raise ValueError(f"Negative powers not supported: got q={q}")
+        n, m = self.shape
+        if n != m:
+            raise ValueError(
+                f"Zero exponent only supported for square matrices, got shape {self.shape}"  # noqa: E501
+            )
+        if q == 0:
+            return Matrix(jnp.eye(n, dtype=self.dtype))
+
+        result: Matrix | None = None
+        base: Matrix = self
+        remaining = q
+        while remaining > 0:
+            if remaining % 2 == 1:
+                result = base if result is None else result @ base
+            base = base @ base
+            remaining //= 2
+
+        assert result is not None
+        return result
+
+    def crop(self, n: int, m: int) -> Matrix:
+        """Return a new :class:`Matrix` cropped to ``(n, m)``.
+
+        Args:
+            n: New row count.
+            m: New column count.
+        """
+        return Matrix(self.data[:n, :m])
 
     def __mul__(self, other: float | Array) -> Matrix:
         return self.scale(other)

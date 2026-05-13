@@ -138,7 +138,7 @@ def tosparse(a: Array, tol: int = 100) -> DiaMatrix:
         tol: The tolerance for eliminating near-zero entries, in units of ULP.
             An entry is kept only if ``ulp(max|a|) * tol >= max|a|``.
     """
-    return DiaMatrix.from_dense(a)
+    return DiaMatrix.from_dense(a, tol=tol)
 
 
 class ArrayFn(Protocol):

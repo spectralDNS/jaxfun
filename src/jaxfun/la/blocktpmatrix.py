@@ -109,8 +109,6 @@ class BlockTPMatrix(nnx.Pytree):
         Returns:
             :class:`~jaxfun.la.DiaMatrix` of shape ``(total_rows, total_cols)``.
         """
-        from jaxfun.utils import ulp
-
         cached: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
         if cached is not None:
             return cached.value
@@ -130,9 +128,7 @@ class BlockTPMatrix(nnx.Pytree):
         for s, block_kron in self._combined_blocks.items():
             bi, bj = map(int, s.split(","))
             if isinstance(block_kron, Matrix):
-                block_dia = DiaMatrix.from_dense(
-                    block_kron.todense(), tol=float(ulp(tol))
-                )
+                block_dia = DiaMatrix.from_dense(block_kron.todense(), tol=tol)
             else:
                 block_dia = block_kron
             block_dias[(bi, bj)] = block_dia

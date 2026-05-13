@@ -36,8 +36,7 @@ if TYPE_CHECKING:
     )
     from jaxfun.galerkin.arguments import Jaxc
     from jaxfun.galerkin.orthogonal import OrthogonalSpace
-    from jaxfun.galerkin.tensorproductspace import TPMatrices, TPMatrix
-    from jaxfun.la import TensorMatrix
+    from jaxfun.la import TensorMatrix, TPMatrices, TPMatrix
 
 
 type FloatLike = float | sp.Number
@@ -61,6 +60,7 @@ class SympyExpr(Protocol):
     def doit(self, **hints: Any) -> Any: ...
 
 
+type TriDiagMatrixFun = Callable[[sp.Symbol | int, sp.Symbol | int], sp.Expr]
 type Activation = Callable[[ArrayLike], Array]
 type LossValue = sp.Number | complex | Array
 type Loss_Tuple = (

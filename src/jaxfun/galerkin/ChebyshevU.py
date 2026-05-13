@@ -242,8 +242,13 @@ class ChebyshevU(Jacobi):
         Returns:
             Matrix or DiaMatrix or None if combination unsupported.
         """
+        A = None
+        if q != 0:
+            A = self.A().power(q)
+
         u, j = trial
-        if i == 0 and j == 0 and q == 0:
-            return diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
+        if i == 0 and j == 0:
+            M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
+            return M if A is None else A.T @ M
 
         return None

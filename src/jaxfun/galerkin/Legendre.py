@@ -215,24 +215,30 @@ class Legendre(Jacobi):
         assert isinstance(u, Legendre), (
             "Trial space must be Legendre for Legendre matrices"
         )
-        if i == 0 and j == 0 and q == 0:
-            return diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
+        A = None
+        if q != 0:
+            A = self.A().power(q)
 
-        if i == 0 and j == 1 and q == 0:
+        if i == 0 and j == 0:
+            M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
+            return M if A is None else A.T @ M
+
+        if i == 0 and j == 1:
             if u.N < 2:
                 return None
-            return diags(
+            M = diags(
                 [jnp.full(u.N - k, 2.0) for k in jnp.arange(1, u.N, 2).tolist()],
                 offsets=tuple(jnp.arange(1, u.N, 2).tolist()),
                 shape=(self.N, u.N),
             ).to_matrix()  # Matrix is upper triangular, better and faster to use dense.
+            return M if A is None else A.T @ M
 
         if i == 1 and j == 0:
             m = u.matrices(j, (self, i), q=q)
             if m is not None:
                 return m.T
             return None
-        if i == 0 and j == 2 and q == 0:
+        if i == 0 and j == 2:
             k = jnp.arange(max(self.N, u.N))
             offsets = jnp.arange(2, u.N, 2).tolist()
             if len(offsets) == 0:
@@ -247,15 +253,18 @@ class Legendre(Jacobi):
                     / (2 * k[:Q] + 1)
                 )
 
-            return diags(
+            M = diags(
                 [_getkey(j) for j in offsets],
                 offsets=tuple(offsets),
                 shape=(self.N, u.N),
             ).to_matrix()  # Matrix is upper triangular, better and faster to use dense.
+            return M if A is None else A.T @ M
+
         if i == 2 and j == 0:
             m = u.matrices(j, (self, i), q=q)
             if m is not None:
                 return m.T
+
         return None
 
 

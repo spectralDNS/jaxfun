@@ -529,9 +529,9 @@ class Jacobi(OrthogonalSpace):
     ) -> DiaMatrix:
         N = self.num_quad_points if N is None else N
         d: list[Array | complex] = [
-            sp.lambdify(n, mat(n, n - 1))(jnp.arange(1, N)),
-            sp.lambdify(n, mat(n, n))(jnp.arange(0, N)),
-            sp.lambdify(n, mat(n, n + 1))(jnp.arange(0, N - 1)),
+            sp.lambdify(n, mat(n, n - 1), modules=["jax"])(jnp.arange(1, N)),
+            sp.lambdify(n, mat(n, n), modules=["jax"])(jnp.arange(0, N)),
+            sp.lambdify(n, mat(n, n + 1), modules=["jax"])(jnp.arange(0, N - 1)),
         ]
         if d[1] == 0:
             d = [d[0], d[2]]
@@ -553,6 +553,10 @@ class Jacobi(OrthogonalSpace):
         """
         u, j = trial
         assert isinstance(u, Jacobi), "Trial space must be Jacobi for Jacobi matrices"
+        A = None
+        if q != 0:
+            A = self.A().power(q)
         if i == 0 and j == 0 and q == 0:
-            return diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
+            M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
+            return M if A is None else A.T @ M
         return None

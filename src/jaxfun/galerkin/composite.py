@@ -638,7 +638,8 @@ class PGComposite(Composite):
         trial[1].
 
         Args:
-            i: Derivative order for test function. Should be 0.
+            i: Derivative order for test function. Should be 0. Kept for
+                consistency with Galerkin.
             trial: Tuple (u, j) with trial space u and derivative order j.
             q: polynomial order for scaling.
 
@@ -651,7 +652,7 @@ class PGComposite(Composite):
 
         assert isinstance(u, Jacobi | Composite), (
             "Trial space must be Jacobi or Composite."
-        )  # noqa: E501
+        )
 
         def Bkl(k: int, l: int, V: Jacobi | Composite) -> DiaMatrix:
             B = V.orthogonal.B(V.N + 2 * (k - l))

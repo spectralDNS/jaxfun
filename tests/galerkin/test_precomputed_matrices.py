@@ -49,7 +49,7 @@ def _ultra05(N: int) -> Ultraspherical:
     return Ultraspherical(N, lambda_=0.5)
 
 
-def _quad_matrix(space, dv: int, du: int) -> jnp.ndarray:
+def _quad_matrix(space, dv: int, du: int, q: int = 0) -> jnp.ndarray:
     """Compute integral matrix numerically via the space's own quadrature.
 
     Entry (i, j) = integral phi_i^{(dv)} * phi_j^{(du)} dx (with weight).
@@ -58,7 +58,7 @@ def _quad_matrix(space, dv: int, du: int) -> jnp.ndarray:
     v = TestFunction(space)
     u = TrialFunction(space)
     x = space.system.x
-    A = inner(v.diff(x, dv) * u.diff(x, du), use_precomputed_matrices=False)
+    A = inner(x**q * v.diff(x, dv) * u.diff(x, du), use_precomputed_matrices=False)
     return A.todense()
 
 
@@ -229,6 +229,40 @@ class TestPoly5SecondDerivativeMatrix:
         assert jnp.allclose(M.get_column(1), jnp.zeros(N), atol=ulp(10))
 
 
+@pytest.mark.parametrize("space_fn", _POLY5)
+class TestPoly5FirstDerivativeMatrixWithCoefficient:
+    """(0,1) matrix entries verified by numerical quadrature."""
+
+    @pytest.mark.parametrize("N,q", [(6, 1), (8, 2), (10, 3)])
+    def test_values_match_quadrature(self, space_fn, N, q):
+        v = space_fn(N)
+        M = v.matrices(0, (v, 1), q)
+        assert M is not None
+        ref = _quad_matrix(v, 0, 1, q)
+        err = float(jnp.linalg.norm(M.todense() - ref))
+        scale = float(jnp.linalg.norm(M.todense()))
+        assert err / max(scale, 1.0) < ulp(100), (
+            f"N={N}: relative err {err / scale:.2e}"
+        )
+
+
+@pytest.mark.parametrize("space_fn", _POLY5)
+class TestPoly5SecondDerivativeMatrixWithCoefficient:
+    """(0,2) matrix entries verified by numerical quadrature."""
+
+    @pytest.mark.parametrize("N,q", [(6, 1), (8, 2), (10, 3)])
+    def test_values_match_quadrature(self, space_fn, N, q):
+        v = space_fn(N)
+        M = v.matrices(0, (v, 2), q)
+        assert M is not None
+        ref = _quad_matrix(v, 0, 2, q)
+        err = float(jnp.linalg.norm(M.todense() - ref))
+        scale = float(jnp.linalg.norm(M.todense()))
+        assert err / max(scale, 1.0) < ulp(100), (
+            f"N={N}: relative err {err / scale:.2e}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Fourier -- always returns DiaMatrix, always purely diagonal
 # ---------------------------------------------------------------------------
@@ -350,6 +384,19 @@ class TestMassOnlyMassMatrix:
         M = v.matrices(0, (v, 0))
         assert M is not None
         ref = _quad_matrix(v, 0, 0)
+        assert jnp.allclose(M.todense(), ref, atol=ulp(100)), (
+            f"N={N}: max err {float(jnp.abs(M.todense() - ref).max())}"
+        )
+
+
+@pytest.mark.parametrize("space_fn", _MASS_ONLY)
+class TestWithCoefficientMatrix:
+    @pytest.mark.parametrize("N,q", [(6, 1), (8, 2), (10, 3)])
+    def test_values_match_quadrature(self, space_fn, N, q):
+        v = space_fn(N)
+        M = v.matrices(0, (v, 0), q)
+        assert M is not None
+        ref = _quad_matrix(v, 0, 0, q)
         assert jnp.allclose(M.todense(), ref, atol=ulp(100)), (
             f"N={N}: max err {float(jnp.abs(M.todense() - ref).max())}"
         )

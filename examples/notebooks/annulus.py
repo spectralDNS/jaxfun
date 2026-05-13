@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.19.8"
+__generated_with = "0.19.11"
 app = marimo.App()
 
 
@@ -24,7 +24,6 @@ def _(mo):
 
 @app.cell
 def _():
-    import jax.numpy as jnp
     import matplotlib.pyplot as plt
     import sympy as sp
 
@@ -33,7 +32,7 @@ def _():
         Fourier,
         FunctionSpace,
         Legendre,
-        TensorProductSpace,
+        TensorProduct,
         TestFunction,
         TrialFunction,
         inner,
@@ -48,12 +47,11 @@ def _():
         FunctionSpace,
         Grad,
         Legendre,
-        TensorProductSpace,
+        TensorProduct,
         TestFunction,
         TrialFunction,
         get_CoordSys,
         inner,
-        jnp,
         plt,
         sp,
     )
@@ -85,7 +83,7 @@ def _(mo):
 
 
 @app.cell
-def _(C, Domain, Fourier, FunctionSpace, Legendre, TensorProductSpace, sp):
+def _(C, Domain, Fourier, FunctionSpace, Legendre, TensorProduct, sp):
     r0, r1 = sp.S.Half, 1
     R = FunctionSpace(
         20,
@@ -96,7 +94,7 @@ def _(C, Domain, Fourier, FunctionSpace, Legendre, TensorProductSpace, sp):
         fun_str="phi",
     )
     F = FunctionSpace(20, Fourier.Fourier, name="F", fun_str="E")
-    P = TensorProductSpace((R, F), system=C, name="P")
+    P = TensorProduct(R, F, system=C, name="P")
     return (P,)
 
 
@@ -267,7 +265,7 @@ def _(mo):
 
 @app.cell
 def _(eq, inner, sp, v):
-    A, b = inner((eq - 2) * sp.conjugate(v))
+    A, b = inner((eq - 2) * sp.conjugate(v), sparse=True)
     return A, b
 
 
@@ -310,15 +308,14 @@ def _(mo):
     mo.md(r"""
     Here the test function uses indices $i$ and $j$, whereas the trial function uses $k$ and $l$. Each term with four indices is one `TPMatrix` in `A`. As seen above, there are 4 tensor product matrices (4 items with 4 indices). Note that the complex conjugate of the test function is evaluated automatically inside the `inner` function and it is not necessary to call it explicitly as above. Hence `eq*v` would produce the same result, but it would not print as nicely (and correctly) as above. Also, when evaluating the inner product, the equation is multiplied by an additional `r`, since the domain measure $d\Omega = rdrd\theta$
 
-    In the end we assemble a Kronecker product matrix from all the items in `A` and then solve the linear system of equations:
+    In the end we solve the linear system of equations:
     """)
     return
 
 
 @app.cell
-def _(A, b, jnp):
-    M = jnp.sum(jnp.array([jnp.kron(*a.mats) for a in A]), axis=0)
-    uh = jnp.linalg.solve(M, b.flatten()).reshape(b.shape)
+def _(A, b):
+    uh = A.solve(b)
     return (uh,)
 
 

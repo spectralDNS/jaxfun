@@ -9,11 +9,11 @@ import sympy as sp
 
 from jaxfun.coordinates import get_CoordSys
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
-from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorProduct, tpmats_to_kron
+from jaxfun.galerkin.Legendre import Legendre
+from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, ulp
 
@@ -37,7 +37,7 @@ C = get_CoordSys(
     & sp.Q.positive(phi)
     & sp.Q.positive(sp.sin(theta)),
 )
-D0 = FunctionSpace(N, Chebyshev, domain=(0, np.pi), name="D0", fun_str="theta")
+D0 = FunctionSpace(N, Legendre, domain=(0, np.pi), name="D0", fun_str="theta")
 D1 = FunctionSpace(M, Fourier, name="D1", fun_str="phi")
 T = TensorProduct(D0, D1, system=C, name="T")
 v = TestFunction(T, name="v")
@@ -52,12 +52,9 @@ ue = sph(6, 3, theta, phi)
 A, b = inner(
     (v * (2 * u - Div(Grad(u))) - v * (2 * ue - Div(Grad(ue)))),
     sparse=True,
-    sparse_tol=1000,
 )
 
-# Alternative scipy sparse implementation
-A0 = tpmats_to_kron(A)
-un = A0.solve(b.flatten()).reshape(b.shape)
+un = A.solve(b)
 
 rj, tj = T.mesh(N=(100, 100))
 xc, yc, zc = T.cartesian_mesh(N=(100, 100))
@@ -66,7 +63,7 @@ uej = lambdify((theta, phi), ue)(rj, tj)
 
 error = jnp.linalg.norm(uj - uej) / 100
 if "PYTEST" in os.environ:
-    assert error < ulp(1) * 1000, error
+    assert error < ulp(1000), error
     sys.exit(1)
 
 print("Error =", error)

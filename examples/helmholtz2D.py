@@ -16,7 +16,7 @@ from jaxfun.galerkin.functionspace import FunctionSpace
 # from jaxfun.Jacobi import Jacobi as space
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre as space
-from jaxfun.galerkin.tensorproductspace import TensorProduct, TPMatrices
+from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -40,8 +40,7 @@ ue = T.system.expr_psi_to_base_scalar(ue)
 
 A, L = inner(v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True)
 
-B = TPMatrices(A)
-un = B.solve(L, method="kron", kron_method="banded")
+un = A.solve(L, method="kron", kron_method="banded")
 
 N = 100
 uj = T.backward(un, kind="uniform", N=(N, N))

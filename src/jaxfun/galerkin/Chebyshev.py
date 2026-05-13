@@ -223,12 +223,12 @@ class Chebyshev(Jacobi):
         Returns:
             Coefficient array of length self.N.
         """
-        n: int = len(u)
-        assert len(u) >= self.N, "Only truncation supported for forward transform"
+        n: int = u.shape[0]
+        assert n >= self.N, "Only truncation supported for forward transform"
         sign = (-1) ** jnp.arange(n)
         uh = jax.scipy.fft.dct(u, n=n)
         uh = uh.at[0].set(uh[0] / 2) * sign / n
-        if len(u) > self.N:
+        if n > self.N:
             uh = uh[: self.N]
         return uh
 
@@ -415,4 +415,4 @@ def matrices(
 
     return diags(
         [_getkey(m) for m in offsets], tuple(offsets.tolist()), (v.N, u.N)
-    ).to_Matrix()  # Matrix is upper triangular, better and faster to use dense.
+    ).to_matrix()  # Matrix is upper triangular, better and faster to use dense.

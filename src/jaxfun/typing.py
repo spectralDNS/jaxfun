@@ -36,7 +36,8 @@ if TYPE_CHECKING:
     )
     from jaxfun.galerkin.arguments import Jaxc
     from jaxfun.galerkin.orthogonal import OrthogonalSpace
-    from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
+    from jaxfun.galerkin.tensorproductspace import TPMatrices, TPMatrix
+    from jaxfun.la import TensorMatrix
 
 
 type FloatLike = float | sp.Number

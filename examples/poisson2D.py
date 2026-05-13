@@ -12,7 +12,7 @@ from jaxfun.galerkin.Chebyshev import Chebyshev as space
 # from jaxfun.galerkin.Legendre import Legendre as space
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorProduct, TPMatrices
+from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -30,7 +30,7 @@ ue = (1 - x**2) * (1 - y**2)  # * sp.exp(sp.cos(sp.pi * x)) * sp.exp(sp.sin(sp.p
 # A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=False)
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 
-uh = TPMatrices(A).solve(b)
+uh = A.solve(b, method="lu")
 
 N = 100
 uj = T.backward(uh, kind="uniform", N=(N, N))

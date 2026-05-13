@@ -7,8 +7,7 @@ import jax.numpy as jnp
 import sympy as sp
 
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.tensorproductspace import TensorMatrix, TPMatrices, TPMatrix
-from jaxfun.la import DiaMatrix, Matrix
+from jaxfun.la import DiaMatrix, Matrix, TensorMatrix, TPMatrices, TPMatrix
 from jaxfun.typing import (
     Array,
     GalerkinAssembledForm,
@@ -79,7 +78,7 @@ def operator_diagonal(obj: GalerkinOperatorLike | None) -> Array | None:
     if isinstance(obj, TPMatrix):
         return _tpmatrix_diagonal(obj)
     if isinstance(obj, TensorMatrix):
-        return operator_diagonal(obj.mat)
+        return operator_diagonal(obj.data)
     arr = jnp.asarray(obj)
     if arr.ndim == 2 and arr.shape[0] == arr.shape[1]:
         diag = jnp.diag(arr)
@@ -97,9 +96,9 @@ def apply_operator(op: GalerkinOperatorLike | None, u: Array) -> Array:
         applied = [apply_operator(item, u) for item in items]
         return jnp.sum(jnp.stack(applied), axis=0)
     if isinstance(op, TPMatrices | TPMatrix):
-        return op(u)
+        return op @ u
     if isinstance(op, TensorMatrix):
-        return apply_operator(op.mat, u)
+        return op @ u
     if isinstance(op, DiaMatrix | Matrix):
         return op @ u
     arr = jnp.asarray(op)
@@ -141,7 +140,7 @@ def operator_to_dense(op: GalerkinOperatorLike) -> Array:
     if isinstance(op, TPMatrix):
         return _tpmatrix_to_dense(op)
     if isinstance(op, TensorMatrix):
-        return operator_to_dense(op.mat)
+        return operator_to_dense(op.data)
     return jnp.asarray(op)
 
 

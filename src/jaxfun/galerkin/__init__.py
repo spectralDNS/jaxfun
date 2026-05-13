@@ -21,7 +21,5 @@ from .tensorproductspace import (
     DirectSumTPS as DirectSumTPS,
     TensorProduct as TensorProduct,
     TensorProductSpace as TensorProductSpace,
-    TPSolveMethod as TPSolveMethod,
     VectorTensorProductSpace as VectorTensorProductSpace,
-    tpmats_to_kron as tpmats_to_kron,
 )

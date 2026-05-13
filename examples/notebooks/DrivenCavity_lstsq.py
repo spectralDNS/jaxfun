@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.19.8"
+__generated_with = "0.19.11"
 app = marimo.App()
 
 
@@ -428,7 +428,7 @@ def _(jnp, plt, uvp, xx, yy):
 
 
 @app.cell
-def _(hide_code=True):
+def _():
     import marimo as mo
 
     return (mo,)

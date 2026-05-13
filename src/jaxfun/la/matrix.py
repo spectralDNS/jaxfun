@@ -186,11 +186,31 @@ class Matrix(nnx.Pytree):
         """
         return jnp.diag(self.data, k)
 
-    def to_dense(self) -> Array:
+    def todense(self) -> Array:
         """Return the underlying ``(n, m)`` array (identity — already dense)."""
         return self.data
 
-    todense = to_dense
+    def tosparse(self, *, tol: int = 100) -> DiaMatrix:
+        """Return a :class:`~jaxfun.la.DiaMatrix` representation.
+
+        Near-zero entries (relative to the largest element) are dropped before
+        conversion.  An entry is kept only if ``ulp(max|a|) * tol >= max|a|``.
+
+        Args:
+            tol: Sparsity tolerance passed to
+                :func:`~jaxfun.utils.common.tosparse`.  Default 100.
+
+        Returns:
+            :class:`~jaxfun.la.DiaMatrix` with the same non-near-zero
+            diagonals as this matrix.
+        """
+        from jaxfun.utils.common import tosparse
+
+        return tosparse(self.data, tol=tol)
+
+    def to_matrix(self) -> Matrix:
+        """Return self (identity — already a Matrix)."""
+        return self
 
     def get_row(self, i: int | Array) -> Array:
         """Return row ``i`` as a dense 1-D array of length ``m``.

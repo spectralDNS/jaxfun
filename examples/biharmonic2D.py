@@ -11,7 +11,7 @@ from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.galerkin.tensorproductspace import TensorProduct, TPMatrices
+from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
@@ -39,8 +39,7 @@ u = TrialFunction(T, name="u")
 ue = T.system.expr_psi_to_base_scalar(ue)
 
 A, b = inner(Div(Grad(Div(Grad(u)))) * v - Div(Grad(Div(Grad(ue)))) * v, sparse=True)
-B = TPMatrices(A)
-uh = B.solve(b, method="kron", kron_method="rcm")
+uh = A.solve(b)
 
 N = 100
 xj = T.mesh(kind="uniform", N=(N, N))

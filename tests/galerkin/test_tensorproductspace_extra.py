@@ -16,10 +16,10 @@ from jaxfun.galerkin import (
     TrialFunction,
     Ultraspherical,
     VectorTensorProductSpace,
-    tpmats_to_kron,
 )
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.tensorproductspace import DirectSumTPS
+from jaxfun.la import TPMatrix
 from jaxfun.utils.common import ulp
 
 
@@ -54,7 +54,7 @@ def test_tensorproduct_get_homogeneous():
     v = TestFunction(H)
     u = TrialFunction(H)
     A = inner(v * u)
-    assert isinstance(A, list)
+    assert isinstance(A, TPMatrix)
 
 
 def test_multivar_and_linear_bcs_branch():
@@ -75,21 +75,6 @@ def test_multivar_and_linear_bcs_branch():
     A = inner((sp.sqrt(x + y) * u * v) + jf * v, return_all_items=True)
     # Should return tuple (aresults,bresults)
     assert isinstance(A, tuple)
-
-
-def test_tpmats_to_kron():
-    C = Chebyshev.Chebyshev(4)
-    L = Legendre.Legendre(4)
-    T = TensorProduct(C, L)
-    v = TestFunction(T)
-    u = TrialFunction(T)
-    A = inner(v * u)
-    assert isinstance(A, list)
-    S = tpmats_to_kron(A)
-    assert S.shape == (T.dim, T.dim)
-    # Compare to dense version
-    A_dense = sum(mat.mat.todense() for mat in A)
-    assert jnp.allclose(S.todense(), A_dense)
 
 
 @pytest.mark.parametrize(

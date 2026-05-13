@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import jax
+import jax.numpy as jnp
+from flax import nnx
+from jax import Array
+
+if TYPE_CHECKING:
+    from jaxfun.galerkin import JAXFunction
+
+
+class TensorMatrix(nnx.Pytree):  # noqa: B903
+    """Non-separable tensor with dims * 2 indices.
+
+    For test function v_{ij} and trial function u_{kl}, the tensor
+    represents  A_{ikjl}.
+
+    Matrix vector product
+
+    .. math::
+
+        v_{ij} = \\sum_{k,l} A_{ikjl} u_{kl}
+
+    Stored when coefficient is non-separable in coordinates so Kron
+    factorization is unavailable.
+
+    Attributes:
+        data: Dense (or sparse) global matrix.
+    """
+
+    def __init__(self, data: Array) -> None:
+        self.data = data  # mat is A_ikjl
+
+    def __len__(self) -> int:
+        return self.data.shape[0]
+
+    @jax.jit(static_argnums=0)
+    def _matmul_array(self, w: Array) -> Array:
+        return jnp.einsum("ikjl,kl->ij", self.data, w)
+
+    def __call__(self, u: Array | JAXFunction) -> Array:
+        """Apply matrix to coefficient array u."""
+        from jaxfun.galerkin import JAXFunction
+
+        w = u.array if isinstance(u, JAXFunction) else u
+        return self._matmul_array(w)
+
+    def __matmul__(self, u: Array | JAXFunction) -> Array:
+        """Alias to __call__ for @ operator."""
+        return self.__call__(u)
+
+    @jax.jit(static_argnums=0)
+    def _rmatmul_array(self, w: Array) -> Array:
+        return jnp.einsum("ij,ikjl->kl", w, self.data)
+
+    def __rmatmul__(self, u: Array | JAXFunction) -> Array:
+        """Right matmul (u @ A) treating u as left factor."""
+        from jaxfun.galerkin import JAXFunction
+
+        w = u.array if isinstance(u, JAXFunction) else u
+        return self._rmatmul_array(w)
+
+    def solve(self, rhs: Array) -> Array:
+        """Solve A x = rhs for x."""
+        AT = jnp.transpose(self.data, (0, 2, 1, 3)).reshape(
+            (
+                self.data.shape[0] * self.data.shape[2],
+                self.data.shape[1] * self.data.shape[3],
+            )
+        )  # AT_{i*k,j*l}
+        return jnp.linalg.solve(AT, rhs.flatten()).reshape(rhs.shape)

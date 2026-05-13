@@ -6,10 +6,17 @@ import sympy as sp
 from flax import nnx
 from jax import Array
 
-from jaxfun.galerkin import JAXFunction
-from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol
-from jaxfun.typing import TrialSpaceType
-from jaxfun.utils.common import lambdify, matmat, tosparse
+from jaxfun.la import (
+    BlockTPMatrix,
+    DiaMatrix,
+    Matrix,
+    MatrixProtocol,
+    TensorMatrix,
+    TPMatrices,
+    TPMatrix,
+)
+from jaxfun.typing import TestSpaceType, TrialSpaceType
+from jaxfun.utils.common import lambdify, matmat
 
 from .arguments import (
     ArgumentTag,
@@ -30,11 +37,8 @@ from .forms import (
 )
 from .orthogonal import OrthogonalSpace
 from .tensorproductspace import (
-    BlockTPMatrix,
     DirectSumTPS,
-    TensorMatrix,
     TensorProductSpace,
-    TPMatrix,
     VectorTensorProductSpace,
 )
 
@@ -98,6 +102,7 @@ def inner(
     assert V is not None, "No TestFunction found in expression"
     assert _has_testspace(V), "TestFunction has no associated function space"
     test_space = V.functionspace
+    trial_space: TrialSpaceType | None = None
     measure = test_space.system.sg
     allforms = split(expr * measure)
     a_forms = allforms["bilinear"]
@@ -383,7 +388,13 @@ def inner(
                 bresults.append(vectorize_bresult(res, test_space, global_index))
 
     return process_results(
-        aresults, bresults, return_all_items, test_space.dims, sparse, sparse_tol
+        aresults,
+        bresults,
+        return_all_items,
+        test_space,
+        trial_space,
+        sparse,
+        sparse_tol,
     )
 
 
@@ -401,7 +412,8 @@ def process_results(
     aresults: list[MatrixProtocol | TPMatrix | TensorMatrix],
     bresults: list[Array],
     return_all_items: Literal[True],
-    dims: int,
+    test_space: TestSpaceType,
+    trial_space: TrialSpaceType | None,
     sparse: bool,
     sparse_tol: int,
 ) -> tuple[list[MatrixProtocol | TPMatrix | TensorMatrix], list[Array]]: ...
@@ -410,36 +422,45 @@ def process_results(
     aresults: list[MatrixProtocol | TPMatrix | TensorMatrix],
     bresults: list[Array],
     return_all_items: Literal[False],
-    dims: int,
+    test_space: TestSpaceType,
+    trial_space: TrialSpaceType | None,
     sparse: Literal[False],
     sparse_tol: int,
 ) -> (
     MatrixProtocol
     | TPMatrix
+    | TPMatrices
     | TensorMatrix
+    | BlockTPMatrix
     | Array
-    | tuple[MatrixProtocol | TPMatrix | TensorMatrix, Array]
+    | tuple[
+        MatrixProtocol | TPMatrix | TPMatrices | TensorMatrix | BlockTPMatrix, Array
+    ]
 ): ...
 @overload
 def process_results(
     aresults: list[MatrixProtocol | TPMatrix | TensorMatrix],
     bresults: list[Array],
     return_all_items: Literal[False],
-    dims: int,
+    test_space: TestSpaceType,
+    trial_space: TrialSpaceType | None,
     sparse: Literal[True],
     sparse_tol: int,
 ) -> (
     DiaMatrix
     | TPMatrix
+    | TPMatrices
     | TensorMatrix
+    | BlockTPMatrix
     | Array
-    | tuple[DiaMatrix | TPMatrix | TensorMatrix, Array]
+    | tuple[DiaMatrix | TPMatrix | TPMatrices | TensorMatrix | BlockTPMatrix, Array]
 ): ...
 def process_results(
     aresults: list[MatrixProtocol | TPMatrix | TensorMatrix],
     bresults: list[Array],
     return_all_items: bool,
-    dims: int,
+    test_space: TestSpaceType,
+    trial_space: TrialSpaceType | None,
     sparse: bool,
     sparse_tol: int,
 ) -> Any:
@@ -459,50 +480,80 @@ def process_results(
     if return_all_items:
         return aresults, bresults
 
-    if len(aresults) > 0 and dims == 1:
-        if not sparse:
-            aresults: Matrix = Matrix(
-                jnp.sum(
-                    jnp.array([cast(MatrixProtocol, a).todense() for a in aresults]),
-                    axis=0,
-                )
-            )
-        else:
-            # Matrices are either Matrix or DiaMatrix. Convert all matrices to DiaMatrix
-            adia = [
-                a
-                if isinstance(a, DiaMatrix)
-                else tosparse(cast(Matrix, a).data, tol=sparse_tol)
-                for a in aresults
-            ]
-            aresults: DiaMatrix = sum(adia[1:], adia[0])
-
-    if len(aresults) > 0 and dims > 1:
-        aresults: list[TPMatrix] = cast(list[TPMatrix], aresults)
-        for a0 in aresults:
-            if isinstance(a0, TPMatrix):
-                if sparse:
-                    a0.mats = nnx.List(
-                        mat
-                        if isinstance(mat, DiaMatrix)
-                        else tosparse(mat.data, tol=sparse_tol)
-                        for mat in a0.mats
-                    )
-                else:
-                    a0.mats = nnx.List(
-                        mat if isinstance(mat, Matrix) else Matrix(mat.todense())
-                        for mat in a0.mats
-                    )
+    dims: int = test_space.dims
+    rank: int = test_space.rank
 
     if len(bresults) > 0:
         bresults: Array = jnp.sum(jnp.array(bresults), axis=0)
 
-    # Return just the one matrix/vector if 1D and only bilinear or linear forms
-    if len(aresults) > 0 and len(bresults) == 0:
-        return aresults
+    ares1D = None
+
+    if dims == 1:
+        if len(aresults) > 0:
+            if not sparse:
+                ares1D: Matrix = Matrix(
+                    jnp.sum(
+                        jnp.array(
+                            [cast(MatrixProtocol, a).todense() for a in aresults]
+                        ),
+                        axis=0,
+                    )
+                )
+            else:
+                # Matrices are either Matrix or DiaMatrix. Convert matrices to DiaMatrix
+                adia = [
+                    cast(MatrixProtocol, a).tosparse(tol=sparse_tol) for a in aresults
+                ]
+                ares1D: DiaMatrix = sum(adia[1:], adia[0])
+
+        if ares1D and len(bresults) == 0:
+            return ares1D
+
+        if not ares1D and len(bresults) > 0:
+            return bresults
+
+        return ares1D, bresults
+
+    if len(aresults) > 0:
+        # aresults is an empty list or a list of TPMatrix/TensorMatrix objects.
+
+        if all(isinstance(a, TPMatrix) for a in aresults):
+            aresults: list[TPMatrix] = cast(list[TPMatrix], aresults)
+            for a0 in aresults:
+                if sparse:
+                    a0.mats = nnx.List(mat.tosparse(tol=sparse_tol) for mat in a0.mats)
+                else:
+                    a0.mats = nnx.List(mat.to_matrix() for mat in a0.mats)
+
+            if rank == 0:
+                aresults: TPMatrix | TPMatrices = (
+                    aresults[0] if len(aresults) == 1 else TPMatrices(aresults)
+                )
+            elif rank == 1:
+                aresults: BlockTPMatrix = BlockTPMatrix(
+                    aresults,
+                    cast(VectorTensorProductSpace, test_space),
+                    cast(VectorTensorProductSpace, trial_space),
+                )
+
+        elif all(isinstance(a, TensorMatrix) for a in aresults):
+            if rank == 0:
+                array = jnp.sum(
+                    jnp.array([cast(TensorMatrix, a).data for a in aresults]),
+                    axis=0,
+                )
+                aresults: TensorMatrix = TensorMatrix(array)
+            else:
+                raise NotImplementedError("Rank >0 TensorMatrix not implemented")
+
+        else:
+            raise ValueError("Inconsistent matrix types in aresults")
 
     if len(aresults) == 0 and len(bresults) > 0:
         return bresults
+
+    if len(aresults) > 0 and len(bresults) == 0:
+        return aresults
 
     return aresults, bresults
 
@@ -746,6 +797,11 @@ def project1D(ue: sp.Expr, V: OrthogonalSpace | Composite | DirectSum) -> Array:
     Returns:
         Coefficient vector uh.
     """
+    if len(get_jaxfunctions(ue)) == 0:
+        uj = lambdify(V.system.base_scalars(), ue)(V.mesh())
+        uj = jnp.broadcast_to(uj, V.num_quad_points)
+        return V.forward(uj)
+
     u = TrialFunction(V)
     v = TestFunction(V)
     M, b = inner(v * (u - ue))
@@ -772,7 +828,7 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
     if len(get_jaxfunctions(ue)) == 0:
         assert not isinstance(V, OrthogonalSpace | Composite | DirectSum)
         if V.rank == 0:
-            uj = lambdify(V.system.base_scalars(), ue, modules="jax")(*V.mesh())
+            uj = lambdify(V.system.base_scalars(), ue)(*V.mesh())
             uj = jnp.broadcast_to(uj, V.num_quad_points)
         elif V.rank == 1:
             assert isinstance(V, VectorTensorProductSpace)
@@ -788,16 +844,12 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
     u = TrialFunction(V)
     v = TestFunction(V)
     if V.rank == 0:
-        M, b = inner(v * (u - ue))
-        uh = M[0].solve(b)
+        A, b = inner(v * (u - ue))
+        uh = A.solve(b)
 
     elif V.rank == 1:
-        assert isinstance(ue, sp.Mul | sp.Add | JAXFunction), (
-            "Projection requires unevaluated expressions"
-        )  # noqa: E501
         assert isinstance(V, VectorTensorProductSpace)
-        M, b = inner(Dot(v, (u - ue)))
-        A = BlockTPMatrix(M, V, V)
+        A, b = inner(Dot(v, (u - ue)))
         uh = A.solve(b)
 
     return uh

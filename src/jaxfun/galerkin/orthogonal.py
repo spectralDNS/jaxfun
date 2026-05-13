@@ -208,7 +208,7 @@ class OrthogonalSpace(BaseSpace):
     def mass_matrix(self) -> DiaMatrix:
         """Return diagonal mass matrix (orthogonality) in sparse format."""
         return diags(
-            [self.norm_squared() / self.domain_factor],
+            [self.norm_squared() / float(self.domain_factor)],
             offsets=(0,),
             shape=(self.N, self.N),
         )
@@ -218,7 +218,7 @@ class OrthogonalSpace(BaseSpace):
         """Forward projection (samples -> coefficients) using orthogonality."""
         # u should be a padded array of length >= self.N
         L = self.scalar_product(u)
-        A = self.norm_squared() / self.domain_factor
+        A = self.norm_squared() / float(self.domain_factor)
         return L / A
 
     @jax.jit(static_argnums=0)

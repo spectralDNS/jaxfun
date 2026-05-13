@@ -16,8 +16,11 @@ from jaxfun.galerkin import (
 from jaxfun.galerkin.arguments import JAXFunction, ScalarFunction, VectorFunction
 from jaxfun.galerkin.forms import split_coeff
 from jaxfun.galerkin.inner import inner, project
-from jaxfun.galerkin.tensorproductspace import DirectSumTPS, VectorTensorProductSpace
-from jaxfun.la import DiaMatrix
+from jaxfun.galerkin.tensorproductspace import (
+    DirectSumTPS,
+    VectorTensorProductSpace,
+)
+from jaxfun.la import DiaMatrix, TPMatrix
 from jaxfun.utils.common import Domain, ulp
 
 
@@ -57,10 +60,8 @@ def test_inner_return_all_items_and_sparse_paths():
     v2 = TestFunction(T)
     u2 = TrialFunction(T)
     A2 = inner(v2 * u2, sparse=True)
-    assert isinstance(A2, list)
-    # Expect list of TPMatrix with sparse mats
-    for tp in cast(list, A2):
-        assert all(isinstance(m, DiaMatrix) for m in tp.mats)
+    assert isinstance(A2, TPMatrix)
+    assert all(isinstance(m, DiaMatrix) for m in A2.mats)
 
 
 def test_split_coeff_mul_and_add_jaxf():

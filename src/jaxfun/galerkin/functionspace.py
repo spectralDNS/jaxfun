@@ -45,8 +45,8 @@ def FunctionSpace[T: OrthogonalSpace](
     bcs: None = None,
     domain: Domain | tuple[FloatLike, FloatLike] | None = None,
     system: CoordSys | None = None,
-    name: str = "fun",
-    fun_str: str = "psi",
+    name: str | None = None,
+    fun_str: str | None = None,
     **kw,
 ) -> T: ...
 @overload
@@ -56,8 +56,8 @@ def FunctionSpace(
     bcs: BoundaryConditions | dict,
     domain: Domain | tuple[FloatLike, FloatLike] | None = None,
     system: CoordSys | None = None,
-    name: str = "fun",
-    fun_str: str = "psi",
+    name: str | None = None,
+    fun_str: str | None = None,
     **kw,
 ) -> DirectSum | Composite: ...
 def FunctionSpace(
@@ -66,8 +66,8 @@ def FunctionSpace(
     bcs: BoundaryConditions | dict | None = None,
     domain: Domain | tuple[FloatLike, FloatLike] | None = None,
     system: CoordSys | None = None,
-    name: str = "fun",
-    fun_str: str = "psi",
+    name: str | None = None,
+    fun_str: str | None = None,
     **kw,
 ) -> OrthogonalSpace | DirectSum | Composite:
     """Return a (possibly boundary-constrained) function space instance.
@@ -87,7 +87,10 @@ def FunctionSpace(
     Args:
         N: Number of modes (polynomials) or base functions (unconstrained).
         space: Base orthogonal / spectral space class (callable) or already
-            constructed BaseSpace subclass.
+            constructed BaseSpace subclass. If space is a Composite class,
+            the returned space will be an instance of that class, and bcs will
+            be ignored (since the Composite class is assumed to already encode
+            any desired boundary conditions).
         bcs: BoundaryConditions instance or raw dict specifying left/right
             boundary constraints. See module docstring for format.
         domain: Physical Domain (maps to reference domain internally).
@@ -119,21 +122,30 @@ def FunctionSpace(
     else:
         domain = Domain(float(domain[0]), float(domain[1]))
 
+    if name is not None:
+        kw.update(name=name)
+    if fun_str is not None:
+        kw.update(fun_str=fun_str)
+
     if bcs is not None:
         bcs = BoundaryConditions(bcs, domain=domain)
         assert issubclass(space, Jacobi)
+
         C = Composite(
             N,
             space,
             bcs=bcs.get_homogeneous(),
             domain=domain,
-            name=name,
-            fun_str=fun_str,
             system=system,
             **kw,
         )
         if bcs.is_homogeneous():
             return C
+        kwb = {}
+        if name in kw:
+            kwb["name"] = kw["name"] + "_b"
+        if fun_str in kw:
+            kwb["fun_str"] = kw["fun_str"] + "_b"
         B = BCGeneric(
             bcs.num_bcs(),
             space,
@@ -141,20 +153,9 @@ def FunctionSpace(
             domain=domain,
             system=system,
             num_quad_points=N,
-            name=name + "_b",
-            fun_str=fun_str + "_b",
+            **kwb,
         )
         C.name += "0"
         return DirectSum(C, B)
 
-    if isinstance(space, Composite):
-        return space(N, domain=domain, system=system, name=name, fun_str=fun_str, **kw)
-
-    return space(
-        N,
-        domain=domain,
-        system=system,
-        name=name,
-        fun_str=fun_str,
-        **kw,
-    )
+    return space(N, domain=domain, **kw)

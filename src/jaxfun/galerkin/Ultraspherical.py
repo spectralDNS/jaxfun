@@ -100,7 +100,7 @@ class Ultraspherical(Jacobi):
             return 0
         return super().b(i, j)
 
-    def matrices(
+    def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
     ) -> DiaMatrix | None:
         """Return sparse mass matrix for (i,j)=(0,0) else None.

@@ -375,7 +375,7 @@ class Chebyshev(Jacobi):
             / self.gn(i + k)
         )
 
-    def matrices(
+    def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
     ) -> Matrix | DiaMatrix | None:
         """Return (possibly sparse) operator matrices between test/trial Chebyshev modes

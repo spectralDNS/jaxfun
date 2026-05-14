@@ -223,7 +223,7 @@ class ChebyshevU(Jacobi):
         """
         return (n + 1) / sp.jacobi(n, self.alpha, self.beta, 1)
 
-    def matrices(
+    def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
     ) -> Matrix | DiaMatrix | None:
         """Sparse operator matrices between test/trial ChebyshevU modes.

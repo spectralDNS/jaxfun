@@ -609,7 +609,9 @@ def inner_bilinear(
     df = float(vo.domain_factor)
     i, j = 0, 0
     scale = jnp.array([sc])
-    poly_scale = None
+    poly_scale: int = 0
+    x = vo.system.base_scalars()[0]
+
     for aii in ai.args:
         found_basis = False
         for p in sp.core.traversal.preorder_traversal(aii):
@@ -636,43 +638,29 @@ def inner_bilinear(
 
         if len(aii.free_symbols) > 0:
             s = aii.free_symbols.pop()
+            assert s == x
             aii = cast(sp.Expr, aii)
             if aii.is_polynomial(s) and sp.degree(aii, s) > 0:
-                poly_scale = aii
+                # just store degree, because any numeric scale will already be in scale.
+                poly_scale = int(sp.degree(aii, s))
             else:
-                scale *= lambdify(s, uo.map_expr_true_domain(aii), modules="jax")(xj)
+                scale *= lambdify(s, uo.map_expr_true_domain(aii))(xj)
 
         else:
             scale *= float(aii)  # ty:ignore[invalid-argument-type]
 
-    z: Matrix | None = None
-    if isinstance(v, PGComposite) and use_precomputed_matrices and not multivar:
-        q = int(sp.degree(poly_scale)) if poly_scale is not None else 0
-        if getattr(v, "matrices", None):
-            z: Matrix | DiaMatrix | None = v.matrices(i, (u, j), q=q)
-        if z is not None:
-            s = scale * df ** (i + j - 1)
-            if s.item() != 1:
-                z.data = z.data * s
-            return cast(MatrixProtocol, z)
-
+    z: DiaMatrix | Matrix | None = None
     if len(scale) == 1 and use_precomputed_matrices and not multivar:
-        # Look up matrix for constant scale and given derivative orders.
-        q = int(sp.degree(poly_scale)) if poly_scale is not None else 0
-
-        z: Matrix | DiaMatrix | None = vo.matrices(i, (uo, j), q=q)
-        if z is not None:
-            s = scale * df ** (i + j - 1)
-            if s.item() != 1:
-                z.data = z.data * s
-            poly_scale = None  # Avoid applying scale again below
-
-    if poly_scale is not None:
-        # Fallback to evaluating the polynomial at quadrature points
-        s = poly_scale.free_symbols.pop()
-        scale *= lambdify(s, uo.map_expr_true_domain(poly_scale))(xj)
+        if isinstance(v, PGComposite):
+            z = v.matrices(i, (u, j), q=poly_scale, scale=scale.item())
+            if z is not None:
+                return cast(MatrixProtocol, z)
+        z = vo.matrices(i, (uo, j), q=poly_scale, scale=scale.item())
 
     if z is None:
+        if poly_scale != 0:
+            scale *= lambdify(s, vo.map_expr_true_domain(x**poly_scale))(xj)
+
         w = wj * df ** (i + j - 1) * scale
         Pi = vo.evaluate_basis_derivative(xj, k=i)
         Pj = uo.evaluate_basis_derivative(xj, k=j)

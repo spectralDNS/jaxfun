@@ -229,7 +229,7 @@ class Fourier(OrthogonalSpace):
         M = N if N is not None else self.num_quad_points
         return jnp.linspace(float(a), float(b), M, endpoint=False)
 
-    def matrices(
+    def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
     ) -> DiaMatrix | None:
         """Return sparse operator matrix for Fourier test/trial derivatives.

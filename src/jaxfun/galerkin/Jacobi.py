@@ -538,7 +538,7 @@ class Jacobi(OrthogonalSpace):
         d: list[Array] = [jnp.atleast_1d(di) for di in d]
         return diags(d, offsets=(-1, 0, 1) if len(d) == 3 else (-1, 1), shape=(N, N))
 
-    def matrices(
+    def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
     ) -> Matrix | DiaMatrix | None:
         """Return square sparse mass matrix for (i,j)=(0,0) else None.
@@ -546,7 +546,7 @@ class Jacobi(OrthogonalSpace):
         Args:
             i: Derivative order for test function.
             trial: (space, derivative order) for trial function.
-            q: polynomial degree of coefficient.
+            q: polynomial degree of coefficient. Reference domain.
 
         Returns:
             DiaMatrix diagonal mass matrix or None if derivative combo unsupported.

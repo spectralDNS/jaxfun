@@ -190,7 +190,7 @@ class Legendre(Jacobi):
 
     legder = derivative_coeffs
 
-    def matrices(
+    def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
     ) -> Matrix | DiaMatrix | None:
         """Return (sparse) operator matrices for Legendre derivative coupling.

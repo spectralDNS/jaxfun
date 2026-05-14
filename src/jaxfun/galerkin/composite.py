@@ -625,7 +625,7 @@ class PGComposite(Composite):
         )
         self.order = order
 
-    def matrices(
+    def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
     ) -> DiaMatrix | Matrix | None:
         """Return (sparse) operator matrices for Petrov-Galerkin method.

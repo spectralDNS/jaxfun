@@ -17,7 +17,7 @@ Subclasses must implement:
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Self, overload
+from typing import TYPE_CHECKING, Self, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -431,7 +431,70 @@ class OrthogonalSpace(BaseSpace):
             self.S_inv = jnp.linalg.pinv(self.S.todense())
         return self.S_inv
 
-    def matrices(
+    def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
     ) -> Matrix | DiaMatrix | None:
         return None
+
+    def matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0, scale: complex = 1
+    ) -> Matrix | DiaMatrix | None:
+        """Return (sparse) predefined matrix.
+
+        Args:
+            i: Derivative order for test function.
+            trial: (space, derivative order) for trial function.
+            q: polynomial degree of coefficient. Physical domain.
+            scale: scaling factor for the matrix.
+
+        Returns:
+            DiaMatrix or Matrix; None if not implemented.
+        """
+
+        u, j = trial
+        z: Matrix | DiaMatrix | None = None
+
+        if self.domain_factor == 1:
+            z = self._matrices(i, trial, q)
+
+        else:
+            if q > 0:
+                x = self.system.base_scalars()[0]
+                poly_scale = self.map_expr_true_domain(x**q)
+                poly_ref = sp.expand(poly_scale)
+                coeffs = sp.Poly(poly_ref, x).all_coeffs()[::-1]
+                z_poly: list[Matrix | DiaMatrix] = []
+                _all_found = True
+                for _k, _ck in enumerate(coeffs):
+                    ck_f = float(_ck)
+                    if ck_f == 0.0:
+                        continue
+                    Mq = self._matrices(i, (u, j), q=_k)
+                    if Mq is None:
+                        _all_found = False
+                        break
+                    z_poly.append(ck_f * Mq)
+                if _all_found and z_poly:
+                    z = _addmats(cast(list[MatrixProtocol], z_poly))
+
+            else:
+                z = self._matrices(i, trial, q=0)
+
+        if z is not None:
+            df = float(self.domain_factor)
+            s = scale * df ** (i + j - 1)
+            if s != 1:
+                z.data = z.data * s
+
+        return z
+
+
+def _addmats(matrices: list[MatrixProtocol]) -> Matrix | DiaMatrix:
+    if any(isinstance(m, Matrix) for m in matrices):
+        return Matrix(
+            jnp.sum(
+                jnp.array([cast(MatrixProtocol, a).todense() for a in matrices]), axis=0
+            )
+        )
+    diamats: list[DiaMatrix] = cast(list[DiaMatrix], matrices)
+    return sum(diamats[1:], diamats[0])

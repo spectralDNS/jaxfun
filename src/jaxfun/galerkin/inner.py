@@ -659,7 +659,7 @@ def inner_bilinear(
 
     if z is None:
         if poly_scale != 0:
-            scale *= lambdify(s, vo.map_expr_true_domain(x**poly_scale))(xj)
+            scale *= lambdify(x, vo.map_expr_true_domain(x**poly_scale))(xj)
 
         w = wj * df ** (i + j - 1) * scale
         Pi = vo.evaluate_basis_derivative(xj, k=i)

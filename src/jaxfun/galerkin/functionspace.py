@@ -142,9 +142,9 @@ def FunctionSpace(
         if bcs.is_homogeneous():
             return C
         kwb = {}
-        if name in kw:
+        if "name" in kw:
             kwb["name"] = kw["name"] + "_b"
-        if fun_str in kw:
+        if "fun_str" in kw:
             kwb["fun_str"] = kw["fun_str"] + "_b"
         B = BCGeneric(
             bcs.num_bcs(),

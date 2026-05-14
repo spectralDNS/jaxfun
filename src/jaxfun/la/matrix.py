@@ -247,7 +247,7 @@ class Matrix(nnx.Pytree):
         n, m = self.shape
         if n != m:
             raise ValueError(
-                f"Zero exponent only supported for square matrices, got shape {self.shape}"  # noqa: E501
+                f"Matrix power only supported for square matrices, got shape {self.shape}"  # noqa: E501
             )
         if q == 0:
             return Matrix(jnp.eye(n, dtype=self.dtype))
@@ -258,8 +258,9 @@ class Matrix(nnx.Pytree):
         while remaining > 0:
             if remaining % 2 == 1:
                 result = base if result is None else result @ base
-            base = base @ base
             remaining //= 2
+            if remaining > 0:
+                base = base @ base
 
         assert result is not None
         return result

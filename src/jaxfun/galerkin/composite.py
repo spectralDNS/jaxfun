@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterator
-from typing import Literal, cast, overload
+from typing import Literal, overload
 
 import jax
 import jax.numpy as jnp
@@ -628,10 +628,10 @@ class PGComposite(Composite):
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
     ) -> DiaMatrix | Matrix | None:
-        """Return (sparse) operator matrices for Petrov-Galerkin method.
+        r"""Return (sparse) operator matrices for Petrov-Galerkin method.
 
         .. math::
-            \\langle \\psi_m^{(i)}, x^q \phi_n^{(trial[1])} \\rangle
+            \langle \psi_m^{(i)}, x^q \phi_n^{(trial[1])} \rangle
 
         where \psi_m^{(i)} are i'th derivative of test functions and
         \phi_n^{(trial[1])} are trial functions with derivative order
@@ -668,10 +668,8 @@ class PGComposite(Composite):
             return B @ u.ST if isinstance(u, Composite) else B
 
         elif j <= self.order and q > 0:
-            A: DiaMatrix = Akq(self.order, q, cast(Composite, u)).crop(
-                self.num_dofs, u.N
-            )
-            B: DiaMatrix = Bkl(self.order, j, cast(Composite, u))
+            A: DiaMatrix = Akq(self.order, q, u).crop(self.num_dofs, u.N)
+            B: DiaMatrix = Bkl(self.order, j, u)
             return A @ B @ u.ST if isinstance(u, Composite) else A @ B
 
         return None

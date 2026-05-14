@@ -522,7 +522,7 @@ class Jacobi(OrthogonalSpace):
         Returns:
             DiaMatrix for A_.
         """  # noqa: E501
-        return self._get_tridiagonal(cast(TriDiagMatrixFun, partial(self.a_, k=k)))
+        return self._get_tridiagonal(cast(TriDiagMatrixFun, partial(self.a_, k=k)), N=N)
 
     def _get_tridiagonal(
         self, mat: TriDiagMatrixFun, N: int | None = None
@@ -533,10 +533,12 @@ class Jacobi(OrthogonalSpace):
             sp.lambdify(n, mat(n, n), modules=["jax"])(jnp.arange(0, N)),
             sp.lambdify(n, mat(n, n + 1), modules=["jax"])(jnp.arange(0, N - 1)),
         ]
-        if d[1] == 0:
+        if bool(jnp.all(jnp.atleast_1d(d[1]) == 0)):
             d = [d[0], d[2]]
-        d: list[Array] = [jnp.atleast_1d(di) for di in d]
-        return diags(d, offsets=(-1, 0, 1) if len(d) == 3 else (-1, 1), shape=(N, N))
+        diagonals: list[Array] = [jnp.atleast_1d(di) for di in d]
+        return diags(
+            diagonals, offsets=(-1, 0, 1) if len(d) == 3 else (-1, 1), shape=(N, N)
+        )
 
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
@@ -556,7 +558,7 @@ class Jacobi(OrthogonalSpace):
         A = None
         if q != 0:
             A = self.A().power(q)
-        if i == 0 and j == 0 and q == 0:
+        if i == 0 and j == 0:
             M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
             return M if A is None else A.T @ M
         return None

@@ -812,7 +812,7 @@ class DiaMatrix(nnx.Pytree):
         col = jnp.zeros((n,), dtype=self.data.dtype)
         return col.at[safe_rows].add(vals)
 
-    def scale(self, alpha: float | Array) -> DiaMatrix:
+    def scale(self, alpha: complex | Array) -> DiaMatrix:
         """Return ``alpha * A`` as a new :class:`DiaMatrix`."""
         return DiaMatrix(data=self.data * alpha, offsets=self.offsets, shape=self.shape)
 
@@ -869,10 +869,10 @@ class DiaMatrix(nnx.Pytree):
         """Return the total number of entries in the matrix (including zeros)."""
         return self._size
 
-    def __mul__(self, other: float | Array) -> DiaMatrix:
+    def __mul__(self, other: complex | Array) -> DiaMatrix:
         return self.scale(other)
 
-    def __rmul__(self, other: float | Array) -> DiaMatrix:
+    def __rmul__(self, other: complex | Array) -> DiaMatrix:
         return self.scale(other)
 
     def __neg__(self) -> DiaMatrix:

@@ -24,7 +24,7 @@ from .arguments import (
     evaluate_jaxfunction_expr_quad,
     get_arg,
 )
-from .composite import BCGeneric, Composite, DirectSum, PGComposite
+from .composite import BCGeneric, Composite, DirectSum
 from .forms import (
     _has_functionspace,
     _has_globalindex,
@@ -651,7 +651,7 @@ def inner_bilinear(
 
     z: DiaMatrix | Matrix | None = None
     if len(scale) == 1 and use_precomputed_matrices and not multivar:
-        if isinstance(v, PGComposite):
+        if isinstance(v, Composite):
             z = v.matrices(i, (u, j), q=poly_scale, scale=scale.item())
             if z is not None:
                 return cast(MatrixProtocol, z)

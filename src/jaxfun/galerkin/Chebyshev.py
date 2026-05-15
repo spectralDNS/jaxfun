@@ -7,9 +7,9 @@ from jax import Array
 from sympy import Expr, Symbol
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.composite import PGComposite
+from jaxfun.galerkin.composite import Composite, PGComposite
 from jaxfun.la import DiaMatrix, Matrix, diags
-from jaxfun.typing import MeshKind
+from jaxfun.typing import MeshKind, TestSpaceKind
 from jaxfun.utils.common import Domain, jit_vmap
 
 from .Jacobi import Jacobi
@@ -446,6 +446,52 @@ class Chebyshev(Jacobi):
 
 
 ##### Predefined Composite spaces #####
+
+
+class CGComposite(Composite):
+    """Chebyshev Composite basis with Galerkin test functions.
+
+    Args:
+        N: Target (unconstrained) number of modes of underlying orthogonal.
+        orthogonal: Underlying orthogonal basis class.
+        bcs: BoundaryConditions specification.
+        domain: Physical domain (defaults to [-1, 1]).
+        name: Space name.
+        fun_str: Symbol stem for basis functions.
+        system: Optional coordinate system.
+        stencil: Optional custom stencil dict {shift: sympy_expr}.
+        scaling: SymPy expression scaling the stencil diagonals.
+        order: Highest derivative order for trial function.
+
+    Attributes:
+        orthogonal: Instance of underlying orthogonal basis.
+        stencil: Ordered dict of diagonal shift -> expression / scaling.
+        S: Sparse (DiaMatrix) stencil matrix for test functions.
+        ST: Pre-computed transpose of S for efficiency.
+        scaling: Scaling expression applied to user stencil.
+    """
+
+    def get_testspace(
+        self, kind: TestSpaceKind | str = TestSpaceKind.GALERKIN
+    ) -> Composite:
+        """Return test space (same as self for Galerkin)."""
+        kind = TestSpaceKind.coerce(kind)
+        if kind == TestSpaceKind.GALERKIN:
+            return self
+
+        assert kind == TestSpaceKind.PETROV_GALERKIN, (
+            f"Unsupported test space kind {kind!r} for Chebyshev CGComposite. "
+            f"Supported: {TestSpaceKind.GALERKIN!r}, {TestSpaceKind.PETROV_GALERKIN!r}."
+        )
+        if self.bcs.num_bcs() == 1:
+            return Phi_1(self.N)
+        if self.bcs.num_bcs() == 2:
+            return Phi_2(self.N)
+        if self.bcs.num_bcs() == 4:
+            return Phi_4(self.N)
+        raise NotImplementedError(
+            f"Test space kind {kind} not implemented for {self.bcs.num_bcs()} BCs."
+        )
 
 
 class Phi_1(PGComposite):

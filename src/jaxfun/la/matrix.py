@@ -236,7 +236,7 @@ class Matrix(nnx.Pytree):
         """
         return self.data[:, j]
 
-    def scale(self, alpha: float | Array) -> Matrix:
+    def scale(self, alpha: complex | Array) -> Matrix:
         """Return ``alpha * A`` as a new :class:`Matrix`."""
         return Matrix(self.data * alpha)
 
@@ -274,10 +274,10 @@ class Matrix(nnx.Pytree):
         """
         return Matrix(self.data[:n, :m])
 
-    def __mul__(self, other: float | Array) -> Matrix:
+    def __mul__(self, other: complex | Array) -> Matrix:
         return self.scale(other)
 
-    def __rmul__(self, other: float | Array) -> Matrix:
+    def __rmul__(self, other: complex | Array) -> Matrix:
         return self.scale(other)
 
     def __neg__(self) -> Matrix:

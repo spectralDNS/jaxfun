@@ -82,6 +82,35 @@ class MeshKind(StrEnum):
     UNIFORM = "uniform"
 
 
+class TestSpaceKind(StrEnum):
+    GALERKIN = "Galerkin"
+    G = "Galerkin"
+    PETROV_GALERKIN = "Petrov-Galerkin"
+    PG = "Petrov-Galerkin"
+
+    @classmethod
+    def coerce(cls, value: str | TestSpaceKind) -> TestSpaceKind:
+        """Accept a value, member name, or short alias and return the canonical member.
+
+        Examples::
+
+            TestSpaceKind.coerce("Galerkin")  # -> GALERKIN
+            TestSpaceKind.coerce("G")  # -> GALERKIN
+            TestSpaceKind.coerce("GALERKIN")  # -> GALERKIN
+            TestSpaceKind.coerce("PG")  # -> PETROV_GALERKIN
+        """
+        if isinstance(value, cls):
+            return value
+        try:
+            return cls(value)  # match by value: "Galerkin", "Petrov-Galerkin"
+        except ValueError:
+            pass
+        try:
+            return cls[value]  # match by name:  "G", "PG", "GALERKIN", ...
+        except KeyError as err:
+            raise ValueError(f"{value!r} is not a valid {cls.__name__}") from err
+
+
 type DomainType = Literal["inside", "boundary", "intersection", "all"]
 type InnerBilinearResult = Array | MatrixProtocol | TPMatrix | TensorMatrix
 type InnerBilinearResults = list[Array | MatrixProtocol | TPMatrix | TensorMatrix]

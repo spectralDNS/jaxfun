@@ -117,6 +117,9 @@ def FunctionSpace(
         No boundary conditions:
             V = FunctionSpace(32, Chebyshev)
     """
+    from jaxfun.galerkin.Chebyshev import CGComposite, Chebyshev
+    from jaxfun.galerkin.Legendre import Legendre, LGComposite
+
     if domain is None or isinstance(domain, Domain):
         domain = domain
     else:
@@ -131,7 +134,14 @@ def FunctionSpace(
         bcs = BoundaryConditions(bcs, domain=domain)
         assert issubclass(space, Jacobi)
 
-        C = Composite(
+        compspace = (
+            LGComposite
+            if issubclass(space, Legendre)
+            else CGComposite
+            if issubclass(space, Chebyshev)
+            else Composite
+        )
+        C = compspace(
             N,
             space,
             bcs=bcs.get_homogeneous(),
@@ -139,6 +149,7 @@ def FunctionSpace(
             system=system,
             **kw,
         )
+
         if bcs.is_homogeneous():
             return C
         kwb = {}

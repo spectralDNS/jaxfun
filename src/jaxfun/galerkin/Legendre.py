@@ -6,8 +6,9 @@ import sympy as sp
 from jax import Array
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.composite import PGComposite
+from jaxfun.galerkin.composite import BCGeneric, Composite, PGComposite
 from jaxfun.la import DiaMatrix, Matrix, diags
+from jaxfun.typing import TestSpaceKind
 from jaxfun.utils.common import Domain, jit_vmap, n
 from jaxfun.utils.fastgl import leggauss
 
@@ -269,6 +270,180 @@ class Legendre(Jacobi):
 
 
 ### Predefined Composite spaces #####
+
+
+class LGComposite(Composite):
+    """Legendre Composite basis with Galerkin test functions.
+
+    Args:
+        N: Target (unconstrained) number of modes of underlying orthogonal.
+        orthogonal: Underlying orthogonal basis class.
+        bcs: BoundaryConditions specification.
+        domain: Physical domain (defaults to [-1, 1]).
+        name: Space name.
+        fun_str: Symbol stem for basis functions.
+        system: Optional coordinate system.
+        stencil: Optional custom stencil dict {shift: sympy_expr}.
+        scaling: SymPy expression scaling the stencil diagonals.
+        order: Highest derivative order for trial function.
+
+    Attributes:
+        orthogonal: Instance of underlying orthogonal basis.
+        stencil: Ordered dict of diagonal shift -> expression / scaling.
+        S: Sparse (DiaMatrix) stencil matrix for test functions.
+        ST: Pre-computed transpose of S for efficiency.
+        scaling: Scaling expression applied to user stencil.
+    """
+
+    def get_testspace(
+        self, kind: TestSpaceKind | str = TestSpaceKind.GALERKIN
+    ) -> Composite:
+        """Return test space (same as self for Galerkin)."""
+        kind = TestSpaceKind.coerce(kind)
+        if kind == TestSpaceKind.GALERKIN:
+            return self
+
+        assert kind == TestSpaceKind.PETROV_GALERKIN, (
+            f"Unsupported test space kind {kind!r} for Legendre LGComposite. "
+            f"Supported: {TestSpaceKind.GALERKIN!r}, {TestSpaceKind.PETROV_GALERKIN!r}."
+        )
+        if self.bcs.num_bcs() == 1:
+            return Phi_1(self.N)
+        if self.bcs.num_bcs() == 2:
+            return Phi_2(self.N)
+        if self.bcs.num_bcs() == 4:
+            return Phi_4(self.N)
+        raise NotImplementedError(
+            f"Test space kind {kind} not implemented for {self.bcs.num_bcs()} BCs."
+        )
+
+    def _matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
+    ) -> DiaMatrix | Matrix | None:
+        r"""Return (sparse) operator matrices for Galerkin method.
+
+        .. math::
+            \langle \psi_m^{(i)}, x^q \phi_n^{(trial[1])} \rangle
+
+        where \psi_m^{(i)} are i'th derivative of test functions and
+        \phi_n^{(trial[1])} are trial functions with derivative order
+        trial[1].
+
+        Args:
+            i: Derivative order for test function. Should be 0. Kept for
+                consistency with Galerkin.
+            trial: Tuple (u, j) with trial space u and derivative order j.
+            q: polynomial order for scaling.
+
+        """
+
+        u, j = trial
+
+        assert isinstance(u, Legendre | Composite), (
+            "Trial space must be Legendre or Composite."
+        )
+
+        if isinstance(u, BCGeneric):
+            return None
+
+        if self.bcs == {"left": {"D": 0}, "right": {"D": 0}}:
+            # Not implementing i=j=0 case since mass matrix in orthogonal basis is
+            # diagonal and thus computation is fast via orthogonal basis path.
+            if (
+                (i == 0 and j in (1, 2))
+                or (j == 0 and i in (1, 2))
+                or (i == 1 and j == 1)
+            ):
+                M = self.num_dofs
+                k = jnp.arange(M)
+                if self.scaling is not None:
+                    s = jnp.ones(M) * sp.lambdify(n, self.scaling, modules="jax")(k)
+                else:
+                    s = jnp.ones(M)
+            else:
+                return None
+
+            if i == 0 and j == 1:
+                if q == 0:
+                    return diags(
+                        [-2 / (s[1:] * s[:-1]), 2 / (s[:-1] * s[1:])],
+                        offsets=(-1, 1),
+                        shape=(M, M),
+                    )
+                elif q == 1:
+                    diag0 = -2 * (2 * k + 3) / ((2 * k + 1) * (2 * k + 5)) / s**2
+                    return diags(
+                        [
+                            -2 * k[2:] / (2 * k[2:] + 1) / (s[2:] * s[:-2]),
+                            diag0,
+                            2 * (k[:-2] + 3) / (2 * k[:-2] + 5) / (s[:-2] * s[2:]),
+                        ],
+                        offsets=(-2, 0, 2),
+                        shape=(M, M),
+                    )
+                return None  # q >= 2: fall back to quadrature
+
+            elif i == 1 and j == 0:
+                A = self._matrices(0, (u, 1), q=q)
+                if A is None:
+                    return None
+                return A.T
+
+            elif i == 0 and j == 2:
+                if q == 0:
+                    return diags([-(4 * k + 6) / s**2], offsets=(0,), shape=(M, M))
+
+                elif q == 1:
+                    return diags(
+                        [
+                            -2 * k[1:] / (s[1:] * s[:-1]),
+                            -2 * (k[:-1] + 3) / (s[:-1] * s[1:]),
+                        ],
+                        offsets=(-1, 1),
+                        shape=(M, M),
+                    )
+
+                elif q == 2:
+                    diag0 = (
+                        -2
+                        * (2 * k + 3)
+                        * (2 * k**2 + 6 * k + 1)
+                        / ((2 * k + 1) * (2 * k + 5))
+                        / s**2
+                    )
+                    return diags(
+                        [
+                            -2
+                            * k[2:]
+                            * (k[2:] - 1)
+                            / (2 * k[2:] + 1)
+                            / (s[2:] * s[:-2]),
+                            diag0,
+                            -2
+                            * (k[:-2] + 3)
+                            * (k[:-2] + 4)
+                            / (2 * k[:-2] + 5)
+                            / (s[:-2] * s[2:]),
+                        ],
+                        offsets=(-2, 0, 2),
+                        shape=(M, M),
+                    )
+
+                return None  # q >= 3: fall back to quadrature
+
+            elif i == 2 and j == 0:
+                A = self._matrices(0, (u, 2), q=q)
+                if A is None:
+                    return None
+                return A.T
+
+            elif i == 1 and j == 1:
+                A = self._matrices(0, (u, 2), q=q)
+                if A is None:
+                    return None
+                return -A
+
+        return None
 
 
 class Phi_1(PGComposite):

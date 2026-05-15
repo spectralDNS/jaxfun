@@ -13,7 +13,7 @@ from sympy import Number
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol, diags
-from jaxfun.typing import MeshKind
+from jaxfun.typing import MeshKind, TestSpaceKind
 from jaxfun.utils.common import Domain, matmat, n
 
 from .Jacobi import Jacobi
@@ -124,6 +124,7 @@ class Composite(OrthogonalSpace):
         orthogonal: Instance of underlying orthogonal basis.
         stencil: Ordered dict of diagonal shift -> expression / scaling.
         S: Sparse (DiaMatrix) stencil matrix.
+        ST: Pre-computed transpose of S for efficiency.
         scaling: Scaling expression applied to user stencil.
     """
 
@@ -158,8 +159,7 @@ class Composite(OrthogonalSpace):
         self.scaling = scaling
         self.stencil = {(si[0]): si[1] / scaling for si in sorted(stencil.items())}
         self.S: DiaMatrix = self.stencil_to_diamatrix()
-        self.ST: DiaMatrix = self.S.T  # pre-computed transpose; avoids creating
-        # a new DiaMatrix inside jax.jit traces (which breaks metadata comparison)
+        self.ST: DiaMatrix = self.S.T
         self._mass_matrix: DiaMatrix = self._compute_mass_matrix()
         self._mass_matrix.lu_factor()
 
@@ -345,6 +345,15 @@ class Composite(OrthogonalSpace):
         """Return underlying orthogonal basis instance."""
         return self.orthogonal
 
+    def get_testspace(
+        self, kind: TestSpaceKind | str = TestSpaceKind.GALERKIN
+    ) -> Composite:
+        """Return test space (same as self for Galerkin)."""
+        kind = TestSpaceKind.coerce(kind)
+        if kind == TestSpaceKind.GALERKIN:
+            return self
+        raise NotImplementedError(f"Test space kind {kind} not implemented.")
+
     def __add__(self, b: BCGeneric) -> DirectSum:
         """Direct sum self ⊕ b."""
         return DirectSum(self, b)
@@ -468,6 +477,7 @@ class DirectSum:
         self.quad_points_and_weights = a.quad_points_and_weights
         self.num_quad_points = a.num_quad_points
         self.get_orthogonal = a.get_orthogonal
+        self.get_testspace = a.get_testspace
         self.dims = a.dims
         self.rank = a.rank
         self.domain = a.domain
@@ -624,6 +634,7 @@ class PGComposite(Composite):
             scaling=scaling,
         )
         self.order = order
+        assert self.order > 0, "Order must be positive for Petrov-Galerkin composite."
 
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
@@ -664,7 +675,7 @@ class PGComposite(Composite):
             return V.orthogonal.A_(k=k).power(q)
 
         if j <= self.order and q == 0:
-            B: DiaMatrix = Bkl(self.order, j, u.orthogonal).crop(self.num_dofs, u.N)
+            B: DiaMatrix = Bkl(self.order, j, u).crop(self.num_dofs, u.N)
             return B @ u.ST if isinstance(u, Composite) else B
 
         elif j <= self.order and q > 0:

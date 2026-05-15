@@ -482,8 +482,7 @@ class OrthogonalSpace(BaseSpace):
 
         if z is not None:
             df = float(self.domain_factor)
-            s = scale * df ** (i + j - 1)
-            z.data = z.data * s
+            z = z * (scale * df ** (i + j - 1))
 
         return z
 

@@ -235,7 +235,7 @@ class Legendre(Jacobi):
             return M if A is None else A.T @ M
 
         if i == 1 and j == 0:
-            m = u.matrices(j, (self, i), q=q)
+            m = u._matrices(j, (self, i), q=q)
             if m is not None:
                 return m.T
             return None
@@ -262,7 +262,7 @@ class Legendre(Jacobi):
             return M if A is None else A.T @ M
 
         if i == 2 and j == 0:
-            m = u.matrices(j, (self, i), q=q)
+            m = u._matrices(j, (self, i), q=q)
             if m is not None:
                 return m.T
 
@@ -308,11 +308,11 @@ class LGComposite(Composite):
             f"Supported: {TestSpaceKind.GALERKIN!r}, {TestSpaceKind.PETROV_GALERKIN!r}."
         )
         if self.bcs.num_bcs() == 1:
-            return Phi_1(self.N)
+            return LegPhi_1(self.N)
         if self.bcs.num_bcs() == 2:
-            return Phi_2(self.N)
+            return LegPhi_2(self.N)
         if self.bcs.num_bcs() == 4:
-            return Phi_4(self.N)
+            return LegPhi_4(self.N)
         raise NotImplementedError(
             f"Test space kind {kind} not implemented for {self.bcs.num_bcs()} BCs."
         )
@@ -446,7 +446,7 @@ class LGComposite(Composite):
         return None
 
 
-class Phi_1(PGComposite):
+class LegPhi_1(PGComposite):
     r"""
     Composite space for Mortensen's Petrov-Galerkin method order 1.
 
@@ -469,11 +469,11 @@ class Phi_1(PGComposite):
     dense operator matrices for the same problem.
 
     Examples:
-        >>> from jaxfun.galerkin.Legendre import Phi_1
+        >>> from jaxfun.galerkin.Legendre import LegPhi_1
         >>> from jaxfun.galerkin import inner, Legendre, TrialFunction, TestFunction
         >>> from jaxfun.galerkin import FunctionSpace
         >>> N = 6
-        >>> P = Phi_1(N)
+        >>> P = LegPhi_1(N)
         >>> V = Legendre.Legendre(N)
         >>> u = TrialFunction(V)
         >>> v = TestFunction(P)
@@ -502,7 +502,7 @@ class Phi_1(PGComposite):
         N: int,
         domain: Domain | None = None,
         system: CoordSys | None = None,
-        name: str = "Phi_1",
+        name: str = "LegPhi_1",
         fun_str: str = "phi_1",
     ) -> None:
         PGComposite.__init__(
@@ -511,6 +511,7 @@ class Phi_1(PGComposite):
             Legendre,
             bcs={"left": {"D": 0}, "right": {"D": 0}},
             domain=domain,
+            system=system,
             stencil={0: sp.S.Half, 2: -sp.S.Half},
             name=name,
             fun_str=fun_str,
@@ -518,7 +519,7 @@ class Phi_1(PGComposite):
         )
 
 
-class Phi_2(PGComposite):
+class LegPhi_2(PGComposite):
     r"""Composite space for Mortensen's Petrov-Galerkin method order 2.
 
     The test functions are defined by
@@ -542,11 +543,11 @@ class Phi_2(PGComposite):
     dense operator matrices for the same problem.
 
     Examples:
-        >>> from jaxfun.galerkin.Legendre import Phi_2
+        >>> from jaxfun.galerkin.Legendre import LegPhi_2
         >>> from jaxfun.galerkin import inner, Legendre, TrialFunction, TestFunction
         >>> from jaxfun.galerkin import FunctionSpace
         >>> N = 7
-        >>> P = Phi_2(N)
+        >>> P = LegPhi_2(N)
         >>> V = Legendre.Legendre(N)
         >>> u = TrialFunction(V)
         >>> v = TestFunction(P)
@@ -577,7 +578,7 @@ class Phi_2(PGComposite):
         N: int,
         domain: Domain | None = None,
         system: CoordSys | None = None,
-        name: str = "Phi_2",
+        name: str = "LegPhi_2",
         fun_str: str = "phi_2",
     ) -> None:
         PGComposite.__init__(
@@ -586,6 +587,7 @@ class Phi_2(PGComposite):
             Legendre,
             bcs={"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}},
             domain=domain,
+            system=system,
             stencil={
                 0: 1 / (2 * (2 * n + 3)),
                 2: -(2 * n + 5) / (2 * n + 7) / (2 * n + 3),
@@ -597,7 +599,7 @@ class Phi_2(PGComposite):
         )
 
 
-class Phi_4(PGComposite):
+class LegPhi_4(PGComposite):
     r"""Composite space for Mortensen's Petrov-Galerkin method order 4.
 
     The test functions are defined by
@@ -621,11 +623,11 @@ class Phi_4(PGComposite):
     dense operator matrices for the same problem.
 
     Examples:
-        >>> from jaxfun.galerkin.Legendre import Phi_4
+        >>> from jaxfun.galerkin.Legendre import LegPhi_4
         >>> from jaxfun.galerkin import inner, Legendre, TrialFunction, TestFunction
         >>> from jaxfun.galerkin import FunctionSpace
         >>> N = 9
-        >>> P = Phi_4(N)
+        >>> P = LegPhi_4(N)
         >>> V = Legendre.Legendre(N)
         >>> u = TrialFunction(V)
         >>> v = TestFunction(P)
@@ -658,7 +660,7 @@ class Phi_4(PGComposite):
         N: int,
         domain: Domain | None = None,
         system: CoordSys | None = None,
-        name: str = "Phi_4",
+        name: str = "LegPhi_4",
         fun_str: str = "phi_4",
     ) -> None:
         PGComposite.__init__(
@@ -670,6 +672,7 @@ class Phi_4(PGComposite):
                 "right": {"D": 0, "N": 0, "N2": 0, "N3": 0},
             },
             domain=domain,
+            system=system,
             stencil={
                 0: 1 / (2 * (8 * n**3 + 60 * n**2 + 142 * n + 105)),
                 2: -2 / (8 * n**3 + 84 * n**2 + 262 * n + 231),

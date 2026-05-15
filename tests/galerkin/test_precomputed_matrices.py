@@ -259,7 +259,7 @@ class TestPoly5SecondDerivativeMatrixWithCoefficient:
         err = float(jnp.linalg.norm(M.todense() - ref))
         scale = float(jnp.linalg.norm(M.todense()))
         assert err / max(scale, 1.0) < ulp(100), (
-            f"N={N}: relative err {err / scale:.2e}"
+            f"N={N}: relative err {err / max(scale, 1.0):.2e}"
         )
 
 
@@ -293,6 +293,7 @@ class TestFourierReturnType:
         v = _four(8)
         M = v.matrices(i, (v, j))
         assert M is not None
+        assert isinstance(M, DiaMatrix)
         assert set(M.offsets) == {0}, (
             f"expected only offset 0 for ({i},{j}), got {M.offsets}"
         )

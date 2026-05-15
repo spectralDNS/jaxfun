@@ -470,7 +470,7 @@ class Jacobi(OrthogonalSpace):
         """
 
         J = Jacobi(
-            self.N,
+            1,  # insignificant
             domain=self.domain,
             system=self.system,
             alpha=cast(Number, self.alpha + k),

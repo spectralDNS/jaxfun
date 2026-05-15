@@ -94,21 +94,21 @@ class TestSpaceKind(StrEnum):
 
         Examples::
 
-            TestSpaceKind.coerce("Galerkin")  # -> GALERKIN
-            TestSpaceKind.coerce("G")  # -> GALERKIN
-            TestSpaceKind.coerce("GALERKIN")  # -> GALERKIN
-            TestSpaceKind.coerce("PG")  # -> PETROV_GALERKIN
+            TestSpaceKind.coerce("Galerkin")  # -> GALERKIN  (value lookup)
+            TestSpaceKind.coerce("G")  # -> GALERKIN  (name lookup)
+            TestSpaceKind.coerce("GALERKIN")  # -> GALERKIN  (name lookup)
+            TestSpaceKind.coerce("PG")  # -> PETROV_GALERKIN  (name lookup)
         """
         if isinstance(value, cls):
             return value
         try:
-            return cls(value)  # match by value: "Galerkin", "Petrov-Galerkin"
-        except ValueError:
+            return cls[value]  # match by name: "G", "PG", "GALERKIN", "PETROV_GALERKIN"
+        except KeyError:
             pass
         try:
-            return cls[value]  # match by name:  "G", "PG", "GALERKIN", ...
-        except KeyError as err:
-            raise ValueError(f"{value!r} is not a valid {cls.__name__}") from err
+            return cls(value)  # match by value: "Galerkin", "Petrov-Galerkin"
+        except ValueError:
+            raise ValueError(f"{value!r} is not a valid {cls.__name__}") from None
 
 
 type DomainType = Literal["inside", "boundary", "intersection", "all"]

@@ -672,7 +672,7 @@ class PGComposite(Composite):
             return DI @ BN
 
         def Akq(k: int, q: int, V: Jacobi | Composite) -> DiaMatrix:
-            return V.orthogonal.A_(k=k).power(q)
+            return V.orthogonal.A_(k=k, N=V.N).power(q)
 
         if j <= self.order and q == 0:
             B: DiaMatrix = Bkl(self.order, j, u).crop(self.num_dofs, u.N)

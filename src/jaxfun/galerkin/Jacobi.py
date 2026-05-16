@@ -470,7 +470,7 @@ class Jacobi(OrthogonalSpace):
         """
 
         J = Jacobi(
-            1,  # insignificant
+            0,  # insignificant
             domain=self.domain,
             system=self.system,
             alpha=cast(Number, self.alpha + k),
@@ -495,7 +495,7 @@ class Jacobi(OrthogonalSpace):
         Returns:
             DiaMatrix for A.
         """
-        return self._get_tridiagonal(cast(TriDiagMatrixFun, self.a))
+        return self._get_tridiagonal(cast(TriDiagMatrixFun, self.a), N=N)
 
     def B(self, N: int | None = None) -> DiaMatrix:
         """Return recursion matrix B for normalized Jacobi polynomials.
@@ -508,7 +508,7 @@ class Jacobi(OrthogonalSpace):
         Returns:
             DiaMatrix for B.
         """
-        return self._get_tridiagonal(cast(TriDiagMatrixFun, self.b))
+        return self._get_tridiagonal(cast(TriDiagMatrixFun, self.b), N=N)
 
     def A_(self, N: int | None = None, k: int = 0) -> DiaMatrix:
         """Return recursion matrix A_ for k-th derivative of normalized Jacobi polynomials.
@@ -529,9 +529,13 @@ class Jacobi(OrthogonalSpace):
     ) -> DiaMatrix:
         N = self.num_quad_points if N is None else N
         d: list[Array | complex] = [
-            sp.lambdify(n, mat(n, n - 1), modules=["jax"])(jnp.arange(1, N)),
-            sp.lambdify(n, mat(n, n), modules=["jax"])(jnp.arange(0, N)),
-            sp.lambdify(n, mat(n, n + 1), modules=["jax"])(jnp.arange(0, N - 1)),
+            sp.lambdify(n, sp.simplify(mat(n, n - 1)), modules=["jax"])(
+                jnp.arange(1, N)
+            ),
+            sp.lambdify(n, sp.simplify(mat(n, n)), modules=["jax"])(jnp.arange(0, N)),
+            sp.lambdify(n, sp.simplify(mat(n, n + 1)), modules=["jax"])(
+                jnp.arange(0, N - 1)
+            ),
         ]
         if bool(jnp.all(jnp.atleast_1d(d[1]) == 0)):
             d = [d[0], d[2]]

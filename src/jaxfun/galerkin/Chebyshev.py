@@ -365,7 +365,7 @@ class Chebyshev(Jacobi):
     def a_(self, i: Symbol | int, j: Symbol | int, k: int = 0) -> Expr | float:
         from .Ultraspherical import Ultraspherical
 
-        U = Ultraspherical(1, domain=self.domain, system=self.system, lambda_=k)
+        U = Ultraspherical(0, domain=self.domain, system=self.system, lambda_=k)
 
         return (
             U._a(i, j)

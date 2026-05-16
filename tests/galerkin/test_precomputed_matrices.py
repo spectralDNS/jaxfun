@@ -19,7 +19,7 @@ from typing import cast
 import jax.numpy as jnp
 import pytest
 
-from jaxfun.galerkin import TestFunction, TrialFunction, inner
+from jaxfun.galerkin import FunctionSpace, TestFunction, TrialFunction, inner
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.ChebyshevU import ChebyshevU
 from jaxfun.galerkin.Fourier import Fourier
@@ -59,6 +59,15 @@ def _quad_matrix(space, dv: int, du: int, q: int = 0) -> jnp.ndarray:
     u = TrialFunction(space)
     x = space.system.x
     A = inner(x**q * v.diff(x, dv) * u.diff(x, du), use_precomputed_matrices=False)
+    return A.todense()
+
+
+def _quad_matrix_pg(test_space, trial_space, du: int, q: int = 0) -> jnp.ndarray:
+    """Compute integral matrix for PG test space via numerical quadrature."""
+    v = TestFunction(test_space)
+    u = TrialFunction(trial_space)
+    x = test_space.system.x
+    A = inner(x**q * v * u.diff(x, du), use_precomputed_matrices=False)
     return A.todense()
 
 
@@ -239,6 +248,25 @@ class TestPoly5FirstDerivativeMatrixWithCoefficient:
         M = v.matrices(0, (v, 1), q)
         assert M is not None
         ref = _quad_matrix(v, 0, 1, q)
+        err = float(jnp.linalg.norm(M.todense() - ref))
+        scale = float(jnp.linalg.norm(M.todense()))
+        assert err / max(scale, 1.0) < ulp(100), (
+            f"N={N}: relative err {err / scale:.2e}"
+        )
+
+
+@pytest.mark.parametrize("space_fn", (Legendre, Chebyshev))
+class TestPoly5FirstDerivativeMatrixPGWithCoefficient:
+    @pytest.mark.parametrize("N,q", [(6, 1), (8, 2), (10, 3)])
+    def test_values_match_quadrature(self, space_fn, N, q):
+        U = FunctionSpace(N, space_fn, bcs={"left": {"D": 0}, "right": {"D": 0}})
+        V = U.get_testspace(kind="PG")
+        u = TrialFunction(U)
+        v = TestFunction(V)
+        x = U.system.x
+        M = inner(x**q * v * u.diff(x, 1), sparse=True, use_precomputed_matrices=True)
+        assert M is not None
+        ref = _quad_matrix_pg(V, U, 1, q)
         err = float(jnp.linalg.norm(M.todense() - ref))
         scale = float(jnp.linalg.norm(M.todense()))
         assert err / max(scale, 1.0) < ulp(100), (

@@ -9,6 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 from flax import nnx
 from jax import Array
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from scipy import sparse as scipy_sparse
 
 from jaxfun.la.diamatrix import DiaMatrix, diakron
@@ -641,6 +642,15 @@ class TPMatricesWavenumberSolver:
         )
         self.L_offsets: tuple[int, ...] = all_L_offsets
         self.U_offsets: tuple[int, ...] = all_U_offsets
+
+        if len(jax.devices()) > 1:
+            mesh = Mesh(np.array(jax.devices()), axis_names=("k",))
+            k_sharding = NamedSharding(mesh, P("k", None, None))  # (n_F, n_diags, n_P)
+
+            self.L_data_batch = jax.device_put(self.L_data_batch, k_sharding)
+            self.U_data_batch = jax.device_put(self.U_data_batch, k_sharding)
+            self._mesh = mesh
+
         self._vmap_solve = _make_wavenumber_vmap_solve(
             all_L_offsets, all_U_offsets, n_P_local, self.L_data_batch.dtype
         )
@@ -703,7 +713,15 @@ class TPMatricesWavenumberSolver:
         axes_order = fourier_axes + [poly_axis]
         rhs_2d = jnp.transpose(rhs, axes_order).reshape(n_F, n_P)
 
-        sol_2d = self._vmap_solve(self.L_data_batch, self.U_data_batch, rhs_2d)
+        if len(jax.devices()) > 1:
+            rhs_sharding = NamedSharding(self._mesh, P("k", None))  # (n_F, n_P)
+            rhs_2d = jax.device_put(rhs_2d, rhs_sharding)
+            sol_2d = self._vmap_solve(self.L_data_batch, self.U_data_batch, rhs_2d)
+            # sol_2d is now a sharded Array; gather before reshaping:
+            sol_2d = jax.device_get(sol_2d)  # or keep sharded for downstream ops
+
+        else:
+            sol_2d = self._vmap_solve(self.L_data_batch, self.U_data_batch, rhs_2d)
 
         # Un-permute back to the original axis order.
         sol_perm = sol_2d.reshape(fourier_shape + (n_P,))

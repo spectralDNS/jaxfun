@@ -476,11 +476,25 @@ class CGComposite(Composite):
         kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
         name: str | None = None,
         fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
     ) -> Composite:
         """Return test space (same as self for Galerkin)."""
         kind = TestSpaceKind.coerce(kind)
         if kind == TestSpaceKind.GALERKIN:
-            return self
+            if name is None and fun_str is None and scaling is None:
+                return self
+            else:
+                return CGComposite(
+                    N=self.orthogonal.dim,
+                    orthogonal=Chebyshev,
+                    bcs=self.bcs,
+                    domain=self.domain,
+                    name=name if name is not None else self.name,
+                    fun_str=fun_str if fun_str is not None else self.fun_str,
+                    system=self.system,
+                    stencil=self.stencil,
+                    scaling=self.scaling,
+                )
 
         assert kind == TestSpaceKind.PETROV_GALERKIN, (
             f"Unsupported test space kind {kind!r} for Chebyshev CGComposite. "
@@ -493,6 +507,7 @@ class CGComposite(Composite):
                 system=self.system,
                 name=name,
                 fun_str=fun_str,
+                scaling=scaling,
             )
         if self.bcs.num_bcs() == 2:
             return ChebPhi_2(
@@ -501,6 +516,7 @@ class CGComposite(Composite):
                 system=self.system,
                 name=name,
                 fun_str=fun_str,
+                scaling=scaling,
             )
         if self.bcs.num_bcs() == 4:
             return ChebPhi_4(
@@ -509,6 +525,7 @@ class CGComposite(Composite):
                 system=self.system,
                 name=name,
                 fun_str=fun_str,
+                scaling=scaling,
             )
         raise NotImplementedError(
             f"Test space kind {kind} not implemented for {self.bcs.num_bcs()} BCs."
@@ -574,6 +591,7 @@ class ChebPhi_1(PGComposite):
         system: CoordSys | None = None,
         name: str | None = None,
         fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
     ) -> None:
         name = name if name is not None else "ChebPhi_1"
         fun_str = fun_str if fun_str is not None else "phi_1"
@@ -585,6 +603,7 @@ class ChebPhi_1(PGComposite):
             domain=domain,
             system=system,
             stencil={0: 1 / sp.pi / (n + 1), 2: -1 / sp.pi / (n + 1)},
+            scaling=scaling,
             name=name,
             fun_str=fun_str,
             order=1,
@@ -651,6 +670,7 @@ class ChebPhi_2(PGComposite):
         system: CoordSys | None = None,
         name: str | None = None,
         fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
     ) -> None:
         name = name if name is not None else "ChebPhi_2"
         fun_str = fun_str if fun_str is not None else "phi_2"
@@ -668,6 +688,7 @@ class ChebPhi_2(PGComposite):
             },
             name=name,
             fun_str=fun_str,
+            scaling=scaling,
             order=2,
         )
 
@@ -734,6 +755,7 @@ class ChebPhi_4(PGComposite):
         system: CoordSys | None = None,
         name: str | None = None,
         fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
     ) -> None:
         name = name if name is not None else "ChebPhi_4"
         fun_str = fun_str if fun_str is not None else "phi_4"
@@ -756,5 +778,6 @@ class ChebPhi_4(PGComposite):
             },
             name=name,
             fun_str=fun_str,
+            scaling=scaling,
             order=4,
         )

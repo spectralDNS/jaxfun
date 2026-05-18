@@ -9,7 +9,7 @@ from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.composite import BCGeneric, Composite, PGComposite
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TestSpaceKind
-from jaxfun.utils.common import Domain, jit_vmap, n
+from jaxfun.utils.common import Domain, jit_vmap, lambdify, n
 from jaxfun.utils.fastgl import leggauss
 
 from .Jacobi import Jacobi
@@ -300,11 +300,25 @@ class LGComposite(Composite):
         kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
         name: str | None = None,
         fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
     ) -> Composite:
         """Return test space (same as self for Galerkin)."""
         kind = TestSpaceKind.coerce(kind)
         if kind == TestSpaceKind.GALERKIN:
-            return self
+            if name is None and fun_str is None and scaling is None:
+                return self
+            else:
+                return LGComposite(
+                    N=self.orthogonal.dim,
+                    orthogonal=Legendre,
+                    bcs=self.bcs,
+                    domain=self.domain,
+                    name=name if name is not None else self.name,
+                    fun_str=fun_str if fun_str is not None else self.fun_str,
+                    system=self.system,
+                    stencil=self.stencil,
+                    scaling=scaling if scaling is not None else self.scaling,
+                )
 
         assert kind == TestSpaceKind.PETROV_GALERKIN, (
             f"Unsupported test space kind {kind!r} for Legendre LGComposite. "
@@ -317,6 +331,7 @@ class LGComposite(Composite):
                 system=self.system,
                 name=name,
                 fun_str=fun_str,
+                scaling=scaling,
             )
         if self.bcs.num_bcs() == 2:
             return LegPhi_2(
@@ -325,6 +340,7 @@ class LGComposite(Composite):
                 system=self.system,
                 name=name,
                 fun_str=fun_str,
+                scaling=scaling,
             )
         if self.bcs.num_bcs() == 4:
             return LegPhi_4(
@@ -333,6 +349,7 @@ class LGComposite(Composite):
                 system=self.system,
                 name=name,
                 fun_str=fun_str,
+                scaling=scaling,
             )
         raise NotImplementedError(
             f"Test space kind {kind} not implemented for {self.bcs.num_bcs()} BCs."
@@ -351,8 +368,7 @@ class LGComposite(Composite):
         trial[1].
 
         Args:
-            i: Derivative order for test function. Should be 0. Kept for
-                consistency with Galerkin.
+            i: Derivative order for test function.
             trial: Tuple (u, j) with trial space u and derivative order j.
             q: polynomial order for scaling.
 
@@ -367,6 +383,14 @@ class LGComposite(Composite):
         if isinstance(u, BCGeneric):
             return None
 
+        if u.bcs != self.bcs:  # only fast paths for Galerkin.
+            return None
+
+        assert isinstance(u, Composite)
+
+        if self.num_dofs != u.num_dofs:  # only fast paths for square matrices.
+            return None
+
         if self.bcs == {"left": {"D": 0}, "right": {"D": 0}}:
             # Not implementing i=j=0 case since mass matrix in orthogonal basis is
             # diagonal and thus computation is fast via orthogonal basis path.
@@ -378,26 +402,41 @@ class LGComposite(Composite):
                 M = self.num_dofs
                 k = jnp.arange(M)
                 if self.scaling is not None:
-                    s = jnp.ones(M) * sp.lambdify(n, self.scaling, modules="jax")(k)
+                    s_test = jnp.ones(M) * lambdify(n, self.scaling)(k)
                 else:
-                    s = jnp.ones(M)
+                    s_test = jnp.ones(M)
+                if u.scaling is not None:
+                    s_trial = jnp.ones(M) * lambdify(n, u.scaling)(k)
+                else:
+                    s_trial = jnp.ones(M)
             else:
                 return None
 
             if i == 0 and j == 1:
                 if q == 0:
                     return diags(
-                        [-2 / (s[1:] * s[:-1]), 2 / (s[:-1] * s[1:])],
+                        [
+                            -2 / (s_test[1:] * s_trial[:-1]),
+                            2 / (s_test[:-1] * s_trial[1:]),
+                        ],
                         offsets=(-1, 1),
                         shape=(M, M),
                     )
                 elif q == 1:
-                    diag0 = -2 * (2 * k + 3) / ((2 * k + 1) * (2 * k + 5)) / s**2
+                    diag0 = (
+                        -2
+                        * (2 * k + 3)
+                        / ((2 * k + 1) * (2 * k + 5))
+                        / (s_test * s_trial)
+                    )
                     return diags(
                         [
-                            -2 * k[2:] / (2 * k[2:] + 1) / (s[2:] * s[:-2]),
+                            -2 * k[2:] / (2 * k[2:] + 1) / (s_test[2:] * s_trial[:-2]),
                             diag0,
-                            2 * (k[:-2] + 3) / (2 * k[:-2] + 5) / (s[:-2] * s[2:]),
+                            2
+                            * (k[:-2] + 3)
+                            / (2 * k[:-2] + 5)
+                            / (s_test[:-2] * s_trial[2:]),
                         ],
                         offsets=(-2, 0, 2),
                         shape=(M, M),
@@ -412,13 +451,15 @@ class LGComposite(Composite):
 
             elif i == 0 and j == 2:
                 if q == 0:
-                    return diags([-(4 * k + 6) / s**2], offsets=(0,), shape=(M, M))
+                    return diags(
+                        [-(4 * k + 6) / (s_test * s_trial)], offsets=(0,), shape=(M, M)
+                    )
 
                 elif q == 1:
                     return diags(
                         [
-                            -2 * k[1:] / (s[1:] * s[:-1]),
-                            -2 * (k[:-1] + 3) / (s[:-1] * s[1:]),
+                            -2 * k[1:] / (s_test[1:] * s_trial[:-1]),
+                            -2 * (k[:-1] + 3) / (s_test[:-1] * s_trial[1:]),
                         ],
                         offsets=(-1, 1),
                         shape=(M, M),
@@ -430,7 +471,7 @@ class LGComposite(Composite):
                         * (2 * k + 3)
                         * (2 * k**2 + 6 * k + 1)
                         / ((2 * k + 1) * (2 * k + 5))
-                        / s**2
+                        / (s_test * s_trial)
                     )
                     return diags(
                         [
@@ -438,13 +479,13 @@ class LGComposite(Composite):
                             * k[2:]
                             * (k[2:] - 1)
                             / (2 * k[2:] + 1)
-                            / (s[2:] * s[:-2]),
+                            / (s_test[2:] * s_trial[:-2]),
                             diag0,
                             -2
                             * (k[:-2] + 3)
                             * (k[:-2] + 4)
                             / (2 * k[:-2] + 5)
-                            / (s[:-2] * s[2:]),
+                            / (s_test[:-2] * s_trial[2:]),
                         ],
                         offsets=(-2, 0, 2),
                         shape=(M, M),
@@ -525,6 +566,7 @@ class LegPhi_1(PGComposite):
         system: CoordSys | None = None,
         name: str | None = None,
         fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
     ) -> None:
         name = name if name is not None else "LegPhi_1"
         fun_str = fun_str if fun_str is not None else "phi_1"
@@ -536,6 +578,7 @@ class LegPhi_1(PGComposite):
             domain=domain,
             system=system,
             stencil={0: sp.S.Half, 2: -sp.S.Half},
+            scaling=scaling,
             name=name,
             fun_str=fun_str,
             order=1,
@@ -603,6 +646,7 @@ class LegPhi_2(PGComposite):
         system: CoordSys | None = None,
         name: str | None = None,
         fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
     ) -> None:
         name = name if name is not None else "LegPhi_2"
         fun_str = fun_str if fun_str is not None else "phi_2"
@@ -618,6 +662,7 @@ class LegPhi_2(PGComposite):
                 2: -(2 * n + 5) / (2 * n + 7) / (2 * n + 3),
                 4: 1 / (2 * (2 * n + 7)),
             },
+            scaling=scaling,
             name=name,
             fun_str=fun_str,
             order=2,
@@ -687,6 +732,7 @@ class LegPhi_4(PGComposite):
         system: CoordSys | None = None,
         name: str | None = None,
         fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
     ) -> None:
         name = name if name is not None else "LegPhi_4"
         fun_str = fun_str if fun_str is not None else "phi_4"
@@ -709,6 +755,7 @@ class LegPhi_4(PGComposite):
                 6: -2 / (8 * n**3 + 132 * n**2 + 694 * n + 1155),
                 8: 1 / (2 * (8 * n**3 + 156 * n**2 + 1006 * n + 2145)),
             },
+            scaling=scaling,
             name=name,
             fun_str=fun_str,
             order=4,

@@ -12,16 +12,20 @@ from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
 from jaxfun.operators import Div, Grad
 from jaxfun.typing import TestSpaceKind
-from jaxfun.utils.common import lambdify, ulp
+from jaxfun.utils.common import lambdify, n, ulp
 
 x = sp.Symbol("x", real=True)
-N = 80
+N = 60
 # Method of manufactured solution
 ue = sp.exp(sp.cos(2 * sp.pi * x))
 
-bcs = {"left": {"D": float(ue.subs(x, -1))}, "right": {"D": float(ue.subs(x, 1))}}
-D = FunctionSpace(N, Chebyshev, bcs=bcs, name="D", fun_str="psi")
-P = D.get_testspace(kind=TestSpaceKind.PG)
+domain = (0, 1)
+bcs = {
+    "left": {"D": float(ue.subs(x, domain[0]))},
+    "right": {"D": float(ue.subs(x, domain[1]))},
+}
+D = FunctionSpace(N, Chebyshev, bcs=bcs, name="D", fun_str="psi", domain=domain)
+P = D.get_testspace(kind=TestSpaceKind.PG, scaling=n + 1)
 v = TestFunction(P, name="v")
 u = TrialFunction(D, name="u")
 ue = D.system.expr_psi_to_base_scalar(ue)

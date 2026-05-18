@@ -140,10 +140,11 @@ class Composite(OrthogonalSpace):
         fun_str: str = "phi",
         system: CoordSys | None = None,
         stencil: dict | None = None,
-        alpha: Number | float = 0,
-        beta: Number | float = 0,
-        scaling: sp.Expr = sp.S.One,
+        alpha: Number | float = 0,  # Used if orthogonal is Jacobi; ignored otherwise.
+        beta: Number | float = 0,  # Used if orthogonal is Jacobi; ignored otherwise.
+        scaling: sp.Expr | None = None,
     ) -> None:
+        scaling = scaling if scaling is not None else sp.S.One
         domain = Domain(-1, 1) if domain is None else domain
         super().__init__(N, domain=domain, system=system, name=name, fun_str=fun_str)
         self.orthogonal: Jacobi = orthogonal(
@@ -346,12 +347,31 @@ class Composite(OrthogonalSpace):
         return self.orthogonal
 
     def get_testspace(
-        self, kind: TestSpaceKind | str = TestSpaceKind.GALERKIN
+        self,
+        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
+        name: str | None = None,
+        fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
     ) -> Composite:
         """Return test space (same as self for Galerkin)."""
         kind = TestSpaceKind.coerce(kind)
         if kind == TestSpaceKind.GALERKIN:
-            return self
+            if name is None and fun_str is None:
+                return self
+            else:
+                return Composite(
+                    N=self.orthogonal.dim,
+                    orthogonal=self.orthogonal.__class__,
+                    bcs=self.bcs,
+                    domain=self.domain,
+                    name=name if name is not None else self.name,
+                    fun_str=fun_str if fun_str is not None else self.fun_str,
+                    system=self.system,
+                    stencil=self.stencil,
+                    scaling=scaling if scaling is not None else self.scaling,
+                    alpha=self.orthogonal.alpha,
+                    beta=self.orthogonal.beta,
+                )
         raise NotImplementedError(f"Test space kind {kind} not implemented.")
 
     def __add__(self, b: BCGeneric) -> DirectSum:
@@ -617,7 +637,7 @@ class PGComposite(Composite):
         stencil: dict | None = None,
         alpha: Number | float = 0,
         beta: Number | float = 0,
-        scaling: sp.Expr = sp.S.One,
+        scaling: sp.Expr | None = None,
         order: int = 1,
     ) -> None:
         super().__init__(
@@ -674,14 +694,32 @@ class PGComposite(Composite):
         def Akq(k: int, q: int, V: Jacobi | Composite) -> DiaMatrix:
             return V.orthogonal.A_(k=k, N=V.N + 2 * q).power(q)  # (N+2q, N+2q)
 
+        z: DiaMatrix | Matrix | None = None
         if j <= self.order and q == 0:
             B: DiaMatrix = Bkl(self.order, j, u).crop(self.num_dofs, u.N)
-            return B @ u.ST if isinstance(u, Composite) else B
+            z = B @ u.ST if isinstance(u, Composite) else B
 
         elif j <= self.order and q > 0:
             A: DiaMatrix = Akq(self.order, q, u).crop(self.num_dofs, u.N)  # (M, N)
             B: DiaMatrix = Bkl(self.order, j, u)  # (N, N)
-            return A @ B @ u.ST if isinstance(u, Composite) else A @ B
+            z = A @ B @ u.ST if isinstance(u, Composite) else A @ B
+
+        if z is not None:
+            # Diagonal scaling of test functions.
+            if self.scaling != sp.S.One:
+                from jaxfun.utils import lambdify
+
+                assert len(self.scaling.free_symbols) == 1, (
+                    "Scaling must have exactly one free symbol."
+                )  # noqa: E501
+                m = self.scaling.free_symbols.pop()
+                scaling = diags(
+                    [lambdify(m, 1 / self.scaling)(jnp.arange(z.shape[0]))],
+                    offsets=(0,),
+                    shape=(z.shape[0], z.shape[0]),
+                )
+                return scaling @ z
+            return z
 
         return None
 

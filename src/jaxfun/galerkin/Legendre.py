@@ -296,7 +296,10 @@ class LGComposite(Composite):
     """
 
     def get_testspace(
-        self, kind: TestSpaceKind | str = TestSpaceKind.GALERKIN
+        self,
+        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
+        name: str | None = None,
+        fun_str: str | None = None,
     ) -> Composite:
         """Return test space (same as self for Galerkin)."""
         kind = TestSpaceKind.coerce(kind)
@@ -308,11 +311,11 @@ class LGComposite(Composite):
             f"Supported: {TestSpaceKind.GALERKIN!r}, {TestSpaceKind.PETROV_GALERKIN!r}."
         )
         if self.bcs.num_bcs() == 1:
-            return LegPhi_1(self.N)
+            return LegPhi_1(self.N, name=name, fun_str=fun_str)
         if self.bcs.num_bcs() == 2:
-            return LegPhi_2(self.N)
+            return LegPhi_2(self.N, name=name, fun_str=fun_str)
         if self.bcs.num_bcs() == 4:
-            return LegPhi_4(self.N)
+            return LegPhi_4(self.N, name=name, fun_str=fun_str)
         raise NotImplementedError(
             f"Test space kind {kind} not implemented for {self.bcs.num_bcs()} BCs."
         )
@@ -502,9 +505,11 @@ class LegPhi_1(PGComposite):
         N: int,
         domain: Domain | None = None,
         system: CoordSys | None = None,
-        name: str = "LegPhi_1",
-        fun_str: str = "phi_1",
+        name: str | None = None,
+        fun_str: str | None = None,
     ) -> None:
+        name = name if name is not None else "LegPhi_1"
+        fun_str = fun_str if fun_str is not None else "phi_1"
         PGComposite.__init__(
             self,
             N + 1,
@@ -578,9 +583,11 @@ class LegPhi_2(PGComposite):
         N: int,
         domain: Domain | None = None,
         system: CoordSys | None = None,
-        name: str = "LegPhi_2",
-        fun_str: str = "phi_2",
+        name: str | None = None,
+        fun_str: str | None = None,
     ) -> None:
+        name = name if name is not None else "LegPhi_2"
+        fun_str = fun_str if fun_str is not None else "phi_2"
         PGComposite.__init__(
             self,
             N + 2,
@@ -660,9 +667,11 @@ class LegPhi_4(PGComposite):
         N: int,
         domain: Domain | None = None,
         system: CoordSys | None = None,
-        name: str = "LegPhi_4",
-        fun_str: str = "phi_4",
+        name: str | None = None,
+        fun_str: str | None = None,
     ) -> None:
+        name = name if name is not None else "LegPhi_4"
+        fun_str = fun_str if fun_str is not None else "phi_4"
         PGComposite.__init__(
             self,
             N + 4,

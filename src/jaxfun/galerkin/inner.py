@@ -742,7 +742,8 @@ def inner_linear(
             # Need to compute bii as bii(x(X)), since we use quadrature points
             if len(bii.free_symbols) > 0:
                 s = bii.free_symbols.pop()
-                uj *= lambdify(s, vo.map_expr_true_domain(bii), modules="jax")(xj)
+                bii = cast(sp.Expr, bii)
+                uj *= lambdify(s, vo.map_expr_true_domain(bii))(xj)
             else:
                 uj *= float(bii)  # ty:ignore[invalid-argument-type]
 

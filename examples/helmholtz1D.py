@@ -21,8 +21,8 @@ ue = sp.exp(sp.cos(2 * sp.pi * x))
 
 bcs = {"left": {"D": float(ue.subs(x, -1))}, "right": {"D": float(ue.subs(x, 1))}}
 D = FunctionSpace(N, Chebyshev, bcs=bcs, name="D", fun_str="psi")
-T = D.get_testspace(kind=TestSpaceKind.PG)
-v = TestFunction(T, name="v")
+P = D.get_testspace(kind=TestSpaceKind.PG)
+v = TestFunction(P, name="v")
 u = TrialFunction(D, name="u")
 ue = D.system.expr_psi_to_base_scalar(ue)
 

@@ -669,18 +669,18 @@ class PGComposite(Composite):
             B = V.orthogonal.B(V.N + 2 * (k - l))
             BN = B.power(k - l).crop(V.N + k - l, V.N)
             DI = diags([jnp.array([1.0])], offsets=(k,), shape=(V.N, V.N + k - l))
-            return DI @ BN
+            return DI @ BN  # (N, N)
 
         def Akq(k: int, q: int, V: Jacobi | Composite) -> DiaMatrix:
-            return V.orthogonal.A_(k=k, N=V.N).power(q)
+            return V.orthogonal.A_(k=k, N=V.N + 2 * q).power(q)  # (N+2q, N+2q)
 
         if j <= self.order and q == 0:
             B: DiaMatrix = Bkl(self.order, j, u).crop(self.num_dofs, u.N)
             return B @ u.ST if isinstance(u, Composite) else B
 
         elif j <= self.order and q > 0:
-            A: DiaMatrix = Akq(self.order, q, u).crop(self.num_dofs, u.N)
-            B: DiaMatrix = Bkl(self.order, j, u)
+            A: DiaMatrix = Akq(self.order, q, u).crop(self.num_dofs, u.N)  # (M, N)
+            B: DiaMatrix = Bkl(self.order, j, u)  # (N, N)
             return A @ B @ u.ST if isinstance(u, Composite) else A @ B
 
         return None

@@ -311,11 +311,29 @@ class LGComposite(Composite):
             f"Supported: {TestSpaceKind.GALERKIN!r}, {TestSpaceKind.PETROV_GALERKIN!r}."
         )
         if self.bcs.num_bcs() == 1:
-            return LegPhi_1(self.N, name=name, fun_str=fun_str)
+            return LegPhi_1(
+                self.N,
+                domain=self.domain,
+                system=self.system,
+                name=name,
+                fun_str=fun_str,
+            )
         if self.bcs.num_bcs() == 2:
-            return LegPhi_2(self.N, name=name, fun_str=fun_str)
+            return LegPhi_2(
+                self.N,
+                domain=self.domain,
+                system=self.system,
+                name=name,
+                fun_str=fun_str,
+            )
         if self.bcs.num_bcs() == 4:
-            return LegPhi_4(self.N, name=name, fun_str=fun_str)
+            return LegPhi_4(
+                self.N,
+                domain=self.domain,
+                system=self.system,
+                name=name,
+                fun_str=fun_str,
+            )
         raise NotImplementedError(
             f"Test space kind {kind} not implemented for {self.bcs.num_bcs()} BCs."
         )

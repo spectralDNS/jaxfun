@@ -763,10 +763,14 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         Args:
             x: Coordinates (N, d). Created by calling self.functionspace.flatmesh().
         """
-        if isinstance(self.functionspace, OrthogonalSpace | DirectSum):
-            return self.functionspace.evaluate(x, self.array)
-        z = self.functionspace.evaluate(x, self.array, True)
-        if self.functionspace.rank == 0:
+        functionspace = self.functionspace
+        if isinstance(functionspace, OrthogonalSpace | DirectSum):
+            return functionspace.evaluate(x, self.array)
+        assert isinstance(
+            functionspace, TensorProductSpace | VectorTensorProductSpace | DirectSumTPS
+        )
+        z = functionspace.evaluate(x, self.array, True)
+        if functionspace.rank == 0:
             return jnp.expand_dims(z, -1)
         return z
 

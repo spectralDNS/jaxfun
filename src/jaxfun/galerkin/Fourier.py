@@ -80,7 +80,7 @@ class Fourier(OrthogonalSpace):
         return points, jnp.full(N, 2 * jnp.pi / N)
 
     @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
-    def eval_basis_function(self, X: float, i: int) -> Array:
+    def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single basis function exp(i k_i X).
 
         Args:
@@ -90,10 +90,11 @@ class Fourier(OrthogonalSpace):
         Returns:
             exp( i * k_i * X ).
         """
+        X = jnp.asarray(X)
         return jax.lax.exp(1j * self.wavenumbers()[i] * X)
 
     @jit_vmap(in_axes=0)
-    def eval_basis_functions(self, X: float) -> Array:
+    def eval_basis_functions(self, X: float | Array) -> Array:
         """Evaluate all basis functions at points X.
 
         Args:
@@ -102,6 +103,7 @@ class Fourier(OrthogonalSpace):
         Returns:
             Array shape (N,) for each X containing exp(i k_j X).
         """
+        X = jnp.asarray(X)
         return jax.lax.exp(1j * self.wavenumbers() * X)
 
     @jax.jit(static_argnums=(0, 2))

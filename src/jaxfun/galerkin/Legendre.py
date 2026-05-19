@@ -113,7 +113,7 @@ class Legendre(Jacobi):
         return x, w
 
     @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
-    def eval_basis_function(self, X: Array, i: int) -> Array:
+    def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single Legendre polynomial P_i at X.
 
         Args:
@@ -123,6 +123,7 @@ class Legendre(Jacobi):
         Returns:
             P_i(X) values.
         """
+        X = jnp.asarray(X)
         x0 = X * 0 + 1
         if i == 0:
             return x0

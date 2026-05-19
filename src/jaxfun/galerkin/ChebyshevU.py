@@ -104,7 +104,7 @@ class ChebyshevU(Jacobi):
         return points, weights
 
     @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
-    def eval_basis_function(self, X: Array, i: int) -> Array:
+    def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single Chebyshev polynomial U_i at points X.
 
         Iterative two-term recurrence:
@@ -118,6 +118,7 @@ class ChebyshevU(Jacobi):
         Returns:
             Array of U_i(X).
         """
+        X = jnp.asarray(X)
         x0 = X * 0 + 1
         if i == 0:
             return x0
@@ -130,7 +131,7 @@ class ChebyshevU(Jacobi):
         return jax.lax.fori_loop(1, i, body_fun, (x0, 2 * X))[-1]
 
     @jit_vmap(in_axes=0)
-    def eval_basis_functions(self, X: float) -> Array:
+    def eval_basis_functions(self, X: float | Array) -> Array:
         """Evaluate all basis functions U_0..U_{N-1} at X.
 
         Uses a scan to build the recurrence efficiently.
@@ -141,11 +142,12 @@ class ChebyshevU(Jacobi):
         Returns:
             Array (N,) for each X containing U_k(X) stacked along axis 0.
         """
+        X = jnp.asarray(X)
         x0 = X * 0 + 1
 
         def inner_loop(
-            carry: tuple[float, float], _
-        ) -> tuple[tuple[float, float], float]:
+            carry: tuple[Array, Array], _
+        ) -> tuple[tuple[Array, Array], Array]:
             x0, x1 = carry
             x2 = 2 * X * x1 - x0
             return (x1, x2), x1

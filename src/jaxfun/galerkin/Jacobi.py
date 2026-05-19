@@ -124,7 +124,7 @@ class Jacobi(OrthogonalSpace):
         return jnp.array(x), jnp.array(w)
 
     @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
-    def eval_basis_function(self, X: Array, i: int) -> Array:
+    def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single (possibly scaled) Jacobi polynomial
 
         .. math::
@@ -140,6 +140,7 @@ class Jacobi(OrthogonalSpace):
         Returns:
             Array of Q_i(X) = g_i^{(α,β)} * P_i^{(α,β)}(X).
         """
+        X = jnp.asarray(X)
         x0 = X * 0 + 1
         if i == 0:
             return x0
@@ -162,7 +163,7 @@ class Jacobi(OrthogonalSpace):
         return jax.lax.fori_loop(2, i + 1, body_fun, (x0, X))[-1]
 
     @jit_vmap(in_axes=0)
-    def eval_basis_functions(self, X: Array) -> Array:
+    def eval_basis_functions(self, X: float | Array) -> Array:
         """Evaluate all (possibly scaled) Jacobi polynomials P_0..P_{N-1} at X.
 
         Args:
@@ -171,6 +172,7 @@ class Jacobi(OrthogonalSpace):
         Returns:
             Array (N,) per X containing stacked basis values.
         """
+        X = jnp.asarray(X)
         x0 = X * 0 + 1
 
         am = sp.lambdify(n, self.a(n + 1, n), modules="jax")(jnp.arange(self.N))

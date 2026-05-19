@@ -149,7 +149,7 @@ def test_tpmats_wavenumber_factor_accepts_tpmatrices():
 
 def test_tpmats_wavenumber_factor_type_error():
     with pytest.raises(TypeError):
-        tpmats_wavenumber_factor("not a valid input")  # type: ignore[arg-type]
+        tpmats_wavenumber_factor("not a valid input")  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
 
 
 # ---------------------------------------------------------------------------

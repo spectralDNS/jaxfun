@@ -123,7 +123,9 @@ def inner(
         # If the form contains a JAXFunction, then the matrix assembled will
         # be multiplied with the JAXFunction and a vector will be returned
 
-        mats: list[tuple[tuple[Array, Array] | MatrixProtocol, tuple[int, int]]] = []
+        mats: list[
+            tuple[tuple[Array, Array] | Matrix | DiaMatrix, tuple[int, int]]
+        ] = []
         # Split coefficients into linear (JAXFunction) and bilinear (constant
         # coefficients) contributions.
         coeffs = split_coeff(a0["coeff"])
@@ -196,7 +198,7 @@ def inner(
             pass
 
         elif test_space.dims == 1 and "bilinear" in coeffs:
-            assert isinstance(mats[0][0], MatrixProtocol)
+            assert isinstance(mats[0][0], Matrix | DiaMatrix)
             aresults.append(mats[0][0])
 
         elif isinstance(mats[0][0], tuple):
@@ -242,7 +244,9 @@ def inner(
                     aresults.append(TensorMatrix(Am))
 
         elif len(mats) > 1:  # regular separable multivariable form
-            mats_: list[MatrixProtocol] = [cast(MatrixProtocol, m[0]) for m in mats]
+            mats_: list[Matrix | DiaMatrix] = [
+                cast(Matrix | DiaMatrix, m[0]) for m in mats
+            ]
             gi = [m[1] for m in mats]
 
             assert isinstance(test_space, TensorProductSpace | VectorTensorProductSpace)
@@ -566,7 +570,7 @@ def inner_bilinear(
     multivar: Literal[False],
     num_quad_points: int,
     use_precomputed_matrices: bool,
-) -> MatrixProtocol: ...
+) -> Matrix | DiaMatrix: ...
 @overload
 def inner_bilinear(
     ai: sp.Expr,
@@ -585,7 +589,7 @@ def inner_bilinear(
     multivar: bool,
     num_quad_points: int,
     use_precomputed_matrices: bool,
-) -> MatrixProtocol | tuple[Array, Array]:
+) -> Matrix | DiaMatrix | tuple[Array, Array]:
     """Assemble single bilinear form contribution term.
 
     Detects derivative orders on test/trial factors, applies optional
@@ -600,7 +604,7 @@ def inner_bilinear(
         multivar: True if coefficient not separable (handled upstream).
         num_quad_points: Number of quadrature points.
     Returns:
-        MatrixProtocol, or (Pi, Pj) tuple for multivar separation.
+        Matrix/DiaMatrix, or (Pi, Pj) tuple for multivar separation.
     """
     vo = v.orthogonal
     uo = u.orthogonal
@@ -654,7 +658,7 @@ def inner_bilinear(
         if isinstance(v, Composite):
             z = v.matrices(i, (u, j), q=poly_scale, scale=scale.item())
             if z is not None:
-                return cast(MatrixProtocol, z)
+                return z
         z = vo.matrices(i, (uo, j), q=poly_scale, scale=scale.item())
 
     if z is None:
@@ -670,9 +674,8 @@ def inner_bilinear(
             multj: Array = u.apply_stencil_right(jnp.conj(Pj))
             return multi, multj
 
-        z: Matrix = Matrix(matmat(Pi.T * w[None, :], jnp.conj(Pj)))
+        z = Matrix(matmat(Pi.T * w[None, :], jnp.conj(Pj)))
 
-    z: MatrixProtocol = cast(MatrixProtocol, z)
     if isinstance(v, Composite) and u == v:
         z = v.apply_stencil_galerkin(z)
     elif isinstance(v, Composite) and isinstance(u, Composite):

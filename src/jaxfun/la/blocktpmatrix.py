@@ -16,6 +16,8 @@ if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
     from jaxfun.galerkin.tensorproductspace import VectorTensorProductSpace
 
+type _SparseMatrixCache = _CacheBox[DiaMatrix]
+
 
 class BlockTPMatrix(nnx.Pytree):
     """Block matrix of TPMatrix objects.
@@ -109,7 +111,7 @@ class BlockTPMatrix(nnx.Pytree):
         Returns:
             :class:`~jaxfun.la.DiaMatrix` of shape ``(total_rows, total_cols)``.
         """
-        cached: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        cached: _SparseMatrixCache | None = getattr(self, "_sparse_cache", None)
         if cached is not None:
             return cached.value
 
@@ -169,7 +171,7 @@ class BlockTPMatrix(nnx.Pytree):
         from jaxfun.galerkin import JAXFunction
 
         w = u.array if isinstance(u, JAXFunction) else u
-        sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        sparse_box: _SparseMatrixCache | None = getattr(self, "_sparse_cache", None)
         if sparse_box is not None:
             sparse = sparse_box.value
             if getattr(sparse, "_rcm_cache", None) is not None:

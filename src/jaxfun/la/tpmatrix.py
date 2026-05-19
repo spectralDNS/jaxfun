@@ -23,6 +23,9 @@ from jaxfun.la.matrixprotocol import (
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
 
+type _SparseMatrixCache = _CacheBox[DiaMatrix]
+type _DenseMatrixCache = _CacheBox[Matrix]
+
 
 class TPMatrix(nnx.Pytree):  # noqa: B903
     """Rank-d separable tensor product operator A = kron(A0, A1, ...).
@@ -54,7 +57,7 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         return len(self.mats)
 
     def tosparse(self, *, tol: int = 100) -> DiaMatrix:
-        sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        sparse_box: _SparseMatrixCache | None = getattr(self, "_sparse_cache", None)
         if sparse_box is not None:
             return sparse_box.value
         kron = tpmats_to_kron(self)
@@ -73,10 +76,10 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
             2-D :class:`~jaxfun.Array` of shape ``(N, N)`` where ``N`` is the
             total number of degrees of freedom.
         """
-        dense_box: _CacheBox[Matrix] | None = getattr(self, "_dense_cache", None)
+        dense_box: _DenseMatrixCache | None = getattr(self, "_dense_cache", None)
         if dense_box is not None:
             return dense_box.value.todense()
-        sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        sparse_box: _SparseMatrixCache | None = getattr(self, "_sparse_cache", None)
         if sparse_box is not None:
             return sparse_box.value.todense()
         kron = tpmats_to_kron(self)
@@ -245,7 +248,7 @@ class TPMatrices(nnx.Pytree):
         )
 
     def tosparse(self, *, tol: int = 100) -> DiaMatrix:
-        sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        sparse_box: _SparseMatrixCache | None = getattr(self, "_sparse_cache", None)
         if sparse_box is not None:
             return sparse_box.value
         kron = tpmats_to_kron(list(self.tpmats))
@@ -264,10 +267,10 @@ class TPMatrices(nnx.Pytree):
             2-D :class:`~jaxfun.Array` of shape ``(N, N)`` where ``N`` is the
             total number of degrees of freedom.
         """
-        dense_box: _CacheBox[Matrix] | None = getattr(self, "_dense_cache", None)
+        dense_box: _DenseMatrixCache | None = getattr(self, "_dense_cache", None)
         if dense_box is not None:
             return dense_box.value.todense()
-        sparse_box: _CacheBox[DiaMatrix] | None = getattr(self, "_sparse_cache", None)
+        sparse_box: _SparseMatrixCache | None = getattr(self, "_sparse_cache", None)
         if sparse_box is not None:
             return sparse_box.value.todense()
         kron = tpmats_to_kron(list(self.tpmats))
@@ -300,9 +303,11 @@ class TPMatrices(nnx.Pytree):
             or :class:`TPMatricesLUFactors` for repeated fast solves.
         """
         cached: (
-            TPMatricesDenseLUFactors
-            | TPMatricesLUFactors
-            | TPMatricesWavenumberSolver
+            _CacheBox[
+                TPMatricesDenseLUFactors
+                | TPMatricesLUFactors
+                | TPMatricesWavenumberSolver
+            ]
             | None
         ) = getattr(self, "_lu_cache", None)
         if cached is not None:
@@ -364,15 +369,13 @@ class TPMatrices(nnx.Pytree):
         def _kron_solve(r: Array) -> Array:
             flat = r.flatten()
             # DiaMatrix path: shared cache with tosparse()
-            sparse_box: _CacheBox[DiaMatrix] | None = getattr(
-                self, "_sparse_cache", None
-            )
+            sparse_box: _SparseMatrixCache | None = getattr(self, "_sparse_cache", None)
             if sparse_box is not None:
                 return sparse_box.value.lu_solve(flat, method=kron_method).reshape(
                     r.shape
                 )
             # Dense Matrix path
-            dense_box: _CacheBox[Matrix] | None = getattr(self, "_dense_cache", None)
+            dense_box: _DenseMatrixCache | None = getattr(self, "_dense_cache", None)
             if dense_box is not None:
                 return dense_box.value.solve(flat).reshape(r.shape)
             # No cache yet: compute and store

@@ -767,7 +767,7 @@ class TestLU:
         lu = A.lu_factor(pivot=True)
         # L @ U == P @ A
         PA = a if lu.perm is None else a[lu.perm, :]
-        H = cast(DiaMatrix, lu.L @ lu.U)
+        H = lu.L @ lu.U
         assert jnp.allclose(H.todense(), PA, atol=ulp(100))
         # Solve A x = b
         x_true = jnp.array([1.0, 2.0, 3.0])

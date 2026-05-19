@@ -257,7 +257,11 @@ class KANLayer(nnx.Module):
 
         self.basespaces: list[OrthogonalSpace] = (
             [
-                basespace(spectral_size, domain=domains[i], system=subsystems[i])  # type: ignore[index]
+                basespace(
+                    spectral_size,
+                    domain=domains[i],
+                    system=cast(CoordSys | None, subsystems[i]),
+                )
                 for i in range(in_features)
             ]
             if not hidden
@@ -664,7 +668,7 @@ class SpectralModule(BaseModule):
         if isinstance(self.space, OrthogonalSpace | DirectSum):
             return self.space.evaluate(x, self.kernel[0])
 
-        z = self.space.evaluate(x, self.kernel, True)
+        z = self.space.evaluate(x, self.kernel[...], True)
         if self.space.rank == 0:
             return jnp.expand_dims(z, -1)
         return z

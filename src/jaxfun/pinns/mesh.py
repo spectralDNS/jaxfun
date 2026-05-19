@@ -47,6 +47,10 @@ def _coerce_sample_method(kind: SampleMethodLike) -> SampleMethod:
     return kind if isinstance(kind, SampleMethod) else SampleMethod(kind)
 
 
+def _normalize_points_args(N: NPointsType) -> tuple[int, ...]:
+    return (N,) if isinstance(N, int) else N
+
+
 def _normalize_kind(kind: KindType, n: int) -> list[SampleMethod]:
     if kind is None:
         return [SampleMethod.UNIFORM] * n
@@ -252,14 +256,14 @@ class MultiParameterMesh(BaseMesh, ABC):
 class CartesianProductMesh(MultiParameterMesh):
     """Cartesian product mesh."""
 
-    def __init__(self, *m0: BaseMesh) -> None:
+    def __init__(self, *m0: ParameterMesh) -> None:
         """Cartesian product mesh.
 
         Args:
             *m0: Submeshes to form the Cartesian product.
 
         """
-        self.submeshes = list(m0)
+        self.submeshes: list[ParameterMesh] = list(m0)
 
     @property
     def dim(self) -> int:
@@ -296,7 +300,7 @@ class CartesianProductMesh(MultiParameterMesh):
         kind_list = _normalize_kind(kind, len(self.submeshes))
         bnd_marks = []
         for m, Ni, knd in zip(self.submeshes, N, kind_list, strict=True):
-            args = (Ni,) if np.isscalar(Ni) else tuple(Ni)
+            args = _normalize_points_args(Ni)
             bnd_marks.append(m.boundary_mask(*args, kind=knd))
         mask = jnp.array(list(itertools.product(*bnd_marks)))
 
@@ -337,7 +341,7 @@ class CartesianProductMesh(MultiParameterMesh):
         assert len(N) == len(self.submeshes)
         meshes = []
         for mi, Ni, knd in zip(self.submeshes, N, kind_list, strict=True):
-            args = (Ni,) if np.isscalar(Ni) else tuple(Ni)
+            args = _normalize_points_args(Ni)
             meshes.append(mi.get_all_points(*args, kind=knd))
 
         if len(meshes) == 2:
@@ -405,7 +409,7 @@ class CartesianProductMesh(MultiParameterMesh):
         assert len(N) == len(self.submeshes)
         weights = []
         for mi, Ni, knd in zip(self.submeshes, N, kind_list, strict=True):
-            args = (Ni,) if np.isscalar(Ni) else tuple(Ni)
+            args = _normalize_points_args(Ni)
             weights.append(mi.get_all_weights(*args, kind=knd))
 
         if len(weights) == 2:
@@ -473,7 +477,7 @@ class TimeMarchingMesh(CartesianProductMesh):
         timestep: Current time step index.
     """
 
-    def __init__(self, *m0: BaseMesh) -> None:
+    def __init__(self, *m0: ParameterMesh) -> None:
         """Initialize time-marching mesh.
 
         Args:
@@ -527,7 +531,7 @@ class TimeMarchingMesh(CartesianProductMesh):
         """Return spatial mesh (excluding time axis)."""
         if self._spatial_mesh is None:
             if len(self.submeshes) == 2:
-                self._spatial_mesh = cast(ParameterMesh, self.submeshes[0])
+                self._spatial_mesh = self.submeshes[0]
             else:
                 self._spatial_mesh = CartesianProductMesh(*self.submeshes[:-1])
         return self._spatial_mesh

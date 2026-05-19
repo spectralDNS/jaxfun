@@ -993,14 +993,18 @@ class FlaxFunction(Function):
         args = self.get_args(Cartesian=False)
 
         if V.rank == 0:
-            return Function(
-                self.fun_str,
-                global_index=0,
-                functionspace_name=V.name,
-                rank_parent=V.rank,
-                module=self.module,
-                argument=ArgumentTag.JAXFUNC,
-            )(*args)  # type: ignore[return-value]
+            function = cast(
+                Callable[..., AppliedUndef],
+                Function(
+                    self.fun_str,
+                    global_index=0,
+                    functionspace_name=V.name,
+                    rank_parent=V.rank,
+                    module=self.module,
+                    argument=ArgumentTag.JAXFUNC,
+                ),
+            )
+            return function(*args)
 
         if V.rank == 1:
             b = V.system.base_vectors()

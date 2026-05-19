@@ -129,9 +129,9 @@ def get_BasisFunction(
     )(arg)  # ty:ignore[call-non-callable]
 
     b.__class__.__str__ = __str__  # ty:ignore[invalid-assignment]
-    b.__class__._pretty = _pretty
-    b.__class__._sympystr = _sympystr
-    b.__class__._latex = _latex
+    b.__class__._pretty = _pretty  # ty:ignore[unresolved-attribute]
+    b.__class__._sympystr = _sympystr  # ty:ignore[unresolved-attribute]
+    b.__class__._latex = _latex  # ty:ignore[unresolved-attribute]
     return b
 
 
@@ -611,10 +611,11 @@ def get_JAXFunction(
     )(*args)  # ty:ignore[call-non-callable]
 
     b.__class__.__str__ = __str__  # ty:ignore[invalid-assignment]
-    b.__class__._pretty = _pretty
-    b.__class__._sympystr = _sympystr
-    b.__class__._latex = _latex
-    del b._kwargs["array"]  # prevent printing of the raw array in the function args
+    b.__class__._pretty = _pretty  # ty:ignore[unresolved-attribute]
+    b.__class__._sympystr = _sympystr  # ty:ignore[unresolved-attribute]
+    b.__class__._latex = _latex  # ty:ignore[unresolved-attribute]
+    # prevent printing of the raw array in the function args
+    del b._kwargs["array"]  # ty:ignore[unresolved-attribute]
     return b
 
 

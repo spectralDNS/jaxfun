@@ -297,6 +297,10 @@ class BaseVector(Vector, AtomicExpr):
     """
 
     _id: tuple[int, CoordSys]
+    _base_instance: BaseVector
+    _components: dict[BaseVector, Expr]
+    _measure_number: Expr
+    _assumptions: StdFactKB
     _system: CoordSys
     _sys: CoordSys
     _name: str
@@ -378,6 +382,11 @@ class BaseDyadic(Dyadic, AtomicExpr):
     """
 
     _sys: CoordSys
+    _base_instance: BaseDyadic
+    _measure_number: int
+    _components: dict[BaseDyadic, Expr]
+    _pretty_form: str
+    _latex_form: str
     args: tuple[BaseVector, BaseVector]
 
     def __new__(cls, vector1: BaseVector, vector2: BaseVector) -> Self:

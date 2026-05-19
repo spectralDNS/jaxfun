@@ -1,4 +1,3 @@
-import importlib
 from typing import Any, Literal, TypeGuard, cast, overload
 
 import jax.numpy as jnp
@@ -610,6 +609,9 @@ def inner_bilinear(
     df = float(vo.domain_factor)
     i, j = 0, 0
     scale = jnp.array([sc])
+    poly_scale: int = 0
+    x = vo.system.base_scalars()[0]
+
     for aii in ai.args:
         found_basis = False
         for p in sp.core.traversal.preorder_traversal(aii):
@@ -636,21 +638,29 @@ def inner_bilinear(
 
         if len(aii.free_symbols) > 0:
             s = aii.free_symbols.pop()
-            scale *= lambdify(s, uo.map_expr_true_domain(aii), modules="jax")(xj)
+            assert s == x
+            aii = cast(sp.Expr, aii)
+            if aii.is_polynomial(s) and sp.degree(aii, s) > 0:
+                # just store degree, because any numeric scale will already be in scale.
+                poly_scale = int(sp.degree(aii, s))
+            else:
+                scale *= lambdify(s, uo.map_expr_true_domain(aii))(xj)
+
         else:
             scale *= float(aii)  # ty:ignore[invalid-argument-type]
 
-    z: Matrix | None = None
+    z: DiaMatrix | Matrix | None = None
     if len(scale) == 1 and use_precomputed_matrices and not multivar:
-        # Look up matrix
-        mod = importlib.import_module(vo.__class__.__module__)
-        z: MatrixProtocol | None = mod.matrices((vo, i), (uo, j))
-        if z is not None:
-            s = scale * df ** (i + j - 1)
-            if s.item() != 1:
-                z.data = z.data * s
+        if isinstance(v, Composite):
+            z = v.matrices(i, (u, j), q=poly_scale, scale=scale.item())
+            if z is not None:
+                return cast(MatrixProtocol, z)
+        z = vo.matrices(i, (uo, j), q=poly_scale, scale=scale.item())
 
     if z is None:
+        if poly_scale != 0:
+            scale *= lambdify(x, vo.map_expr_true_domain(x**poly_scale))(xj)
+
         w = wj * df ** (i + j - 1) * scale
         Pi = vo.evaluate_basis_derivative(xj, k=i)
         Pj = uo.evaluate_basis_derivative(xj, k=j)
@@ -732,7 +742,8 @@ def inner_linear(
             # Need to compute bii as bii(x(X)), since we use quadrature points
             if len(bii.free_symbols) > 0:
                 s = bii.free_symbols.pop()
-                uj *= lambdify(s, vo.map_expr_true_domain(bii), modules="jax")(xj)
+                bii = cast(sp.Expr, bii)
+                uj *= lambdify(s, vo.map_expr_true_domain(bii))(xj)
             else:
                 uj *= float(bii)  # ty:ignore[invalid-argument-type]
 

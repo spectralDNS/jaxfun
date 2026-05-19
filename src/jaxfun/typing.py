@@ -36,8 +36,7 @@ if TYPE_CHECKING:
     )
     from jaxfun.galerkin.arguments import Jaxc
     from jaxfun.galerkin.orthogonal import OrthogonalSpace
-    from jaxfun.galerkin.tensorproductspace import TPMatrices, TPMatrix
-    from jaxfun.la import TensorMatrix
+    from jaxfun.la import TensorMatrix, TPMatrices, TPMatrix
 
 
 type FloatLike = float | sp.Number
@@ -61,6 +60,7 @@ class SympyExpr(Protocol):
     def doit(self, **hints: Any) -> Any: ...
 
 
+type TriDiagMatrixFun = Callable[[sp.Symbol | int, sp.Symbol | int], sp.Expr]
 type Activation = Callable[[ArrayLike], Array]
 type LossValue = sp.Number | complex | Array
 type Loss_Tuple = (
@@ -80,6 +80,35 @@ class SampleMethod(StrEnum):
 class MeshKind(StrEnum):
     QUADRATURE = "quadrature"
     UNIFORM = "uniform"
+
+
+class TestSpaceKind(StrEnum):
+    GALERKIN = "Galerkin"
+    G = "Galerkin"
+    PETROV_GALERKIN = "Petrov-Galerkin"
+    PG = "Petrov-Galerkin"
+
+    @classmethod
+    def coerce(cls, value: str | TestSpaceKind) -> TestSpaceKind:
+        """Accept a value, member name, or short alias and return the canonical member.
+
+        Examples::
+
+            TestSpaceKind.coerce("Galerkin")  # -> GALERKIN  (value lookup)
+            TestSpaceKind.coerce("G")  # -> GALERKIN  (name lookup)
+            TestSpaceKind.coerce("GALERKIN")  # -> GALERKIN  (name lookup)
+            TestSpaceKind.coerce("PG")  # -> PETROV_GALERKIN  (name lookup)
+        """
+        if isinstance(value, cls):
+            return value
+        try:
+            return cls[value]  # match by name: "G", "PG", "GALERKIN", "PETROV_GALERKIN"
+        except KeyError:
+            pass
+        try:
+            return cls(value)  # match by value: "Galerkin", "Petrov-Galerkin"
+        except ValueError:
+            raise ValueError(f"{value!r} is not a valid {cls.__name__}") from None
 
 
 type DomainType = Literal["inside", "boundary", "intersection", "all"]

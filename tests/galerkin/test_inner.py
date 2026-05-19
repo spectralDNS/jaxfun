@@ -477,10 +477,10 @@ def test_inner_exact_poly():
     ).n()
 
     # Check that without padding we get wrong result
-    A = inner(x**2 * v * u)
+    A = inner(x**2 * v * u, use_precomputed_matrices=False)
     assert not jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
     # Check that with padding we get correct result
-    A = inner(x**2 * v * u, num_quad_points=7)
+    A = inner(x**2 * v * u, num_quad_points=7, use_precomputed_matrices=False)
     assert jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
 
 
@@ -498,13 +498,15 @@ def test_inner_exact_poly_2d():
     ).n()
 
     # Check that without padding we get wrong result
-    B = inner((x**2 + y**2) * v * u)
+    B = inner((x**2 + y**2) * v * u, use_precomputed_matrices=False)
     A = B.tpmats[0].mats[0].data
     assert not jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
     A = B.tpmats[1].mats[1].data
     assert not jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
     # Check that with padding we get correct result
-    B = inner((x**2 + y**2) * v * u, num_quad_points=(7, 7))
+    B = inner(
+        (x**2 + y**2) * v * u, num_quad_points=(7, 7), use_precomputed_matrices=False
+    )
     A = B.tpmats[0].mats[0].data
     assert jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
     A = B.tpmats[1].mats[1].data

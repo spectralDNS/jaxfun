@@ -116,7 +116,7 @@ class DiaMatrix(nnx.Pytree):
         cls,
         a: Array,
         offsets: tuple[int, ...] | None = None,
-        tol: float = 1e-12,
+        tol: int = 100,
     ) -> DiaMatrix:
         """Build a DiaMatrix from a dense 2-D array.
 
@@ -127,15 +127,19 @@ class DiaMatrix(nnx.Pytree):
         """
         import numpy as np
 
+        from jaxfun.utils.common import ulp
+
         a = jnp.asarray(a)
         n, m = a.shape
+
+        atol: Array = ulp(jnp.abs(a).max()) * tol
 
         if offsets is None:
             # Use NumPy for the detection loop to avoid ~(n+m) separate JAX
             # device dispatches, which dominate runtime for large matrices.
             a_np = np.asarray(a)
             offsets = tuple(
-                k for k in range(-(n - 1), m) if np.any(np.abs(a_np.diagonal(k)) > tol)
+                k for k in range(-(n - 1), m) if np.any(np.abs(a_np.diagonal(k)) > atol)
             )
 
         if not offsets:
@@ -609,14 +613,12 @@ class DiaMatrix(nnx.Pytree):
         # "dense" path (and cache hit for dense)
         # ------------------------------------------------------------------
         if method == DiaMatrixSolveMethod.DENSE:
-            from jaxfun.la.matrix import Matrix  # local import avoids circular
-
             if _box is None:
                 _box = _CacheBox({})
                 object.__setattr__(self, "_lu_cache", _box)
             _dense_key = "_dense"
             if _dense_key not in _box.value:
-                _box.value[_dense_key] = Matrix(self.todense()).lu_factor()  # type: ignore[index]
+                _box.value[_dense_key] = self.to_matrix().lu_factor()  # type: ignore[index]
             return _box.value[_dense_key].solve(b, axis=axis)
 
         # ------------------------------------------------------------------
@@ -810,19 +812,67 @@ class DiaMatrix(nnx.Pytree):
         col = jnp.zeros((n,), dtype=self.data.dtype)
         return col.at[safe_rows].add(vals)
 
-    def scale(self, alpha: float | Array) -> DiaMatrix:
+    def scale(self, alpha: complex | Array) -> DiaMatrix:
         """Return ``alpha * A`` as a new :class:`DiaMatrix`."""
         return DiaMatrix(data=self.data * alpha, offsets=self.offsets, shape=self.shape)
+
+    def power(self, q: int) -> DiaMatrix:
+        """Return ``A**q`` as a new :class:`DiaMatrix`.
+
+        The result is computed via repeated squaring, so the cost is
+        logarithmic in *q*.  The bandwidth of the result can grow up to
+        ``q * p`` (where ``p`` is the original bandwidth), so this method is
+        suitable only for small powers of very narrow matrices.
+
+        Args:
+            q: Non-negative integer exponent.
+        """
+        n, m = self.shape
+        if n != m:
+            raise ValueError(
+                f"Matrix power only supported for square matrices, got shape {self.shape}"  # noqa: E501
+            )
+        if q < 0:
+            raise ValueError(f"Negative exponent not supported: got q={q}")
+        if q == 0:
+            return diags([jnp.array([1.0])], offsets=(0,), shape=(n, n))
+
+        result: DiaMatrix | None = None
+        base: DiaMatrix = self
+        remaining = q
+        while remaining > 0:
+            if remaining % 2 == 1:
+                result = base if result is None else result @ base
+            remaining //= 2
+            if remaining > 0:
+                base = base @ base
+
+        assert result is not None
+        return result
+
+    def crop(self, n: int, m: int) -> DiaMatrix:
+        """Return a new :class:`DiaMatrix` with the same diagonals but shape cropped to
+        ``(n, m)``.
+
+        Args:
+            n: New row count.
+            m: New column count.
+        """
+        return diags(
+            [self.diagonal(k)[: min(n, m)] for k in self.offsets],
+            offsets=self.offsets,
+            shape=(n, m),
+        )
 
     @property
     def size(self) -> int:
         """Return the total number of entries in the matrix (including zeros)."""
         return self._size
 
-    def __mul__(self, other: float | Array) -> DiaMatrix:
+    def __mul__(self, other: complex | Array) -> DiaMatrix:
         return self.scale(other)
 
-    def __rmul__(self, other: float | Array) -> DiaMatrix:
+    def __rmul__(self, other: complex | Array) -> DiaMatrix:
         return self.scale(other)
 
     def __neg__(self) -> DiaMatrix:
@@ -1636,7 +1686,7 @@ class LUFactors(nnx.Pytree):
 
 @jax.jit(static_argnums=(1, 2, 3))
 def _lu_banded_no_pivot_kernel(band: Array, p: int, q: int, center: int) -> Array:
-    """JIT-compiled banded LU *without* pivoting via ``jax.lax.scan``.
+    """JIT-compiled banded LU *without* pivoting.
 
     Suitable for diagonally-dominant or positive-definite matrices.  Skips
     all pivot-search and row-swap operations, making each scan step cheaper
@@ -1796,32 +1846,32 @@ def _forward_elimination(L: DiaMatrix, b: Array) -> Array:
     b2d = b[:, None] if scalar else b  # (n, k)
     k = b2d.shape[1]
 
-    # Build l_mat[j, i] = L[i, i-(j+1)]  for j = 0 .. p-1.
-    # Important: iterate over the FULL range 1..p_max so that j always maps
-    # to window slot (j+1)-th sub-diagonal.  Missing offsets get zero rows.
-    p = max((-o for o in offsets if o < 0), default=0)
-    if p == 0:
+    # Build l_mat only for sub-diagonals that actually exist (skip zero rows).
+    # The window still has size p (= max stride), but win_indices selects the
+    # correct slots for each present diagonal — avoiding wasted dot-product
+    # work on zero diagonals (e.g. only s∈{2,4} for offsets (-4,-2,0,2,4)).
+    sub_strides: list[int] = sorted(-o for o in offsets if o < 0)
+    if not sub_strides:
         return b  # L is identity
 
-    l_rows: list[Array] = []
-    for s in range(1, p + 1):  # s = 1, 2, ..., p
-        off = -s
-        if off in offsets and s < n:
-            idx = offsets.index(off)
-            d = L.data[idx]
-            # d[j] = L[j+s, j]; shift right by s → l_rows[-1][i] = L[i, i-s]
-            l_rows.append(jnp.concatenate([jnp.zeros(s, dtype=d.dtype), d[: n - s]]))
-        else:
-            l_rows.append(jnp.zeros(n, dtype=L.data.dtype))
+    p = sub_strides[-1]  # max lookback
+    win_indices = jnp.array([s - 1 for s in sub_strides])  # static window slots
 
-    l_mat = jnp.stack(l_rows)  # (p, n);  l_mat[j, i] = L[i, i-(j+1)]
+    l_rows: list[Array] = []
+    for s in sub_strides:
+        idx = offsets.index(-s)
+        d = L.data[idx]
+        # d[j] = L[j+s, j]; shift right by s → row[i] = L[i, i-s]
+        l_rows.append(jnp.concatenate([jnp.zeros(s, dtype=d.dtype), d[: n - s]]))
+
+    l_mat = jnp.stack(l_rows)  # (d, n);  d = number of present sub-diagonals
 
     # carry: window[:, :] where window[j] = y[i-1-j] — the last p y-values.
-    # xs at each step i: (b2d[i], l_mat[:, i])
+    # Only the d present diagonals contribute; their window slots are win_indices.
 
     def step(window: Array, xs: tuple) -> tuple[Array, Array]:
-        bi, l_i = xs  # (k,), (p,)
-        yi = bi - jnp.einsum("p,pk->k", l_i, window)
+        bi, l_i = xs  # (k,), (d,)
+        yi = bi - jnp.einsum("d,dk->k", l_i, window[win_indices])
         new_window = jnp.concatenate([yi[None, :], window[:-1, :]], axis=0)
         return new_window, yi  # carry (p, k);  output (k,)
 
@@ -1852,40 +1902,40 @@ def _backward_substitution(U: DiaMatrix, b: Array) -> Array:
     main_idx = offsets.index(0)
     diag_d = U.data[main_idx]  # diag_d[i] = U[i, i]
 
-    # Build u_mat[j, i] = U[i, i+(j+1)]  for j = 0 .. q-1.
-    # Iterate over the FULL range 1..q_max so j always maps to the correct
-    # window slot.  Missing offsets get zero rows.
-    q = max((o for o in offsets if o > 0), default=0)
+    # Build u_mat only for super-diagonals that actually exist (skip zero rows).
+    # The window still has size q (= max stride), but win_indices selects the
+    # correct slots for each present diagonal.
+    super_strides: list[int] = sorted(o for o in offsets if o > 0)
 
     # Reverse all xs so the scan runs from i = n-1 down to 0.
     rev = jnp.arange(n - 1, -1, -1)
     b_rev = b2d[rev]  # (n, k)
     diag_rev = diag_d[rev]  # (n,)
 
-    if q == 0:
+    if not super_strides:
         # Pure diagonal: no coupling, no window needed.
         xs_rev = b_rev / diag_rev[:, None]  # (n, k)
         x = xs_rev[rev]  # un-reverse
         return x[:, 0] if scalar else x
 
-    u_rows: list[Array] = []
-    for s in range(1, q + 1):  # s = 1, 2, ..., q
-        off = s
-        if off in offsets and s < n:
-            idx = offsets.index(off)
-            d = U.data[idx]
-            # d[i+s] = U[i, i+s]; shift left by s: d[s:n] ++ zeros(s)
-            u_rows.append(jnp.concatenate([d[s:n], jnp.zeros(s, dtype=d.dtype)]))
-        else:
-            u_rows.append(jnp.zeros(n, dtype=U.data.dtype))
+    q = super_strides[-1]  # max lookahead
+    win_indices = jnp.array([s - 1 for s in super_strides])  # static window slots
 
-    u_mat = jnp.stack(u_rows)  # (q, n)
-    u_mat_rev = u_mat[:, rev].T  # (n, q)
+    u_rows: list[Array] = []
+    for s in super_strides:
+        idx = offsets.index(s)
+        d = U.data[idx]
+        # d[i+s] = U[i, i+s]; shift left by s: d[s:n] ++ zeros(s)
+        u_rows.append(jnp.concatenate([d[s:n], jnp.zeros(s, dtype=d.dtype)]))
+
+    u_mat = jnp.stack(u_rows)  # (d, n)
+    u_mat_rev = u_mat[:, rev].T  # (n, d)
 
     # carry: window[j] = x[i+1+j] — next q solution values.
+    # Only the d present diagonals contribute; their slots are win_indices.
     def step(window: Array, xs: tuple) -> tuple[Array, Array]:
-        bi, u_i, dii = xs  # (k,), (q,), ()
-        xi = (bi - jnp.einsum("q,qk->k", u_i, window)) / dii
+        bi, u_i, dii = xs  # (k,), (d,), ()
+        xi = (bi - jnp.einsum("d,dk->k", u_i, window[win_indices])) / dii
         new_window = jnp.concatenate([xi[None, :], window[:-1, :]], axis=0)
         return new_window, xi  # carry (q, k);  output (k,)
 

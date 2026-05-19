@@ -15,14 +15,13 @@ def test_legendre_short_series_and_matrices_branches():
     expected = c2[0] + c2[1] * 0.3
     assert jnp.isclose(v2, expected, atol=ulp(2.0))
     # matrices lookup branches
-    from jaxfun.galerkin import Legendre as Lmod
 
-    _ = Lmod.matrices((L, 0), (L, 0))
-    _ = Lmod.matrices((L, 0), (L, 1))
-    _ = Lmod.matrices((L, 1), (L, 0))
-    _ = Lmod.matrices((L, 0), (L, 2))
-    _ = Lmod.matrices((L, 2), (L, 0))
-    assert Lmod.matrices((L, 3), (L, 3)) is None
+    _ = L.matrices(0, (L, 0))
+    _ = L.matrices(0, (L, 1))
+    _ = L.matrices(1, (L, 0))
+    _ = L.matrices(0, (L, 2))
+    _ = L.matrices(2, (L, 0))
+    assert L.matrices(3, (L, 3)) is None
 
 
 def test_jacobi_edge_matrices_and_evaluate_short():

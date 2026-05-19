@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -5,11 +7,15 @@ from jax import Array
 from sympy import Expr, Symbol
 
 from jaxfun.coordinates import CoordSys
+from jaxfun.galerkin.composite import Composite, PGComposite
 from jaxfun.la import DiaMatrix, Matrix, diags
-from jaxfun.typing import MeshKind
+from jaxfun.typing import MeshKind, TestSpaceKind
 from jaxfun.utils.common import Domain, jit_vmap
 
 from .Jacobi import Jacobi
+from .orthogonal import OrthogonalSpace
+
+n = sp.Symbol("n", integer=True)
 
 
 class Chebyshev(Jacobi):
@@ -330,7 +336,7 @@ class Chebyshev(Jacobi):
             j: Column index symbol.
 
         Returns:
-            SymPy expression for b_{i,j}.
+            SymPy expression for a_{i,j}.
         """
         if (i - j) == 1:
             return sp.Piecewise((1, sp.Eq(j, 0)), (sp.S.Half, True))
@@ -353,66 +359,416 @@ class Chebyshev(Jacobi):
         if (i - j) == 1:
             return sp.Piecewise((1, sp.Eq(j, 0)), (1 / (2 * i), True))
         if (j - i) == 1:
-            return -1 / (2 * i)
+            return sp.Piecewise((0, sp.Eq(i, 0)), (-1 / (2 * i), True))
         return 0
 
+    def a_(self, i: Symbol | int, j: Symbol | int, k: int = 0) -> Expr | float:
+        from .Ultraspherical import Ultraspherical
 
-def matrices(
-    test: tuple[Chebyshev, int], trial: tuple[Chebyshev, int]
-) -> Matrix | DiaMatrix | None:
-    """Return (possibly sparse) operator matrices between test/trial Chebyshev modes.
+        U = Ultraspherical(0, domain=self.domain, system=self.system, lambda_=k)
 
-    Constructs (possibly rectangular) sparse differentiation / mass-like
-    matrices for combinations of test index i and trial index j flags:
-
-        (i, j):
-          (0,0): Diagonal mass-matrix.
-          (0,1): First derivative.
-          (1,0): Transpose of (0,1).
-          (0,2): Second derivative.
-          (2,0): Transpose of (0,2).
-
-    Args:
-        test: Tuple (v, i) with Chebyshev space v and number of derivatives i.
-        trial: Tuple (u, j) with Chebyshev space u and number of derivatives j.
-
-    Returns:
-        Matrix | DiaMatrix | None if combination unsupported.
-    """
-    v, i = test
-    u, j = trial
-    if (i, j) not in ((0, 0), (0, 1), (1, 0), (0, 2), (2, 0)):
-        return None
-
-    if i == 0 and j == 0:
-        return diags([v.norm_squared()], offsets=(0,), shape=(v.N, u.N))
-
-    if i in (1, 2) and j == 0:
-        m = matrices(trial, test)
-        if m is not None:
-            m = m.T
-        return m
-
-    offsets = jnp.arange(j, u.N, 2)
-    if len(offsets) == 0:
-        return None
-    k = jnp.arange(max(v.N, u.N))
-
-    def _getkey1(offset):
-        Q = min(v.N, u.N - offset)
-        return jnp.pi * k[offset : (Q + offset)]
-
-    def _getkey2(offset):
-        Q = min(v.N, u.N - offset)
         return (
-            k[offset : (Q + offset)]
-            * (k[offset : (Q + offset)] ** 2 - k[:Q] ** 2)
-            * jnp.pi
-            / 2
+            U._a(i, j)
+            * self.psi(j + k, k)
+            / self.psi(i + k, k)
+            * self.gn(j + k)
+            / self.gn(i + k)
         )
 
-    _getkey = _getkey1 if j == 1 else _getkey2
+    def _matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
+    ) -> Matrix | DiaMatrix | None:
+        """Return (possibly sparse) operator matrices between test/trial Chebyshev modes
 
-    return diags(
-        [_getkey(m) for m in offsets], tuple(offsets.tolist()), (v.N, u.N)
-    ).to_matrix()  # Matrix is upper triangular, better and faster to use dense.
+        Constructs square sparse differentiation / mass-like
+        matrices for combinations of test index i and trial index j flags:
+
+            (i, j):
+              (0,0): Diagonal mass-matrix.
+              (0,1): First derivative.
+              (1,0): Transpose of (0,1).
+              (0,2): Second derivative.
+              (2,0): Transpose of (0,2).
+
+        Args:
+            i: Derivative order for test function. Should be 0.
+            trial: Tuple (u, j) with trial space u and derivative order j.
+            q: polynomial degree of coefficient.
+
+        Returns:
+            Matrix | DiaMatrix | None if combination unsupported.
+        """
+        u, j = trial
+        assert isinstance(u, Chebyshev), (
+            "Trial space must be Chebyshev for Chebyshev matrices"
+        )
+        if (i, j) not in ((0, 0), (0, 1), (1, 0), (0, 2), (2, 0)):
+            return None
+
+        A = None
+        if q != 0:
+            A = self.A().power(q)
+
+        if i == 0 and j == 0:
+            M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
+            return M if A is None else A.T @ M
+
+        if i in (1, 2) and j == 0:
+            m = u._matrices(j, (self, i), q=q)
+            if m is not None:
+                m = m.T
+            return m
+
+        offsets = jnp.arange(j, u.N, 2)
+        if len(offsets) == 0:
+            return None
+        k = jnp.arange(max(self.N, u.N))
+
+        def _getkey1(offset):
+            Q = min(self.N, u.N - offset)
+            return jnp.pi * k[offset : (Q + offset)]
+
+        def _getkey2(offset):
+            Q = min(self.N, u.N - offset)
+            return (
+                k[offset : (Q + offset)]
+                * (k[offset : (Q + offset)] ** 2 - k[:Q] ** 2)
+                * jnp.pi
+                / 2
+            )
+
+        _getkey = _getkey1 if j == 1 else _getkey2
+
+        M = diags(
+            [_getkey(m) for m in offsets], tuple(offsets.tolist()), (self.N, u.N)
+        ).to_matrix()  # Matrix is upper triangular, better and faster to use dense.
+        return M if A is None else A.T @ M
+
+
+##### Predefined Composite spaces #####
+
+
+class CGComposite(Composite):
+    """Chebyshev Composite basis with Galerkin test functions.
+
+    Args:
+        N: Target (unconstrained) number of modes of underlying orthogonal.
+        orthogonal: Underlying orthogonal basis class.
+        bcs: BoundaryConditions specification.
+        domain: Physical domain (defaults to [-1, 1]).
+        name: Space name.
+        fun_str: Symbol stem for basis functions.
+        system: Optional coordinate system.
+        stencil: Optional custom stencil dict {shift: sympy_expr}.
+        scaling: SymPy expression scaling the stencil diagonals.
+        order: Highest derivative order for trial function.
+
+    Attributes:
+        orthogonal: Instance of underlying orthogonal basis.
+        stencil: Ordered dict of diagonal shift -> expression / scaling.
+        S: Sparse (DiaMatrix) stencil matrix for test functions.
+        ST: Pre-computed transpose of S for efficiency.
+        scaling: Scaling expression applied to user stencil.
+    """
+
+    def get_testspace(
+        self,
+        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
+        name: str | None = None,
+        fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
+    ) -> Composite:
+        """Return test space (same as self for Galerkin)."""
+        kind = TestSpaceKind.coerce(kind)
+        if kind == TestSpaceKind.GALERKIN:
+            if name is None and fun_str is None and scaling is None:
+                return self
+            else:
+                return CGComposite(
+                    N=self.orthogonal.dim,
+                    orthogonal=Chebyshev,
+                    bcs=self.bcs,
+                    domain=self.domain,
+                    name=name if name is not None else self.name,
+                    fun_str=fun_str if fun_str is not None else self.fun_str,
+                    system=self.system,
+                    stencil=self.stencil,
+                    scaling=self.scaling,
+                )
+
+        assert kind == TestSpaceKind.PETROV_GALERKIN, (
+            f"Unsupported test space kind {kind!r} for Chebyshev CGComposite. "
+            f"Supported: {TestSpaceKind.GALERKIN!r}, {TestSpaceKind.PETROV_GALERKIN!r}."
+        )
+        match self.bcs.num_bcs():
+            case 1:
+                P = ChebPhi_1
+            case 2:
+                P = ChebPhi_2
+            case 4:
+                P = ChebPhi_4
+            case _:
+                raise NotImplementedError(
+                    f"Unsupported number of BCs {self.bcs.num_bcs()} for PGComposite. "
+                    f"Supported: 1, 2, or 4."
+                )
+
+        return P(
+            self.N,
+            domain=self.domain,
+            system=self.system,
+            name=name,
+            fun_str=fun_str,
+            scaling=scaling,
+        )
+
+
+class ChebPhi_1(PGComposite):
+    r"""
+    Composite space for Mortensen's Petrov-Galerkin method order 1.
+
+    The test functions are defined by
+
+    .. math::
+
+        \phi_k = \frac{2(1-x^2)}{\pi k(k+1)} T'_{k+1}, \, k=0, 1, \ldots, N-3
+
+    where :math:`T'_{k+1}` is the derivative of Chebyshev polynomial k+1 of the
+    first kind.
+
+    When used as a test function space, the resulting inner product is a skewed
+    diagonal matrix with entries
+
+    .. math::
+        \langle \phi_k, T'_j \rangle = \delta_{k,k+1}
+
+    The advantage of using this space is that the resulting operator matrices are
+    sparse, whereas a regular Chebyshev test space (Galerkin method) would yield
+    dense operator matrices for the same problem.
+
+    Examples:
+        >>> from jaxfun.galerkin.Chebyshev import ChebPhi_1
+        >>> from jaxfun.galerkin import inner, Chebyshev, TrialFunction, TestFunction
+        >>> from jaxfun.galerkin import FunctionSpace
+        >>> N = 6
+        >>> P = ChebPhi_1(N)
+        >>> V = Chebyshev.Chebyshev(N)
+        >>> u = TrialFunction(V)
+        >>> v = TestFunction(P)
+        >>> x = V.system.x
+        >>> A = inner(u.diff(x, 1) * v, sparse=True)
+        >>> A.todense()
+        Array([[0., 1., 0., 0., 0., 0.],
+               [0., 0., 1., 0., 0., 0.],
+               [0., 0., 0., 1., 0., 0.],
+               [0., 0., 0., 0., 1., 0.],
+               [0., 0., 0., 0., 0., 1.]], dtype=float32)
+        >>> D = FunctionSpace(N, Chebyshev.Chebyshev, {"left": {"D": 0}})
+        >>> x = D.system.x
+        >>> u = TrialFunction(D)
+        >>> A = inner(u.diff(x, 1) * v, sparse=True)
+        >>> A.todense()
+        Array([[1., 1., 0., 0., 0.],
+               [0., 1., 1., 0., 0.],
+               [0., 0., 1., 1., 0.],
+               [0., 0., 0., 1., 1.],
+               [0., 0., 0., 0., 1.]], dtype=float32)
+    """
+
+    def __init__(
+        self,
+        N: int,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
+        name: str | None = None,
+        fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
+    ) -> None:
+        name = name if name is not None else "ChebPhi_1"
+        fun_str = fun_str if fun_str is not None else "phi_1"
+        PGComposite.__init__(
+            self,
+            N + 1,
+            Chebyshev,
+            bcs={"left": {"D": 0}, "right": {"D": 0}},
+            domain=domain,
+            system=system,
+            stencil={0: 1 / sp.pi / (n + 1), 2: -1 / sp.pi / (n + 1)},
+            scaling=scaling,
+            name=name,
+            fun_str=fun_str,
+            order=1,
+        )
+
+
+class ChebPhi_2(PGComposite):
+    r"""Composite space for Mortensen's Petrov-Galerkin method order 2.
+
+    The test functions are defined by
+
+    .. math::
+
+        \phi_k = \frac{2(1-x^2)^2 T''_{k+2}}{\pi (k+1)(k+2)^2(k+3)}
+
+    where :math:`T''_{k+2}` is the second derivative of Chebyshev polynomial
+    k+2 of the first kind.
+
+    When used as a test function space, the resulting inner product is a skewed
+    diagonal matrix with entries
+
+    .. math::
+        \langle \phi_k, T''_j \rangle = \delta_{k,k+2}
+
+    The advantage of using this space is that the resulting operator matrices are
+    sparse, whereas a regular Chebyshev test space (Galerkin method) would yield
+    dense operator matrices for the same problem.
+
+    Examples:
+        >>> from jaxfun.galerkin.Chebyshev import ChebPhi_2
+        >>> from jaxfun.galerkin import inner, Chebyshev, TrialFunction, TestFunction
+        >>> from jaxfun.galerkin import FunctionSpace
+        >>> N = 7
+        >>> P = ChebPhi_2(N)
+        >>> V = Chebyshev.Chebyshev(N)
+        >>> u = TrialFunction(V)
+        >>> v = TestFunction(P)
+        >>> x = V.system.x
+        >>> A = inner(u.diff(x, 2) * v, sparse=True)
+        >>> A.todense()
+        Array([[0., 0., 1., 0., 0., 0., 0.],
+               [0., 0., 0., 1., 0., 0., 0.],
+               [0., 0., 0., 0., 1., 0., 0.],
+               [0., 0., 0., 0., 0., 1., 0.],
+               [0., 0., 0., 0., 0., 0., 1.]], dtype=float32)
+        >>> D = FunctionSpace(
+        ...     N, Chebyshev.Chebyshev, {"left": {"D": 0}, "right": {"D": 0}}
+        ... )
+        >>> x = D.system.x
+        >>> u = TrialFunction(D)
+        >>> A = inner(u.diff(x, 2) * v, sparse=True)
+        >>> A.todense()
+        Array([[-1.,  0.,  1.,  0.,  0.],
+               [ 0., -1.,  0.,  1.,  0.],
+               [ 0.,  0., -1.,  0.,  1.],
+               [ 0.,  0.,  0., -1.,  0.],
+               [ 0.,  0.,  0.,  0., -1.]], dtype=float32)
+    """  # noqa: E501
+
+    def __init__(
+        self,
+        N: int,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
+        name: str | None = None,
+        fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
+    ) -> None:
+        name = name if name is not None else "ChebPhi_2"
+        fun_str = fun_str if fun_str is not None else "phi_2"
+        PGComposite.__init__(
+            self,
+            N + 2,
+            Chebyshev,
+            bcs={"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}},
+            domain=domain,
+            system=system,
+            stencil={
+                0: 1 / (2 * sp.pi * (n + 1) * (n + 2)),
+                2: -1 / (sp.pi * (n**2 + 4 * n + 3)),
+                4: 1 / (2 * sp.pi * (n + 2) * (n + 3)),
+            },
+            name=name,
+            fun_str=fun_str,
+            scaling=scaling,
+            order=2,
+        )
+
+
+class ChebPhi_4(PGComposite):
+    r"""Composite space for Mortensen's Petrov-Galerkin method order 4.
+
+    The test functions are defined by
+
+    .. math::
+
+        \phi_k = \frac{(1-x^2)^4}{h^{(4)}_{k+4}} T^{(4)}_{k+4}
+
+    where :math:`T^{(4)}_{k+4}` is the fourth derivative of Chebyshev polynomial
+    k+4 of the first kind.
+
+    When used as a test function space, the resulting inner product is a skewed
+    diagonal matrix with entries
+
+    .. math::
+        \langle \phi_k, T^{(4)}_j \rangle = \delta_{k,k+4}
+
+    The advantage of using this space is that the resulting operator matrices are
+    sparse, whereas a regular Chebyshev test space (Galerkin method) would yield
+    dense operator matrices for the same problem.
+
+    Examples:
+        >>> from jaxfun.galerkin.Chebyshev import ChebPhi_4
+        >>> from jaxfun.galerkin import inner, Chebyshev, TrialFunction, TestFunction
+        >>> from jaxfun.galerkin import FunctionSpace
+        >>> N = 9
+        >>> P = ChebPhi_4(N)
+        >>> V = Chebyshev.Chebyshev(N)
+        >>> u = TrialFunction(V)
+        >>> v = TestFunction(P)
+        >>> x = V.system.x
+        >>> A = inner(u.diff(x, 4) * v, sparse=True)
+        >>> A.todense()
+        Array([[0., 0., 0., 0., 1., 0., 0., 0., 0.],
+               [0., 0., 0., 0., 0., 1., 0., 0., 0.],
+               [0., 0., 0., 0., 0., 0., 1., 0., 0.],
+               [0., 0., 0., 0., 0., 0., 0., 1., 0.],
+               [0., 0., 0., 0., 0., 0., 0., 0., 1.]], dtype=float32)
+        >>> D = FunctionSpace(
+        ...     N,
+        ...     Chebyshev.Chebyshev,
+        ...     {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}},
+        ... )
+        >>> x = D.system.x
+        >>> u = TrialFunction(D)
+        >>> A = inner(u.diff(x, 4) * v, sparse=True)
+        >>> A.todense()
+        Array([[ 0.33333334,  0.        , -1.6       ,  0.        ,  1.        ],
+               [ 0.        ,  0.5       ,  0.        , -1.6666666 ,  0.        ],
+               [ 0.        ,  0.        ,  0.6       ,  0.        , -1.7142857 ],
+               [ 0.        ,  0.        ,  0.        ,  0.6666667 ,  0.        ],
+               [ 0.        ,  0.        ,  0.        ,  0.        ,  0.71428573]],      dtype=float32)
+    """  # noqa: E501
+
+    def __init__(
+        self,
+        N: int,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
+        name: str | None = None,
+        fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
+    ) -> None:
+        name = name if name is not None else "ChebPhi_4"
+        fun_str = fun_str if fun_str is not None else "phi_4"
+        PGComposite.__init__(
+            self,
+            N + 4,
+            Chebyshev,
+            bcs={
+                "left": {"D": 0, "N": 0, "N2": 0, "N3": 0},
+                "right": {"D": 0, "N": 0, "N2": 0, "N3": 0},
+            },
+            domain=domain,
+            system=system,
+            stencil={
+                0: 1 / (8 * sp.pi * (n + 1) * (n + 2) * (n + 3) * (n + 4)),
+                2: -1 / (2 * sp.pi * (n + 1) * (n + 3) * (n + 4) * (n + 5)),
+                4: 3 / (4 * sp.pi * (n + 2) * (n + 3) * (n + 5) * (n + 6)),
+                6: -1 / (2 * sp.pi * (n + 3) * (n + 4) * (n + 5) * (n + 7)),
+                8: 1 / (8 * sp.pi * (n + 4) * (n + 5) * (n + 6) * (n + 7)),
+            },
+            name=name,
+            fun_str=fun_str,
+            scaling=scaling,
+            order=4,
+        )

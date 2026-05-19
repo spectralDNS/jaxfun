@@ -6,6 +6,7 @@ from jaxfun.la import DiaMatrix, diags
 from jaxfun.utils.common import Domain
 
 from .Jacobi import Jacobi
+from .orthogonal import OrthogonalSpace
 
 
 class Ultraspherical(Jacobi):
@@ -99,22 +100,28 @@ class Ultraspherical(Jacobi):
             return 0
         return super().b(i, j)
 
+    def _matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
+    ) -> DiaMatrix | None:
+        """Return sparse mass matrix for (i,j)=(0,0) else None.
 
-def matrices(
-    test: tuple[Ultraspherical, int], trial: tuple[Ultraspherical, int]
-) -> DiaMatrix | None:
-    """Return sparse mass matrix for (i,j)=(0,0) else None.
+        Args:
+            i: Derivative order for test function.
+            trial: (space, derivative order) for trial function.
+            q: polynomial degree of coefficient.
 
-    Args:
-        test: (space, derivative order) for test function.
-        trial: (space, derivative order) for trial function.
+        Returns:
+            DiaMatrix diagonal mass matrix or None if derivative combo unsupported.
+        """
+        u, j = trial
+        assert isinstance(u, Ultraspherical), (
+            "Trial space must be Ultraspherical for Ultraspherical matrices"
+        )
+        A = None
+        if q != 0:
+            A = self.A().power(q)
+        if i == 0 and j == 0:
+            M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
+            return M if A is None else A.T @ M
 
-    Returns:
-        DiaMatrix diagonal mass matrix or None if derivative combo unsupported.
-    """
-    v, i = test
-    u, j = trial
-    if i == 0 and j == 0:
-        return diags([v.norm_squared()], offsets=(0,), shape=(v.N, u.N))
-
-    return None
+        return None

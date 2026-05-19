@@ -13,12 +13,10 @@ from sympy import Number
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol, diags
-from jaxfun.typing import MeshKind
+from jaxfun.typing import MeshKind, TestSpaceKind
 from jaxfun.utils.common import Domain, matmat, n
 
-from .Chebyshev import Chebyshev
 from .Jacobi import Jacobi
-from .Legendre import Legendre
 from .orthogonal import OrthogonalSpace
 
 direct_sum_symbol = "\u2295"
@@ -126,6 +124,7 @@ class Composite(OrthogonalSpace):
         orthogonal: Instance of underlying orthogonal basis.
         stencil: Ordered dict of diagonal shift -> expression / scaling.
         S: Sparse (DiaMatrix) stencil matrix.
+        ST: Pre-computed transpose of S for efficiency.
         scaling: Scaling expression applied to user stencil.
     """
 
@@ -141,10 +140,11 @@ class Composite(OrthogonalSpace):
         fun_str: str = "phi",
         system: CoordSys | None = None,
         stencil: dict | None = None,
-        alpha: Number | float = 0,
-        beta: Number | float = 0,
-        scaling: sp.Expr = sp.S.One,
+        alpha: Number | float = 0,  # Used if orthogonal is Jacobi; ignored otherwise.
+        beta: Number | float = 0,  # Used if orthogonal is Jacobi; ignored otherwise.
+        scaling: sp.Expr | None = None,
     ) -> None:
+        scaling = scaling if scaling is not None else sp.S.One
         domain = Domain(-1, 1) if domain is None else domain
         super().__init__(N, domain=domain, system=system, name=name, fun_str=fun_str)
         self.orthogonal: Jacobi = orthogonal(
@@ -160,8 +160,7 @@ class Composite(OrthogonalSpace):
         self.scaling = scaling
         self.stencil = {(si[0]): si[1] / scaling for si in sorted(stencil.items())}
         self.S: DiaMatrix = self.stencil_to_diamatrix()
-        self.ST: DiaMatrix = self.S.T  # pre-computed transpose; avoids creating
-        # a new DiaMatrix inside jax.jit traces (which breaks metadata comparison)
+        self.ST: DiaMatrix = self.S.T
         self._mass_matrix: DiaMatrix = self._compute_mass_matrix()
         self._mass_matrix.lu_factor()
 
@@ -347,6 +346,36 @@ class Composite(OrthogonalSpace):
         """Return underlying orthogonal basis instance."""
         return self.orthogonal
 
+    def get_testspace(
+        self,
+        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
+        name: str | None = None,
+        fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
+    ) -> Composite:
+        """Return test space (same as self for Galerkin)."""
+        kind = TestSpaceKind.coerce(kind)
+        if kind != TestSpaceKind.GALERKIN:
+            raise NotImplementedError(
+                f"Unsupported test space kind {kind!r} for Composite. "
+            )
+        if name is None and fun_str is None:
+            return self
+
+        return Composite(
+            N=self.orthogonal.dim,
+            orthogonal=self.orthogonal.__class__,
+            bcs=self.bcs,
+            domain=self.domain,
+            name=name if name is not None else self.name,
+            fun_str=fun_str if fun_str is not None else self.fun_str,
+            system=self.system,
+            stencil=self.stencil,
+            scaling=scaling if scaling is not None else self.scaling,
+            alpha=self.orthogonal.alpha,
+            beta=self.orthogonal.beta,
+        )
+
     def __add__(self, b: BCGeneric) -> DirectSum:
         """Direct sum self ⊕ b."""
         return DirectSum(self, b)
@@ -470,6 +499,7 @@ class DirectSum:
         self.quad_points_and_weights = a.quad_points_and_weights
         self.num_quad_points = a.num_quad_points
         self.get_orthogonal = a.get_orthogonal
+        self.get_testspace = a.get_testspace
         self.dims = a.dims
         self.rank = a.rank
         self.domain = a.domain
@@ -572,6 +602,130 @@ class DirectSum:
         return self[0]
 
 
+class PGComposite(Composite):
+    """Composite basis with Petrov-Galerkin test functions (stencil on test side).
+
+    Args:
+        N: Target (unconstrained) number of modes of underlying orthogonal.
+        orthogonal: Underlying orthogonal basis class (e.g. Chebyshev).
+        bcs: BoundaryConditions specification.
+        domain: Physical domain (defaults to [-1, 1]).
+        name: Space name.
+        fun_str: Symbol stem for basis functions.
+        system: Optional coordinate system.
+        stencil: Optional custom stencil dict {shift: sympy_expr}.
+        alpha: Jacobi alpha (for Jacobi-based bases).
+        beta: Jacobi beta.
+        scaling: SymPy expression scaling the stencil diagonals.
+        order: Highest derivative order for trial function.
+
+    Attributes:
+        orthogonal: Instance of underlying orthogonal basis.
+        stencil: Ordered dict of diagonal shift -> expression / scaling.
+        S_test: Sparse (DiaMatrix) stencil matrix for test functions.
+        scaling: Scaling expression applied to user stencil.
+        order: Highest derivative order for trial functions.
+    """
+
+    def __init__(
+        self,
+        N: int,
+        orthogonal: type[Jacobi],
+        bcs: BoundaryConditions | dict,
+        domain: Domain | None = None,
+        name: str = "PGComposite",
+        fun_str: str = "phi",
+        system: CoordSys | None = None,
+        stencil: dict | None = None,
+        alpha: Number | float = 0,
+        beta: Number | float = 0,
+        scaling: sp.Expr | None = None,
+        order: int = 1,
+    ) -> None:
+        super().__init__(
+            N,
+            orthogonal,
+            bcs,
+            domain=domain,
+            name=name,
+            fun_str=fun_str,
+            system=system,
+            stencil=stencil,
+            alpha=alpha,
+            beta=beta,
+            scaling=scaling,
+        )
+        self.order = order
+        assert self.order > 0, "Order must be positive for Petrov-Galerkin composite."
+
+    def _matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
+    ) -> DiaMatrix | Matrix | None:
+        r"""Return (sparse) operator matrices for Petrov-Galerkin method.
+
+        .. math::
+            \langle \psi_m^{(i)}, x^q \phi_n^{(trial[1])} \rangle
+
+        where \psi_m^{(i)} are i'th derivative of test functions and
+        \phi_n^{(trial[1])} are trial functions with derivative order
+        trial[1].
+
+        Args:
+            i: Derivative order for test function. Should be 0. Kept for
+                consistency with Galerkin.
+            trial: Tuple (u, j) with trial space u and derivative order j.
+            q: polynomial order for scaling.
+
+        """
+
+        if i != 0:
+            return None
+
+        u, j = trial
+
+        assert isinstance(u, Jacobi | Composite), (
+            "Trial space must be Jacobi or Composite."
+        )
+
+        def Bkl(k: int, l: int, V: Jacobi | Composite) -> DiaMatrix:
+            B = V.orthogonal.B(V.N + 2 * (k - l))
+            BN = B.power(k - l).crop(V.N + k - l, V.N)
+            DI = diags([jnp.array([1.0])], offsets=(k,), shape=(V.N, V.N + k - l))
+            return DI @ BN  # (N, N)
+
+        def Akq(k: int, q: int, V: Jacobi | Composite) -> DiaMatrix:
+            return V.orthogonal.A_(k=k, N=V.N + 2 * q).power(q)  # (N+2q, N+2q)
+
+        z: DiaMatrix | Matrix | None = None
+        if j <= self.order and q == 0:
+            B: DiaMatrix = Bkl(self.order, j, u).crop(self.num_dofs, u.N)
+            z = B @ u.ST if isinstance(u, Composite) else B
+
+        elif j <= self.order and q > 0:
+            A: DiaMatrix = Akq(self.order, q, u).crop(self.num_dofs, u.N)  # (M, N)
+            B: DiaMatrix = Bkl(self.order, j, u)  # (N, N)
+            z = A @ B @ u.ST if isinstance(u, Composite) else A @ B
+
+        if z is None:
+            return None
+
+        # Diagonal scaling of test functions.
+        if self.scaling != sp.S.One:
+            from jaxfun.utils import lambdify
+
+            assert len(self.scaling.free_symbols) == 1, (
+                "Scaling must have exactly one free symbol."
+            )  # noqa: E501
+            m = self.scaling.free_symbols.pop()
+            scaling = diags(
+                [lambdify(m, 1 / self.scaling)(jnp.arange(z.shape[0]))],
+                offsets=(0,),
+                shape=(z.shape[0], z.shape[0]),
+            )
+            return scaling @ z
+        return z
+
+
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
     """Derive symbolic stencil mapping orthogonal -> constrained basis.
 
@@ -590,6 +744,9 @@ def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
         Neumann Chebyshev:
             ψ_i = T_i - i^2/(i^2+4i+4) T_{i+2}
     """
+    from .Chebyshev import Chebyshev
+    from .Legendre import Legendre
+
     if "".join(bcs.orderednames()) == "LDRD" and isinstance(
         orthogonal, Chebyshev | Legendre
     ):

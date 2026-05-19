@@ -128,19 +128,18 @@ def test_fourier_backward_padding():
 
 def test_chebyshev_matrices_branches():
     C = Chebyshev.Chebyshev(6)
-    from jaxfun.galerkin import Chebyshev as Cmod
 
     # i=0,j=0
-    m00 = Cmod.matrices((C, 0), (C, 0))
+    m00 = C.matrices(0, (C, 0))
     assert m00 is not None
     # i=0,j=1 maybe None if not enough odd indices
-    _ = Cmod.matrices((C, 0), (C, 1))
+    _ = C.matrices(0, (C, 1))
     # i=0,j=2 even derivative
-    _ = Cmod.matrices((C, 0), (C, 2))
+    _ = C.matrices(0, (C, 2))
     # i=2,j=0 transpose path
-    _ = Cmod.matrices((C, 2), (C, 0))
+    _ = C.matrices(2, (C, 0))
     # Unknown path returns None
-    assert Cmod.matrices((C, 3), (C, 3)) is None
+    assert C.matrices(3, (C, 3)) is None
 
 
 def test_tensorproductspace_3d_paths_and_mapping():

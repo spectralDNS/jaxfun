@@ -222,12 +222,14 @@ def inner(
             Am = assemble_multivar(mats_, scales, test_space)
             if has_bcs:
                 sign = 1 if all_linear else -1
-                assert isinstance(
-                    trial_space, TensorProductSpace | VectorTensorProductSpace
-                )
-                res = sign * jnp.einsum(
-                    "ikjl,kl->ij", Am, trial_space.bndvals[tuple(trial)]
-                )
+                assert isinstance(trial_space, DirectSumTPS | VectorTensorProductSpace)
+                if isinstance(trial_space, DirectSumTPS):
+                    fun = trial_space.bndvals[tuple(trial)]
+                else:
+                    dsspace = trial_space[gi[1][1]]
+                    assert isinstance(dsspace, DirectSumTPS)
+                    fun = dsspace.bndvals[tuple(trial)]
+                res = sign * jnp.einsum("ikjl,kl->ij", Am, fun)
                 global_indices = gi[0]
                 bresults.append(vectorize_bresult(res, test_space, gi[0][0]))
 
@@ -253,10 +255,12 @@ def inner(
             if has_bcs:
                 assert len(mats_) == 2  # BCs only implemented for 2D at present
                 if trial_space is not None:
-                    if isinstance(trial_space, TensorProductSpace):
+                    if isinstance(trial_space, DirectSumTPS):
                         fun = trial_space.bndvals[tuple(trial)]
                     elif isinstance(trial_space, VectorTensorProductSpace):
-                        fun = trial_space[gi[1][1]].bndvals[tuple(trial)]
+                        dsspace = trial_space[gi[1][1]]
+                        assert isinstance(dsspace, DirectSumTPS)
+                        fun = dsspace.bndvals[tuple(trial)]
                     else:
                         raise NotImplementedError(
                             "BCs only implemented for TensorProductSpace and VectorTensorProductSpace"  # noqa: E501

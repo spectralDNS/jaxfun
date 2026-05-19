@@ -391,7 +391,7 @@ def _make_tpmatrix_2d(
     a0 = jax.random.normal(jax.random.PRNGKey(7), shape=(m0, n0))
     a1 = jax.random.normal(jax.random.PRNGKey(8), shape=(m1, n1))
     tp = TPMatrix(
-        [Matrix(a0), Matrix(a1)],  # ty:ignore[invalid-argument-type]
+        [Matrix(a0), Matrix(a1)],
         scale,
     )
     K = np.kron(a0, a1) * scale
@@ -407,7 +407,7 @@ def _make_tpmatrix_3d(
     for a in mats_np[1:]:
         K = np.kron(K, a)
     K = K * scale
-    tp = TPMatrix([Matrix(jnp.array(a)) for a in mats_np], scale)  # ty:ignore[invalid-argument-type]
+    tp = TPMatrix([Matrix(jnp.array(a)) for a in mats_np], scale)
     return tp, K
 
 
@@ -442,7 +442,7 @@ class TestTPMatrixMatmul:
         T = _diag3(n)
         I = diags([jnp.ones(n)], offsets=(0,))
         K_dia = diakron(T, I)  # symmetric
-        tp = TPMatrix([T, I], 1.0)  # ty:ignore[invalid-argument-type]
+        tp = TPMatrix([T, I], 1.0)
         w = jax.random.normal(jax.random.PRNGKey(2), shape=(n, n))
         # A @ w (flattened) and w @ A (flattened) differ only by interpretation:
         # check against kron dense product

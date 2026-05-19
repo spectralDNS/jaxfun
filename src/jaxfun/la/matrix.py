@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
 Array = jax.Array
 
+type _LUCache = _CacheBox[LUFactors]
+
 
 @nnx.dataclass
 class Matrix(nnx.Pytree):
@@ -116,7 +118,7 @@ class Matrix(nnx.Pytree):
         Raises:
             ValueError: if the matrix is not square.
         """
-        _box: _CacheBox[LUFactors] | None = getattr(self, "_lu_cache", None)
+        _box: _LUCache | None = getattr(self, "_lu_cache", None)
         if _box is not None:
             return _box.value
         n, m = self.shape

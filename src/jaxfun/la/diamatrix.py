@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, NamedTuple, TypedDict, overload
 
 import jax
 import jax.numpy as jnp
@@ -11,10 +11,39 @@ from jaxfun.la.matrixprotocol import DiaMatrixSolveMethod, _CacheBox
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
-    from jaxfun.la import Matrix, MatrixProtocol
+    from jaxfun.la import Matrix
+    from jaxfun.la.matrix import LUFactors as DenseLUFactors
     from jaxfun.la.pinned import PinnedSystem
 
 Array = jax.Array
+
+
+class _LUCache(TypedDict):
+    banded: dict[bool, LUFactors]
+    dense: DenseLUFactors | None
+
+
+def _new_lu_cache() -> _LUCache:
+    return {"banded": {}, "dense": None}
+
+
+class _RCMResult(NamedTuple):
+    matrix: DiaMatrix
+    perm: Array
+    inv_perm: Array
+
+
+class _RCMSolveEntry(NamedTuple):
+    lu: LUFactors
+    perm: Array
+    inv_perm: Array
+
+
+type _RCMSolveCache = dict[bool, _RCMSolveEntry]
+
+
+def _new_rcm_solve_cache() -> _RCMSolveCache:
+    return {}
 
 
 class DenseIndexingWarning(UserWarning):
@@ -358,13 +387,11 @@ class DiaMatrix(nnx.Pytree):
             ValueError: if the matrix is not square or the system is singular.
         """
         # --- lazy cache -------------------------------------------------
-        _box: _CacheBox[dict[bool | str, LUFactors]] | None = getattr(
-            self, "_lu_cache", None
-        )
+        _box: _CacheBox[_LUCache] | None = getattr(self, "_lu_cache", None)
         if _box is None:
-            _box = _CacheBox({})
+            _box = _CacheBox(_new_lu_cache())
             object.__setattr__(self, "_lu_cache", _box)
-        cache: dict[bool | str, LUFactors] = _box.value
+        cache = _box.value["banded"]
         if pivot in cache:
             return cache[pivot]
 
@@ -575,21 +602,19 @@ class DiaMatrix(nnx.Pytree):
         # ------------------------------------------------------------------
         # "banded" path (and cache hit for banded)
         # ------------------------------------------------------------------
-        _box: _CacheBox[dict[bool | str, LUFactors]] | None = getattr(
-            self, "_lu_cache", None
-        )
+        _box: _CacheBox[_LUCache] | None = getattr(self, "_lu_cache", None)
         if method == DiaMatrixSolveMethod.BANDED or (
             method == DiaMatrixSolveMethod.AUTO
             and _box is not None
-            and pivot in _box.value
+            and pivot in _box.value["banded"]
         ):
             return self.lu_factor(pivot=pivot).solve(b, axis=axis)
 
         # ------------------------------------------------------------------
         # "rcm" path (and cache hit for rcm)
         # ------------------------------------------------------------------
-        _rcm_box: _CacheBox[dict[bool, tuple[LUFactors, Array, Array]]] | None = (
-            getattr(self, "_rcm_solve_cache", None)
+        _rcm_box: _CacheBox[_RCMSolveCache] | None = getattr(
+            self, "_rcm_solve_cache", None
         )
         if method == DiaMatrixSolveMethod.RCM or (
             method == DiaMatrixSolveMethod.AUTO
@@ -600,9 +625,9 @@ class DiaMatrix(nnx.Pytree):
                 A_perm, perm, inv_perm = self.rcm()
                 lu_perm = A_perm.lu_factor(pivot=pivot)
                 if _rcm_box is None:
-                    _rcm_box = _CacheBox({})
+                    _rcm_box = _CacheBox(_new_rcm_solve_cache())
                     object.__setattr__(self, "_rcm_solve_cache", _rcm_box)
-                _rcm_box.value[pivot] = (lu_perm, perm, inv_perm)
+                _rcm_box.value[pivot] = _RCMSolveEntry(lu_perm, perm, inv_perm)
             lu_perm, perm, inv_perm = _rcm_box.value[pivot]
             ax = axis % b.ndim
             return jnp.take(
@@ -614,12 +639,13 @@ class DiaMatrix(nnx.Pytree):
         # ------------------------------------------------------------------
         if method == DiaMatrixSolveMethod.DENSE:
             if _box is None:
-                _box = _CacheBox({})
+                _box = _CacheBox(_new_lu_cache())
                 object.__setattr__(self, "_lu_cache", _box)
-            _dense_key = "_dense"
-            if _dense_key not in _box.value:
-                _box.value[_dense_key] = self.to_matrix().lu_factor()  # type: ignore[index]
-            return _box.value[_dense_key].solve(b, axis=axis)
+            dense_lu = _box.value["dense"]
+            if dense_lu is None:
+                dense_lu = self.to_matrix().lu_factor()
+                _box.value["dense"] = dense_lu
+            return dense_lu.solve(b, axis=axis)
 
         # ------------------------------------------------------------------
         # "auto": choose based on bandwidth
@@ -647,9 +673,9 @@ class DiaMatrix(nnx.Pytree):
         elif p_p * (q_p + 1) <= auto_threshold:
             lu_perm = A_perm.lu_factor(pivot=pivot)
             if _rcm_box is None:
-                _rcm_box = _CacheBox({})
+                _rcm_box = _CacheBox(_new_rcm_solve_cache())
                 object.__setattr__(self, "_rcm_solve_cache", _rcm_box)
-            _rcm_box.value[pivot] = (lu_perm, perm, inv_perm)
+            _rcm_box.value[pivot] = _RCMSolveEntry(lu_perm, perm, inv_perm)
             ax = axis % b.ndim
             return jnp.take(
                 lu_perm.solve(jnp.take(b, perm, axis=ax), axis=ax), inv_perm, axis=ax
@@ -1191,9 +1217,9 @@ class DiaMatrix(nnx.Pytree):
     def __matmul__(self, other: DiaMatrix) -> DiaMatrix: ...
     @overload
     def __matmul__(self, other: Matrix) -> Matrix: ...
-    @overload
-    def __matmul__(self, other: MatrixProtocol) -> MatrixProtocol: ...
-    def __matmul__(self, other: Array | JAXFunction | MatrixProtocol) -> Any:
+    def __matmul__(
+        self, other: Array | JAXFunction | Matrix | DiaMatrix
+    ) -> Array | DiaMatrix | Matrix:
         """Support ``A @ x`` (vector/matrix) and ``A @ B`` (DiaMatrix).
 
         DiaMatrix x DiaMatrix is computed purely in DIA format without
@@ -1229,9 +1255,9 @@ class DiaMatrix(nnx.Pytree):
     def __rmatmul__(self, other: DiaMatrix) -> DiaMatrix: ...
     @overload
     def __rmatmul__(self, other: Matrix) -> Matrix: ...
-    @overload
-    def __rmatmul__(self, other: MatrixProtocol) -> MatrixProtocol: ...
-    def __rmatmul__(self, other: Array | JAXFunction | MatrixProtocol) -> Any:
+    def __rmatmul__(
+        self, other: Array | JAXFunction | Matrix | DiaMatrix
+    ) -> Array | DiaMatrix | Matrix:
         """Support ``x @ A`` (row-vector or matrix on the left).
 
         Delegates to :meth:`rmatvec` which contracts the last axis of ``other``
@@ -1401,9 +1427,7 @@ class DiaMatrix(nnx.Pytree):
             x_perm = A_perm.solve(b[perm])
             x = x_perm[inv_perm]
         """
-        _box: _CacheBox[tuple[DiaMatrix, Array, Array]] | None = getattr(
-            self, "_rcm_cache", None
-        )
+        _box: _CacheBox[_RCMResult] | None = getattr(self, "_rcm_cache", None)
         if _box is not None:
             return _box.value
 
@@ -1419,7 +1443,7 @@ class DiaMatrix(nnx.Pytree):
             shape=(n, n),
         )
         inv_perm = jnp.argsort(perm).astype(jnp.int32)
-        result = (A_perm, perm, inv_perm)
+        result = _RCMResult(A_perm, perm, inv_perm)
         object.__setattr__(self, "_rcm_cache", _CacheBox(result))
         return result
 

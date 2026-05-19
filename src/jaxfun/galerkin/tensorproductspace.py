@@ -10,6 +10,7 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
+from jax.sharding import NamedSharding, PartitionSpec as P
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.typing import MeshKind
@@ -67,6 +68,14 @@ class TensorProductSpace:
         self.name = name
         self.system: CoordSys = system
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
+        # Set to a NamedSharding before the first transform call to enable SPMD.
+        # Unsharded axes will be processed first (local work, fully distributed),
+        # sharded axes last (allgather deferred; output re-annotated with the same
+        # sharding via jax.lax.with_sharding_constraint).  Must be set before the
+        # first JIT'd call on this instance, as JAX caches compiled functions by
+        # object identity.
+        # For DirectSumTPS, also set the sharding on .orthogonal separately.
+        self._spmd_sharding: NamedSharding | None = None
 
     def __len__(self) -> int:
         """Return number of spatial dimensions."""
@@ -311,6 +320,98 @@ class TensorProductSpace:
             orthogonal_spaces, system=self.system, name=self.name + "o"
         )
 
+    def _apply_separable(
+        self,
+        c: Array,
+        fns: list,
+    ) -> Array:
+        """Apply a per-axis 1D function to a tensor-product array.
+
+        Called from inside already-JIT'd methods; not JIT'd itself.
+
+        When ``self._spmd_sharding`` is set the work is split into two
+        communication-free phases separated by a single all-to-all
+        redistribution ("global transpose"):
+
+        * **Phase 1 — unsharded axes**: each device holds a complete
+          local slice along these axes, so the vmaps require no
+          communication.
+        * **Global transpose**: ``jax.lax.with_sharding_constraint``
+          moves the sharding annotation from the originally-sharded axes
+          to the formerly-unsharded axes (an all-to-all, cost
+          ``O(N^d / P)`` per device).  After this, every device holds a
+          complete slice along the originally-sharded axes.
+        * **Phase 2 — originally-sharded axes**: the transforms are now
+          also fully local.
+
+        The output retains the transposed sharding
+        ``P(None, "k")`` rather than the original ``P("k", None)``.
+        This avoids a second all-to-all and keeps the result distributed.
+        The caller may apply an explicit ``jax.lax.with_sharding_constraint``
+        to change the layout if required.
+
+        When ``_spmd_sharding`` is ``None`` (the default, single-process
+        case), axes are processed in natural order ``0, 1, …`` with no
+        communication.
+
+        The 3D case uses ``sorted()`` for the two remaining axes to
+        guarantee deterministic vmap nesting.
+
+        Args:
+            c: Coefficient / value array of shape ``(N0, N1, ...)``.
+            fns: Per-axis callables; ``fns[ax]`` accepts and returns a
+                 1-D array.
+
+        Returns:
+            Transformed array (sharding may differ from input; see above).
+        """
+        dim = len(self)
+        sharding = self._spmd_sharding
+
+        if sharding is not None:
+            spec = sharding.spec
+            sharded = [
+                ax for ax in range(dim) if ax < len(spec) and spec[ax] is not None
+            ]
+            unsharded = [ax for ax in range(dim) if ax not in sharded]
+        else:
+            sharded = []
+            unsharded = list(range(dim))
+
+        def _apply_axis(c: Array, ax: int) -> Array:
+            if dim == 2:
+                axi = dim - 1 - ax
+                return jax.vmap(fns[ax], in_axes=axi, out_axes=axi)(c)
+            else:
+                ax0, ax1 = sorted(set(range(dim)) - {ax})
+                return jax.vmap(
+                    jax.vmap(fns[ax], in_axes=ax0, out_axes=ax0),
+                    in_axes=ax1,
+                    out_axes=ax1,
+                )(c)
+
+        # Phase 1: non-sharded axes — fully local, no communication.
+        for ax in unsharded:
+            c = _apply_axis(c, ax)
+
+        # Global all-to-all transpose: move the sharding from the
+        # originally-sharded axes to the formerly-unsharded axes.
+        # After this every device holds a complete slice along the
+        # originally-sharded axes, so Phase 2 is also communication-free.
+        if sharding is not None and sharded:
+            new_spec: list = [None] * dim
+            for s_ax, u_ax in zip(sharded, unsharded):
+                new_spec[u_ax] = spec[s_ax]
+            c = jax.lax.with_sharding_constraint(
+                c, NamedSharding(sharding.mesh, P(*new_spec))
+            )
+
+        # Phase 2: originally-sharded axes — local after the transpose.
+        for ax in sharded:
+            c = _apply_axis(c, ax)
+
+        return c
+
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
         self,
@@ -319,75 +420,41 @@ class TensorProductSpace:
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
         """Jitted backward transform with optional padding."""
-        dim: int = len(self)
-        if dim == 2:
-            for ax in range(dim):
-                axi: int = dim - 1 - ax
-                backward = partial(
-                    self.basespaces[ax].backward,
-                    kind=kind,
-                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
-                )
-                c = jax.vmap(backward, in_axes=axi, out_axes=axi)(c)
-
-        else:
-            for ax in range(dim):
-                backward = partial(
-                    self.basespaces[ax].backward,
-                    kind=kind,
-                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
-                )
-                ax0, ax1 = set(range(dim)) - set((ax,))
-                c = jax.vmap(
-                    jax.vmap(backward, in_axes=ax0, out_axes=ax0),
-                    in_axes=ax1,
-                    out_axes=ax1,
-                )(c)
-        return c
+        fns = [
+            partial(
+                self.basespaces[ax].backward,
+                kind=kind,
+                N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+            )
+            for ax in range(len(self))
+        ]
+        return self._apply_separable(c, fns)
 
     @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
         """Return tensor of inner products along each axis (separable)."""
-        dim: int = len(self)
         sg = self.system.sg
         if sg != 1:
             sg = lambdify(self.system.base_scalars(), sg)(*self.mesh())
             u = u * sg
-        if dim == 2:
-            for ax in range(dim):
-                axi: int = dim - 1 - ax
-                u = jax.vmap(
-                    self.basespaces[ax].scalar_product, in_axes=axi, out_axes=axi
-                )(u)
-        else:
-            for ax in range(dim):
-                ax0, ax1 = set(range(dim)) - set((ax,))
-                u = jax.vmap(
-                    jax.vmap(
-                        self.basespaces[ax].scalar_product, in_axes=ax0, out_axes=ax0
-                    ),
-                    in_axes=ax1,
-                    out_axes=ax1,
-                )(u)
-        return u
+        fns = [self.basespaces[ax].scalar_product for ax in range(len(self))]
+        c = self._apply_separable(u, fns)
+        # Re-shard to the canonical spectral sharding P("k",None,None) so that
+        # the output layout is consistent for downstream consumers (e.g. the
+        # wavenumber solver).  backward() keeps the transposed real sharding
+        # P(None,"k",None) that _apply_separable produces naturally.
+        if self._spmd_sharding is not None:
+            c = jax.lax.with_sharding_constraint(c, self._spmd_sharding)
+        return c
 
     @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation."""
-        dim: int = len(self)
-        if dim == 2:
-            for ax in range(dim):
-                axi: int = dim - 1 - ax
-                u = jax.vmap(self.basespaces[ax].forward, in_axes=axi, out_axes=axi)(u)
-        else:
-            for ax in range(dim):
-                ax0, ax1 = set(range(dim)) - set((ax,))
-                u = jax.vmap(
-                    jax.vmap(self.basespaces[ax].forward, in_axes=ax0, out_axes=ax0),
-                    in_axes=ax1,
-                    out_axes=ax1,
-                )(u)
-        return u
+        fns = [self.basespaces[ax].forward for ax in range(len(self))]
+        c = self._apply_separable(u, fns)
+        if self._spmd_sharding is not None:
+            c = jax.lax.with_sharding_constraint(c, self._spmd_sharding)
+        return c
 
     @jax.jit(static_argnums=(0, 2, 3, 4))
     def backward_primitive(
@@ -398,32 +465,16 @@ class TensorProductSpace:
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
         """Evaluate the field or mixed derivatives on a tensor-product mesh."""
-        dim: int = len(self)
-        if dim == 2:
-            for ax in range(dim):
-                axi: int = dim - 1 - ax
-                backward_p = partial(
-                    self.basespaces[ax].backward_primitive,
-                    k=k[ax],
-                    kind=kind,
-                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
-                )
-                c = jax.vmap(backward_p, in_axes=axi, out_axes=axi)(c)
-        else:
-            for ax in range(dim):
-                backward_p = partial(
-                    self.basespaces[ax].backward_primitive,
-                    k=k[ax],
-                    kind=kind,
-                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
-                )
-                ax0, ax1 = set(range(dim)) - set((ax,))
-                c = jax.vmap(
-                    jax.vmap(backward_p, in_axes=ax0, out_axes=ax0),
-                    in_axes=ax1,
-                    out_axes=ax1,
-                )(c)
-        return c
+        fns = [
+            partial(
+                self.basespaces[ax].backward_primitive,
+                k=k[ax],
+                kind=kind,
+                N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+            )
+            for ax in range(len(self))
+        ]
+        return self._apply_separable(c, fns)
 
     @jax.jit(static_argnums=0)
     def to_orthogonal(self, c: Array) -> Array:

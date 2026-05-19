@@ -500,35 +500,26 @@ class CGComposite(Composite):
             f"Unsupported test space kind {kind!r} for Chebyshev CGComposite. "
             f"Supported: {TestSpaceKind.GALERKIN!r}, {TestSpaceKind.PETROV_GALERKIN!r}."
         )
-        if self.bcs.num_bcs() == 1:
-            return ChebPhi_1(
-                self.N,
-                domain=self.domain,
-                system=self.system,
-                name=name,
-                fun_str=fun_str,
-                scaling=scaling,
-            )
-        if self.bcs.num_bcs() == 2:
-            return ChebPhi_2(
-                self.N,
-                domain=self.domain,
-                system=self.system,
-                name=name,
-                fun_str=fun_str,
-                scaling=scaling,
-            )
-        if self.bcs.num_bcs() == 4:
-            return ChebPhi_4(
-                self.N,
-                domain=self.domain,
-                system=self.system,
-                name=name,
-                fun_str=fun_str,
-                scaling=scaling,
-            )
-        raise NotImplementedError(
-            f"Test space kind {kind} not implemented for {self.bcs.num_bcs()} BCs."
+        match self.bcs.num_bcs():
+            case 1:
+                P = ChebPhi_1
+            case 2:
+                P = ChebPhi_2
+            case 4:
+                P = ChebPhi_4
+            case _:
+                raise NotImplementedError(
+                    f"Unsupported number of BCs {self.bcs.num_bcs()} for PGComposite. "
+                    f"Supported: 1, 2, or 4."
+                )
+
+        return P(
+            self.N,
+            domain=self.domain,
+            system=self.system,
+            name=name,
+            fun_str=fun_str,
+            scaling=scaling,
         )
 
 

@@ -324,35 +324,26 @@ class LGComposite(Composite):
             f"Unsupported test space kind {kind!r} for Legendre LGComposite. "
             f"Supported: {TestSpaceKind.GALERKIN!r}, {TestSpaceKind.PETROV_GALERKIN!r}."
         )
-        if self.bcs.num_bcs() == 1:
-            return LegPhi_1(
-                self.N,
-                domain=self.domain,
-                system=self.system,
-                name=name,
-                fun_str=fun_str,
-                scaling=scaling,
-            )
-        if self.bcs.num_bcs() == 2:
-            return LegPhi_2(
-                self.N,
-                domain=self.domain,
-                system=self.system,
-                name=name,
-                fun_str=fun_str,
-                scaling=scaling,
-            )
-        if self.bcs.num_bcs() == 4:
-            return LegPhi_4(
-                self.N,
-                domain=self.domain,
-                system=self.system,
-                name=name,
-                fun_str=fun_str,
-                scaling=scaling,
-            )
-        raise NotImplementedError(
-            f"Test space kind {kind} not implemented for {self.bcs.num_bcs()} BCs."
+        match self.bcs.num_bcs():
+            case 1:
+                P = LegPhi_1
+            case 2:
+                P = LegPhi_2
+            case 4:
+                P = LegPhi_4
+            case _:
+                raise NotImplementedError(
+                    f"Unsupported number of BCs {self.bcs.num_bcs()} for PGComposite. "
+                    f"Supported: 1, 2, or 4."
+                )
+
+        return P(
+            self.N,
+            domain=self.domain,
+            system=self.system,
+            name=name,
+            fun_str=fun_str,
+            scaling=scaling,
         )
 
     def _matrices(

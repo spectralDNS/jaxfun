@@ -9,7 +9,6 @@ import jax.numpy as jnp
 import numpy as np
 from flax import nnx
 from jax import Array
-from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from scipy import sparse as scipy_sparse
 
 from jaxfun.la.diamatrix import DiaMatrix, diakron
@@ -534,7 +533,8 @@ def _make_wavenumber_vmap_solve(
             yi = bi - jnp.dot(l_i, window)
             return jnp.concatenate([yi[None], window[:-1]]), yi
 
-        _, ys = jax.lax.scan(step, jnp.zeros(p, dtype=b.dtype), (b, l_mat.T))
+        carry0 = jnp.zeros(p, dtype=b.dtype)
+        _, ys = jax.lax.scan(step, carry0, (b, l_mat.T))
         return ys
 
     def _bwd_sub(U_data: Array, y: Array) -> Array:
@@ -557,8 +557,9 @@ def _make_wavenumber_vmap_solve(
             xi = (yi - jnp.dot(u_i, window)) / dii
             return jnp.concatenate([xi[None], window[:-1]]), xi
 
+        carry0 = jnp.zeros(q, dtype=y.dtype)
         _, xs_out = jax.lax.scan(
-            step, jnp.zeros(q, dtype=y.dtype), (y_rev, u_mat_rev, diag_rev)
+            step, carry0, (y_rev, u_mat_rev, diag_rev)
         )
         return xs_out[rev]
 
@@ -611,19 +612,17 @@ class TPMatricesWavenumberSolver:
         self.B_matrices = B_matrices
         self.shape = shape
         # Pre-stack L and U data for vmapped solving.
-        # lu_factor prunes structurally-zero diagonals per-wavenumber, so
-        # different B_k may yield L/U with different offsets.  Compute the
-        # union of offsets and pad missing diagonals with zeros so all rows
-        # have the same shape before stacking.
-        lu_list = [B.lu_factor() for B in B_matrices]
+        # Different wavenumbers can produce B_matrices with different offsets
+        # (e.g. H = B + k²A: for k=0 only B's offsets appear, for k≠0 the
+        # union of B's and A's offsets appears).  Collect the union of input
+        # offsets across all B_matrices, then split by sign.  LU without
+        # pivoting cannot generate fill-in beyond the input bandwidth, so this
+        # union is always a superset of every per-wavenumber L/U offset set.
+        # _align_data zero-pads any diagonals absent for a specific wavenumber.
         n_P_local = B_matrices[0].shape[0]
-
-        all_L_offsets: tuple[int, ...] = tuple(
-            sorted({off for lu in lu_list for off in lu.L.offsets})
-        )
-        all_U_offsets: tuple[int, ...] = tuple(
-            sorted({off for lu in lu_list for off in lu.U.offsets})
-        )
+        _all_offsets = sorted({off for B in B_matrices for off in B.offsets})
+        all_L_offsets: tuple[int, ...] = tuple(o for o in _all_offsets if o < 0)
+        all_U_offsets: tuple[int, ...] = tuple(o for o in _all_offsets if o >= 0)
 
         def _align_data(dia_mat: DiaMatrix, target_offsets: tuple[int, ...]) -> Array:
             rows: list[Array] = []
@@ -634,25 +633,35 @@ class TPMatricesWavenumberSolver:
                     rows.append(jnp.zeros(n_P_local, dtype=dia_mat.data.dtype))
             return jnp.stack(rows)
 
-        self.L_data_batch: Array = jnp.stack(
-            [_align_data(lu.L, all_L_offsets) for lu in lu_list]
-        )
-        self.U_data_batch: Array = jnp.stack(
-            [_align_data(lu.U, all_U_offsets) for lu in lu_list]
-        )
         self.L_offsets: tuple[int, ...] = all_L_offsets
         self.U_offsets: tuple[int, ...] = all_U_offsets
+        n_F = len(B_matrices)
 
         if len(jax.devices()) > 1:
-            mesh = Mesh(np.array(jax.devices()), axis_names=("k",))
-            k_sharding = NamedSharding(mesh, P("k", None, None))  # (n_F, n_diags, n_P)
-
-            self.L_data_batch = jax.device_put(self.L_data_batch, k_sharding)
-            self.U_data_batch = jax.device_put(self.U_data_batch, k_sharding)
-            self._mesh = mesh
+            if poly_axis == 0:
+                raise ValueError(
+                    "Multi-process solve requires axis 0 to be a Fourier axis "
+                    f"(poly_axis=0 not supported). Got shape={shape}, "
+                    f"poly_axis={poly_axis}."
+                )
+            # Each process assembles only its local wavenumber slice.
+            n_global = len(jax.devices())
+            k_start = jax.process_index() * n_F // n_global
+            k_end = (jax.process_index() + 1) * n_F // n_global
+            _local_lu = [B.lu_factor() for B in B_matrices[k_start:k_end]]
+            _local_L = jnp.stack([_align_data(lu.L, all_L_offsets) for lu in _local_lu])
+            _local_U = jnp.stack([_align_data(lu.U, all_U_offsets) for lu in _local_lu])
+            self._L_data_local = _local_L
+            self._U_data_local = _local_U
+        else:
+            _local_lu = [B.lu_factor() for B in B_matrices]
+            _local_L = jnp.stack([_align_data(lu.L, all_L_offsets) for lu in _local_lu])
+            _local_U = jnp.stack([_align_data(lu.U, all_U_offsets) for lu in _local_lu])
+            self._L_data_local: Array = _local_L
+            self._U_data_local: Array = _local_U
 
         self._vmap_solve = _make_wavenumber_vmap_solve(
-            all_L_offsets, all_U_offsets, n_P_local, self.L_data_batch.dtype
+            all_L_offsets, all_U_offsets, n_P_local, self._L_data_local.dtype
         )
 
         # Experimental alternative: instead of custom scan kernels, try rebuilding
@@ -665,26 +674,78 @@ class TPMatricesWavenumberSolver:
         from jaxfun.la.diamatrix import LUFactors as _DiaLUFactors
 
         n = n_P_local
+        # Use _local_L/_local_U (the per-process slice in multi-device mode,
+        # full arrays in single-device mode) so solve2's vmap covers only the
+        # locally-owned wavenumbers — no cross-process indexing required.
         aligned_lu_list = [
             _DiaLUFactors(
                 L=DiaMatrix(
-                    data=self.L_data_batch[k],
+                    data=_local_L[k],
                     offsets=all_L_offsets,
                     shape=(n, n),
                 ),
                 U=DiaMatrix(
-                    data=self.U_data_batch[k],
+                    data=_local_U[k],
                     offsets=all_U_offsets,
                     shape=(n, n),
                 ),
                 shape=(n, n),
             )
-            for k in range(len(lu_list))
+            for k in range(len(_local_lu))
         ]
         self._lu_stacked = jax.tree.map(lambda *xs: jnp.stack(xs), *aligned_lu_list)
         self._vmap_solve2 = jax.jit(jax.vmap(lambda lu, b: lu.solve(b)))
 
-    @jax.jit(static_argnums=(0,))
+        # Build per-instance JIT'd solve functions.  L/U data are fixed after
+        # init and captured as closure constants; only rhs is a dynamic argument.
+        _vmap_fn = self._vmap_solve
+        _poly_axis = poly_axis
+        _ndim = len(shape)
+        _fourier_axes = [a for a in range(_ndim) if a != _poly_axis]
+        _fourier_shape = tuple(shape[a] for a in _fourier_axes)
+        _n_F = int(np.prod(_fourier_shape)) if _fourier_shape else 1
+        _n_P = shape[_poly_axis]
+        _axes_order = _fourier_axes + [_poly_axis]
+        _inv_perm = [0] * _ndim
+        for _new_pos, _old_pos in enumerate(_axes_order):
+            _inv_perm[_old_pos] = _new_pos
+
+        if len(jax.devices()) > 1:
+            _n_shards = len(jax.devices())
+            _n_F_local = _n_F // _n_shards
+            # Local Fourier shape: axis 0 is divided among processes
+            _fourier_shape_local = (
+                _fourier_shape[0] // _n_shards,
+            ) + _fourier_shape[1:]
+
+            # Plain per-process JIT over locally-owned wavenumbers.
+            # L/U are closed over (fixed after init) — JAX only needs to
+            # check one dynamic argument (rhs_nd_local) at dispatch time,
+            # reducing per-call Python overhead.
+            # Input rhs_nd_local comes from rhs.addressable_data(0): a plain
+            # local array with shape _fourier_shape_local + (_n_P,).
+            @jax.jit
+            def _local_solve_jit(rhs_nd_local: Array) -> Array:
+                rhs_2d = jnp.transpose(rhs_nd_local, _axes_order).reshape(
+                    _n_F_local, _n_P
+                )
+                sol_2d = _vmap_fn(_local_L, _local_U, rhs_2d)
+                sol_perm = sol_2d.reshape(_fourier_shape_local + (_n_P,))
+                return jnp.transpose(sol_perm, _inv_perm)
+
+            self._local_solve_jit = _local_solve_jit
+
+        else:
+
+            @jax.jit
+            def _solve_jit(rhs: Array) -> Array:
+                rhs_2d = jnp.transpose(rhs, _axes_order).reshape(_n_F, _n_P)
+                sol_2d = _vmap_fn(_local_L, _local_U, rhs_2d)
+                sol_perm = sol_2d.reshape(_fourier_shape + (_n_P,))
+                return jnp.transpose(sol_perm, _inv_perm)
+
+            self._solve_jit = _solve_jit
+
     def solve(self, rhs: Array) -> Array:
         """Solve the wavenumber-loop system for RHS ``rhs``.
 
@@ -693,42 +754,23 @@ class TPMatricesWavenumberSolver:
         data arrays.  The scan kernels are compiled once on the first call
         and reused for subsequent solves.
 
+        In multi-process mode ``rhs`` must carry sharding ``P("k", None, None)``
+        so that each process holds a contiguous block of Fourier wavenumber
+        rows.  The reshape, local vmap, and global assembly are all
+        communication-free.
+
         Args:
             rhs: Right-hand side shaped ``self.shape``.
 
         Returns:
             Solution with the same shape as ``rhs``.
         """
-        shape = self.shape
-        ndim = len(shape)
-        poly_axis = self.poly_axis
-        n_P = shape[poly_axis]
-
-        fourier_axes = [a for a in range(ndim) if a != poly_axis]
-        fourier_shape = tuple(shape[a] for a in fourier_axes)
-        n_F = int(np.prod(fourier_shape)) if fourier_shape else 1
-
-        # Permute so all Fourier axes come first, polynomial axis last, then
-        # flatten to (n_F, n_P) for vectorised solving.
-        axes_order = fourier_axes + [poly_axis]
-        rhs_2d = jnp.transpose(rhs, axes_order).reshape(n_F, n_P)
-
         if len(jax.devices()) > 1:
-            rhs_sharding = NamedSharding(self._mesh, P("k", None))  # (n_F, n_P)
-            rhs_2d = jax.device_put(rhs_2d, rhs_sharding)
-            sol_2d = self._vmap_solve(self.L_data_batch, self.U_data_batch, rhs_2d)
-            # sol_2d is now a sharded Array; gather before reshaping:
-            sol_2d = jax.device_get(sol_2d)  # or keep sharded for downstream ops
-
-        else:
-            sol_2d = self._vmap_solve(self.L_data_batch, self.U_data_batch, rhs_2d)
-
-        # Un-permute back to the original axis order.
-        sol_perm = sol_2d.reshape(fourier_shape + (n_P,))
-        inv_perm = [0] * ndim
-        for new_pos, old_pos in enumerate(axes_order):
-            inv_perm[old_pos] = new_pos
-        return jnp.transpose(sol_perm, inv_perm)
+            # rhs has sharding P("k", None, None).  addressable_data(0)
+            # extracts the process-local nd-array — zero communication.
+            # L/U are baked into the jit closure; only rhs is a dynamic arg.
+            return self._local_solve_jit(rhs.addressable_data(0))
+        return self._solve_jit(rhs)
 
     @jax.jit(static_argnums=(0,))
     def solve2(self, rhs: Array) -> Array:
@@ -1101,7 +1143,9 @@ def tpmats_wavenumber_factor(
     B_data_batch = jnp.einsum("tf,tdp->fdp", W, P_data_stack)  # (n_F, n_diags, n_P)
     n_F = B_data_batch.shape[0]
 
-    # Build per-wavenumber DiaMatrix objects and warm their lu_factor caches.
+    # Build per-wavenumber DiaMatrix objects.
+    # LU factorisation is deferred to TPMatricesWavenumberSolver.__init__
+    # where each process computes only its local wavenumber slice.
     B_matrices: list[DiaMatrix] = []
     for k in range(n_F):
         B_k = DiaMatrix(
@@ -1109,7 +1153,6 @@ def tpmats_wavenumber_factor(
             offsets=poly_offsets,
             shape=(n_P, n_P),
         )
-        B_k.lu_factor()  # warms the cache stored on B_k
         B_matrices.append(B_k)
 
     return TPMatricesWavenumberSolver(

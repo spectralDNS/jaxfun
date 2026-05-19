@@ -558,9 +558,7 @@ def _make_wavenumber_vmap_solve(
             return jnp.concatenate([xi[None], window[:-1]]), xi
 
         carry0 = jnp.zeros(q, dtype=y.dtype)
-        _, xs_out = jax.lax.scan(
-            step, carry0, (y_rev, u_mat_rev, diag_rev)
-        )
+        _, xs_out = jax.lax.scan(step, carry0, (y_rev, u_mat_rev, diag_rev))
         return xs_out[rev]
 
     def _solve_one(L_data: Array, U_data: Array, b: Array) -> Array:
@@ -714,9 +712,9 @@ class TPMatricesWavenumberSolver:
             _n_shards = len(jax.devices())
             _n_F_local = _n_F // _n_shards
             # Local Fourier shape: axis 0 is divided among processes
-            _fourier_shape_local = (
-                _fourier_shape[0] // _n_shards,
-            ) + _fourier_shape[1:]
+            _fourier_shape_local = (_fourier_shape[0] // _n_shards,) + _fourier_shape[
+                1:
+            ]
 
             # Plain per-process JIT over locally-owned wavenumbers.
             # L/U are closed over (fixed after init) — JAX only needs to

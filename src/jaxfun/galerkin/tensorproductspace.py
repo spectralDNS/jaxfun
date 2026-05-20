@@ -71,9 +71,11 @@ class TensorProductSpace:
         # Set to a NamedSharding before the first transform call to enable SPMD.
         # Unsharded axes will be processed first (local work, fully distributed),
         # sharded axes last (allgather deferred; output re-annotated with the same
-        # sharding via jax.lax.with_sharding_constraint).  Must be set before the
-        # first JIT'd call on this instance, as JAX caches compiled functions by
-        # object identity.
+        # sharding via jax.lax.with_sharding_constraint).  Can be changed after
+        # the first JIT'd call: the public methods (backward, forward, …) are
+        # plain wrappers that delegate to private *_jitted helpers which include
+        # _spmd_sharding as an explicit static argument, so JAX recompiles
+        # whenever the sharding is set or updated.
         # For DirectSumTPS, also set the sharding on .orthogonal separately.
         self._spmd_sharding: NamedSharding | None = None
 
@@ -320,17 +322,17 @@ class TensorProductSpace:
             orthogonal_spaces, system=self.system, name=self.name + "o"
         )
 
-    @jax.jit(static_argnums=(0, 2))
     def _apply_separable(
         self,
         c: Array,
         fns: tuple[ArrayFun, ...],
+        sharding: NamedSharding | None = None,
     ) -> Array:
         """Apply a per-axis 1D function to a tensor-product array.
 
         Called from inside already-JIT'd methods; not JIT'd itself.
 
-        When ``self._spmd_sharding`` is set the work is split into two
+        When ``sharding`` is set the work is split into two
         communication-free phases separated by a single all-to-all
         redistribution ("global transpose"):
 
@@ -351,7 +353,7 @@ class TensorProductSpace:
         The caller may apply an explicit ``jax.lax.with_sharding_constraint``
         to change the layout if required.
 
-        When ``_spmd_sharding`` is ``None`` (the default, single-process
+        When ``sharding`` is ``None`` (the default, single-process
         case), axes are processed in natural order ``0, 1, …`` with no
         communication.
 
@@ -362,12 +364,15 @@ class TensorProductSpace:
             c: Coefficient / value array of shape ``(N0, N1, ...)``.
             fns: Per-axis callables; ``fns[ax]`` accepts and returns a
                  1-D array.
+            sharding: Optional SPMD sharding; pass ``self._spmd_sharding``.
+                Must be supplied by the caller so that it is visible as a
+                static argument to the enclosing JIT'd function, allowing
+                JAX to recompile when the sharding is set or changed.
 
         Returns:
             Transformed array (sharding may differ from input; see above).
         """
         dim = len(self)
-        sharding = self._spmd_sharding
 
         if sharding is not None:
             spec = sharding.spec
@@ -413,14 +418,25 @@ class TensorProductSpace:
 
         return c
 
-    @jax.jit(static_argnums=(0, 2, 3))
     def backward(
         self,
         c: Array,
         kind: MeshKind = MeshKind.QUADRATURE,
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
-        """Jitted backward transform with optional padding."""
+        """Backward transform.  Passes _spmd_sharding as an explicit static
+        argument to the JIT'd helper so that JAX recompiles when the sharding
+        is changed, rather than re-using a cached no-SPMD compilation."""
+        return self._backward_jitted(c, kind, N, self._spmd_sharding)
+
+    @jax.jit(static_argnums=(0, 2, 3, 4))
+    def _backward_jitted(
+        self,
+        c: Array,
+        kind: MeshKind,
+        N: tuple[int | None, ...] | None,
+        sharding: NamedSharding | None,
+    ) -> Array:
         fns = tuple(
             partial(
                 self.basespaces[ax].backward,
@@ -429,35 +445,51 @@ class TensorProductSpace:
             )
             for ax in range(len(self))
         )
-        return self._apply_separable(c, fns)
+        return self._apply_separable(c, fns, sharding)
 
-    @jax.jit(static_argnums=0)
+    def _real_sharding(self) -> NamedSharding | None:
+        """Return the real-space (transposed) sharding derived from ``_spmd_sharding``.
+
+        ``_spmd_sharding`` describes the spectral layout, e.g. ``P("k", None, None)``
+        (axis 0 sharded).  The real-space array produced by ``backward`` has the
+        transposed layout ``P(None, "k", None)`` (axis 1 sharded).  This is the
+        correct sharding to pass to ``_apply_separable`` for ``forward`` and
+        ``scalar_product`` so that Phase 1 processes only fully-local axes.
+        """
+        sharding = self._spmd_sharding
+        if sharding is None:
+            return None
+        dim = len(self)
+        spec = sharding.spec
+        sharded = [ax for ax in range(dim) if ax < len(spec) and spec[ax] is not None]
+        unsharded = [ax for ax in range(dim) if ax not in sharded]
+        new_spec: list = [None] * dim
+        for s_ax, u_ax in zip(sharded, unsharded):
+            new_spec[u_ax] = spec[s_ax]
+        return NamedSharding(sharding.mesh, P(*new_spec))
+
     def scalar_product(self, u: Array) -> Array:
         """Return tensor of inner products along each axis (separable)."""
+        return self._scalar_product_jitted(u, self._real_sharding())
+
+    @jax.jit(static_argnums=(0, 2))
+    def _scalar_product_jitted(self, u: Array, sharding: NamedSharding | None) -> Array:
         sg = self.system.sg
         if sg != 1:
             sg = lambdify(self.system.base_scalars(), sg)(*self.mesh())
             u = u * sg
         fns = tuple(self.basespaces[ax].scalar_product for ax in range(len(self)))
-        c = self._apply_separable(u, fns)
-        # Re-shard to the canonical spectral sharding P("k",None,None) so that
-        # the output layout is consistent for downstream consumers (e.g. the
-        # wavenumber solver).  backward() keeps the transposed real sharding
-        # P(None,"k",None) that _apply_separable produces naturally.
-        if self._spmd_sharding is not None:
-            c = jax.lax.with_sharding_constraint(c, self._spmd_sharding)
-        return c
+        return self._apply_separable(u, fns, sharding)
 
-    @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation."""
-        fns = tuple(self.basespaces[ax].forward for ax in range(len(self)))
-        c = self._apply_separable(u, fns)
-        if self._spmd_sharding is not None:
-            c = jax.lax.with_sharding_constraint(c, self._spmd_sharding)
-        return c
+        return self._forward_jitted(u, self._real_sharding())
 
-    @jax.jit(static_argnums=(0, 2, 3, 4))
+    @jax.jit(static_argnums=(0, 2))
+    def _forward_jitted(self, u: Array, sharding: NamedSharding | None) -> Array:
+        fns = tuple(self.basespaces[ax].forward for ax in range(len(self)))
+        return self._apply_separable(u, fns, sharding)
+
     def backward_primitive(
         self,
         c: Array,
@@ -466,6 +498,17 @@ class TensorProductSpace:
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
         """Evaluate the field or mixed derivatives on a tensor-product mesh."""
+        return self._backward_primitive_jitted(c, k, kind, N, self._spmd_sharding)
+
+    @jax.jit(static_argnums=(0, 2, 3, 4, 5))
+    def _backward_primitive_jitted(
+        self,
+        c: Array,
+        k: tuple[int, ...],
+        kind: MeshKind | str,
+        N: tuple[int | None, ...] | None,
+        sharding: NamedSharding | None,
+    ) -> Array:
         fns = tuple(
             partial(
                 self.basespaces[ax].backward_primitive,
@@ -475,7 +518,7 @@ class TensorProductSpace:
             )
             for ax in range(len(self))
         )
-        return self._apply_separable(c, fns)
+        return self._apply_separable(c, fns, sharding)
 
     @jax.jit(static_argnums=0)
     def to_orthogonal(self, c: Array) -> Array:
@@ -897,7 +940,7 @@ class DirectSumTPS(TensorProductSpace):
         d = self.orthogonal.forward(c)
         return self.from_orthogonal(d)
 
-    def scalar_product(self, c: Array) -> NoReturn:
+    def scalar_product(self, c: Array) -> NoReturn:  # ty:ignore[invalid-method-override]
         """Disabled scalar product (non-homogeneous test space)."""
         raise RuntimeError(
             "Scalar product requires homogeneous test space (call on get_homogeneous())"
@@ -924,7 +967,7 @@ class DirectSumTPS(TensorProductSpace):
     def backward_primitive(
         self,
         c: Array,
-        k: int | tuple[int, ...] = 0,
+        k: tuple[int, ...] = (0,),
         kind: MeshKind = MeshKind.QUADRATURE,
         N: tuple[int, ...] | None = None,
     ) -> Array:

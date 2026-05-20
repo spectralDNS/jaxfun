@@ -448,11 +448,16 @@ class TensorProductSpace:
     ) -> Array:
         """SPMD version of ``_apply_separable`` that operates on addressable data.
 
-        Called **outside** JIT so that ``c.addressable_data(0)`` returns the
+        Called **outside** JIT so that ``c.addressable_data(d)`` returns a
         concrete local shard.  ``fns[ax]`` must be pre-built
         ``jax.jit(jax.vmap(...))`` functions (see ``_build_spmd_local_fn`` and
         ``_spmd_local_fn_cache``) so that JAX's Python-level JIT cache is hit
         on every call after the first.
+
+        Supports hybrid parallelism: each process may own *multiple* local
+        devices (``jax.local_device_count() > 1``).  All addressable shards
+        are processed independently and reassembled via
+        ``jax.make_array_from_single_device_arrays``.
 
         The only cross-device collective is the single ``jax.device_put`` call
         that performs the all-to-all redistribution between Phase 1 and Phase 2.
@@ -461,21 +466,24 @@ class TensorProductSpace:
         spec = sharding.spec
         sharded = [ax for ax in range(dim) if ax < len(spec) and spec[ax] is not None]
         unsharded = [ax for ax in range(dim) if ax not in sharded]
+        n_local = jax.local_device_count()
 
-        # Phase 1 — unsharded axes: operate on the local addressable shard.
-        # fns[ax] is a pre-jitted vmap; XLA cache is hit on every call.
-        c_local = c.addressable_data(0)
+        # Phase 1 — unsharded axes: apply fns independently to each local shard.
+        # fns[ax] dispatches to whichever device the shard lives on; the JIT
+        # cache is keyed on shape/dtype so all local devices share one binary.
+        local_shards: list[Array] = [c.addressable_data(d) for d in range(n_local)]
         for ax in unsharded:
-            c_local = fns[ax](c_local)
+            local_shards = [fns[ax](shard) for shard in local_shards]
 
-        # Reconstruct the global array from the updated local shard.
+        # Reconstruct the global array from updated local shards.
         # Unsharded axes may have changed size (e.g. Chebyshev zero-padding);
         # sharded axes retain their original global size.
         global_shape_p1 = tuple(
-            c_local.shape[ax] if ax in unsharded else c.shape[ax] for ax in range(dim)
+            local_shards[0].shape[ax] if ax in unsharded else c.shape[ax]
+            for ax in range(dim)
         )
         c = jax.make_array_from_single_device_arrays(
-            global_shape_p1, sharding, [c_local]
+            global_shape_p1, sharding, local_shards
         )
 
         # All-to-all: transpose the sharding (one collective, O(N^d/P) per device).
@@ -486,16 +494,16 @@ class TensorProductSpace:
         c = jax.device_put(c, transposed)
 
         # Phase 2 — originally-sharded axes: now fully local after the transpose.
-        c_local = c.addressable_data(0)
+        local_shards = [c.addressable_data(d) for d in range(n_local)]
         for ax in sharded:
-            c_local = fns[ax](c_local)
+            local_shards = [fns[ax](shard) for shard in local_shards]
 
         # Reconstruct the final global array; sharded-axis sizes may have changed.
         global_shape_p2 = list(global_shape_p1)
         for ax in sharded:
-            global_shape_p2[ax] = c_local.shape[ax]
+            global_shape_p2[ax] = local_shards[0].shape[ax]
         return jax.make_array_from_single_device_arrays(
-            tuple(global_shape_p2), transposed, [c_local]
+            tuple(global_shape_p2), transposed, local_shards
         )
 
     def backward(

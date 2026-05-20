@@ -355,26 +355,24 @@ class Composite(OrthogonalSpace):
     ) -> Composite:
         """Return test space (same as self for Galerkin)."""
         kind = TestSpaceKind.coerce(kind)
-        if kind != TestSpaceKind.GALERKIN:
-            raise NotImplementedError(
-                f"Unsupported test space kind {kind!r} for Composite. "
-            )
-        if name is None and fun_str is None:
-            return self
-
-        return Composite(
-            N=self.orthogonal.dim,
-            orthogonal=self.orthogonal.__class__,
-            bcs=self.bcs,
-            domain=self.domain,
-            name=name if name is not None else self.name,
-            fun_str=fun_str if fun_str is not None else self.fun_str,
-            system=self.system,
-            stencil=self.stencil,
-            scaling=scaling if scaling is not None else self.scaling,
-            alpha=self.orthogonal.alpha,
-            beta=self.orthogonal.beta,
-        )
+        if kind == TestSpaceKind.GALERKIN:
+            if name is None and fun_str is None:
+                return self
+            else:
+                return Composite(
+                    N=self.orthogonal.dim,
+                    orthogonal=self.orthogonal.__class__,
+                    bcs=self.bcs,
+                    domain=self.domain,
+                    name=name if name is not None else self.name,
+                    fun_str=fun_str if fun_str is not None else self.fun_str,
+                    system=self.system,
+                    stencil=self.stencil,
+                    scaling=scaling if scaling is not None else self.scaling,
+                    alpha=self.orthogonal.alpha,
+                    beta=self.orthogonal.beta,
+                )
+        raise NotImplementedError(f"Test space kind {kind} not implemented.")
 
     def __add__(self, b: BCGeneric) -> DirectSum:
         """Direct sum self ⊕ b."""
@@ -706,24 +704,24 @@ class PGComposite(Composite):
             B: DiaMatrix = Bkl(self.order, j, u)  # (N, N)
             z = A @ B @ u.ST if isinstance(u, Composite) else A @ B
 
-        if z is None:
-            return None
+        if z is not None:
+            # Diagonal scaling of test functions.
+            if self.scaling != sp.S.One:
+                from jaxfun.utils import lambdify
 
-        # Diagonal scaling of test functions.
-        if self.scaling != sp.S.One:
-            from jaxfun.utils import lambdify
+                assert len(self.scaling.free_symbols) == 1, (
+                    "Scaling must have exactly one free symbol."
+                )  # noqa: E501
+                m = self.scaling.free_symbols.pop()
+                scaling = diags(
+                    [lambdify(m, 1 / self.scaling)(jnp.arange(z.shape[0]))],
+                    offsets=(0,),
+                    shape=(z.shape[0], z.shape[0]),
+                )
+                return scaling @ z
+            return z
 
-            assert len(self.scaling.free_symbols) == 1, (
-                "Scaling must have exactly one free symbol."
-            )  # noqa: E501
-            m = self.scaling.free_symbols.pop()
-            scaling = diags(
-                [lambdify(m, 1 / self.scaling)(jnp.arange(z.shape[0]))],
-                offsets=(0,),
-                shape=(z.shape[0], z.shape[0]),
-            )
-            return scaling @ z
-        return z
+        return None
 
 
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:

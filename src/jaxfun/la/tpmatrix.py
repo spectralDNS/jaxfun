@@ -747,17 +747,13 @@ class TPMatricesWavenumberSolver:
                         _n_F_per_device, _n_P
                     )
                     sol_2d = _vmap_fn(L_d, U_d, rhs_2d)
-                    sol_perm = sol_2d.reshape(
-                        _fourier_shape_per_device + (_n_P,)
-                    )
+                    sol_perm = sol_2d.reshape(_fourier_shape_per_device + (_n_P,))
                     return jnp.transpose(sol_perm, _inv_perm)
 
                 return _jit
 
             self._local_solve_jits = [
-                _make_device_jit(
-                    self._L_per_device[d], self._U_per_device[d]
-                )
+                _make_device_jit(self._L_per_device[d], self._U_per_device[d])
                 for d in range(_n_local)
             ]
 

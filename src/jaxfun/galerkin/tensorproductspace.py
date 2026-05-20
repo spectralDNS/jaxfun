@@ -13,7 +13,7 @@ from jax import Array
 from jax.sharding import NamedSharding, PartitionSpec as P
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.typing import MeshKind
+from jaxfun.typing import ArrayFun, MeshKind
 from jaxfun.utils.common import jit_vmap, lambdify
 
 from .composite import BCGeneric, BoundaryConditions, Composite, DirectSum
@@ -320,10 +320,11 @@ class TensorProductSpace:
             orthogonal_spaces, system=self.system, name=self.name + "o"
         )
 
+    @jax.jit(static_argnums=(0, 2))
     def _apply_separable(
         self,
         c: Array,
-        fns: list,
+        fns: tuple[ArrayFun, ...],
     ) -> Array:
         """Apply a per-axis 1D function to a tensor-product array.
 
@@ -420,14 +421,14 @@ class TensorProductSpace:
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
         """Jitted backward transform with optional padding."""
-        fns = [
+        fns = tuple(
             partial(
                 self.basespaces[ax].backward,
                 kind=kind,
                 N=self.basespaces[ax].num_quad_points if N is None else N[ax],
             )
             for ax in range(len(self))
-        ]
+        )
         return self._apply_separable(c, fns)
 
     @jax.jit(static_argnums=0)
@@ -437,7 +438,7 @@ class TensorProductSpace:
         if sg != 1:
             sg = lambdify(self.system.base_scalars(), sg)(*self.mesh())
             u = u * sg
-        fns = [self.basespaces[ax].scalar_product for ax in range(len(self))]
+        fns = tuple(self.basespaces[ax].scalar_product for ax in range(len(self)))
         c = self._apply_separable(u, fns)
         # Re-shard to the canonical spectral sharding P("k",None,None) so that
         # the output layout is consistent for downstream consumers (e.g. the
@@ -450,7 +451,7 @@ class TensorProductSpace:
     @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation."""
-        fns = [self.basespaces[ax].forward for ax in range(len(self))]
+        fns = tuple(self.basespaces[ax].forward for ax in range(len(self)))
         c = self._apply_separable(u, fns)
         if self._spmd_sharding is not None:
             c = jax.lax.with_sharding_constraint(c, self._spmd_sharding)
@@ -465,7 +466,7 @@ class TensorProductSpace:
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
         """Evaluate the field or mixed derivatives on a tensor-product mesh."""
-        fns = [
+        fns = tuple(
             partial(
                 self.basespaces[ax].backward_primitive,
                 k=k[ax],
@@ -473,7 +474,7 @@ class TensorProductSpace:
                 N=self.basespaces[ax].num_quad_points if N is None else N[ax],
             )
             for ax in range(len(self))
-        ]
+        )
         return self._apply_separable(c, fns)
 
     @jax.jit(static_argnums=0)

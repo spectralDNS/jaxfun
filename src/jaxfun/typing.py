@@ -60,6 +60,7 @@ class SympyExpr(Protocol):
     def doit(self, **hints: Any) -> Any: ...
 
 
+type ArrayFun = Callable[[Array], Array]
 type TriDiagMatrixFun = Callable[[sp.Symbol | int, sp.Symbol | int], sp.Expr]
 type Activation = Callable[[ArrayLike], Array]
 type LossValue = sp.Number | complex | Array

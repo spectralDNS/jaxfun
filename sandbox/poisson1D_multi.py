@@ -96,7 +96,7 @@ global_shape = (N, 1)
 mesh = Line(float(domain.lower), float(domain.upper), key=nnx.Rngs(1000 + rank)())
 
 # Get local data points of shape (N_PER_PROCESS, 1), that reside on single local device
-x_process = mesh.get_points_inside_domain(N_PER_PROCESS, "random")
+x_process = mesh.get_points_inside_domain(N_PER_PROCESS + 2, "random")
 
 # Shard the local data across local devices
 x_device = jax.device_put(x_process, local_batch)
@@ -108,7 +108,7 @@ x_global = jax.make_array_from_process_local_data(
     global_shape,
 )
 
-xb = mesh.get_points_on_domain()  # Just two points so just replicate
+xb = mesh.get_points_on_domain(2)  # Just two points so just replicate
 xb = jax.device_put(xb, NamedSharding(local_mesh, P()))
 ub = lambdify(x, ue)(xb[:, 0])
 

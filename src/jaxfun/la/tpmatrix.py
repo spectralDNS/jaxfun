@@ -642,13 +642,33 @@ class TPMatricesWavenumberSolver:
                     f"(poly_axis=0 not supported). Got shape={shape}, "
                     f"poly_axis={poly_axis}."
                 )
-            # Each process assembles only its local wavenumber slice.
-            n_global = len(jax.devices())
-            k_start = jax.process_index() * n_F // n_global
-            k_end = (jax.process_index() + 1) * n_F // n_global
+            # Partition by total device count so every device (across all
+            # processes and local devices) handles the same number of
+            # wavenumbers.  Each local device gets its own L/U slice placed
+            # on that device so solves can run concurrently.
+            n_total = len(jax.devices())
+            n_local = jax.local_device_count()
+            n_F_per_device = n_F // n_total
+            proc_dev_offset = jax.process_index() * n_local
+            k_start = proc_dev_offset * n_F_per_device
+            k_end = k_start + n_local * n_F_per_device
             _local_lu = [B.lu_factor() for B in B_matrices[k_start:k_end]]
             _local_L = jnp.stack([_align_data(lu.L, all_L_offsets) for lu in _local_lu])
             _local_U = jnp.stack([_align_data(lu.U, all_U_offsets) for lu in _local_lu])
+            self._L_per_device = [
+                jax.device_put(
+                    _local_L[d * n_F_per_device : (d + 1) * n_F_per_device],
+                    jax.local_devices()[d],
+                )
+                for d in range(n_local)
+            ]
+            self._U_per_device = [
+                jax.device_put(
+                    _local_U[d * n_F_per_device : (d + 1) * n_F_per_device],
+                    jax.local_devices()[d],
+                )
+                for d in range(n_local)
+            ]
             self._L_data_local = _local_L
             self._U_data_local = _local_U
         else:
@@ -709,29 +729,37 @@ class TPMatricesWavenumberSolver:
             _inv_perm[_old_pos] = _new_pos
 
         if len(jax.devices()) > 1:
-            _n_shards = len(jax.devices())
-            _n_F_local = _n_F // _n_shards
-            # Local Fourier shape: axis 0 is divided among processes
-            _fourier_shape_local = (_fourier_shape[0] // _n_shards,) + _fourier_shape[
-                1:
-            ]
+            # One JIT per local device, each closing over that device's L/U
+            # slice.  All JITs are dispatched independently so XLA can
+            # schedule them concurrently across local devices.
+            _n_total = len(jax.devices())
+            _n_local = jax.local_device_count()
+            _n_F_per_device = _n_F // _n_total
+            _fourier_shape_per_device = (
+                _fourier_shape[0] // _n_total,
+            ) + _fourier_shape[1:]
 
-            # Plain per-process JIT over locally-owned wavenumbers.
-            # L/U are closed over (fixed after init) — JAX only needs to
-            # check one dynamic argument (rhs_nd_local) at dispatch time,
-            # reducing per-call Python overhead.
-            # Input rhs_nd_local comes from rhs.addressable_data(0): a plain
-            # local array with shape _fourier_shape_local + (_n_P,).
-            @jax.jit
-            def _local_solve_jit(rhs_nd_local: Array) -> Array:
-                rhs_2d = jnp.transpose(rhs_nd_local, _axes_order).reshape(
-                    _n_F_local, _n_P
+            # Factory avoids the Python late-binding closure pitfall.
+            def _make_device_jit(L_d: Array, U_d: Array):
+                @jax.jit
+                def _jit(rhs_d: Array) -> Array:
+                    rhs_2d = jnp.transpose(rhs_d, _axes_order).reshape(
+                        _n_F_per_device, _n_P
+                    )
+                    sol_2d = _vmap_fn(L_d, U_d, rhs_2d)
+                    sol_perm = sol_2d.reshape(
+                        _fourier_shape_per_device + (_n_P,)
+                    )
+                    return jnp.transpose(sol_perm, _inv_perm)
+
+                return _jit
+
+            self._local_solve_jits = [
+                _make_device_jit(
+                    self._L_per_device[d], self._U_per_device[d]
                 )
-                sol_2d = _vmap_fn(_local_L, _local_U, rhs_2d)
-                sol_perm = sol_2d.reshape(_fourier_shape_local + (_n_P,))
-                return jnp.transpose(sol_perm, _inv_perm)
-
-            self._local_solve_jit = _local_solve_jit
+                for d in range(_n_local)
+            ]
 
         else:
 
@@ -764,10 +792,22 @@ class TPMatricesWavenumberSolver:
             Solution with the same shape as ``rhs``.
         """
         if len(jax.devices()) > 1:
-            # rhs has sharding P("k", None, None).  addressable_data(0)
-            # extracts the process-local nd-array — zero communication.
-            # L/U are baked into the jit closure; only rhs is a dynamic arg.
-            return self._local_solve_jit(rhs.addressable_data(0))
+            # Dispatch one JIT per local device (JAX async — XLA schedules
+            # them concurrently).  Each JIT is communication-free and closes
+            # over its own L/U slice already placed on that device.
+            n_local = jax.local_device_count()
+            results = [
+                self._local_solve_jits[d](rhs.addressable_data(d))
+                for d in range(n_local)
+            ]
+            if n_local == 1:
+                return results[0]
+            # Gather to device 0 (intra-host copy on CPU) and concatenate
+            # to form the full process-local result for the caller.
+            return jnp.concatenate(
+                [jax.device_put(r, jax.local_devices()[0]) for r in results],
+                axis=0,
+            )
         return self._solve_jit(rhs)
 
     @jax.jit(static_argnums=(0,))

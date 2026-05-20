@@ -418,16 +418,97 @@ class TensorProductSpace:
 
         return c
 
+    def _apply_separable_spmd(
+        self,
+        c: Array,
+        fns: tuple[ArrayFun, ...],
+        sharding: NamedSharding,
+    ) -> Array:
+        """SPMD version of ``_apply_separable`` that operates on addressable data.
+
+        Called **outside** JIT so that ``c.addressable_data(0)`` returns the
+        concrete local shard.  Each vmap then sees a plain (non-globally-sharded)
+        array — the XLA SPMD partitioner is not involved and generates no
+        all-gather operations.
+
+        The only cross-device collective is the single ``jax.device_put`` call
+        that performs the all-to-all redistribution between Phase 1 and Phase 2.
+        """
+        dim = len(self)
+        spec = sharding.spec
+        sharded = [ax for ax in range(dim) if ax < len(spec) and spec[ax] is not None]
+        unsharded = [ax for ax in range(dim) if ax not in sharded]
+
+        def _apply_axis(c_local: Array, ax: int) -> Array:
+            if dim == 2:
+                axi = dim - 1 - ax
+                return jax.vmap(fns[ax], in_axes=axi, out_axes=axi)(c_local)
+            else:
+                ax0, ax1 = sorted(set(range(dim)) - {ax})
+                return jax.vmap(
+                    jax.vmap(fns[ax], in_axes=ax0, out_axes=ax0),
+                    in_axes=ax1,
+                    out_axes=ax1,
+                )(c_local)
+
+        # Phase 1 — unsharded axes: operate on the local addressable shard.
+        # vmap here sees a plain array, so no all-gather is emitted.
+        c_local = c.addressable_data(0)
+        for ax in unsharded:
+            c_local = _apply_axis(c_local, ax)
+
+        # Reconstruct the global array from the updated local shard.
+        # Unsharded axes may have changed size (e.g. Chebyshev zero-padding);
+        # sharded axes retain their original global size.
+        global_shape_p1 = tuple(
+            c_local.shape[ax] if ax in unsharded else c.shape[ax] for ax in range(dim)
+        )
+        c = jax.make_array_from_single_device_arrays(
+            global_shape_p1, sharding, [c_local]
+        )
+
+        # All-to-all: transpose the sharding (one collective, O(N^d/P) per device).
+        new_spec: list = [None] * dim
+        for s_ax, u_ax in zip(sharded, unsharded):
+            new_spec[u_ax] = spec[s_ax]
+        transposed = NamedSharding(sharding.mesh, P(*new_spec))
+        c = jax.device_put(c, transposed)
+
+        # Phase 2 — originally-sharded axes: now fully local after the transpose.
+        c_local = c.addressable_data(0)
+        for ax in sharded:
+            c_local = _apply_axis(c_local, ax)
+
+        # Reconstruct the final global array; sharded-axis sizes may have changed.
+        global_shape_p2 = list(global_shape_p1)
+        for ax in sharded:
+            global_shape_p2[ax] = c_local.shape[ax]
+        return jax.make_array_from_single_device_arrays(
+            tuple(global_shape_p2), transposed, [c_local]
+        )
+
     def backward(
         self,
         c: Array,
         kind: MeshKind = MeshKind.QUADRATURE,
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
-        """Backward transform.  Passes _spmd_sharding as an explicit static
-        argument to the JIT'd helper so that JAX recompiles when the sharding
-        is changed, rather than re-using a cached no-SPMD compilation."""
-        return self._backward_jitted(c, kind, N, self._spmd_sharding)
+        """Backward transform.
+
+        In the SPMD case the separable transform runs outside JIT on each
+        device's addressable shard, eliminating spurious all-gather ops.
+        """
+        if self._spmd_sharding is not None:
+            fns = tuple(
+                partial(
+                    self.basespaces[ax].backward,
+                    kind=kind,
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+                )
+                for ax in range(len(self))
+            )
+            return self._apply_separable_spmd(c, fns, self._spmd_sharding)
+        return self._backward_jitted(c, kind, N, None)
 
     @jax.jit(static_argnums=(0, 2, 3, 4))
     def _backward_jitted(
@@ -470,7 +551,16 @@ class TensorProductSpace:
 
     def scalar_product(self, u: Array) -> Array:
         """Return tensor of inner products along each axis (separable)."""
-        return self._scalar_product_jitted(u, self._real_sharding())
+        if self._spmd_sharding is not None:
+            sg = self.system.sg
+            if sg != 1:
+                sg = lambdify(self.system.base_scalars(), sg)(*self.mesh())
+                u = u * sg
+            fns = tuple(self.basespaces[ax].scalar_product for ax in range(len(self)))
+            sharding = self._real_sharding()
+            assert sharding is not None, "SPMD sharding must be set for scalar_product"
+            return self._apply_separable_spmd(u, fns, sharding)
+        return self._scalar_product_jitted(u, None)
 
     @jax.jit(static_argnums=(0, 2))
     def _scalar_product_jitted(self, u: Array, sharding: NamedSharding | None) -> Array:
@@ -483,7 +573,12 @@ class TensorProductSpace:
 
     def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation."""
-        return self._forward_jitted(u, self._real_sharding())
+        if self._spmd_sharding is not None:
+            fns = tuple(self.basespaces[ax].forward for ax in range(len(self)))
+            sharding = self._real_sharding()
+            assert sharding is not None, "SPMD sharding must be set for forward"
+            return self._apply_separable_spmd(u, fns, sharding)
+        return self._forward_jitted(u, None)
 
     @jax.jit(static_argnums=(0, 2))
     def _forward_jitted(self, u: Array, sharding: NamedSharding | None) -> Array:
@@ -498,7 +593,18 @@ class TensorProductSpace:
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
         """Evaluate the field or mixed derivatives on a tensor-product mesh."""
-        return self._backward_primitive_jitted(c, k, kind, N, self._spmd_sharding)
+        if self._spmd_sharding is not None:
+            fns = tuple(
+                partial(
+                    self.basespaces[ax].backward_primitive,
+                    k=k[ax],
+                    kind=kind,
+                    N=self.basespaces[ax].num_quad_points if N is None else N[ax],
+                )
+                for ax in range(len(self))
+            )
+            return self._apply_separable_spmd(c, fns, self._spmd_sharding)
+        return self._backward_primitive_jitted(c, k, kind, N, None)
 
     @jax.jit(static_argnums=(0, 2, 3, 4, 5))
     def _backward_primitive_jitted(

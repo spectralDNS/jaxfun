@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from enum import StrEnum
+from functools import partial
 from typing import TYPE_CHECKING, Any, cast, overload
 
 import jax
@@ -809,17 +810,19 @@ class TPMatricesWavenumberSolver:
             ) + _fourier_shape[1:]
 
             # Factory avoids the Python late-binding closure pitfall.
+            # L/U are passed as explicit arguments (not closed over) so XLA
+            # treats them as dynamic values and skips constant-folding them.
             def _make_device_jit(L_d: Array, U_d: Array):
                 @jax.jit
-                def _jit(rhs_d: Array) -> Array:
+                def _jit(L: Array, U: Array, rhs_d: Array) -> Array:
                     rhs_2d = jnp.transpose(rhs_d, _axes_order).reshape(
                         _n_F_per_device, _n_P
                     )
-                    sol_2d = _vmap_fn(L_d, U_d, rhs_2d)
+                    sol_2d = _vmap_fn(L, U, rhs_2d)
                     sol_perm = sol_2d.reshape(_fourier_shape_per_device + (_n_P,))
                     return jnp.transpose(sol_perm, _inv_perm)
 
-                return _jit
+                return partial(_jit, L_d, U_d)
 
             self._local_solve_jits = [
                 _make_device_jit(self._L_per_device[d], self._U_per_device[d])
@@ -829,13 +832,13 @@ class TPMatricesWavenumberSolver:
         else:
 
             @jax.jit
-            def _solve_jit(rhs: Array) -> Array:
+            def _solve_jit(L: Array, U: Array, rhs: Array) -> Array:
                 rhs_2d = jnp.transpose(rhs, _axes_order).reshape(_n_F, _n_P)
-                sol_2d = _vmap_fn(_local_L, _local_U, rhs_2d)
+                sol_2d = _vmap_fn(L, U, rhs_2d)
                 sol_perm = sol_2d.reshape(_fourier_shape + (_n_P,))
                 return jnp.transpose(sol_perm, _inv_perm)
 
-            self._solve_jit = _solve_jit
+            self._solve_jit = partial(_solve_jit, _local_L, _local_U)
 
     def solve(self, rhs: Array) -> Array:
         """Solve the wavenumber-loop system for RHS ``rhs``.

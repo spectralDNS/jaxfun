@@ -30,6 +30,9 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
         data: Dense (or sparse) global matrix.
     """
 
+    is_zero = False
+    is_diagonal = False
+
     def __init__(self, data: Array) -> None:
         self.data = data  # mat is A_ikjl
 
@@ -75,13 +78,15 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
 
     def solve(self, rhs: Array) -> Array:
         """Solve A x = rhs for x."""
-        AT = jnp.transpose(self.data, (0, 2, 1, 3)).reshape(
-            (
-                self.data.shape[0] * self.data.shape[2],
-                self.data.shape[1] * self.data.shape[3],
-            )
-        )  # AT_{i*k,j*l}
+        AT = self.todense()
         return jnp.linalg.solve(AT, rhs.flatten()).reshape(rhs.shape)
+
+    def todense(self) -> Array:
+        """Return the equivalent 2-D global matrix."""
+        return jnp.transpose(self.data, (0, 2, 1, 3)).reshape(self.shape)
+
+    def diagonal_or_none(self) -> Array | None:
+        return None
 
     def scale(self, alpha: complex | Array) -> TensorMatrix:
         return TensorMatrix(self.data * alpha)

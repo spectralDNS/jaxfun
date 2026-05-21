@@ -57,6 +57,7 @@ class Matrix(nnx.Pytree):
         Y = A.matvec(jnp.ones((3, 4)), axis=1)  # shape (3, 4)
     """
 
+    is_zero = False
     data: Array
 
     def __init__(self, data: Array):
@@ -188,6 +189,11 @@ class Matrix(nnx.Pytree):
             A.solve(B, axis=1)  # B shape (k, n)    → (k, n)
             A.solve(T, axis=2)  # T shape (a, b, n) → (a, b, n)
         """
+        n, m = self.shape
+        axis = axis % b.ndim
+        if b.ndim > 1 and n == m == b.size and b.shape[axis] != n:
+            return self.solve(b.reshape((-1,))).reshape(b.shape)
+
         diagonal_box: _DiagonalCache | None = getattr(self, "_diagonal_cache", None)
         if diagonal_box is not None:
             return _solve_diagonal(diagonal_box.value, b, axis)

@@ -11,7 +11,6 @@ from jax.scipy.linalg import expm as _expm
 
 from jaxfun.la import DiagonalMatrix, Matrix
 from jaxfun.typing import Array, FunctionSpaceType, Padding
-from jaxfun.utils.operator_tools import operator_diagonal, operator_to_dense
 
 from .base import BaseIntegrator
 
@@ -120,30 +119,30 @@ class ETDRK4(BaseIntegrator):
 
     def _mass_diagonal_or_identity(self) -> Array | None:
         """Return the mass diagonal, treating a missing mass operator as identity."""
-        return operator_diagonal(self.mass_operator)
+        return self.mass_operator.diagonal_or_none()
 
     def _has_diagonal_etd(self) -> bool:
         """Return True when the ETD coefficients can stay elementwise."""
         mass_diag = self._mass_diagonal_or_identity()
-        linear_diag = operator_diagonal(self.linear_operator)
+        linear_diag = self.linear_operator.diagonal_or_none()
         return mass_diag is not None and linear_diag is not None
 
     def _setup_diagonal_etd(self, dt: float) -> ETDCoefficients:
         """Return ETD coefficients for the diagonal operator path."""
         mass_diag = self._mass_diagonal_or_identity()
         assert mass_diag is not None
-        linear_diag = operator_diagonal(self.linear_operator)
+        linear_diag = self.linear_operator.diagonal_or_none()
         Ldiag = cast(Array, linear_diag) / mass_diag
         return _etdrk4_diag_coeffs(Ldiag, dt)
 
     def _setup_dense_etd(self, dt: float) -> ETDCoefficients:
         """Return ETD coefficients for the dense matrix-function path."""
-        A = operator_to_dense(self.linear_operator)
+        A = self.linear_operator.todense()
         mass_diag = self._mass_diagonal_or_identity()
         if mass_diag is not None:
             Lmat = A / mass_diag.reshape((-1,))[:, None]
         else:
-            M = operator_to_dense(self.mass_operator)
+            M = self.mass_operator.todense()
             Lmat = Matrix(M).solve(A)
 
         z = dt * Lmat

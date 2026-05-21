@@ -36,7 +36,15 @@ if TYPE_CHECKING:
     )
     from jaxfun.galerkin.arguments import Jaxc
     from jaxfun.galerkin.orthogonal import OrthogonalSpace
-    from jaxfun.la import TensorMatrix, TPMatrices, TPMatrix
+    from jaxfun.la import (
+        DiaMatrix,
+        IdentityMatrix,
+        Matrix,
+        TensorMatrix,
+        TPMatrices,
+        TPMatrix,
+        ZeroMatrix,
+    )
 
 
 type FloatLike = float | sp.Number
@@ -115,10 +123,17 @@ type DomainType = Literal["inside", "boundary", "intersection", "all"]
 type InnerBilinearResult = Array | MatrixProtocol | TPMatrix | TensorMatrix
 type InnerBilinearResults = list[Array | MatrixProtocol | TPMatrix | TensorMatrix]
 type InnerLinearResults = list[Array]
-type GalerkinOperator = Array | MatrixProtocol | TPMatrix | TensorMatrix | TPMatrices
-type GalerkinOperatorLike = GalerkinOperator | list[GalerkinOperator]
+type GalerkinOperator = (
+    DiaMatrix
+    | Matrix
+    | TPMatrix
+    | TensorMatrix
+    | TPMatrices
+    | IdentityMatrix
+    | ZeroMatrix
+)
 type GalerkinAssembledForm = (
-    GalerkinOperatorLike | tuple[GalerkinOperatorLike, Array | None] | None
+    GalerkinOperator | Array | tuple[GalerkinOperator | Array, Array | None] | None
 )
 
 

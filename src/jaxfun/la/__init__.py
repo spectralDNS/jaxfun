@@ -1,5 +1,6 @@
 from .blocktpmatrix import BlockTPMatrix as BlockTPMatrix
 from .diamatrix import (
+    DiagonalMatrix as DiagonalMatrix,
     DiaMatrix as DiaMatrix,
     diags as diags,
     diakron as diakron,

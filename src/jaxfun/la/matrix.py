@@ -398,6 +398,9 @@ class Matrix(nnx.Pytree):
             return matmat(self.data, other.array)
 
         if isinstance(other, Array):
+            n, m = self.shape
+            if other.ndim > 1 and (n, m) == (other.size, other.size):
+                return (self.data @ other.reshape((-1,))).reshape(other.shape)
             return matmat(self.data, other)
 
         if isinstance(other, DiaMatrix):

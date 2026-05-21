@@ -67,6 +67,7 @@ Design notes:
 - [x] Run matrix solver regression tests: `uv run pytest tests/la/test_diamatrix.py tests/la/test_kron.py tests/la/test_tpmatrices_solvers.py`.
 - [x] Confirm ETDRK4 diagonal FFT tests still assert no `dot_general`.
 - [x] If failures occur, append the cause and design adjustment under the relevant TODO section before patching.
+- [x] Investigate high per-process memory usage in the focused integrator and matrix test files before continuing larger implementation work.
 
 Design notes:
 
@@ -80,6 +81,10 @@ Design notes:
 - Re-ran the focused integrator suite after removing `LinearTerm`: 25 tests passed.
 - Re-ran the full matrix solver regression suite after removing `LinearTerm` and adding matrix-level diagonal solves: 393 tests passed and 2 skipped.
 - Final focused integrator pass after removing the stale `_state_size` field: 25 tests passed.
+- Sequential `-n0` memory probing showed the largest single-process peaks are `tests/la/test_diamatrix.py` at about 1.59 GB, `tests/la/test_tpmatrices_solvers.py` at about 1.55 GB, and `tests/la/test_kron.py` at about 1.30 GB. The focused integrator files are smaller, between about 0.43 GB and 0.86 GB.
+- Class/section-level probing showed the heavy regions are repeated JAX solve/matvec/LU coverage rather than one large allocation: `DiaMatrix.TestLU` peaked around 0.99 GB, `DiaMatrix.TestSolve` around 0.82 GB, tensor-product dense LU around 1.06 GB, and tensor-product dispatch/L2/3D coverage around 1.19 GB.
+- JAX compile logging confirmed the pressure is largely many shape-specialized XLA traces/executables retained in each worker process. `DiaMatrix.TestLU` emitted 545 compile log entries, while the tensor-product dispatch/L2/3D section emitted 747. Running with JIT disabled increased memory for representative heavy groups, so the issue is not caused by one explicit jitted kernel alone; eager JAX still dispatches many compiled primitive programs.
+- The global pytest default `-n logical` multiplies this per-worker JAX/XLA footprint. On the local run that created eight workers, several workers can each accumulate around 1.5-2 GB depending on which matrix/integrator sections they receive.
 
 ## 7. Move Operator Semantics Into Matrix Classes
 
@@ -124,3 +129,45 @@ Design notes:
 - Unsupported mixed dimensional families are not silently densified; the relevant dunder methods return `NotImplemented`, leaving Python to raise a clear unsupported operand error.
 - Direct `Matrix.solve()` and `DiaMatrix.solve()` now handle coefficient-shaped RHS values against flat diagonal operators, matching the global-state solve behavior previously handled in temporal helpers.
 - Verification after this pass: operator tests passed with 10 tests, focused integrator tests passed with 25 tests, and matrix regression tests passed with 395 tests and 2 skipped.
+
+## 9. Introduce DiagonalMatrix For Pure Main-Diagonal Operators
+
+- [x] Add `DiagonalMatrix` as a `DiaMatrix` subclass that represents only square main-diagonal operators.
+- [x] Route pure main-diagonal construction through `DiagonalMatrix`, including `diags(..., offsets=(0,))` and identity scaling.
+- [x] Move coefficient-shaped elementwise `matvec` and `solve` behavior into `DiagonalMatrix` so ETDRK4 can eventually store diagonal ETD coefficients as matrix objects.
+- [x] Preserve `DiaMatrix` for genuinely banded/shifted DIA matrices; a single shifted diagonal must not be treated as a diagonal operator.
+- [x] Add tests showing `DiagonalMatrix` is still a `DiaMatrix`, applies and solves coefficient-shaped arrays without LU, and preserves diagonal structure under diagonal arithmetic.
+
+Design notes:
+
+- `DiagonalMatrix` is the concrete matrix-layer abstraction needed before removing ETDRK4's separate diagonal coefficient path. It should own the pure elementwise behavior while general `DiaMatrix` continues to represent arbitrary DIA sparsity.
+- Implemented `DiagonalMatrix` as a `DiaMatrix` subclass with pure main-diagonal storage, coefficient-shaped `matvec`/`solve`, and diagonal-preserving arithmetic for diagonal operands.
+- `diags(..., offsets=(0,))` now constructs `DiagonalMatrix` for square pure-main-diagonal inputs, while shifted single-diagonal matrices remain plain `DiaMatrix` and do not report diagonal fast-path eligibility.
+- Kept `lu_factor()` compatible with the existing `LUFactors` API by returning `L` and `U` factors rather than introducing a separate LU factor type.
+- Verified the diagonal work with targeted diagonal tests, `tests/la/test_operators.py`, `tests/la/test_diamatrix.py`, the focused integrator suite, and the full matrix regression suite.
+- Extended pure-diagonal construction through `DiaMatrix.from_dense()` so `Matrix.tosparse()` and dense diagonal extraction preserve the `DiagonalMatrix` abstraction.
+- Added explicit `IdentityMatrix` arithmetic handling in `DiagonalMatrix` to avoid reflected-operation recursion and keep `D + I`, `D - I`, and `I - D` in the diagonal subclass.
+- Added `DiagonalMatrix.astype()` so dtype conversion does not widen back to a generic `DiaMatrix`.
+- Re-verified this pass with `uv run pytest -n0 tests/la/test_operators.py tests/la/test_diamatrix.py -q`, `uv run pytest -n0 tests/la/test_kron.py tests/la/test_tpmatrices_solvers.py tests/integrators/test_integrator_skeleton.py tests/integrators/test_backward_euler.py tests/integrators/test_etdrk4.py tests/integrators/test_nls1d_etdrk4.py -q`, and `uv run ruff check src/jaxfun/la/diamatrix.py tests/la/test_diamatrix.py tests/la/test_operators.py`.
+
+## 10. Represent ETDRK4 Coefficients As Matrix Objects
+
+- [x] Wrap diagonal ETDRK4 coefficients in `DiagonalMatrix` instead of storing the timestep coefficients as raw arrays.
+- [x] Wrap dense ETDRK4 coefficients in `Matrix` so the timestep applies a uniform matrix-like coefficient interface.
+- [x] Remove the raw-array `_apply_etd_operator(op, u, is_diag)` branch and apply coefficient matrices directly, flattening only for dense global `Matrix` coefficients.
+- [x] Preserve compatibility fields `E`, `E2`, `Q`, `f1`, `f2`, and `f3`, but allow them to be matrix objects.
+- [x] Re-run ETDRK4 diagonal FFT tests to confirm the diagonal coefficient path still has no `dot_general`.
+
+Design notes:
+
+- This is the next step after `DiagonalMatrix`: the diagonal ETD path should use the same matrix abstraction as mass and linear operators, while dense coefficients remain global `Matrix` objects that explicitly flatten and restore coefficient-shaped states.
+- `ETDRK4.setup()` now stores diagonal coefficients as flat `DiagonalMatrix` objects and dense coefficients as global `Matrix` objects. The public coefficient field names are unchanged.
+- `ETDRK4.step()` no longer branches on raw coefficient arrays. It applies coefficient matrix objects directly; only dense global `Matrix` coefficients flatten and reshape the coefficient state.
+- The diagonal path still applies coefficient-shaped tensor-product states elementwise through `DiagonalMatrix`, preserving the FFT nonlinear path and avoiding dense basis matmuls.
+- Verification after this pass: `tests/integrators/test_etdrk4.py` passed with 10 tests, including the no-`dot_general` assertions; the broader focused matrix/integrator run passed with 425 tests and 2 skipped; ruff passed on touched files.
+- Removed the local `apply()` closure from `ETDRK4.step()` after teaching `Matrix.__matmul__` how to apply a square global matrix to coefficient-shaped state arrays by flattening and restoring shape internally.
+- The flattening belongs in `Matrix.__matmul__`, not ETDRK4, because dense global operators now share the same ergonomic application surface as `DiagonalMatrix`: timestep code can write `op @ u` regardless of coefficient shape.
+- Re-verified after this simplification: focused operator plus ETDRK4 tests passed with 22 tests; the broader focused matrix/integrator run passed with 426 tests and 2 skipped; ruff passed on touched files.
+- `_etdrk4_diag_coeffs()` now returns `DiagonalMatrix` coefficient objects directly. The formula tests unwrap `.diagonal()` for numerical comparisons, while the integrator stores the same objects without an additional wrapping helper.
+- Fixed `DiagonalMatrix` scaling so `(dt * self.Q) @ n` works inside the jitted ETDRK4 step. The underlying issue was the scaled diagonal object being passed into a nested jitted `DiagonalMatrix.matvec`; `DiagonalMatrix.matvec` is now a plain elementwise method, and scalar dunders are explicit on the subclass.
+- Added a focused regression for applying a scaled `DiagonalMatrix` inside `jax.jit`, restored `dtQ = dt * self.Q` in ETDRK4, and re-verified the broader focused matrix/integrator run with 427 tests passed and 2 skipped.

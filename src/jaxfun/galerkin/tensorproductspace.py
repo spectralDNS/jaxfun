@@ -496,40 +496,49 @@ class TensorProductSpace:
             (powers of two for Fourier, even quadrature counts for Chebyshev).
 
         """
-        dim = len(self)
-        spec = sharding.spec
-        sharded = [ax for ax in range(dim) if ax < len(spec) and spec[ax] is not None]
-        unsharded = [ax for ax in range(dim) if ax not in sharded]
+        # Cache the compiled shard_map function keyed on the (fns, sharding spec)
+        # combination.  _kernel is defined inside the method, so each call would
+        # produce a new function object and force recompilation.  Storing the
+        # shard_map-wrapped callable ensures it is compiled exactly once.
+        cache_key = ("shard_map_kernel", id(fns), sharding.spec)
+        if cache_key not in self._spmd_local_fn_cache:
+            dim = len(self)
+            spec = sharding.spec
+            sharded = [
+                ax for ax in range(dim) if ax < len(spec) and spec[ax] is not None
+            ]
+            unsharded = [ax for ax in range(dim) if ax not in sharded]
 
-        new_spec: list = [None] * dim
-        for s_ax, u_ax in zip(sharded, unsharded):
-            new_spec[u_ax] = spec[s_ax]
+            new_spec: list = [None] * dim
+            for s_ax, u_ax in zip(sharded, unsharded):
+                new_spec[u_ax] = spec[s_ax]
 
-        @jax.jit
-        def _kernel(c_loc: Array) -> Array:
-            # Phase 1 — unsharded axes: fully local, no communication.
-            for ax in unsharded:
-                c_loc = fns[ax](c_loc)
-            # All-to-all: redistribute sharding from sharded → unsharded axes.
-            c_loc = jax.lax.all_to_all(
-                c_loc,
-                axis_name="k",
-                split_axis=unsharded[0],
-                concat_axis=sharded[0],
-                tiled=True,
+            def _kernel(c_loc: Array) -> Array:
+                # Phase 1 — unsharded axes: fully local, no communication.
+                for ax in unsharded:
+                    c_loc = fns[ax](c_loc)
+                # All-to-all: redistribute sharding from sharded → unsharded axes.
+                c_loc = jax.lax.all_to_all(
+                    c_loc,
+                    axis_name="k",
+                    split_axis=unsharded[0],
+                    concat_axis=sharded[0],
+                    tiled=True,
+                )
+                # Phase 2 — originally-sharded axes: fully local after the transpose.
+                for ax in sharded:
+                    c_loc = fns[ax](c_loc)
+                return c_loc
+
+            self._spmd_local_fn_cache[cache_key] = shard_map(
+                _kernel,
+                mesh=sharding.mesh,
+                in_specs=(sharding.spec,),
+                out_specs=P(*new_spec),
+                check_rep=False,
             )
-            # Phase 2 — originally-sharded axes: fully local after the transpose.
-            for ax in sharded:
-                c_loc = fns[ax](c_loc)
-            return c_loc
 
-        return shard_map(
-            _kernel,
-            mesh=sharding.mesh,
-            in_specs=(sharding.spec,),
-            out_specs=P(*new_spec),
-            check_rep=False,
-        )(c)
+        return self._spmd_local_fn_cache[cache_key](c)
 
     def backward(
         self,

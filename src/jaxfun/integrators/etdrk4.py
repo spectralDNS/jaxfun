@@ -52,22 +52,6 @@ def _etdrk4_nonlinear_weights(
     return f1, f2, f3
 
 
-def _etdrk4_diag_coeffs(L: Array, dt: float) -> tuple[DiagonalMatrix, ...]:
-    """Return ETDRK4 coefficients for a diagonal linear operator."""
-    z = dt * L
-    E = jnp.exp(z)
-    E2 = jnp.exp(z / 2)
-    # Stage coefficient:
-    #   L^{-1}(exp(hL/2)-I) = (h/2) * phi1(hL/2)
-    # and step uses h*Q, hence Q = 0.5 * phi1(hL/2).
-    Q = 0.5 * _phi1(z / 2)
-    phi1 = _phi1(z)
-    phi2 = _phi2(z)
-    phi3 = _phi3(z)
-    f1, f2, f3 = _etdrk4_nonlinear_weights(phi1, phi2, phi3)
-    return tuple(DiagonalMatrix(c.reshape((-1,))) for c in (E, E2, Q, f1, f2, f3))
-
-
 def _phi_matrices(z: Array) -> tuple[Array, Array, Array]:
     """Return dense matrix versions of ``phi_1``, ``phi_2``, and ``phi_3``."""
     n = z.shape[0]
@@ -104,10 +88,14 @@ class ETDRK4(BaseIntegrator):
 
     def setup(self, dt: float) -> None:
         """Precompute ETD propagators and nonlinear stage coefficients."""
-        is_diag = self._has_diagonal_etd()
-        self.is_diag = nnx.static(is_diag)
-
-        coeffs = self._setup_diagonal_etd(dt) if is_diag else self._setup_dense_etd(dt)
+        mass_diag = self.mass_operator.diagonal_or_none()
+        linear_diag = self.linear_operator.diagonal_or_none()
+        if mass_diag is not None and linear_diag is not None:
+            self.is_diag = nnx.static(True)
+            coeffs = self._setup_diagonal_etd(dt, linear_diag / mass_diag)
+        else:
+            self.is_diag = nnx.static(False)
+            coeffs = self._setup_dense_etd(dt, mass_diag)
 
         E, E2, Q, f1, f2, f3 = coeffs
         self.E = nnx.data(E)
@@ -117,28 +105,27 @@ class ETDRK4(BaseIntegrator):
         self.f2 = nnx.data(f2)
         self.f3 = nnx.data(f3)
 
-    def _mass_diagonal_or_identity(self) -> Array | None:
-        """Return the mass diagonal, treating a missing mass operator as identity."""
-        return self.mass_operator.diagonal_or_none()
-
-    def _has_diagonal_etd(self) -> bool:
-        """Return True when the ETD coefficients can stay elementwise."""
-        mass_diag = self._mass_diagonal_or_identity()
-        linear_diag = self.linear_operator.diagonal_or_none()
-        return mass_diag is not None and linear_diag is not None
-
-    def _setup_diagonal_etd(self, dt: float) -> ETDCoefficients:
+    @staticmethod
+    def _setup_diagonal_etd(dt: float, Ldiag: Array) -> tuple[DiagonalMatrix, ...]:
         """Return ETD coefficients for the diagonal operator path."""
-        mass_diag = self._mass_diagonal_or_identity()
-        assert mass_diag is not None
-        linear_diag = self.linear_operator.diagonal_or_none()
-        Ldiag = cast(Array, linear_diag) / mass_diag
-        return _etdrk4_diag_coeffs(Ldiag, dt)
+        z = dt * Ldiag
+        E = jnp.exp(z)
+        E2 = jnp.exp(z / 2)
+        # Stage coefficient:
+        #   L^{-1}(exp(hL/2)-I) = (h/2) * phi1(hL/2)
+        # and step uses h*Q, hence Q = 0.5 * phi1(hL/2).
+        Q = 0.5 * _phi1(z / 2)
+        phi1 = _phi1(z)
+        phi2 = _phi2(z)
+        phi3 = _phi3(z)
+        f1, f2, f3 = _etdrk4_nonlinear_weights(phi1, phi2, phi3)
+        return tuple(DiagonalMatrix(c.reshape((-1,))) for c in (E, E2, Q, f1, f2, f3))
 
-    def _setup_dense_etd(self, dt: float) -> ETDCoefficients:
+    def _setup_dense_etd(
+        self, dt: float, mass_diag: Array | None
+    ) -> tuple[Matrix, ...]:
         """Return ETD coefficients for the dense matrix-function path."""
         A = self.linear_operator.todense()
-        mass_diag = self._mass_diagonal_or_identity()
         if mass_diag is not None:
             Lmat = A / mass_diag.reshape((-1,))[:, None]
         else:

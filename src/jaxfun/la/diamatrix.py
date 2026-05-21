@@ -751,6 +751,15 @@ class DiaMatrix(nnx.Pytree):
         )
         return result
 
+    @property
+    def is_diagonal(self) -> bool:
+        """Whether this matrix is square and stores only the main diagonal."""
+        return self.shape[0] == self.shape[1] and self.offsets == (0,)
+
+    def diagonal_or_none(self) -> Array | None:
+        """Return the main diagonal only when this matrix is purely diagonal."""
+        return self.diagonal() if self.is_diagonal else None
+
     def get_row(self, i: int | Array) -> Array:
         """Return row ``i`` of the matrix as a dense 1-D array of length ``m``.
 

@@ -73,3 +73,24 @@ Design notes:
 - The focused ETDRK4 suite includes the diagonal FFT path checks that assert no `dot_general`, and those remained green.
 - Ruff passed on the touched source files after simplifying the ETDRK4 setup branch expression.
 - Re-ran the focused integrator suite after the final source edit: 25 tests passed.
+
+## 7. Move Operator Semantics Into Matrix Classes
+
+- [x] Add a matrix-level pure-diagonal API, starting with `DiaMatrix.diagonal_or_none()` based on whether the matrix stores only the main diagonal.
+- [x] Add the same pure-diagonal API to `Matrix` so dense matrices do not expose unsafe diagonal shortcuts for non-diagonal data.
+- [x] Update `operator_tools.operator_diagonal()` to ask matrix objects for their own diagonal representation before falling back to external inspection.
+- [x] Extend tensor-product operator classes with compatible diagonal helpers so tensor-product diagonal detection does not live in temporal integration helpers.
+- [ ] Add explicit zero and identity operator types, or equivalent matrix-level representations, so `None` is no longer overloaded as both zero and identity depending on integrator context.
+- [ ] Replace `LinearTerm` with plain `(operator, forcing)` once operators consistently implement apply, solve, dense conversion, diagonal detection, zero/identity semantics, and structured linear combinations.
+
+Design notes:
+
+- The intended direction is to make every assembled operator a uniform matrix-like object. `LinearTerm` should become temporary scaffolding, not the final abstraction.
+- Diagonal fast paths belong in the matrix layer: `DiaMatrix` can decide pure diagonal status from its stored offsets, while dense `Matrix` must check whether off-diagonal entries are actually zero.
+- Implemented `is_diagonal` and `diagonal_or_none()` on `DiaMatrix` and `Matrix`. `DiaMatrix` only reports diagonal for square matrices with offsets exactly `(0,)`; a single shifted diagonal is intentionally not treated as elementwise.
+- `operator_tools.operator_diagonal()` now delegates to the matrix-level API for `DiaMatrix` and `Matrix`, reducing duplicated diagonal policy in the temporal helper layer.
+- Added direct matrix-layer regression coverage for `DiaMatrix.diagonal_or_none()` and `Matrix.diagonal_or_none()`, including the shifted single-diagonal case.
+- Verified this first matrix-layer migration with DIA, tensor-product, and focused integrator tests.
+- Moved tensor-product diagonal construction into `TPMatrix.diagonal_or_none()` and `TPMatrices.diagonal_or_none()`, including the TPMatrix scale factor. `operator_tools` now delegates to matrix-level diagonal APIs for dense, DIA, and tensor-product operators.
+- Added tensor-product diagonal regression coverage, including scale propagation and rejection of shifted diagonal factors.
+- Re-ran style, full matrix regressions, and focused integrator tests after moving tensor-product diagonal logic: all passed.

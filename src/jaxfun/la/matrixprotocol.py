@@ -128,6 +128,15 @@ class MatrixProtocol(Protocol):
         """Return the ``k``-th diagonal as a 1-D array."""
         ...
 
+    @property
+    def is_diagonal(self) -> bool:
+        """Whether this matrix is purely main-diagonal."""
+        ...
+
+    def diagonal_or_none(self) -> Array | None:
+        """Return the main diagonal only when this matrix is purely diagonal."""
+        ...
+
     def todense(self) -> Array:
         """Return or compute the equivalent dense ``(n, m)`` array."""
         ...

@@ -54,10 +54,12 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         global_indices: Tuple of global index into vectorized expansions.
     """
 
+    is_zero = False
+
     def __init__(
         self,
         mats: Sequence[MatrixProtocol],
-        scale: complex,
+        scale: complex | Array,
         global_indices: tuple[int, int] = (0, 0),
     ) -> None:
         self.mats = nnx.List(mats)
@@ -271,7 +273,7 @@ class TPLUFactors:
     """
 
     def __init__(
-        self, lu_factors: list, scale: complex, shape: tuple[int, ...]
+        self, lu_factors: list, scale: complex | Array, shape: tuple[int, ...]
     ) -> None:
         self.lu_factors = lu_factors
         self.scale = scale
@@ -316,6 +318,8 @@ class TPSolveMethod(StrEnum):
 
 class TPMatrices(nnx.Pytree):
     """Container for list of TPMatrix bilinear operator tensors."""
+
+    is_zero = False
 
     def __init__(self, tpmats: list[TPMatrix]) -> None:
         self.tpmats = nnx.List(tpmats)
@@ -604,7 +608,7 @@ class TPMatricesLUFactors:
         self,
         eigvecs: list[Array],
         per_term_eigenvalues: list[list[Array]],
-        scales: list[complex],
+        scales: list[complex | Array],
         shape: tuple[int, ...],
     ) -> None:
         self.eigvecs = eigvecs  # list of (n_i, n_i) eigenvector matrices
@@ -1144,7 +1148,7 @@ def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
     per_term_eigenvalues = [
         [axis_eigenvalues[_repr(tp.mats[i])] for i in range(ndim)] for tp in tpmats
     ]
-    scales: list[complex] = [tp.scale for tp in tpmats]
+    scales = [tp.scale for tp in tpmats]
     shape: tuple[int, ...] = tuple(int(tpmats[0].mats[i].shape[0]) for i in range(ndim))
     return TPMatricesLUFactors(
         eigvecs=eigvecs,

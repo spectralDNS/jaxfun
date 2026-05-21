@@ -146,7 +146,9 @@ def test_tpmatrix_solve_diagonal_without_factor_lu() -> None:
     d1 = diags([jnp.array([3.0, 4.0])], offsets=(0,))
     system = TPMatrix([d0, d1], scale=2.0)
     rhs = jnp.ones((2, 2))
+    diagonal = system.diagonal_or_none()
 
-    assert jnp.allclose(system.solve(rhs), rhs / system.diagonal_or_none())
+    assert diagonal is not None
+    assert jnp.allclose(system.solve(rhs), rhs / diagonal)
     assert not hasattr(d0, "_lu_cache")
     assert not hasattr(d1, "_lu_cache")

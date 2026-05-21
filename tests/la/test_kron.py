@@ -421,7 +421,9 @@ class TestTPMatrixMatmul:
 
         expected = 2.0 * d0.diagonal()[:, None] * d1.diagonal()[None, :]
         assert tp.is_diagonal
-        assert jnp.allclose(tp.diagonal_or_none(), expected)
+        diagonal = tp.diagonal_or_none()
+        assert diagonal is not None
+        assert jnp.allclose(diagonal, expected)
 
     def test_diagonal_or_none_rejects_shifted_factor(self):
         shifted = diags([jnp.array([1.0])], offsets=(1,), shape=(2, 2))
@@ -440,7 +442,9 @@ class TestTPMatrixMatmul:
 
         expected = 4.0 * d0.diagonal()[:, None] * d1.diagonal()[None, :]
         assert tpmats.is_diagonal
-        assert jnp.allclose(tpmats.diagonal_or_none(), expected)
+        diagonal = tpmats.diagonal_or_none()
+        assert diagonal is not None
+        assert jnp.allclose(diagonal, expected)
 
     # ------------------------------------------------------------------
     # 2-D: square factor matrices

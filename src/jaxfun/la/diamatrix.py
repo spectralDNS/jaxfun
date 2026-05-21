@@ -146,6 +146,7 @@ class DiaMatrix(nnx.Pytree):
     data: Array
     offsets: tuple[int, ...]
     shape: tuple[int, int]
+    is_zero = False
 
     def __post_init__(self) -> None:
         n, m = self.shape
@@ -619,6 +620,16 @@ class DiaMatrix(nnx.Pytree):
         diagonal = self.diagonal_or_none()
         if diagonal is not None:
             return _solve_diagonal(diagonal, b, axis)
+
+        n, m = self.shape
+        axis = axis % b.ndim
+        if b.ndim > 1 and n == m == b.size and b.shape[axis] != n:
+            return self.lu_solve(
+                b.reshape((-1,)),
+                pivot=pivot,
+                method=method,
+                auto_threshold=auto_threshold,
+            ).reshape(b.shape)
 
         # ------------------------------------------------------------------
         # "banded" path (and cache hit for banded)
@@ -1556,10 +1567,18 @@ class DiagonalMatrix(DiaMatrix):
         shape[axis] = diagonal.shape[0]
         return diagonal.reshape(tuple(shape)) * x
 
-    def solve(self, b: Array, axis: int = 0) -> Array:
+    def lu_solve(
+        self,
+        b: Array,
+        axis: int = 0,
+        *,
+        pivot: bool = False,
+        method: DiaMatrixSolveMethod | str = DiaMatrixSolveMethod.AUTO,
+        auto_threshold: int = 100,
+    ) -> Array:
         return _solve_diagonal(self.diagonal(), b, axis)
 
-    lu_solve = solve
+    solve = lu_solve
 
     def lu_factor(self, *, pivot: bool = False) -> LUFactors:
         return LUFactors(

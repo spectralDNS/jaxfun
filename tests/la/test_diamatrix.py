@@ -181,7 +181,9 @@ class TestConstruction:
         A = diags([jnp.array([1.0, 2.0, 3.0])], offsets=(0,))
         assert isinstance(A, DiagonalMatrix)
         assert A.is_diagonal
-        assert jnp.allclose(A.diagonal_or_none(), jnp.array([1.0, 2.0, 3.0]))
+        diagonal = A.diagonal_or_none()
+        assert diagonal is not None
+        assert jnp.allclose(diagonal, jnp.array([1.0, 2.0, 3.0]))
 
         shifted = diags([jnp.array([1.0, 2.0])], offsets=(1,), shape=(3, 3))
         assert not shifted.is_diagonal
@@ -194,7 +196,9 @@ class TestConstruction:
     def test_matrix_diagonal_or_none_checks_offdiagonal_entries(self):
         diagonal = Matrix(jnp.diag(jnp.array([1.0, 2.0, 3.0])))
         assert diagonal.is_diagonal
-        assert jnp.allclose(diagonal.diagonal_or_none(), jnp.array([1.0, 2.0, 3.0]))
+        diagonal_values = diagonal.diagonal_or_none()
+        assert diagonal_values is not None
+        assert jnp.allclose(diagonal_values, jnp.array([1.0, 2.0, 3.0]))
 
         dense = Matrix(jnp.array([[1.0, 0.5], [0.0, 2.0]]))
         assert not dense.is_diagonal

@@ -71,7 +71,7 @@ class MatrixProtocol(Protocol):
         import jax.numpy as jnp
 
 
-        def apply_operator(A: MatrixProtocol, x: Array) -> Array:
+        def apply_matrix(A: MatrixProtocol, x: Array) -> Array:
             return A.matvec(x)
 
 
@@ -131,6 +131,11 @@ class MatrixProtocol(Protocol):
     @property
     def is_diagonal(self) -> bool:
         """Whether this matrix is purely main-diagonal."""
+        ...
+
+    @property
+    def is_zero(self) -> bool:
+        """Whether this matrix is structurally zero."""
         ...
 
     def diagonal_or_none(self) -> Array | None:

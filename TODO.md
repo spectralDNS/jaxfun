@@ -171,3 +171,21 @@ Design notes:
 - `_etdrk4_diag_coeffs()` now returns `DiagonalMatrix` coefficient objects directly. The formula tests unwrap `.diagonal()` for numerical comparisons, while the integrator stores the same objects without an additional wrapping helper.
 - Fixed `DiagonalMatrix` scaling so `(dt * self.Q) @ n` works inside the jitted ETDRK4 step. The underlying issue was the scaled diagonal object being passed into a nested jitted `DiagonalMatrix.matvec`; `DiagonalMatrix.matvec` is now a plain elementwise method, and scalar dunders are explicit on the subclass.
 - Added a focused regression for applying a scaled `DiagonalMatrix` inside `jax.jit`, restored `dtQ = dt * self.Q` in ETDRK4, and re-verified the broader focused matrix/integrator run with 427 tests passed and 2 skipped.
+
+## 11. Remove Runtime Operator Dispatch Helpers
+
+- [x] Confirm `inner(..., return_all_items=False)` collapses bilinear lists before temporal integration sees them.
+- [x] Remove `list[GalerkinOperator]` from the integrator-facing assembled operator type.
+- [x] Replace `apply_operator(op, u)` call sites with `op @ u`.
+- [x] Replace `solve_operator(op, rhs)` call sites with `op.solve(rhs)`.
+- [x] Replace `operator_to_dense(op)` call sites with `op.todense()`.
+- [x] Keep `operator_tools.py` focused on assembly normalization rather than runtime operator behavior.
+
+Design notes:
+
+- Checked `inner.process_results()`: raw lists are returned only when `return_all_items=True`. `assemble_linear_term()` calls `inner()` with the default collapsed path, so temporal integration does not need to support list-shaped operators.
+- `operator_tools.py` now only normalizes assembled output into `(operator, forcing)`, converting raw 2-D arrays to `Matrix` and rejecting raw operator lists with a message pointing to `return_all_items=True`.
+- `BaseIntegrator`, `BackwardEuler`, and `ETDRK4` now use the matrix interface directly: `op @ u`, `op.solve(rhs)`, `op.todense()`, and `op.diagonal_or_none()`.
+- Moved the coefficient-shaped RHS fallback into `Matrix.solve()` and `DiaMatrix.solve()`, which was the one meaningful behavior previously hidden in `solve_operator()`.
+- Added `is_zero`/`diagonal_or_none()` coverage on the concrete operator classes needed by the direct integrator calls, leaving zero/diagonal semantics on the operator objects themselves.
+- Verification after this pass: `uv run ty check`, ruff on touched files, and the focused matrix/integrator suite all passed.

@@ -36,8 +36,8 @@ A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 uh = A.solve(b)
 
 N = 100
-uj = T.backward(uh, N=(N, N))
-xj = T.mesh(N=(N, N), broadcast=True)
+uj = T.backward(uh, N=(2 * N, 2 * M))
+xj = T.mesh(N=(2 * N, 2 * M), broadcast=True)
 uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
@@ -48,11 +48,11 @@ if "PYTEST" in os.environ:
 print("Error =", error)
 
 f, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4))
-xj = T.mesh(N=(N, N), broadcast=False)
-ax1.contourf(xj[0], xj[1], uj.real)
-ax2.contourf(xj[0], xj[1], uej.real)
+xj = T.mesh(N=(2 * N, 2 * M), broadcast=False)
+ax1.contourf(xj[1], xj[0], uj.real)
+ax2.contourf(xj[1], xj[0], uej.real)
 ax2.set_autoscalex_on(False)
-c3 = ax3.contourf(xj[0], xj[1], (uej - uj).real)
+c3 = ax3.contourf(xj[1], xj[0], (uej - uj).real)
 axins = inset_axes(
     ax3,
     width="5%",  # width = 10% of parent_bbox width

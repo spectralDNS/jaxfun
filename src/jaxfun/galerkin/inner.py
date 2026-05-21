@@ -1,5 +1,6 @@
 from typing import Any, Literal, TypeGuard, cast, overload
 
+import jax
 import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
@@ -512,6 +513,10 @@ def process_results(
             return bresults
 
         return ares1D, bresults
+
+    assert not isinstance(test_space, OrthogonalSpace)
+    if len(jax.devices()) > 1:
+        bresults: Array = jax.device_put(bresults, test_space._spectral_sharding)
 
     if len(aresults) > 0:
         # aresults is an empty list or a list of TPMatrix/TensorMatrix objects.

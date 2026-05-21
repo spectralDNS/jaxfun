@@ -566,7 +566,7 @@ class TensorProductSpace:
             )
         fns = self._spmd_local_fn_cache[cache_key]
         if self._spectral_sharding is not None:
-            return self._apply_separable_spmd_shard_map(c, fns, self._spectral_sharding)
+            return self._apply_separable_spmd(c, fns, self._spectral_sharding)
         for fn in fns:
             c = fn(c)
         return c

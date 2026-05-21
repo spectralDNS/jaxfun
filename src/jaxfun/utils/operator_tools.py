@@ -1,13 +1,20 @@
 """Helpers for assembling, inspecting, and applying Galerkin operators."""
 
-from dataclasses import dataclass
 from typing import cast
 
 import jax.numpy as jnp
 import sympy as sp
 
 from jaxfun.galerkin.inner import inner
-from jaxfun.la import DiaMatrix, Matrix, TensorMatrix, TPMatrices, TPMatrix
+from jaxfun.la import (
+    DiaMatrix,
+    IdentityMatrix,
+    Matrix,
+    TensorMatrix,
+    TPMatrices,
+    TPMatrix,
+    ZeroMatrix,
+)
 from jaxfun.la.matrixprotocol import SolverNotApplicable
 from jaxfun.typing import (
     Array,
@@ -16,69 +23,7 @@ from jaxfun.typing import (
     GalerkinOperatorLike,
 )
 
-
-@dataclass(frozen=True, eq=False)
-class LinearTerm:
-    """Normalized linear term assembled from a Galerkin weak form."""
-
-    operator: GalerkinOperatorLike | None = None
-    forcing: Array | None = None
-    diagonal: Array | None = None
-
-    @property
-    def is_zero(self) -> bool:
-        """Return True when the term has no operator or forcing contribution."""
-        return self.operator is None and self.forcing is None and self.diagonal is None
-
-    def diagonal_or_none(self) -> Array | None:
-        """Return an efficient diagonal representation when available."""
-        if self.diagonal is not None:
-            return self.diagonal
-        return operator_diagonal(self.operator)
-
-    def apply(self, u: Array) -> Array:
-        """Apply the operator part of this term to a coefficient state."""
-        diagonal = self.diagonal_or_none()
-        if diagonal is not None:
-            return _apply_diagonal(diagonal, u)
-
-        if self.operator is None:
-            return jnp.zeros_like(u)
-
-        return apply_operator(self.operator, u)
-
-    def solve(self, rhs: Array) -> Array:
-        """Solve the operator part of this term against a right-hand side."""
-        diagonal = self.diagonal_or_none()
-        if diagonal is not None:
-            return _solve_diagonal(diagonal, rhs)
-
-        if self.operator is None:
-            return rhs
-
-        return solve_operator(self.operator, rhs)
-
-    def todense(self, state_size: int, *, identity_if_zero: bool = False) -> Array:
-        """Return a dense global matrix for this term."""
-        diagonal = self.diagonal_or_none()
-        if diagonal is not None:
-            return jnp.diag(diagonal.reshape((-1,)))
-        if self.operator is None:
-            if identity_if_zero:
-                return jnp.eye(state_size)
-            return jnp.zeros((state_size, state_size))
-        return operator_to_dense(self.operator)
-
-
-AssembledTerm = LinearTerm
-
-
-def _apply_diagonal(diagonal: Array, u: Array) -> Array:
-    """Apply a diagonal stored either in coefficient shape or flattened shape."""
-    if diagonal.shape == u.shape:
-        return diagonal * u
-    flat = diagonal.reshape((-1,)) * u.reshape((-1,))
-    return flat.reshape(u.shape)
+type AssembledTerm = tuple[GalerkinOperatorLike | None, Array | None]
 
 
 def _solve_diagonal(diagonal: Array, rhs: Array) -> Array:
@@ -121,11 +66,18 @@ def operator_diagonal(obj: GalerkinOperatorLike | None) -> Array | None:
         return None
     if isinstance(obj, list):
         return _sum_diagonals(cast(list[GalerkinOperator], obj))
-    if isinstance(obj, DiaMatrix | Matrix | TPMatrices | TPMatrix):
+    if isinstance(
+        obj, DiaMatrix | Matrix | TPMatrices | TPMatrix | IdentityMatrix | ZeroMatrix
+    ):
         return obj.diagonal_or_none()
     if isinstance(obj, TensorMatrix):
         return operator_diagonal(obj.data)
     return _array_diagonal(jnp.asarray(obj))
+
+
+def operator_is_zero(obj: GalerkinOperatorLike | None) -> bool:
+    """Return True when an operator is absent or explicitly the zero operator."""
+    return obj is None or bool(getattr(obj, "is_zero", False))
 
 
 def apply_operator(op: GalerkinOperatorLike | None, u: Array) -> Array:
@@ -136,7 +88,10 @@ def apply_operator(op: GalerkinOperatorLike | None, u: Array) -> Array:
         items = cast(list[GalerkinOperator], op)
         applied = [apply_operator(item, u) for item in items]
         return jnp.sum(jnp.stack(applied), axis=0)
-    if isinstance(op, TPMatrices | TPMatrix):
+    if isinstance(
+        op,
+        TPMatrices | TPMatrix | IdentityMatrix | ZeroMatrix,
+    ):
         return op @ u
     if isinstance(op, TensorMatrix):
         return op @ u
@@ -174,6 +129,8 @@ def operator_to_dense(op: GalerkinOperatorLike) -> Array:
         return op.todense()
     if isinstance(op, Matrix):
         return op.data
+    if isinstance(op, IdentityMatrix | ZeroMatrix):
+        return op.todense()
     if isinstance(op, list):
         return _sum_dense_operators(cast(list[GalerkinOperator], op))
     if isinstance(op, TPMatrices):
@@ -192,7 +149,9 @@ def solve_operator(op: GalerkinOperatorLike, rhs: Array) -> Array:
         if len(items) == 1:
             return solve_operator(items[0], rhs)
 
-    if isinstance(op, TPMatrices | TPMatrix | TensorMatrix):
+    if isinstance(
+        op, TPMatrices | TPMatrix | TensorMatrix | IdentityMatrix | ZeroMatrix
+    ):
         return op.solve(rhs)
 
     if isinstance(op, DiaMatrix | Matrix):
@@ -239,7 +198,15 @@ def split_operator_and_forcing(
         rhs = jnp.asarray(forcing) if forcing is not None else None
         return operator, rhs
     if isinstance(
-        form, list | DiaMatrix | Matrix | TPMatrix | TensorMatrix | TPMatrices
+        form,
+        list
+        | DiaMatrix
+        | Matrix
+        | TPMatrix
+        | TensorMatrix
+        | TPMatrices
+        | IdentityMatrix
+        | ZeroMatrix,
     ):
         return form, None
     arr = jnp.asarray(form)
@@ -248,17 +215,14 @@ def split_operator_and_forcing(
     return arr, None
 
 
-def assemble_linear_term(expr: sp.Expr, *, sparse: bool, sparse_tol: int) -> LinearTerm:
+def assemble_linear_term(
+    expr: sp.Expr, *, sparse: bool, sparse_tol: int
+) -> AssembledTerm:
     """Assemble a linear weak-form expression into reusable operator data."""
     if sp.sympify(expr) == 0:
-        return LinearTerm()
+        return None, None
 
     linear_form = cast(
         GalerkinAssembledForm, inner(expr, sparse=sparse, sparse_tol=sparse_tol)
     )
-    operator, forcing = split_operator_and_forcing(linear_form)
-    return LinearTerm(
-        operator=operator,
-        forcing=forcing,
-        diagonal=operator_diagonal(operator),
-    )
+    return split_operator_and_forcing(linear_form)

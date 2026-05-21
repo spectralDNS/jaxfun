@@ -36,6 +36,17 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
     def __len__(self) -> int:
         return self.data.shape[0]
 
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (
+            int(self.data.shape[0] * self.data.shape[2]),
+            int(self.data.shape[1] * self.data.shape[3]),
+        )
+
+    @property
+    def dtype(self) -> jnp.dtype:
+        return self.data.dtype
+
     @jax.jit(static_argnums=0)
     def _matmul_array(self, w: Array) -> Array:
         return jnp.einsum("ikjl,kl->ij", self.data, w)
@@ -71,3 +82,57 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
             )
         )  # AT_{i*k,j*l}
         return jnp.linalg.solve(AT, rhs.flatten()).reshape(rhs.shape)
+
+    def scale(self, alpha: complex | Array) -> TensorMatrix:
+        return TensorMatrix(self.data * alpha)
+
+    def __mul__(self, other: complex | Array) -> TensorMatrix:
+        return self.scale(other)
+
+    def __rmul__(self, other: complex | Array) -> TensorMatrix:
+        return self.scale(other)
+
+    def __neg__(self) -> TensorMatrix:
+        return self.scale(-1)
+
+    def __add__(self, other):
+        from jaxfun.la import ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return self
+        if isinstance(other, TensorMatrix):
+            if self.data.shape != other.data.shape:
+                raise ValueError(
+                    f"Tensor shape mismatch: {self.data.shape} vs {other.data.shape}"
+                )
+            return TensorMatrix(self.data + other.data)
+        return NotImplemented
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __sub__(self, other):
+        from jaxfun.la import ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return self
+        if isinstance(other, TensorMatrix):
+            if self.data.shape != other.data.shape:
+                raise ValueError(
+                    f"Tensor shape mismatch: {self.data.shape} vs {other.data.shape}"
+                )
+            return TensorMatrix(self.data - other.data)
+        return NotImplemented
+
+    def __rsub__(self, other):
+        from jaxfun.la import ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
+            return -self
+        return NotImplemented

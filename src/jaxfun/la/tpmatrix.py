@@ -27,6 +27,21 @@ type _SparseMatrixCache = _CacheBox[DiaMatrix]
 type _DenseMatrixCache = _CacheBox[Matrix]
 
 
+def _solve_diagonal(diagonal: Array, rhs: Array) -> Array:
+    """Solve a diagonal system while preserving the RHS shape."""
+    if diagonal.shape == rhs.shape:
+        return rhs / diagonal
+    return (rhs.reshape((-1,)) / diagonal.reshape((-1,))).reshape(rhs.shape)
+
+
+def _scale_tpmatrix(tp: TPMatrix, alpha: complex | Array) -> TPMatrix:
+    return TPMatrix(
+        list(tp.mats),
+        scale=tp.scale * alpha,
+        global_indices=tp.global_indices,
+    )
+
+
 class TPMatrix(nnx.Pytree):  # noqa: B903
     """Rank-d separable tensor product operator A = kron(A0, A1, ...).
 
@@ -52,6 +67,19 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
     @property
     def dims(self) -> int:
         return len(self.mats)
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        rows = int(np.prod([mat.shape[0] for mat in self.mats]))
+        cols = int(np.prod([mat.shape[1] for mat in self.mats]))
+        return rows, cols
+
+    @property
+    def dtype(self) -> jnp.dtype:
+        dtype = jnp.result_type(self.scale)
+        for mat in self.mats:
+            dtype = jnp.result_type(dtype, mat.dtype)
+        return jnp.dtype(dtype)
 
     def __len__(self) -> int:
         return len(self.mats)
@@ -167,6 +195,9 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
             Solution array with the same shape as ``rhs``.
 
         """
+        diagonal = self.diagonal_or_none()
+        if diagonal is not None:
+            return _solve_diagonal(diagonal, rhs)
         return self.lu_factor().solve(rhs)
 
     def lu_factor(self) -> TPLUFactors:
@@ -178,6 +209,53 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         lu_factors = [mat.lu_factor() for mat in self.mats]
         shape = tuple(int(mat.shape[0]) for mat in self.mats)
         return TPLUFactors(lu_factors=lu_factors, scale=self.scale, shape=shape)
+
+    def __mul__(self, other: complex | Array) -> TPMatrix:
+        return _scale_tpmatrix(self, other)
+
+    def __rmul__(self, other: complex | Array) -> TPMatrix:
+        return _scale_tpmatrix(self, other)
+
+    def __neg__(self) -> TPMatrix:
+        return _scale_tpmatrix(self, -1)
+
+    def __add__(self, other):
+        from jaxfun.la import ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return self
+        if isinstance(other, TPMatrix):
+            return TPMatrices([self, other])
+        if isinstance(other, TPMatrices):
+            return TPMatrices([self, *list(other.tpmats)])
+        return NotImplemented
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __sub__(self, other):
+        from jaxfun.la import ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return self
+        if isinstance(other, TPMatrix | TPMatrices):
+            return self + (-other)
+        return NotImplemented
+
+    def __rsub__(self, other):
+        from jaxfun.la import ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
+            return -self
+        if isinstance(other, TPMatrices):
+            return other - self
+        return NotImplemented
 
 
 class TPLUFactors:
@@ -257,6 +335,19 @@ class TPMatrices(nnx.Pytree):
         """Return number of TPMatrix terms."""
         return len(self.tpmats)
 
+    @property
+    def shape(self) -> tuple[int, int]:
+        if len(self.tpmats) == 0:
+            return (0, 0)
+        return self.tpmats[0].shape
+
+    @property
+    def dtype(self) -> jnp.dtype:
+        dtype = jnp.float32
+        for mat in self.tpmats:
+            dtype = jnp.result_type(dtype, mat.dtype)
+        return jnp.dtype(dtype)
+
     def __matmul__(self, u: Array | JAXFunction) -> Array:
         """Alias to __call__ for @ operator."""
         return self.__call__(u)
@@ -320,6 +411,55 @@ class TPMatrices(nnx.Pytree):
                 return None
             diagonal_sum = diagonal if diagonal_sum is None else diagonal_sum + diagonal
         return diagonal_sum
+
+    def scale(self, alpha: complex | Array) -> TPMatrices:
+        """Return ``alpha * self`` preserving the summed tensor-product form."""
+        return TPMatrices([_scale_tpmatrix(mat, alpha) for mat in self.tpmats])
+
+    def __mul__(self, other: complex | Array) -> TPMatrices:
+        return self.scale(other)
+
+    def __rmul__(self, other: complex | Array) -> TPMatrices:
+        return self.scale(other)
+
+    def __neg__(self) -> TPMatrices:
+        return self.scale(-1)
+
+    def __add__(self, other):
+        from jaxfun.la import ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return self
+        if isinstance(other, TPMatrix):
+            return TPMatrices([*list(self.tpmats), other])
+        if isinstance(other, TPMatrices):
+            return TPMatrices([*list(self.tpmats), *list(other.tpmats)])
+        return NotImplemented
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __sub__(self, other):
+        from jaxfun.la import ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return self
+        if isinstance(other, TPMatrix | TPMatrices):
+            return self + (-other)
+        return NotImplemented
+
+    def __rsub__(self, other):
+        from jaxfun.la import ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
+            return -self
+        return NotImplemented
 
     def lu_factor(
         self,
@@ -402,6 +542,10 @@ class TPMatrices(nnx.Pytree):
             ValueError: If ``method="lu"`` but the factor-matrix structure is
                 not suitable for the factored solver.
         """
+        diagonal = self.diagonal_or_none()
+        if diagonal is not None:
+            return _solve_diagonal(diagonal, rhs)
+
         method = TPSolveMethod(method)
 
         def _kron_solve(r: Array) -> Array:

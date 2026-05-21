@@ -16,6 +16,21 @@ if TYPE_CHECKING:
 Array = jax.Array
 
 type _LUCache = _CacheBox[LUFactors]
+type _DiagonalCache = _CacheBox[Array]
+
+
+def _solve_diagonal(diagonal: Array, b: Array, axis: int) -> Array:
+    """Solve a main-diagonal system along one axis."""
+    if b.ndim == 1:
+        return b / diagonal
+    if diagonal.shape == b.shape:
+        return b / diagonal
+    if diagonal.size == b.size and diagonal.shape[0] != b.shape[axis % b.ndim]:
+        return (b.reshape((-1,)) / diagonal.reshape((-1,))).reshape(b.shape)
+    axis = axis % b.ndim
+    shape = [1] * b.ndim
+    shape[axis] = diagonal.shape[0]
+    return b / diagonal.reshape(tuple(shape))
 
 
 @nnx.dataclass
@@ -173,6 +188,9 @@ class Matrix(nnx.Pytree):
             A.solve(B, axis=1)  # B shape (k, n)    → (k, n)
             A.solve(T, axis=2)  # T shape (a, b, n) → (a, b, n)
         """
+        diagonal_box: _DiagonalCache | None = getattr(self, "_diagonal_cache", None)
+        if diagonal_box is not None:
+            return _solve_diagonal(diagonal_box.value, b, axis)
         return self.lu_factor().solve(b, axis=axis)
 
     @property
@@ -195,11 +213,15 @@ class Matrix(nnx.Pytree):
 
     def diagonal_or_none(self) -> Array | None:
         """Return the main diagonal only when this matrix is purely diagonal."""
+        cached: _DiagonalCache | None = getattr(self, "_diagonal_cache", None)
+        if cached is not None:
+            return cached.value
         n, m = self.shape
         if n != m:
             return None
         diag = jnp.diag(self.data)
         if bool(jnp.allclose(self.data, jnp.diag(diag), atol=1e-12)):
+            object.__setattr__(self, "_diagonal_cache", _CacheBox(diag))
             return diag
         return None
 
@@ -303,15 +325,55 @@ class Matrix(nnx.Pytree):
     def __len__(self) -> int:
         return min(self.shape)
 
-    def __add__(self, other: Matrix) -> Matrix:
-        if self.shape != other.shape:
-            raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-        return Matrix(self.data + other.data)
+    def __add__(self, other) -> Matrix:
+        from jaxfun.la import DiaMatrix, IdentityMatrix, ZeroMatrix
 
-    def __sub__(self, other: Matrix) -> Matrix:
-        if self.shape != other.shape:
-            raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-        return Matrix(self.data - other.data)
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return self
+        if isinstance(other, Matrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return Matrix(self.data + other.data)
+        if isinstance(other, DiaMatrix | IdentityMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return Matrix(self.data + other.todense())
+        return NotImplemented
+
+    def __radd__(self, other) -> Matrix:
+        return self.__add__(other)
+
+    def __sub__(self, other) -> Matrix:
+        from jaxfun.la import DiaMatrix, IdentityMatrix, ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return self
+        if isinstance(other, Matrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return Matrix(self.data - other.data)
+        if isinstance(other, DiaMatrix | IdentityMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return Matrix(self.data - other.todense())
+        return NotImplemented
+
+    def __rsub__(self, other) -> Matrix:
+        from jaxfun.la import DiaMatrix, IdentityMatrix, ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
+            return -self
+        if isinstance(other, DiaMatrix | IdentityMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
+            return Matrix(other.todense() - self.data)
+        return NotImplemented
 
     def __getitem__(self, idx: int | slice | tuple | Array) -> Array:
         return self.data.__getitem__(idx)

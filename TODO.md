@@ -36,6 +36,7 @@ Design notes:
 Design notes:
 
 - Kept the historical identity fallback for a missing mass operator in `apply_mass` and `apply_mass_inverse`, while all non-empty mass and linear operations now route through `LinearTerm`.
+- Superseded by the matrix-owned operator cleanup in section 7: `BaseIntegrator` now stores normalized matrix-like `mass_operator` and `linear_operator` values directly, while retaining `mass_diag`, `linear_diag`, and `linear_forcing` compatibility attributes.
 
 ## 4. Simplify BackwardEuler
 
@@ -46,6 +47,7 @@ Design notes:
 Design notes:
 
 - Represented the implicit system as a `LinearTerm`, using a diagonal-only term for the fast path and a `Matrix` term with a warmed LU cache for the dense fallback path.
+- Superseded by the matrix-owned operator cleanup in section 7: `BackwardEuler` now stores the structured `M - dt L` operator directly and solves it through the shared operator helper, with diagonal fast paths owned by the matrix classes.
 
 ## 5. Split ETDRK4 Setup Paths
 
@@ -69,10 +71,15 @@ Design notes:
 Design notes:
 
 - Focused integrator suite passed after cache warming: 25 tests passed.
-- Matrix solver regression suite passed: 380 tests passed and 2 skipped.
+- Matrix solver regression suite passed: 393 tests passed and 2 skipped.
 - The focused ETDRK4 suite includes the diagonal FFT path checks that assert no `dot_general`, and those remained green.
 - Ruff passed on the touched source files after simplifying the ETDRK4 setup branch expression.
 - Re-ran the focused integrator suite after the final source edit: 25 tests passed.
+- After removing `LinearTerm`, the focused integrator suite initially failed because diagonal mass solves reached first-time LU factorization inside jitted RK4 paths. Moved pure-diagonal solve shortcuts into `DiaMatrix`, cached-diagonal `Matrix`, and tensor-product operator `solve()` methods so diagonal systems avoid LU without restoring the wrapper.
+- Re-ran focused operator tests after moving diagonal solves into matrix classes: 8 tests passed.
+- Re-ran the focused integrator suite after removing `LinearTerm`: 25 tests passed.
+- Re-ran the full matrix solver regression suite after removing `LinearTerm` and adding matrix-level diagonal solves: 393 tests passed and 2 skipped.
+- Final focused integrator pass after removing the stale `_state_size` field: 25 tests passed.
 
 ## 7. Move Operator Semantics Into Matrix Classes
 
@@ -80,8 +87,9 @@ Design notes:
 - [x] Add the same pure-diagonal API to `Matrix` so dense matrices do not expose unsafe diagonal shortcuts for non-diagonal data.
 - [x] Update `operator_tools.operator_diagonal()` to ask matrix objects for their own diagonal representation before falling back to external inspection.
 - [x] Extend tensor-product operator classes with compatible diagonal helpers so tensor-product diagonal detection does not live in temporal integration helpers.
-- [ ] Add explicit zero and identity operator types, or equivalent matrix-level representations, so `None` is no longer overloaded as both zero and identity depending on integrator context.
-- [ ] Replace `LinearTerm` with plain `(operator, forcing)` once operators consistently implement apply, solve, dense conversion, diagonal detection, zero/identity semantics, and structured linear combinations.
+- [x] Add explicit zero and identity operator types, or equivalent matrix-level representations, so `None` is no longer overloaded as both zero and identity depending on integrator context.
+- [x] Add structured linear-combination support so systems like `M - dt * L` can preserve DIA, dense, or tensor-product structure before falling back to generic sums.
+- [x] Replace `LinearTerm` with plain `(operator, forcing)` once operators consistently implement apply, solve, dense conversion, diagonal detection, zero/identity semantics, and structured linear combinations.
 
 Design notes:
 
@@ -94,3 +102,25 @@ Design notes:
 - Moved tensor-product diagonal construction into `TPMatrix.diagonal_or_none()` and `TPMatrices.diagonal_or_none()`, including the TPMatrix scale factor. `operator_tools` now delegates to matrix-level diagonal APIs for dense, DIA, and tensor-product operators.
 - Added tensor-product diagonal regression coverage, including scale propagation and rejection of shifted diagonal factors.
 - Re-ran style, full matrix regressions, and focused integrator tests after moving tensor-product diagonal logic: all passed.
+- Added `IdentityMatrix`, `ZeroMatrix`, `OperatorSum`, and `linear_combination` in `jaxfun.la`. `BaseIntegrator` now normalizes missing mass to identity and missing linear operators to zero, leaving `None` for absence from assembly rather than runtime operator semantics.
+- `BackwardEuler` now builds its implicit system through `linear_combination((M, -dt * L))`, which preserves DIA, dense, and tensor-product structure where possible and uses `OperatorSum` as the generic fallback.
+- Removed `LinearTerm` from the integrator runtime path. `assemble_linear_term()` now returns plain `(operator, forcing)`, and `BaseIntegrator`, `BackwardEuler`, and `ETDRK4` delegate directly to operator helpers backed by matrix methods.
+- Added matrix-owned diagonal solve paths for `DiaMatrix`, cached-diagonal `Matrix`, `TPMatrix`, and `TPMatrices`. This keeps the performance-sensitive diagonal behavior with the matrix types and avoids first-time LU work inside jitted temporal integration paths.
+- Superseded the `OperatorSum` and `linear_combination()` approach in section 8. Concrete matrix dunder methods now own the expected algebra and promotion behavior.
+
+## 8. Prefer Matrix Dunder Algebra Over Combination Factories
+
+- [x] Add cross-type matrix addition/subtraction promotion so `DiaMatrix + Matrix` returns `Matrix`, identity plus DIA returns `DiaMatrix`, identity plus dense returns `Matrix`, and zero plus any compatible operator returns the other operator.
+- [x] Add tensor-product addition/subtraction dunders so `TPMatrix + TPMatrix`, `TPMatrices + TPMatrix`, and `TPMatrices + TPMatrices` return `TPMatrices`.
+- [x] Replace temporal integration use of `linear_combination()` with direct algebra, e.g. `self.mass_operator - dt * self.linear_operator`.
+- [x] Remove `OperatorSum`, `linear_combination()`, and related tests once concrete matrix promotion covers the temporal integration cases.
+- [x] Keep unsupported mixed dimensional families explicit: raise or return `NotImplemented` instead of silently densifying tensor-product or tensor operators.
+
+Design notes:
+
+- `OperatorSum` was broader than the temporal integration problem requires. The assembly layer already returns one concrete dimensional family per operator, so `M - dt * L` should be expressible through matrix dunder methods and should promote only to the broadest concrete matrix class needed.
+- Removed `OperatorSum`, `linear_combination()`, and `scale_operator()` from the public LA package. `BackwardEuler.setup()` now builds the implicit system as `self.mass_operator - dt * self.linear_operator`.
+- Added concrete promotions: `IdentityMatrix` with DIA stays DIA, identity with dense promotes to dense `Matrix`, mixed DIA/dense promotes to `Matrix`, and zero operators defer to the non-zero operand. Tensor-product additions stay in `TPMatrices`, while non-separable tensor additions stay in `TensorMatrix`.
+- Unsupported mixed dimensional families are not silently densified; the relevant dunder methods return `NotImplemented`, leaving Python to raise a clear unsupported operand error.
+- Direct `Matrix.solve()` and `DiaMatrix.solve()` now handle coefficient-shaped RHS values against flat diagonal operators, matching the global-state solve behavior previously handled in temporal helpers.
+- Verification after this pass: operator tests passed with 10 tests, focused integrator tests passed with 25 tests, and matrix regression tests passed with 395 tests and 2 skipped.

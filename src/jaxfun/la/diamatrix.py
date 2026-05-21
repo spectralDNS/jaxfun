@@ -83,6 +83,20 @@ def _warn_dense_indexing() -> None:
     )
 
 
+def _solve_diagonal(diagonal: Array, b: Array, axis: int) -> Array:
+    """Solve a main-diagonal system along one axis."""
+    if b.ndim == 1:
+        return b / diagonal
+    if diagonal.shape == b.shape:
+        return b / diagonal
+    if diagonal.size == b.size and diagonal.shape[0] != b.shape[axis % b.ndim]:
+        return (b.reshape((-1,)) / diagonal.reshape((-1,))).reshape(b.shape)
+    axis = axis % b.ndim
+    shape = [1] * b.ndim
+    shape[axis] = diagonal.shape[0]
+    return b / diagonal.reshape(tuple(shape))
+
+
 @nnx.dataclass
 class DiaMatrix(nnx.Pytree):
     """Diagonal storage (DIA) sparse matrix, compatible with scipy.sparse.dia.
@@ -598,6 +612,10 @@ class DiaMatrix(nnx.Pytree):
                 f"method must be one of {sorted(_METHODS)!r}, got {method!r}"
             )
         method = DiaMatrixSolveMethod(method)
+
+        diagonal = self.diagonal_or_none()
+        if diagonal is not None:
+            return _solve_diagonal(diagonal, b, axis)
 
         # ------------------------------------------------------------------
         # "banded" path (and cache hit for banded)
@@ -1152,11 +1170,51 @@ class DiaMatrix(nnx.Pytree):
         )
         return DiaMatrix(data=result_data, offsets=all_offsets, shape=(n, m))
 
-    def __add__(self, other: DiaMatrix) -> DiaMatrix:
-        return self._merge(other, +1.0)
+    def __add__(self, other):
+        from jaxfun.la import IdentityMatrix, Matrix, ZeroMatrix
 
-    def __sub__(self, other: DiaMatrix) -> DiaMatrix:
-        return self._merge(other, -1.0)
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return self
+        if isinstance(other, DiaMatrix):
+            return self._merge(other, +1.0)
+        if isinstance(other, IdentityMatrix):
+            return self + other.scale(1)
+        if isinstance(other, Matrix):
+            return other + self
+        return NotImplemented
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __sub__(self, other):
+        from jaxfun.la import IdentityMatrix, Matrix, ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return self
+        if isinstance(other, DiaMatrix):
+            return self._merge(other, -1.0)
+        if isinstance(other, IdentityMatrix):
+            return self - other.scale(1)
+        if isinstance(other, Matrix):
+            return Matrix(self.todense() - other.data)
+        return NotImplemented
+
+    def __rsub__(self, other):
+        from jaxfun.la import IdentityMatrix, Matrix, ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
+            return -self
+        if isinstance(other, IdentityMatrix):
+            return other.scale(1) - self
+        if isinstance(other, Matrix):
+            return other - self
+        return NotImplemented
 
     @jax.jit
     def _matmul_compute(

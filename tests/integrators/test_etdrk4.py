@@ -11,7 +11,6 @@ from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Fourier import Fourier as FourierSpace
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.integrators import ETDRK4
-from jaxfun.integrators.etdrk4 import _etdrk4_diag_coeffs
 from jaxfun.la import DiagonalMatrix
 from jaxfun.operators import Constant
 from jaxfun.utils import ulp
@@ -35,7 +34,7 @@ def _count_primitive(jpr, primitive: str) -> int:
 
 def test_etdrk4_zero_linear_coefficients_match_rk4_limit() -> None:
     Ldiag = jnp.zeros(8)
-    coeffs = _etdrk4_diag_coeffs(Ldiag, dt=0.1)
+    coeffs = ETDRK4._setup_diagonal_etd(dt=0.1, Ldiag=Ldiag)
     assert all(isinstance(coeff, DiagonalMatrix) for coeff in coeffs)
     E, E2, Q, f1, f2, f3 = (coeff.diagonal().reshape(Ldiag.shape) for coeff in coeffs)
     ones = jnp.ones_like(Ldiag)
@@ -75,7 +74,7 @@ def test_etdrk4_setup_stage_coefficient_matches_coeff_builder() -> None:
     assert integrator.linear_diag is not None
 
     Ldiag = integrator.linear_diag / integrator.mass_diag
-    _, _, expected_Q, _, _, _ = _etdrk4_diag_coeffs(Ldiag, dt)
+    _, _, expected_Q, _, _, _ = ETDRK4._setup_diagonal_etd(dt, Ldiag)
     assert isinstance(integrator.Q, DiagonalMatrix)
     assert jnp.allclose(
         integrator.Q.diagonal().reshape(Ldiag.shape),

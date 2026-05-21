@@ -171,6 +171,9 @@ Design notes:
 - `_etdrk4_diag_coeffs()` now returns `DiagonalMatrix` coefficient objects directly. The formula tests unwrap `.diagonal()` for numerical comparisons, while the integrator stores the same objects without an additional wrapping helper.
 - Fixed `DiagonalMatrix` scaling so `(dt * self.Q) @ n` works inside the jitted ETDRK4 step. The underlying issue was the scaled diagonal object being passed into a nested jitted `DiagonalMatrix.matvec`; `DiagonalMatrix.matvec` is now a plain elementwise method, and scalar dunders are explicit on the subclass.
 - Added a focused regression for applying a scaled `DiagonalMatrix` inside `jax.jit`, restored `dtQ = dt * self.Q` in ETDRK4, and re-verified the broader focused matrix/integrator run with 427 tests passed and 2 skipped.
+- Simplified ETDRK4 setup so `setup()` queries `mass_operator.diagonal_or_none()` and `linear_operator.diagonal_or_none()` once, passes the precomputed `Ldiag` to the diagonal coefficient path, and passes the optional mass diagonal to the dense path.
+- Inlined `_setup_diagonal_etd()` after it became a one-line wrapper around `_etdrk4_diag_coeffs()`. Kept `_setup_dense_etd()` because it still owns the dense mass handling and matrix-function construction.
+- Corrected the diagonal setup ownership: `_setup_diagonal_etd()` stays as the named ETDRK4 setup path, and the former module-level `_etdrk4_diag_coeffs()` body is inlined into that method.
 
 ## 11. Remove Runtime Operator Dispatch Helpers
 

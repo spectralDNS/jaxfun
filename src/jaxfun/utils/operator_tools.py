@@ -101,11 +101,7 @@ def _array_diagonal(arr: Array) -> Array | None:
 
 def sparse_diagonal(mat: DiaMatrix) -> Array | None:
     """Return the diagonal of a sparse DiaMatrix matrix when it is purely diagonal."""
-    if mat.ndim != 2 or mat.shape[0] != mat.shape[1]:
-        return None
-    if mat.offsets != (0,):
-        return None
-    return mat.diagonal()
+    return mat.diagonal_or_none()
 
 
 def _sum_diagonals(operators: list[GalerkinOperator]) -> Array | None:
@@ -119,38 +115,14 @@ def _sum_diagonals(operators: list[GalerkinOperator]) -> Array | None:
     return diag_sum
 
 
-def _tpmatrix_diagonal(op: TPMatrix) -> Array | None:
-    """Return the tensor-product diagonal implied by a TPMatrix."""
-    if len(op.mats) == 0:
-        return None
-
-    diagonals: list[Array] = []
-    for diag in (operator_diagonal(item) for item in op.mats):
-        if diag is None or diag.ndim != 1:
-            return None
-        diagonals.append(diag)
-
-    diagonal = diagonals[0]
-    for axis, diag in enumerate(diagonals[1:], start=1):
-        shape = (1,) * axis + (diag.shape[0],)
-        diagonal = diagonal[..., None] * diag.reshape(shape)
-    return diagonal
-
-
 def operator_diagonal(obj: GalerkinOperatorLike | None) -> Array | None:
     """Return a diagonal representation when an operator acts diagonally."""
     if obj is None:
         return None
     if isinstance(obj, list):
         return _sum_diagonals(cast(list[GalerkinOperator], obj))
-    if isinstance(obj, DiaMatrix):
-        return sparse_diagonal(obj)
-    if isinstance(obj, Matrix):
-        return _array_diagonal(obj.todense())
-    if isinstance(obj, TPMatrices):
-        return _sum_diagonals(cast(list[GalerkinOperator], list(obj.tpmats)))
-    if isinstance(obj, TPMatrix):
-        return _tpmatrix_diagonal(obj)
+    if isinstance(obj, DiaMatrix | Matrix | TPMatrices | TPMatrix):
+        return obj.diagonal_or_none()
     if isinstance(obj, TensorMatrix):
         return operator_diagonal(obj.data)
     return _array_diagonal(jnp.asarray(obj))

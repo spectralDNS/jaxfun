@@ -414,6 +414,34 @@ def _make_tpmatrix_3d(
 class TestTPMatrixMatmul:
     """Tests for TPMatrix._matmul_array (A @ u) and _rmatmul_array (u @ A)."""
 
+    def test_diagonal_or_none_for_diagonal_factors(self):
+        d0 = diags([jnp.array([1.0, 2.0])], offsets=(0,))
+        d1 = Matrix(jnp.diag(jnp.array([3.0, 4.0, 5.0])))
+        tp = TPMatrix([d0, d1], scale=2.0)
+
+        expected = 2.0 * d0.diagonal()[:, None] * d1.diagonal()[None, :]
+        assert tp.is_diagonal
+        assert jnp.allclose(tp.diagonal_or_none(), expected)
+
+    def test_diagonal_or_none_rejects_shifted_factor(self):
+        shifted = diags([jnp.array([1.0])], offsets=(1,), shape=(2, 2))
+        diagonal = diags([jnp.array([2.0, 3.0])], offsets=(0,))
+        tp = TPMatrix([shifted, diagonal], scale=1.0)
+
+        assert not tp.is_diagonal
+        assert tp.diagonal_or_none() is None
+
+    def test_tpmatrices_diagonal_or_none_sums_diagonal_terms(self):
+        d0 = diags([jnp.array([1.0, 2.0])], offsets=(0,))
+        d1 = diags([jnp.array([3.0, 4.0, 5.0])], offsets=(0,))
+        tp1 = TPMatrix([d0, d1], scale=1.0)
+        tp2 = TPMatrix([d0, d1], scale=3.0)
+        tpmats = TPMatrices([tp1, tp2])
+
+        expected = 4.0 * d0.diagonal()[:, None] * d1.diagonal()[None, :]
+        assert tpmats.is_diagonal
+        assert jnp.allclose(tpmats.diagonal_or_none(), expected)
+
     # ------------------------------------------------------------------
     # 2-D: square factor matrices
     # ------------------------------------------------------------------

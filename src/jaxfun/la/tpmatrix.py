@@ -92,6 +92,29 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
     def to_matrix(self) -> Matrix:
         return Matrix(self.todense())
 
+    @property
+    def is_diagonal(self) -> bool:
+        """Whether every factor is purely main-diagonal."""
+        return self.diagonal_or_none() is not None
+
+    def diagonal_or_none(self) -> Array | None:
+        """Return the tensor-product diagonal when every factor is diagonal."""
+        if len(self.mats) == 0:
+            return None
+
+        diagonals: list[Array] = []
+        for mat in self.mats:
+            diagonal = mat.diagonal_or_none()
+            if diagonal is None or diagonal.ndim != 1:
+                return None
+            diagonals.append(diagonal)
+
+        diagonal = diagonals[0]
+        for axis, factor_diag in enumerate(diagonals[1:], start=1):
+            shape = (1,) * axis + (factor_diag.shape[0],)
+            diagonal = diagonal[..., None] * factor_diag.reshape(shape)
+        return diagonal * jnp.asarray(self.scale)
+
     def _matmul_array(self, w: Array) -> Array:
         result = w
         for i, mat in enumerate(self.mats):
@@ -282,6 +305,21 @@ class TPMatrices(nnx.Pytree):
 
     def to_matrix(self) -> Matrix:
         return Matrix(self.todense())
+
+    @property
+    def is_diagonal(self) -> bool:
+        """Whether every summed tensor-product term is purely diagonal."""
+        return self.diagonal_or_none() is not None
+
+    def diagonal_or_none(self) -> Array | None:
+        """Return the summed tensor-product diagonal when all terms are diagonal."""
+        diagonal_sum: Array | None = None
+        for mat in self.tpmats:
+            diagonal = mat.diagonal_or_none()
+            if diagonal is None:
+                return None
+            diagonal_sum = diagonal if diagonal_sum is None else diagonal_sum + diagonal
+        return diagonal_sum
 
     def lu_factor(
         self,

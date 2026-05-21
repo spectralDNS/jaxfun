@@ -188,6 +188,21 @@ class Matrix(nnx.Pytree):
         """
         return jnp.diag(self.data, k)
 
+    @property
+    def is_diagonal(self) -> bool:
+        """Whether this square dense matrix has only main-diagonal entries."""
+        return self.diagonal_or_none() is not None
+
+    def diagonal_or_none(self) -> Array | None:
+        """Return the main diagonal only when this matrix is purely diagonal."""
+        n, m = self.shape
+        if n != m:
+            return None
+        diag = jnp.diag(self.data)
+        if bool(jnp.allclose(self.data, jnp.diag(diag), atol=1e-12)):
+            return diag
+        return None
+
     def todense(self) -> Array:
         """Return the underlying ``(n, m)`` array (identity — already dense)."""
         return self.data

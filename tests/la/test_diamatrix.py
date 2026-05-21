@@ -127,6 +127,28 @@ class TestConstruction:
         assert A.shape == (3, 3)
         assert jnp.allclose(A.diagonal(), jnp.array([3.0, 3.0, 3.0]))
 
+    def test_diamatrix_diagonal_or_none_only_for_main_diagonal(self):
+        A = diags([jnp.array([1.0, 2.0, 3.0])], offsets=(0,))
+        assert A.is_diagonal
+        assert jnp.allclose(A.diagonal_or_none(), jnp.array([1.0, 2.0, 3.0]))
+
+        shifted = diags([jnp.array([1.0, 2.0])], offsets=(1,), shape=(3, 3))
+        assert not shifted.is_diagonal
+        assert shifted.diagonal_or_none() is None
+
+        _, tridiag = _tridiag(4)
+        assert not tridiag.is_diagonal
+        assert tridiag.diagonal_or_none() is None
+
+    def test_matrix_diagonal_or_none_checks_offdiagonal_entries(self):
+        diagonal = Matrix(jnp.diag(jnp.array([1.0, 2.0, 3.0])))
+        assert diagonal.is_diagonal
+        assert jnp.allclose(diagonal.diagonal_or_none(), jnp.array([1.0, 2.0, 3.0]))
+
+        dense = Matrix(jnp.array([[1.0, 0.5], [0.0, 2.0]]))
+        assert not dense.is_diagonal
+        assert dense.diagonal_or_none() is None
+
     def test_diags_scalar_broadcast(self):
         """A length-1 diagonal should be broadcast to the full diagonal length."""
         n = 5

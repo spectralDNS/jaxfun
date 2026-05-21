@@ -6,6 +6,10 @@ from .diamatrix import (
 )
 from .matrix import Matrix as Matrix
 from .matrixprotocol import MatrixProtocol as MatrixProtocol
+from .operators import (
+    IdentityMatrix as IdentityMatrix,
+    ZeroMatrix as ZeroMatrix,
+)
 from .pinned import PinnedSystem as PinnedSystem
 from .tensormatrix import TensorMatrix as TensorMatrix
 from .tpmatrix import (

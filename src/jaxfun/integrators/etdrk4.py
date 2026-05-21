@@ -11,6 +11,7 @@ from jax.scipy.linalg import expm as _expm
 
 from jaxfun.la import Matrix
 from jaxfun.typing import Array, FunctionSpaceType, Padding
+from jaxfun.utils.operator_tools import operator_diagonal, operator_to_dense
 
 from .base import BaseIntegrator
 
@@ -125,20 +126,13 @@ class ETDRK4(BaseIntegrator):
 
     def _mass_diagonal_or_identity(self) -> Array | None:
         """Return the mass diagonal, treating a missing mass operator as identity."""
-        mass_diag = self.mass_term.diagonal_or_none()
-        if mass_diag is not None:
-            return mass_diag
-        if self.mass_term.operator is None:
-            return jnp.ones(self.functionspace.num_dofs)
-        return None
+        return operator_diagonal(self.mass_operator)
 
     def _has_diagonal_etd(self) -> bool:
         """Return True when the ETD coefficients can stay elementwise."""
         mass_diag = self._mass_diagonal_or_identity()
-        linear_diag = self.linear_term.diagonal_or_none()
-        return mass_diag is not None and (
-            self.linear_term.operator is None or linear_diag is not None
-        )
+        linear_diag = operator_diagonal(self.linear_operator)
+        return mass_diag is not None and linear_diag is not None
 
     def _setup_diagonal_etd(
         self, dt: float
@@ -146,31 +140,21 @@ class ETDRK4(BaseIntegrator):
         """Return ETD coefficients for the diagonal operator path."""
         mass_diag = self._mass_diagonal_or_identity()
         assert mass_diag is not None
-        linear_diag = self.linear_term.diagonal_or_none()
-        Ldiag = (
-            jnp.zeros_like(mass_diag)
-            if self.linear_term.operator is None
-            else cast(Array, linear_diag) / mass_diag
-        )
+        linear_diag = operator_diagonal(self.linear_operator)
+        Ldiag = cast(Array, linear_diag) / mass_diag
         return _etdrk4_diag_coeffs(Ldiag, dt)
 
     def _setup_dense_etd(
         self, dt: float
     ) -> tuple[Array, Array, Array, Array, Array, Array]:
         """Return ETD coefficients for the dense matrix-function path."""
-        zero = jnp.zeros(self.functionspace.num_dofs)
-        if self.linear_term.operator is None:
-            Lmat = jnp.zeros((zero.size, zero.size), dtype=zero.dtype)
+        A = operator_to_dense(self.linear_operator)
+        mass_diag = self._mass_diagonal_or_identity()
+        if mass_diag is not None:
+            Lmat = A / mass_diag.reshape((-1,))[:, None]
         else:
-            A = self.linear_term.todense(self._state_size)
-            mass_diag = self.mass_term.diagonal_or_none()
-            if mass_diag is not None:
-                Lmat = A / mass_diag.reshape((-1,))[:, None]
-            elif self.mass_term.operator is not None:
-                M = self.mass_term.todense(self._state_size, identity_if_zero=True)
-                Lmat = Matrix(M).solve(A)
-            else:
-                Lmat = A
+            M = operator_to_dense(self.mass_operator)
+            Lmat = Matrix(M).solve(A)
 
         z = dt * Lmat
         E = expm(z)

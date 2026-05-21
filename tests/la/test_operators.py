@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import pytest
 
 from jaxfun.la import (
+    DiagonalMatrix,
     DiaMatrix,
     IdentityMatrix,
     Matrix,
@@ -47,8 +48,28 @@ def test_identity_and_diamatrix_arithmetic_preserves_diamatrix_structure() -> No
     system = identity - 0.1 * laplace
 
     assert isinstance(system, DiaMatrix)
+    assert not isinstance(system, DiagonalMatrix)
     expected = jnp.eye(3) - 0.1 * laplace.todense()
     assert jnp.allclose(system.todense(), expected)
+
+
+def test_identity_and_diagonalmatrix_arithmetic_preserves_diagonal_structure() -> None:
+    identity = IdentityMatrix(3)
+    diagonal = DiagonalMatrix(jnp.array([1.0, 2.0, 4.0]))
+
+    scaled_identity = 2.0 * identity
+    plus = diagonal + identity
+    minus = diagonal - identity
+    reflected = identity - diagonal
+
+    assert isinstance(scaled_identity, DiagonalMatrix)
+    assert isinstance(plus, DiagonalMatrix)
+    assert isinstance(minus, DiagonalMatrix)
+    assert isinstance(reflected, DiagonalMatrix)
+    assert jnp.allclose(scaled_identity.diagonal(), jnp.array([2.0, 2.0, 2.0]))
+    assert jnp.allclose(plus.diagonal(), jnp.array([2.0, 3.0, 5.0]))
+    assert jnp.allclose(minus.diagonal(), jnp.array([0.0, 1.0, 3.0]))
+    assert jnp.allclose(reflected.diagonal(), jnp.array([0.0, -1.0, -3.0]))
 
 
 def test_diamatrix_and_matrix_arithmetic_promotes_to_matrix() -> None:
@@ -103,6 +124,13 @@ def test_matrix_solve_uses_cached_diagonal_without_lu() -> None:
     assert matrix.diagonal_or_none() is not None
     assert jnp.allclose(matrix.solve(rhs), jnp.array([2.0, 2.0, 2.0]))
     assert not hasattr(matrix, "_lu_cache")
+
+
+def test_matrix_matmul_applies_global_operator_to_coefficient_shape() -> None:
+    matrix = Matrix(jnp.arange(16.0).reshape((4, 4)))
+    u = jnp.arange(4.0).reshape((2, 2))
+
+    assert jnp.allclose(matrix @ u, (matrix.data @ u.reshape((-1,))).reshape(u.shape))
 
 
 def test_diamatrix_solve_diagonal_without_lu() -> None:

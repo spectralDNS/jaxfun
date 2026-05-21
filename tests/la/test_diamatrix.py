@@ -10,7 +10,13 @@ import numpy as np
 import pytest
 import scipy.sparse
 
-from jaxfun.la.diamatrix import DenseIndexingWarning, DiaMatrix, LUFactors, diags
+from jaxfun.la.diamatrix import (
+    DenseIndexingWarning,
+    DiagonalMatrix,
+    DiaMatrix,
+    LUFactors,
+    diags,
+)
 from jaxfun.la.matrix import Matrix
 from jaxfun.la.pinned import PinnedSystem
 from jaxfun.utils.common import ulp
@@ -125,10 +131,55 @@ class TestConstruction:
     def test_diags_single_diagonal(self):
         A = diags([jnp.array([3.0, 3.0, 3.0])], offsets=(0,))
         assert A.shape == (3, 3)
+        assert isinstance(A, DiagonalMatrix)
+        assert isinstance(A, DiaMatrix)
         assert jnp.allclose(A.diagonal(), jnp.array([3.0, 3.0, 3.0]))
+
+    def test_from_dense_single_diagonal(self):
+        A = DiaMatrix.from_dense(jnp.diag(jnp.array([1.0, 2.0, 3.0])))
+
+        assert isinstance(A, DiagonalMatrix)
+        assert isinstance(A, DiaMatrix)
+        assert jnp.allclose(A.diagonal(), jnp.array([1.0, 2.0, 3.0]))
+
+    def test_diagonalmatrix_applies_coefficient_shaped_state(self):
+        A = DiagonalMatrix(jnp.array([1.0, 2.0, 3.0, 4.0]))
+        u = jnp.ones((2, 2))
+
+        assert jnp.allclose(A @ u, jnp.array([[1.0, 2.0], [3.0, 4.0]]))
+        assert jnp.allclose(A.solve(A @ u), u)
+        assert not hasattr(A, "_lu_cache")
+
+    def test_diagonalmatrix_arithmetic_preserves_diagonal_subclass(self):
+        A = DiagonalMatrix(jnp.array([1.0, 2.0, 3.0]))
+        B = DiagonalMatrix(jnp.array([4.0, 5.0, 6.0]))
+
+        C = 2.0 * A - B
+
+        assert isinstance(C, DiagonalMatrix)
+        assert jnp.allclose(C.diagonal(), jnp.array([-2.0, -1.0, 0.0]))
+
+    def test_diagonalmatrix_scaled_inside_jit(self):
+        A = DiagonalMatrix(jnp.array([1.0, 2.0, 4.0]))
+        x = jnp.array([2.0, 3.0, 5.0])
+
+        @jax.jit
+        def apply_scaled(alpha, rhs):
+            return (alpha * A) @ rhs
+
+        assert jnp.allclose(apply_scaled(0.5, x), jnp.array([1.0, 3.0, 10.0]))
+
+    def test_diagonalmatrix_astype_preserves_diagonal_subclass(self):
+        A = DiagonalMatrix(jnp.array([1.0, 2.0, 3.0]))
+        B = A.astype(jnp.complex64)
+
+        assert isinstance(B, DiagonalMatrix)
+        assert B.dtype == jnp.complex64
+        assert jnp.allclose(B.diagonal(), A.diagonal())
 
     def test_diamatrix_diagonal_or_none_only_for_main_diagonal(self):
         A = diags([jnp.array([1.0, 2.0, 3.0])], offsets=(0,))
+        assert isinstance(A, DiagonalMatrix)
         assert A.is_diagonal
         assert jnp.allclose(A.diagonal_or_none(), jnp.array([1.0, 2.0, 3.0]))
 

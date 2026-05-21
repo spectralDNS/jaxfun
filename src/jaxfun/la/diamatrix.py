@@ -189,6 +189,9 @@ class DiaMatrix(nnx.Pytree):
             empty = jnp.zeros((0, m), dtype=a.dtype)
             return cls(data=empty, offsets=(), shape=(n, m))
 
+        if offsets == (0,) and n == m:
+            return DiagonalMatrix(jnp.diag(a))
+
         offsets_arr = jnp.asarray(offsets, dtype=int)
         j = jnp.arange(m)
 
@@ -1515,6 +1518,145 @@ class DiaMatrix(nnx.Pytree):
         return result
 
 
+class DiagonalMatrix(DiaMatrix):
+    """Square main-diagonal matrix with coefficient-shaped fast paths."""
+
+    def __init__(self, diagonal: Array, dtype: jnp.dtype | None = None) -> None:
+        diagonal = jnp.asarray(diagonal, dtype=dtype)
+        if diagonal.ndim != 1:
+            raise ValueError(
+                f"DiagonalMatrix requires a 1-D diagonal, got shape {diagonal.shape}"
+            )
+        n = int(diagonal.shape[0])
+        super().__init__(data=diagonal[None, :], offsets=(0,), shape=(n, n))
+
+    @property
+    def is_diagonal(self) -> bool:
+        return True
+
+    def diagonal(self, k: int = 0) -> Array:
+        if k == 0:
+            return self.data[0]
+        n = max(self.shape[0] - abs(k), 0)
+        return jnp.zeros(n, dtype=self.data.dtype)
+
+    def diagonal_or_none(self) -> Array:
+        return self.data[0]
+
+    def matvec(self, x: Array, axis: int = 0) -> Array:
+        diagonal = self.diagonal()
+        if x.ndim == 1:
+            return diagonal * x
+        if diagonal.shape == x.shape:
+            return diagonal * x
+        axis = axis % x.ndim
+        if diagonal.size == x.size and diagonal.shape[0] != x.shape[axis]:
+            return (diagonal * x.reshape((-1,))).reshape(x.shape)
+        shape = [1] * x.ndim
+        shape[axis] = diagonal.shape[0]
+        return diagonal.reshape(tuple(shape)) * x
+
+    def solve(self, b: Array, axis: int = 0) -> Array:
+        return _solve_diagonal(self.diagonal(), b, axis)
+
+    lu_solve = solve
+
+    def lu_factor(self, *, pivot: bool = False) -> LUFactors:
+        return LUFactors(
+            L=DiagonalMatrix(jnp.ones_like(self.diagonal())),
+            U=self,
+            shape=self.shape,
+        )
+
+    @property
+    def T(self) -> DiagonalMatrix:
+        return self
+
+    def scale(self, alpha: complex | Array) -> DiagonalMatrix:
+        return DiagonalMatrix(self.diagonal() * alpha)
+
+    def __mul__(self, other: complex | Array) -> DiagonalMatrix:
+        return self.scale(other)
+
+    def __rmul__(self, other: complex | Array) -> DiagonalMatrix:
+        return self.scale(other)
+
+    def __neg__(self) -> DiagonalMatrix:
+        return self.scale(-1)
+
+    def astype(self, dtype: jnp.dtype) -> DiagonalMatrix:
+        return DiagonalMatrix(self.diagonal().astype(dtype))
+
+    def __add__(self, other):
+        from jaxfun.la import IdentityMatrix, Matrix, ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return self
+        if isinstance(other, IdentityMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return DiagonalMatrix(self.diagonal() + other.diagonal())
+        if isinstance(other, DiaMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            if other.is_diagonal:
+                return DiagonalMatrix(self.diagonal() + other.diagonal())
+            return DiaMatrix.__add__(self, other)
+        if isinstance(other, Matrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return other + self
+        return NotImplemented
+
+    def __sub__(self, other):
+        from jaxfun.la import IdentityMatrix, Matrix, ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return self
+        if isinstance(other, IdentityMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return DiagonalMatrix(self.diagonal() - other.diagonal())
+        if isinstance(other, DiaMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            if other.is_diagonal:
+                return DiagonalMatrix(self.diagonal() - other.diagonal())
+            return DiaMatrix.__sub__(self, other)
+        if isinstance(other, Matrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            return Matrix(self.todense() - other.data)
+        return NotImplemented
+
+    def __rsub__(self, other):
+        from jaxfun.la import IdentityMatrix, Matrix, ZeroMatrix
+
+        if isinstance(other, ZeroMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
+            return -self
+        if isinstance(other, IdentityMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
+            return DiagonalMatrix(other.diagonal() - self.diagonal())
+        if isinstance(other, DiaMatrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
+            if other.is_diagonal:
+                return DiagonalMatrix(other.diagonal() - self.diagonal())
+            return DiaMatrix.__sub__(other, self)
+        if isinstance(other, Matrix):
+            if self.shape != other.shape:
+                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
+            return other - self
+        return NotImplemented
+
+
 @jax.jit(static_argnums=(1, 2, 3))
 def _permute_dia_kernel(
     data: Array,
@@ -2081,6 +2223,14 @@ def diags(
         n, m = shape
 
     common_dtype = jnp.result_type(*diagonals) if dtype is None else dtype
+
+    if offsets == (0,) and n == m:
+        diagonal = diagonals[0].astype(common_dtype)
+        if len(diagonal) == 1 and n > 1:
+            diagonal = jnp.broadcast_to(diagonal, (n,))
+        if len(diagonal) < n:
+            diagonal = jnp.pad(diagonal, (0, n - len(diagonal)))
+        return DiagonalMatrix(diagonal[:n])
 
     data_rows: list[Array] = []
     for d, k in zip(diagonals, offsets):

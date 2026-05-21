@@ -450,11 +450,14 @@ class Jacobi(OrthogonalSpace):
         r"""Symbolic recursion matrix for k-th derivative of normalized Jacobi
         polynomials.
 
+        Scaled according to Eq. (2.18) and (2.28) of
+        https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf.
+
         The recursion is
 
         .. math::
 
-            x  ∂^k \boldsymbol{Q} = {A}^T  ∂^k \boldsymbol{Q}
+            x  ∂^k \boldsymbol{Q} = \underline{A}^T  ∂^k \boldsymbol{Q}
 
         where
 

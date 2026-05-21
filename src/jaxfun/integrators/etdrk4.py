@@ -9,6 +9,7 @@ import sympy as sp
 from flax import nnx
 from jax.scipy.linalg import expm as _expm
 
+from jaxfun.la import Matrix
 from jaxfun.typing import Array, FunctionSpaceType, Padding
 
 from .base import BaseIntegrator
@@ -109,49 +110,76 @@ class ETDRK4(BaseIntegrator):
 
     def setup(self, dt: float) -> None:
         """Precompute ETD propagators and nonlinear stage coefficients."""
-        is_diag = self.mass_diag is not None and (
-            self.linear_operator is None or self.linear_diag is not None
-        )
+        is_diag = self._has_diagonal_etd()
         self.is_diag = nnx.static(is_diag)
 
-        if is_diag:
-            mass_diag = self.mass_diag
-            assert mass_diag is not None
-            Ldiag = (
-                jnp.zeros_like(mass_diag)
-                if self.linear_operator is None
-                else cast(Array, self.linear_diag) / mass_diag
-            )
-            E, E2, Q, f1, f2, f3 = _etdrk4_diag_coeffs(Ldiag, dt)
-        else:
-            zero = jnp.zeros(self.functionspace.num_dofs)
-            if self.linear_operator is None:
-                Lmat = jnp.zeros((zero.size, zero.size), dtype=zero.dtype)
-            else:
-                A = self.linear_matrix_dense()
-                if self.mass_diag is not None:
-                    m = self.mass_diag.reshape((-1,))
-                    Lmat = A / m[:, None]
-                elif self.mass_operator is not None:
-                    M = self.mass_matrix_dense()
-                    Lmat = cast(Array, jnp.linalg.solve(M, A))
-                else:
-                    Lmat = A
+        coeffs = self._setup_diagonal_etd(dt) if is_diag else self._setup_dense_etd(dt)
 
-            z = dt * Lmat
-            E = expm(z)
-            E2 = expm(z / 2)
-            phi1_half, _, _ = _phi_matrices(z / 2)
-            Q = 0.5 * phi1_half
-            phi1, phi2, phi3 = _phi_matrices(z)
-            f1, f2, f3 = _etdrk4_nonlinear_weights(phi1, phi2, phi3)
-
+        E, E2, Q, f1, f2, f3 = coeffs
         self.E = nnx.data(E)
         self.E2 = nnx.data(E2)
         self.Q = nnx.data(Q)
         self.f1 = nnx.data(f1)
         self.f2 = nnx.data(f2)
         self.f3 = nnx.data(f3)
+
+    def _mass_diagonal_or_identity(self) -> Array | None:
+        """Return the mass diagonal, treating a missing mass operator as identity."""
+        mass_diag = self.mass_term.diagonal_or_none()
+        if mass_diag is not None:
+            return mass_diag
+        if self.mass_term.operator is None:
+            return jnp.ones(self.functionspace.num_dofs)
+        return None
+
+    def _has_diagonal_etd(self) -> bool:
+        """Return True when the ETD coefficients can stay elementwise."""
+        mass_diag = self._mass_diagonal_or_identity()
+        linear_diag = self.linear_term.diagonal_or_none()
+        return mass_diag is not None and (
+            self.linear_term.operator is None or linear_diag is not None
+        )
+
+    def _setup_diagonal_etd(
+        self, dt: float
+    ) -> tuple[Array, Array, Array, Array, Array, Array]:
+        """Return ETD coefficients for the diagonal operator path."""
+        mass_diag = self._mass_diagonal_or_identity()
+        assert mass_diag is not None
+        linear_diag = self.linear_term.diagonal_or_none()
+        Ldiag = (
+            jnp.zeros_like(mass_diag)
+            if self.linear_term.operator is None
+            else cast(Array, linear_diag) / mass_diag
+        )
+        return _etdrk4_diag_coeffs(Ldiag, dt)
+
+    def _setup_dense_etd(
+        self, dt: float
+    ) -> tuple[Array, Array, Array, Array, Array, Array]:
+        """Return ETD coefficients for the dense matrix-function path."""
+        zero = jnp.zeros(self.functionspace.num_dofs)
+        if self.linear_term.operator is None:
+            Lmat = jnp.zeros((zero.size, zero.size), dtype=zero.dtype)
+        else:
+            A = self.linear_term.todense(self._state_size)
+            mass_diag = self.mass_term.diagonal_or_none()
+            if mass_diag is not None:
+                Lmat = A / mass_diag.reshape((-1,))[:, None]
+            elif self.mass_term.operator is not None:
+                M = self.mass_term.todense(self._state_size, identity_if_zero=True)
+                Lmat = Matrix(M).solve(A)
+            else:
+                Lmat = A
+
+        z = dt * Lmat
+        E = expm(z)
+        E2 = expm(z / 2)
+        phi1_half, _, _ = _phi_matrices(z / 2)
+        Q = 0.5 * phi1_half
+        phi1, phi2, phi3 = _phi_matrices(z)
+        f1, f2, f3 = _etdrk4_nonlinear_weights(phi1, phi2, phi3)
+        return E, E2, Q, f1, f2, f3
 
     def _N(self, u_hat: Array, N: Padding = None) -> Array:
         """Return the nonlinear-plus-forcing contribution used in ETDRK4 stages."""

@@ -6,10 +6,10 @@ from flax import nnx
 from jax import Array
 
 from jaxfun.la import (
+    BaseMatrix,
     BlockTPMatrix,
     DiaMatrix,
     Matrix,
-    MatrixProtocol,
     TensorMatrix,
     TPMatrices,
     TPMatrix,
@@ -106,7 +106,7 @@ def inner(
     allforms = split(expr * measure)
     a_forms = allforms["bilinear"]
     b_forms = allforms["linear"]
-    aresults: list[MatrixProtocol | TPMatrix | TensorMatrix] = []
+    aresults: list[BaseMatrix] = []
     bresults: list[Array] = []
     all_linear = not (
         len(a_forms) > 0
@@ -302,7 +302,7 @@ def inner(
                     )
                     aresults.append(
                         TPMatrix(
-                            [cast(MatrixProtocol, m[0]) for m in mats],
+                            [cast(BaseMatrix, m[0]) for m in mats],
                             1,
                             global_indices=gi[0],
                         )
@@ -416,54 +416,36 @@ def vectorize_bresult(
 
 @overload
 def process_results(
-    aresults: list[MatrixProtocol | TPMatrix | TensorMatrix],
+    aresults: list[BaseMatrix],
     bresults: list[Array],
     return_all_items: Literal[True],
     test_space: TestSpaceType,
     trial_space: TrialSpaceType | None,
     sparse: bool,
     sparse_tol: int,
-) -> tuple[list[MatrixProtocol | TPMatrix | TensorMatrix], list[Array]]: ...
+) -> tuple[list[BaseMatrix], list[Array]]: ...
 @overload
 def process_results(
-    aresults: list[MatrixProtocol | TPMatrix | TensorMatrix],
+    aresults: list[BaseMatrix],
     bresults: list[Array],
     return_all_items: Literal[False],
     test_space: TestSpaceType,
     trial_space: TrialSpaceType | None,
     sparse: Literal[False],
     sparse_tol: int,
-) -> (
-    MatrixProtocol
-    | TPMatrix
-    | TPMatrices
-    | TensorMatrix
-    | BlockTPMatrix
-    | Array
-    | tuple[
-        MatrixProtocol | TPMatrix | TPMatrices | TensorMatrix | BlockTPMatrix, Array
-    ]
-): ...
+) -> BaseMatrix | Array | tuple[BaseMatrix, Array]: ...
 @overload
 def process_results(
-    aresults: list[MatrixProtocol | TPMatrix | TensorMatrix],
+    aresults: list[BaseMatrix],
     bresults: list[Array],
     return_all_items: Literal[False],
     test_space: TestSpaceType,
     trial_space: TrialSpaceType | None,
     sparse: Literal[True],
     sparse_tol: int,
-) -> (
-    DiaMatrix
-    | TPMatrix
-    | TPMatrices
-    | TensorMatrix
-    | BlockTPMatrix
-    | Array
-    | tuple[DiaMatrix | TPMatrix | TPMatrices | TensorMatrix | BlockTPMatrix, Array]
-): ...
+) -> DiaMatrix | BaseMatrix | Array | tuple[DiaMatrix | BaseMatrix, Array]: ...
 def process_results(
-    aresults: list[MatrixProtocol | TPMatrix | TensorMatrix],
+    aresults: list[BaseMatrix],
     bresults: list[Array],
     return_all_items: bool,
     test_space: TestSpaceType,
@@ -500,17 +482,13 @@ def process_results(
             if not sparse:
                 ares1D: Matrix = Matrix(
                     jnp.sum(
-                        jnp.array(
-                            [cast(MatrixProtocol, a).todense() for a in aresults]
-                        ),
+                        jnp.array([a.todense() for a in aresults]),
                         axis=0,
                     )
                 )
             else:
                 # Matrices are either Matrix or DiaMatrix. Convert matrices to DiaMatrix
-                adia = [
-                    cast(MatrixProtocol, a).tosparse(tol=sparse_tol) for a in aresults
-                ]
+                adia = [a.tosparse(tol=sparse_tol) for a in aresults]
                 ares1D: DiaMatrix = sum(adia[1:], adia[0])
 
         if ares1D and len(bresults) == 0:

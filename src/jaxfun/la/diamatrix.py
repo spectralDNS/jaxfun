@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from jaxfun.la.matrixprotocol import DiaMatrixSolveMethod, _CacheBox
+from jaxfun.la.matrixprotocol import BaseMatrix, DiaMatrixSolveMethod, _CacheBox
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
@@ -98,7 +98,7 @@ def _solve_diagonal(diagonal: Array, b: Array, axis: int) -> Array:
 
 
 @nnx.dataclass
-class DiaMatrix(nnx.Pytree):
+class DiaMatrix(BaseMatrix):
     """Diagonal storage (DIA) sparse matrix, compatible with scipy.sparse.dia.
 
     Format:
@@ -936,15 +936,6 @@ class DiaMatrix(nnx.Pytree):
         """Return the total number of entries in the matrix (including zeros)."""
         return self._size
 
-    def __mul__(self, other: complex | Array) -> DiaMatrix:
-        return self.scale(other)
-
-    def __rmul__(self, other: complex | Array) -> DiaMatrix:
-        return self.scale(other)
-
-    def __neg__(self) -> DiaMatrix:
-        return self.scale(-1)
-
     def __len__(self) -> int:
         return min(self.shape)
 
@@ -1593,15 +1584,6 @@ class DiagonalMatrix(DiaMatrix):
 
     def scale(self, alpha: complex | Array) -> DiagonalMatrix:
         return DiagonalMatrix(self.diagonal() * alpha)
-
-    def __mul__(self, other: complex | Array) -> DiagonalMatrix:
-        return self.scale(other)
-
-    def __rmul__(self, other: complex | Array) -> DiagonalMatrix:
-        return self.scale(other)
-
-    def __neg__(self) -> DiagonalMatrix:
-        return self.scale(-1)
 
     def astype(self, dtype: jnp.dtype) -> DiagonalMatrix:
         return DiagonalMatrix(self.diagonal().astype(dtype))

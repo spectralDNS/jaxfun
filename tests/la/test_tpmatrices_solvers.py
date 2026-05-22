@@ -15,6 +15,7 @@ from jaxfun.galerkin import (
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import inner
 from jaxfun.la import (
+    BaseMatrix,
     BlockTPMatrix,
     TPMatrix,
     tpmats_to_kron,
@@ -353,6 +354,7 @@ def _vector_block_system(N: int, poly):
     v = TestFunction(V)
     A = inner(Dot(v, u), sparse=True)
     assert isinstance(A, BlockTPMatrix)
+    assert isinstance(A, BaseMatrix)
     rng = np.random.default_rng(0)
     x_true = jnp.array(rng.standard_normal(A.shape[1]), dtype=jnp.float32)
     b = A.to_matrix().matvec(x_true)
@@ -363,6 +365,7 @@ def _vector_block_system(N: int, poly):
 def test_blocktpmatrix_tosparse_returns_diamatrix(poly):
     A, b, _ = _vector_block_system(8, poly)
     sparse = A.tosparse()
+    assert A.ndim == 2
     assert isinstance(sparse, DiaMatrix)
     assert sparse.shape == A.shape
 

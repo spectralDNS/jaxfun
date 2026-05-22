@@ -214,7 +214,7 @@ class TestTpmatsToKron:
                     m.todense() if isinstance(m, DiaMatrix) else cast(Matrix, m).data
                 )
                 a0 = np.kron(a0, a1)
-            a0 = a0 * float(tpm.scale)  # ty:ignore[invalid-argument-type]
+            a0 = a0 * float(tpm.coefficient)  # ty:ignore[invalid-argument-type]
             result_np = a0 if result_np is None else result_np + a0
 
         assert np.max(np.abs(np.array(A.todense()) - result_np)) < 1e-5
@@ -225,7 +225,7 @@ class TestTpmatsToKron:
         assert isinstance(C, DiaMatrix)
 
     def test_scale_applied_once(self):
-        """Doubling tpm.scale and halving the factor matrices must give same result."""
+        """Doubling tpm.coefficient and halving factors must give same result."""
         A, _ = _poisson_tpmats(N=6)
         C_ref = A.todense()
 
@@ -241,7 +241,7 @@ class TestTpmatsToKron:
             modified.append(
                 TPMatrix(
                     mats_new,
-                    float(tpm.scale) * 2.0,  # ty:ignore[invalid-argument-type]
+                    float(tpm.coefficient) * 2.0,  # ty:ignore[invalid-argument-type]
                     global_indices=tpm.global_indices,
                 )
             )
@@ -265,7 +265,7 @@ class TestTpmatsToKron:
             for m in tpm.mats[1:]:
                 a1 = np.array(m.todense())
                 a0 = np.kron(a0, a1)
-            a0 = a0 * float(tpm.scale)  # ty:ignore[invalid-argument-type]
+            a0 = a0 * float(tpm.coefficient)  # ty:ignore[invalid-argument-type]
             result_np = a0 if result_np is None else result_np + a0
 
         assert np.max(np.abs(np.array(C.todense()) - result_np)) < ulp(100)
@@ -591,7 +591,7 @@ class TestTpmatsToScipySparse:
         result = tpmats_to_scipy_sparse(list(A.tpmats))
         assert len(result) == len(A.tpmats)
         for tpm, (f0, f1) in zip(A.tpmats, result):
-            scale = complex(tpm.scale).real
+            scale = complex(tpm.coefficient).real
             assert np.allclose(
                 f0.toarray(), np.array(tpm.mats[0].todense()) * scale, atol=1e-6
             )
@@ -601,7 +601,9 @@ class TestTpmatsToScipySparse:
         """Scale is folded into first factor, not applied twice."""
         A, _ = _poisson_tpmats(N=8)
         # Build a scaled copy
-        scaled = [TPMatrix(list(tpm.mats), scale=tpm.scale * 3) for tpm in A.tpmats]
+        scaled = [
+            TPMatrix(list(tpm.mats), scale=tpm.coefficient * 3) for tpm in A.tpmats
+        ]
         orig = tpmats_to_scipy_sparse(list(A.tpmats))
         scl = tpmats_to_scipy_sparse(scaled)
         for (o0, o1), (s0, s1) in zip(orig, scl):
@@ -618,7 +620,9 @@ class TestTpmatsToScipySparse:
     def test_scipy_kron_scale_matches_tpmats_to_kron(self):
         """Scaled tpmats_to_scipy_kron matches scaled tpmats_to_kron."""
         A, _ = _poisson_tpmats(N=8)
-        scaled = [TPMatrix(list(tpm.mats), scale=tpm.scale * 2) for tpm in A.tpmats]
+        scaled = [
+            TPMatrix(list(tpm.mats), scale=tpm.coefficient * 2) for tpm in A.tpmats
+        ]
         K_jax = np.array(tpmats_to_kron(scaled).todense())
         K_sp = tpmats_to_scipy_kron(scaled).toarray()
         assert np.allclose(K_jax, K_sp, atol=1e-5)

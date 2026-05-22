@@ -9,7 +9,7 @@ from jax import Array
 
 from jaxfun.la.diamatrix import DiaMatrix
 from jaxfun.la.matrix import Matrix
-from jaxfun.la.matrixprotocol import _CacheBox
+from jaxfun.la.matrixprotocol import BaseMatrix, _CacheBox
 from jaxfun.la.tpmatrix import TPMatrices, TPMatrix, tpmats_to_kron
 
 if TYPE_CHECKING:
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 type _SparseMatrixCache = _CacheBox[DiaMatrix]
 
 
-class BlockTPMatrix(nnx.Pytree):
+class BlockTPMatrix(BaseMatrix):
     """Block matrix of TPMatrix objects.
 
     Args:
@@ -60,6 +60,20 @@ class BlockTPMatrix(nnx.Pytree):
                 _grouped[idx].tpmats.append(mat)
         self._combined_blocks = nnx.Dict(
             {idx: tpmats_to_kron(list(tpm.tpmats)) for idx, tpm in _grouped.items()}
+        )
+
+    @property
+    def dtype(self) -> jnp.dtype:
+        dtype = jnp.float32
+        for block_mat in self._combined_blocks.values():
+            dtype = jnp.result_type(dtype, block_mat.dtype)
+        return jnp.dtype(dtype)
+
+    def scale(self, alpha: complex | Array) -> BlockTPMatrix:
+        return BlockTPMatrix(
+            [mat.scale(alpha) for mat in self.tpmats],
+            self.test_space,
+            self.trial_space,
         )
 
     @jax.jit
@@ -168,9 +182,7 @@ class BlockTPMatrix(nnx.Pytree):
         :meth:`solve` or an explicit :meth:`tosparse` call); otherwise falls
         back to the per-block path.
         """
-        from jaxfun.galerkin import JAXFunction
-
-        w = u.array if isinstance(u, JAXFunction) else u
+        w = self._as_array(u)
         sparse_box: _SparseMatrixCache | None = getattr(self, "_sparse_cache", None)
         if sparse_box is not None:
             sparse = sparse_box.value

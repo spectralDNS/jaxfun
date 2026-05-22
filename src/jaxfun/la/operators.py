@@ -4,12 +4,12 @@ from math import prod
 from typing import TYPE_CHECKING, Self, overload
 
 import jax.numpy as jnp
-from flax import nnx
 from jax import Array
 
 from jaxfun.la import DiagonalMatrix
 from jaxfun.la.diamatrix import DiaMatrix, diags
 from jaxfun.la.matrix import Matrix
+from jaxfun.la.matrixprotocol import BaseMatrix
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
@@ -28,7 +28,7 @@ def _check_same_shape(left, right) -> None:
         raise ValueError(f"Shape mismatch: {left.shape} vs {right.shape}")
 
 
-class SpecialMatrix(nnx.Pytree):
+class SpecialMatrix(BaseMatrix):
     """Base class for shape-preserving special matrix operators."""
 
     is_diagonal = True
@@ -91,11 +91,6 @@ class SpecialMatrix(nnx.Pytree):
     def astype(self, dtype: jnp.dtype) -> Self:
         return type(self)(self.state_shape, dtype=dtype)
 
-    def _as_array(self, u: Array | JAXFunction) -> Array:
-        from jaxfun.galerkin import JAXFunction
-
-        return u.array if isinstance(u, JAXFunction) else u
-
     def __call__(self, u: Array | JAXFunction) -> Array:
         raise NotImplementedError
 
@@ -106,19 +101,10 @@ class SpecialMatrix(nnx.Pytree):
         return self(other)
 
     def __add__(self, other):
-        raise NotImplementedError
+        return NotImplemented
 
     def __radd__(self, other):
-        return self.__add__(other)
-
-    def __mul__(self, other: complex | Array):
-        return self.scale(other)
-
-    def __rmul__(self, other: complex | Array):
-        return self.scale(other)
-
-    def __neg__(self):
-        return self.scale(-1)
+        return NotImplemented
 
     def __len__(self) -> int:
         return self.shape[0]

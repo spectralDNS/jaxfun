@@ -4,14 +4,15 @@ from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
-from flax import nnx
 from jax import Array
+
+from jaxfun.la.matrixprotocol import BaseMatrix
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
 
 
-class TensorMatrix(nnx.Pytree):  # noqa: B903
+class TensorMatrix(BaseMatrix):  # noqa: B903
     """Non-separable tensor with dims * 2 indices.
 
     For test function v_{ij} and trial function u_{kl}, the tensor
@@ -56,9 +57,7 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
 
     def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply matrix to coefficient array u."""
-        from jaxfun.galerkin import JAXFunction
-
-        w = u.array if isinstance(u, JAXFunction) else u
+        w = self._as_array(u)
         return self._matmul_array(w)
 
     def __matmul__(self, u: Array | JAXFunction) -> Array:
@@ -71,13 +70,12 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
 
     def __rmatmul__(self, u: Array | JAXFunction) -> Array:
         """Right matmul (u @ A) treating u as left factor."""
-        from jaxfun.galerkin import JAXFunction
-
-        w = u.array if isinstance(u, JAXFunction) else u
+        w = self._as_array(u)
         return self._rmatmul_array(w)
 
-    def solve(self, rhs: Array) -> Array:
+    def solve(self, rhs: Array, axis: int = 0) -> Array:
         """Solve A x = rhs for x."""
+        _ = axis
         AT = self.todense()
         return jnp.linalg.solve(AT, rhs.flatten()).reshape(rhs.shape)
 
@@ -85,20 +83,8 @@ class TensorMatrix(nnx.Pytree):  # noqa: B903
         """Return the equivalent 2-D global matrix."""
         return jnp.transpose(self.data, (0, 2, 1, 3)).reshape(self.shape)
 
-    def diagonal_or_none(self) -> Array | None:
-        return None
-
     def scale(self, alpha: complex | Array) -> TensorMatrix:
         return TensorMatrix(self.data * alpha)
-
-    def __mul__(self, other: complex | Array) -> TensorMatrix:
-        return self.scale(other)
-
-    def __rmul__(self, other: complex | Array) -> TensorMatrix:
-        return self.scale(other)
-
-    def __neg__(self) -> TensorMatrix:
-        return self.scale(-1)
 
     def __add__(self, other):
         from jaxfun.la import ZeroMatrix

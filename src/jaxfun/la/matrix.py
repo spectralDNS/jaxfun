@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from jaxfun.la.matrixprotocol import _CacheBox
+from jaxfun.la.matrixprotocol import BaseMatrix, _CacheBox
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
@@ -34,7 +34,7 @@ def _solve_diagonal(diagonal: Array, b: Array, axis: int) -> Array:
 
 
 @nnx.dataclass
-class Matrix(nnx.Pytree):
+class Matrix(BaseMatrix):
     """Dense matrix class backed by a JAX 2-D array.
 
     Mirrors the interface of :class:`~jaxfun.la.sparsemat.DiaMatrix` so that
@@ -318,15 +318,6 @@ class Matrix(nnx.Pytree):
             m: New column count.
         """
         return Matrix(self.data[:n, :m])
-
-    def __mul__(self, other: complex | Array) -> Matrix:
-        return self.scale(other)
-
-    def __rmul__(self, other: complex | Array) -> Matrix:
-        return self.scale(other)
-
-    def __neg__(self) -> Matrix:
-        return self.scale(-1)
 
     def __len__(self) -> int:
         return min(self.shape)

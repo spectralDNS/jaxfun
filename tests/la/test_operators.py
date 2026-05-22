@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import pytest
 
 from jaxfun.la import (
+    BaseMatrix,
     DiagonalMatrix,
     DiaMatrix,
     IdentityMatrix,
@@ -19,6 +20,7 @@ def test_identity_matrix_preserves_state_shape() -> None:
     identity = IdentityMatrix((2, 3))
     x = jnp.arange(6.0).reshape((2, 3))
 
+    assert isinstance(identity, BaseMatrix)
     assert isinstance(identity, SpecialMatrix)
     assert identity.shape == (6, 6)
     assert identity.is_diagonal
@@ -31,6 +33,7 @@ def test_zero_matrix_preserves_state_shape_and_rejects_solve() -> None:
     zero = ZeroMatrix((2, 3))
     x = jnp.arange(6.0).reshape((2, 3))
 
+    assert isinstance(zero, BaseMatrix)
     assert isinstance(zero, SpecialMatrix)
     assert zero.shape == (6, 6)
     assert zero.is_zero
@@ -103,8 +106,30 @@ def test_tensormatrix_arithmetic_preserves_tensormatrix_structure() -> None:
 
     system = 1.5 * tensor - 0.5 * tensor
 
+    assert isinstance(tensor, BaseMatrix)
+    assert tensor.diagonal_or_none() is None
     assert isinstance(system, TensorMatrix)
     assert jnp.allclose(system.data, data)
+
+
+def test_core_matrix_classes_inherit_basematrix() -> None:
+    dense = Matrix(jnp.eye(3))
+    sparse = diags([jnp.ones(3)], offsets=(0,))
+    tp = TPMatrix([sparse, sparse], scale=1.0)
+    tpmats = TPMatrices([tp])
+
+    assert isinstance(dense, BaseMatrix)
+    assert isinstance(sparse, BaseMatrix)
+    assert isinstance(tp, BaseMatrix)
+    assert isinstance(tpmats, BaseMatrix)
+
+
+def test_unsupported_binary_operations_use_python_dispatch() -> None:
+    tensor = TensorMatrix(jnp.arange(16.0).reshape((2, 2, 2, 2)))
+    dense = Matrix(jnp.eye(4))
+
+    with pytest.raises(TypeError):
+        _ = tensor + dense
 
 
 def test_matrix_arithmetic_with_identity_solves_diagonal_without_lu() -> None:
@@ -114,8 +139,10 @@ def test_matrix_arithmetic_with_identity_solves_diagonal_without_lu() -> None:
     rhs = jnp.ones((2, 2))
 
     expected_diag = jnp.array([[3.0, 5.0], [7.0, 9.0]])
+    diagonal = system.diagonal_or_none()
     assert isinstance(system, Matrix)
-    assert jnp.allclose(system.diagonal_or_none().reshape((2, 2)), expected_diag)
+    assert diagonal is not None
+    assert jnp.allclose(diagonal.reshape((2, 2)), expected_diag)
     assert jnp.allclose(system.solve(rhs), rhs / expected_diag)
     assert not hasattr(system, "_lu_cache")
 

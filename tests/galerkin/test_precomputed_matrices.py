@@ -25,7 +25,7 @@ from jaxfun.galerkin.ChebyshevU import ChebyshevU
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.galerkin.Ultraspherical import Ultraspherical
-from jaxfun.la import DiaMatrix, MatrixProtocol
+from jaxfun.la import BaseMatrix, DiaMatrix
 from jaxfun.utils.common import ulp
 
 
@@ -104,8 +104,8 @@ class TestPoly5ReturnType:
         i, j = ij
         v = space_fn(8)
         M = v.matrices(i, (v, j))
-        assert isinstance(M, MatrixProtocol), (
-            f"expected MatrixProtocol for ({i},{j}), got {type(M)}"
+        assert isinstance(M, BaseMatrix), (
+            f"expected BaseMatrix for ({i},{j}), got {type(M)}"
         )
 
     @pytest.mark.parametrize("ij", _POLY5_SUPPORTED)

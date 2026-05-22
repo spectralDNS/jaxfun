@@ -25,7 +25,7 @@ import sympy as sp
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
-from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol, diags
+from jaxfun.la import BaseMatrix, DiaMatrix, Matrix, diags
 from jaxfun.typing import Array, MeshKind
 from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
 
@@ -469,7 +469,7 @@ class OrthogonalSpace(BaseSpace):
                         break
                     z_poly.append(ck_f * Mq)
                 if _all_found and z_poly:
-                    z = _addmats(cast(list[MatrixProtocol], z_poly))
+                    z = _addmats(cast(list[BaseMatrix], z_poly))
 
             else:
                 z = self._matrices(i, trial, q=0)
@@ -481,7 +481,7 @@ class OrthogonalSpace(BaseSpace):
         return z
 
 
-def _addmats(matrices: list[MatrixProtocol]) -> Matrix | DiaMatrix:
+def _addmats(matrices: list[BaseMatrix]) -> Matrix | DiaMatrix:
     if any(isinstance(m, Matrix) for m in matrices):
         return Matrix(jnp.sum(jnp.array([a.todense() for a in matrices]), axis=0))
     diamats: list[DiaMatrix] = cast(list[DiaMatrix], matrices)

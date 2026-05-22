@@ -6,7 +6,7 @@ from .diamatrix import (
     diakron as diakron,
 )
 from .matrix import Matrix as Matrix
-from .matrixprotocol import MatrixProtocol as MatrixProtocol
+from .matrixprotocol import BaseMatrix as BaseMatrix
 from .operators import (
     IdentityMatrix as IdentityMatrix,
     SpecialMatrix as SpecialMatrix,

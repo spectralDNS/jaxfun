@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 import scipy.sparse
 
+from jaxfun.la import BaseMatrix
 from jaxfun.la.diamatrix import (
     DenseIndexingWarning,
     DiagonalMatrix,
@@ -1045,11 +1046,13 @@ class TestPin:
         _, A = _tridiag(5)
         sys = A.pin({0: 0.0})
         assert isinstance(sys, PinnedSystem)
+        assert isinstance(sys, BaseMatrix)
 
     def test_pin_returns_pinned_system_matrix(self):
         a, _ = _tridiag(5)
         sys = a.pin({0: 0.0})
         assert isinstance(sys, PinnedSystem)
+        assert isinstance(sys, BaseMatrix)
 
     def test_constraints_stored_as_sorted_tuple(self):
         _, A = _tridiag(6)
@@ -1301,7 +1304,7 @@ class TestPin:
         assert jnp.allclose(x1, x2)
 
     # ------------------------------------------------------------------
-    # Delegation / read-only MatrixProtocol surface
+    # Delegation / read-only BaseMatrix surface
     # ------------------------------------------------------------------
 
     def test_ndim(self):

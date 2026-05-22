@@ -14,8 +14,8 @@ from scipy import sparse as scipy_sparse
 from jaxfun.la.diamatrix import DiaMatrix, diakron
 from jaxfun.la.matrix import LUFactors, Matrix
 from jaxfun.la.matrixprotocol import (
+    BaseMatrix,
     DiaMatrixSolveMethod,
-    MatrixProtocol,
     SolverNotApplicable,
     _CacheBox,
 )
@@ -37,12 +37,12 @@ def _solve_diagonal(diagonal: Array, rhs: Array) -> Array:
 def _scale_tpmatrix(tp: TPMatrix, alpha: complex | Array) -> TPMatrix:
     return TPMatrix(
         list(tp.mats),
-        scale=tp.scale * alpha,
+        scale=tp.coefficient * alpha,
         global_indices=tp.global_indices,
     )
 
 
-class TPMatrix(nnx.Pytree):  # noqa: B903
+class TPMatrix(BaseMatrix):  # noqa: B903
     """Rank-d separable tensor product operator A = kron(A0, A1, ...).
 
     Provides efficient matvec via successive multiplications instead of
@@ -50,7 +50,7 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
 
     Attributes:
         mats: List of per-axis sparse/dense matrices.
-        scale: Scalar scaling (multiplicative).
+        coefficient: Scalar scaling (multiplicative).
         global_indices: Tuple of global index into vectorized expansions.
     """
 
@@ -58,12 +58,12 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
 
     def __init__(
         self,
-        mats: Sequence[MatrixProtocol],
+        mats: Sequence[BaseMatrix],
         scale: complex | Array,
         global_indices: tuple[int, int] = (0, 0),
     ) -> None:
         self.mats = nnx.List(mats)
-        self.scale = scale
+        self.coefficient = scale
         self.global_indices = global_indices
 
     @property
@@ -78,13 +78,16 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
 
     @property
     def dtype(self) -> jnp.dtype:
-        dtype = jnp.result_type(self.scale)
+        dtype = jnp.result_type(self.coefficient)
         for mat in self.mats:
             dtype = jnp.result_type(dtype, mat.dtype)
         return jnp.dtype(dtype)
 
     def __len__(self) -> int:
         return len(self.mats)
+
+    def scale(self, alpha: complex | Array) -> TPMatrix:
+        return _scale_tpmatrix(self, alpha)
 
     def tosparse(self, *, tol: int = 100) -> DiaMatrix:
         sparse_box: _SparseMatrixCache | None = getattr(self, "_sparse_cache", None)
@@ -143,19 +146,17 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         for axis, factor_diag in enumerate(diagonals[1:], start=1):
             shape = (1,) * axis + (factor_diag.shape[0],)
             diagonal = diagonal[..., None] * factor_diag.reshape(shape)
-        return diagonal * jnp.asarray(self.scale)
+        return diagonal * jnp.asarray(self.coefficient)
 
     def _matmul_array(self, w: Array) -> Array:
         result = w
         for i, mat in enumerate(self.mats):
             result = mat.matvec(result, axis=i)
-        return result * jnp.asarray(self.scale)
+        return result * jnp.asarray(self.coefficient)
 
     def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply matrix to rank-2 coefficient array u."""
-        from jaxfun.galerkin import JAXFunction
-
-        w = u.array if isinstance(u, JAXFunction) else u
+        w = self._as_array(u)
         return self._matmul_array(w)
 
     def __matmul__(self, u: Array | JAXFunction) -> Array:
@@ -166,13 +167,11 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         result = w
         for i, mat in enumerate(self.mats):
             result = mat.T.matvec(result, axis=i)
-        return result * jnp.asarray(self.scale)
+        return result * jnp.asarray(self.coefficient)
 
     def __rmatmul__(self, u: Array | JAXFunction) -> Array:
         """Right matmul (u @ A) treating u as left factor."""
-        from jaxfun.galerkin import JAXFunction
-
-        w = u.array if isinstance(u, JAXFunction) else u
+        w = self._as_array(u)
         return self._rmatmul_array(w)
 
     def solve(self, rhs: Array) -> Array:
@@ -210,16 +209,7 @@ class TPMatrix(nnx.Pytree):  # noqa: B903
         """
         lu_factors = [mat.lu_factor() for mat in self.mats]
         shape = tuple(int(mat.shape[0]) for mat in self.mats)
-        return TPLUFactors(lu_factors=lu_factors, scale=self.scale, shape=shape)
-
-    def __mul__(self, other: complex | Array) -> TPMatrix:
-        return _scale_tpmatrix(self, other)
-
-    def __rmul__(self, other: complex | Array) -> TPMatrix:
-        return _scale_tpmatrix(self, other)
-
-    def __neg__(self) -> TPMatrix:
-        return _scale_tpmatrix(self, -1)
+        return TPLUFactors(lu_factors=lu_factors, scale=self.coefficient, shape=shape)
 
     def __add__(self, other):
         from jaxfun.la import ZeroMatrix
@@ -316,7 +306,7 @@ class TPSolveMethod(StrEnum):
     KRON = "kron"
 
 
-class TPMatrices(nnx.Pytree):
+class TPMatrices(BaseMatrix):
     """Container for list of TPMatrix bilinear operator tensors."""
 
     is_zero = False
@@ -330,9 +320,7 @@ class TPMatrices(nnx.Pytree):
 
     def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply summed tensor product operator to u."""
-        from jaxfun.galerkin import JAXFunction
-
-        w = u.array if isinstance(u, JAXFunction) else u
+        w = self._as_array(u)
         return self._apply_array(w)
 
     def __len__(self) -> int:
@@ -358,9 +346,7 @@ class TPMatrices(nnx.Pytree):
 
     def __rmatmul__(self, u: Array | JAXFunction) -> Array:
         """Right matmul (u @ A) treating u as left factor."""
-        from jaxfun.galerkin import JAXFunction
-
-        w = u.array if isinstance(u, JAXFunction) else u
+        w = self._as_array(u)
         return jnp.sum(
             jnp.array([mat._rmatmul_array(w) for mat in self.tpmats]), axis=0
         )
@@ -419,15 +405,6 @@ class TPMatrices(nnx.Pytree):
     def scale(self, alpha: complex | Array) -> TPMatrices:
         """Return ``alpha * self`` preserving the summed tensor-product form."""
         return TPMatrices([_scale_tpmatrix(mat, alpha) for mat in self.tpmats])
-
-    def __mul__(self, other: complex | Array) -> TPMatrices:
-        return self.scale(other)
-
-    def __rmul__(self, other: complex | Array) -> TPMatrices:
-        return self.scale(other)
-
-    def __neg__(self) -> TPMatrices:
-        return self.scale(-1)
 
     def __add__(self, other):
         from jaxfun.la import ZeroMatrix
@@ -1094,15 +1071,15 @@ def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
         if pair_key in pair_cache:
             continue
         if len(mats_i) == 1:
-            A_dense = cast(MatrixProtocol, mats_i[0]).todense()
+            A_dense = cast(BaseMatrix, mats_i[0]).todense()
             evals, evecs = jnp.linalg.eigh(A_dense)
             pair_cache[pair_key] = (evecs, {_repr(mats_i[0]): evals})
         elif len(mats_i) == 2:
             import numpy as _np
             import scipy.linalg as _scipy_linalg
 
-            A0_np = _np.array(cast(MatrixProtocol, mats_i[0]).todense())
-            A1_np = _np.array(cast(MatrixProtocol, mats_i[1]).todense())
+            A0_np = _np.array(cast(BaseMatrix, mats_i[0]).todense())
+            A1_np = _np.array(cast(BaseMatrix, mats_i[1]).todense())
             # Generalized eigenproblem: try A0 v = λ A1 v (A1 must be PD).
             # If that fails (A1 not PD), swap to A1 v = λ A0 v.
             try:
@@ -1148,7 +1125,7 @@ def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
     per_term_eigenvalues = [
         [axis_eigenvalues[_repr(tp.mats[i])] for i in range(ndim)] for tp in tpmats
     ]
-    scales = [tp.scale for tp in tpmats]
+    scales = [tp.coefficient for tp in tpmats]
     shape: tuple[int, ...] = tuple(int(tpmats[0].mats[i].shape[0]) for i in range(ndim))
     return TPMatricesLUFactors(
         eigvecs=eigvecs,
@@ -1231,7 +1208,7 @@ def tpmats_wavenumber_factor(
     # matching the transposed layout used in TPMatricesWavenumberSolver.solve.
     W_list: list[Array] = []
     for tp in tpmats:
-        w: Array = jnp.asarray(tp.scale, dtype=_dtype).reshape(1)
+        w: Array = jnp.asarray(tp.coefficient, dtype=_dtype).reshape(1)
         for a in fourier_axes:
             # Diagonal DiaMatrix: data has shape (1, n_a); data[0] is the diagonal.
             diag_a = jnp.asarray(tp.mats[a].data[0], dtype=_dtype)  # (n_a,)
@@ -1314,14 +1291,14 @@ def tpmats_to_kron(A: TPMatrix | list[TPMatrix], tol: int = 100) -> Matrix | Dia
         result: Array | None = None
         for tpm in A:
             a0 = tpm.mats[0].todense()
-            a0 = a0 * jnp.asarray(tpm.scale)
+            a0 = a0 * jnp.asarray(tpm.coefficient)
             for m in tpm.mats[1:]:
                 a0 = jnp.kron(a0, m.todense())
             result = a0 if result is None else result + a0
         assert result is not None
         return Matrix(result)
 
-    def _get_dia(mat: MatrixProtocol) -> DiaMatrix:
+    def _get_dia(mat: BaseMatrix) -> DiaMatrix:
         if isinstance(mat, Matrix):
             return DiaMatrix.from_dense(mat.todense(), tol=tol)
         assert isinstance(mat, DiaMatrix)
@@ -1329,7 +1306,7 @@ def tpmats_to_kron(A: TPMatrix | list[TPMatrix], tol: int = 100) -> Matrix | Dia
 
     result: DiaMatrix | None = None
     for tpm in A:
-        dmat: DiaMatrix = _get_dia(tpm.mats[0]) * jnp.asarray(tpm.scale)
+        dmat: DiaMatrix = _get_dia(tpm.mats[0]) * jnp.asarray(tpm.coefficient)
         for m in tpm.mats[1:]:
             dmat = diakron(dmat, _get_dia(m))
         dmat = dmat
@@ -1369,7 +1346,7 @@ def tpmats_to_scipy_sparse(
 ) -> list[tuple[scipy_sparse.csc_array, ...]]:
     """Convert list of separable TPMatrix to scipy CSC factors.
 
-    The :attr:`~TPMatrix.scale` is folded into the first factor matrix.
+    The :attr:`~TPMatrix.coefficient` is folded into the first factor matrix.
 
     Args:
         A: List of TPMatrix objects.
@@ -1382,7 +1359,7 @@ def tpmats_to_scipy_sparse(
 
     result = []
     for a in A:
-        scale = a.scale
+        scale = a.coefficient
         factors = []
         for i, mat in enumerate(a.mats):
             dense = eliminate_near_zeros(mat.todense(), tol)

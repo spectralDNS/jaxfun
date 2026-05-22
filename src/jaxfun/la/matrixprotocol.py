@@ -87,6 +87,32 @@ class BaseMatrix(ABC, nnx.Pytree):
         """
         raise NotImplementedError
 
+    def _check_same_shape(self, other, /) -> None:
+        if self.shape != other.shape:
+            raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+
+    def _check_square(self, operation: str) -> tuple[int, int]:
+        n, m = self.shape
+        if n != m:
+            raise ValueError(
+                f"{operation} requires a square matrix, got shape {self.shape}"
+            )
+        return n, m
+
+    def _check_matmul_shape(self, other, /) -> tuple[int, int]:
+        n, m = self.shape
+        if m != other.shape[0]:
+            raise ValueError(
+                f"Shape mismatch for matrix product: ({n}, {m}) @ {other.shape}"
+            )
+        return n, m
+
+    def _check_same_data_shape(self, other, /, *, label: str = "Data") -> None:
+        if self.data.shape != other.data.shape:
+            raise ValueError(
+                f"{label} shape mismatch: {self.data.shape} vs {other.data.shape}"
+            )
+
     @property
     @abstractmethod
     def dtype(self) -> jnp.dtype:
@@ -188,13 +214,25 @@ class BaseMatrix(ABC, nnx.Pytree):
         return NotImplemented
 
     def __radd__(self, other, /):
-        return NotImplemented
+        return self.__add__(other)
 
     def __sub__(self, other, /):
-        return NotImplemented
+        if isinstance(other, BaseMatrix):
+            self._check_same_shape(other)
+        try:
+            other = -other
+        except TypeError:
+            return NotImplemented
+        return self.__add__(other)
 
     def __rsub__(self, other, /):
-        return NotImplemented
+        if isinstance(other, BaseMatrix):
+            self._check_same_shape(other)
+        try:
+            self_negative = -self
+        except TypeError:
+            return NotImplemented
+        return self_negative.__add__(other)
 
 
 @runtime_checkable

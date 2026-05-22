@@ -413,11 +413,7 @@ class DiaMatrix(BaseMatrix):
         if pivot in cache:
             return cache[pivot]
 
-        n, m = self.shape
-        if n != m:
-            raise ValueError(
-                f"lu_factor requires a square matrix, got shape {self.shape}"
-            )
+        n, m = self._check_square("lu_factor")
 
         offsets = self.offsets
         p = max((-k for k in offsets if k < 0), default=0)  # lower bandwidth
@@ -1151,8 +1147,7 @@ class DiaMatrix(BaseMatrix):
         return jnp.where(in_bounds, out, jnp.zeros((), dtype=self.data.dtype))
 
     def _merge(self, other: DiaMatrix, sign: float) -> DiaMatrix:
-        if self.shape != other.shape:
-            raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+        self._check_same_shape(other)
 
         n, m = self.shape
 
@@ -1176,61 +1171,29 @@ class DiaMatrix(BaseMatrix):
         return DiaMatrix(data=result_data, offsets=all_offsets, shape=(n, m))
 
     def __add__(self, other):
-        from jaxfun.la import IdentityMatrix, Matrix, ZeroMatrix
+        from jaxfun.la import Matrix
 
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return self
         if isinstance(other, DiaMatrix):
             return self._merge(other, +1.0)
-        if isinstance(other, IdentityMatrix):
-            return self + other.scale(1)
         if isinstance(other, Matrix):
             return other + self
         return NotImplemented
 
-    def __radd__(self, other):
-        return self.__add__(other)
-
     def __sub__(self, other):
-        from jaxfun.la import IdentityMatrix, Matrix, ZeroMatrix
+        from jaxfun.la import Matrix
 
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return self
         if isinstance(other, DiaMatrix):
             return self._merge(other, -1.0)
-        if isinstance(other, IdentityMatrix):
-            return self - other.scale(1)
         if isinstance(other, Matrix):
             return Matrix(self.todense() - other.data)
-        return NotImplemented
-
-    def __rsub__(self, other):
-        from jaxfun.la import IdentityMatrix, Matrix, ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
-            return -self
-        if isinstance(other, IdentityMatrix):
-            return other.scale(1) - self
-        if isinstance(other, Matrix):
-            return other - self
         return NotImplemented
 
     @jax.jit
     def _matmul_compute(
         self, other: DiaMatrix
     ) -> tuple[Array, tuple[int, ...], tuple[int, int]]:
-        n, m = self.shape
+        n, m = self._check_matmul_shape(other)
         _, l = other.shape
-        if m != other.shape[0]:
-            raise ValueError(
-                f"Shape mismatch for matrix product: ({n}, {m}) @ {other.shape}"
-            )
 
         p_offs = self.offsets
         q_offs = other.offsets
@@ -1589,73 +1552,23 @@ class DiagonalMatrix(DiaMatrix):
         return DiagonalMatrix(self.diagonal().astype(dtype))
 
     def __add__(self, other):
-        from jaxfun.la import IdentityMatrix, Matrix, ZeroMatrix
+        from jaxfun.la import Matrix
 
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return self
-        if isinstance(other, IdentityMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return DiagonalMatrix(self.diagonal() + other.diagonal())
         if isinstance(other, DiaMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            self._check_same_shape(other)
             if other.is_diagonal:
                 return DiagonalMatrix(self.diagonal() + other.diagonal())
             return DiaMatrix.__add__(self, other)
         if isinstance(other, Matrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            self._check_same_shape(other)
             return other + self
         return NotImplemented
 
     def __sub__(self, other):
-        from jaxfun.la import IdentityMatrix, Matrix, ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return self
-        if isinstance(other, IdentityMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return DiagonalMatrix(self.diagonal() - other.diagonal())
-        if isinstance(other, DiaMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            if other.is_diagonal:
-                return DiagonalMatrix(self.diagonal() - other.diagonal())
-            return DiaMatrix.__sub__(self, other)
-        if isinstance(other, Matrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return Matrix(self.todense() - other.data)
-        return NotImplemented
+        return self.__add__(-other)
 
     def __rsub__(self, other):
-        from jaxfun.la import IdentityMatrix, Matrix, ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
-            return -self
-        if isinstance(other, IdentityMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
-            return DiagonalMatrix(other.diagonal() - self.diagonal())
-        if isinstance(other, DiaMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
-            if other.is_diagonal:
-                return DiagonalMatrix(other.diagonal() - self.diagonal())
-            return DiaMatrix.__sub__(other, self)
-        if isinstance(other, Matrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
-            return other - self
-        return NotImplemented
+        return (-self).__add__(other)
 
 
 @jax.jit(static_argnums=(1, 2, 3))

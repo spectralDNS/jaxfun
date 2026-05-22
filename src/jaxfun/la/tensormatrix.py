@@ -87,43 +87,7 @@ class TensorMatrix(BaseMatrix):  # noqa: B903
         return TensorMatrix(self.data * alpha)
 
     def __add__(self, other):
-        from jaxfun.la import ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return self
         if isinstance(other, TensorMatrix):
-            if self.data.shape != other.data.shape:
-                raise ValueError(
-                    f"Tensor shape mismatch: {self.data.shape} vs {other.data.shape}"
-                )
+            self._check_same_data_shape(other, label="Tensor")
             return TensorMatrix(self.data + other.data)
-        return NotImplemented
-
-    def __radd__(self, other):
-        return self.__add__(other)
-
-    def __sub__(self, other):
-        from jaxfun.la import ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return self
-        if isinstance(other, TensorMatrix):
-            if self.data.shape != other.data.shape:
-                raise ValueError(
-                    f"Tensor shape mismatch: {self.data.shape} vs {other.data.shape}"
-                )
-            return TensorMatrix(self.data - other.data)
-        return NotImplemented
-
-    def __rsub__(self, other):
-        from jaxfun.la import ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
-            return -self
         return NotImplemented

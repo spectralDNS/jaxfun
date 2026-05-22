@@ -127,9 +127,31 @@ def test_core_matrix_classes_inherit_basematrix() -> None:
 def test_unsupported_binary_operations_use_python_dispatch() -> None:
     tensor = TensorMatrix(jnp.arange(16.0).reshape((2, 2, 2, 2)))
     dense = Matrix(jnp.eye(4))
+    pinned = dense.pin({0: 0.0})
 
     with pytest.raises(TypeError):
         _ = tensor + dense
+    with pytest.raises(TypeError, match="unsupported operand type"):
+        _ = dense - pinned
+    with pytest.raises(TypeError, match="unsupported operand type"):
+        _ = pinned - dense
+
+
+def test_regular_matrices_defer_special_matrix_arithmetic() -> None:
+    identity = IdentityMatrix(4)
+    zero = ZeroMatrix(4)
+    dense = Matrix(jnp.arange(16.0).reshape((4, 4)))
+    sparse = diags([jnp.arange(1.0, 5.0)], offsets=(0,))
+    tensor = TensorMatrix(jnp.arange(16.0).reshape((2, 2, 2, 2)))
+    tp = TPMatrix([diags([jnp.ones(2)], offsets=(0,))] * 2, scale=2.0)
+
+    assert isinstance(dense + identity, Matrix)
+    assert jnp.allclose((dense + identity).todense(), dense.todense() + jnp.eye(4))
+    assert jnp.allclose((sparse - identity).todense(), sparse.todense() - jnp.eye(4))
+    assert (dense + zero) is dense
+    assert (sparse - zero) is sparse
+    assert (tensor + zero) is tensor
+    assert (tp - zero) is tp
 
 
 def test_matrix_arithmetic_with_identity_solves_diagonal_without_lu() -> None:

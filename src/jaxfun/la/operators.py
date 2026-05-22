@@ -23,11 +23,6 @@ def _dtype_or_default(dtype) -> jnp.dtype:
     return jnp.dtype(jnp.float32 if dtype is None else dtype)
 
 
-def _check_same_shape(left, right) -> None:
-    if left.shape != right.shape:
-        raise ValueError(f"Shape mismatch: {left.shape} vs {right.shape}")
-
-
 class SpecialMatrix(BaseMatrix):
     """Base class for shape-preserving special matrix operators."""
 
@@ -103,9 +98,6 @@ class SpecialMatrix(BaseMatrix):
     def __add__(self, other):
         return NotImplemented
 
-    def __radd__(self, other):
-        return NotImplemented
-
     def __len__(self) -> int:
         return self.shape[0]
 
@@ -150,14 +142,17 @@ class IdentityMatrix(SpecialMatrix):
     def __add__[T](self, other: T) -> T: ...
     def __add__(self, other):
         if isinstance(other, ZeroMatrix):
-            _check_same_shape(self, other)
+            self._check_same_shape(other)
             return self
-        if isinstance(other, IdentityMatrix | DiaMatrix):
-            _check_same_shape(self, other)
+        if isinstance(other, IdentityMatrix):
+            self._check_same_shape(other)
+            return self.scale(1) + other.scale(1)
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
             return self.scale(1) + other
         if isinstance(other, Matrix):
-            _check_same_shape(self, other)
-            return other + self
+            self._check_same_shape(other)
+            return Matrix(other.data + self.todense())
         return NotImplemented
 
     @overload
@@ -166,13 +161,16 @@ class IdentityMatrix(SpecialMatrix):
     def __sub__[T](self, other: T) -> T: ...
     def __sub__(self, other):
         if isinstance(other, ZeroMatrix):
-            _check_same_shape(self, other)
+            self._check_same_shape(other)
             return self
-        if isinstance(other, IdentityMatrix | DiaMatrix):
-            _check_same_shape(self, other)
+        if isinstance(other, IdentityMatrix):
+            self._check_same_shape(other)
+            return self.scale(1) - other.scale(1)
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
             return self.scale(1) - other
         if isinstance(other, Matrix):
-            _check_same_shape(self, other)
+            self._check_same_shape(other)
             return self.to_matrix() - other
         return NotImplemented
 
@@ -182,11 +180,14 @@ class IdentityMatrix(SpecialMatrix):
     def __rsub__[T](self, other: T) -> T: ...
     def __rsub__[T](self, other: T) -> Self | T:
         if isinstance(other, ZeroMatrix):
-            _check_same_shape(self, other)
+            self._check_same_shape(other)
             return -self
-        if isinstance(other, DiaMatrix | Matrix):
-            _check_same_shape(self, other)
-            return other - self  # ty:ignore[invalid-return-type]
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
+            return other - self.scale(1)
+        if isinstance(other, Matrix):
+            self._check_same_shape(other)
+            return Matrix(other.data - self.todense())  # ty:ignore[invalid-return-type]
         return NotImplemented
 
 
@@ -232,7 +233,7 @@ class ZeroMatrix(SpecialMatrix):
 
     def __add__[T](self, other: T) -> T:
         if hasattr(other, "shape"):
-            _check_same_shape(self, other)
+            self._check_same_shape(other)
         return other
 
     def __sub__[T](self, other: T) -> T:

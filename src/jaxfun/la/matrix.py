@@ -137,11 +137,7 @@ class Matrix(BaseMatrix):
         _box: _LUCache | None = getattr(self, "_lu_cache", None)
         if _box is not None:
             return _box.value
-        n, m = self.shape
-        if n != m:
-            raise ValueError(
-                f"lu_factor requires a square matrix, got shape {self.shape}"
-            )
+        n, _ = self._check_square("lu_factor")
         lu, piv = jax.scipy.linalg.lu_factor(self.data)
         if float(jnp.min(jnp.abs(jnp.diag(lu)))) == 0.0:
             raise ValueError(
@@ -323,53 +319,14 @@ class Matrix(BaseMatrix):
         return min(self.shape)
 
     def __add__(self, other) -> Matrix:
-        from jaxfun.la import DiaMatrix, IdentityMatrix, ZeroMatrix
+        from jaxfun.la import DiaMatrix
 
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return self
         if isinstance(other, Matrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+            self._check_same_shape(other)
             return Matrix(self.data + other.data)
-        if isinstance(other, DiaMatrix | IdentityMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
             return Matrix(self.data + other.todense())
-        return NotImplemented
-
-    def __radd__(self, other) -> Matrix:
-        return self.__add__(other)
-
-    def __sub__(self, other) -> Matrix:
-        from jaxfun.la import DiaMatrix, IdentityMatrix, ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return self
-        if isinstance(other, Matrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return Matrix(self.data - other.data)
-        if isinstance(other, DiaMatrix | IdentityMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return Matrix(self.data - other.todense())
-        return NotImplemented
-
-    def __rsub__(self, other) -> Matrix:
-        from jaxfun.la import DiaMatrix, IdentityMatrix, ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
-            return -self
-        if isinstance(other, DiaMatrix | IdentityMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
-            return Matrix(other.todense() - self.data)
         return NotImplemented
 
     def __getitem__(self, idx: int | slice | tuple | Array) -> Array:
@@ -404,11 +361,7 @@ class Matrix(BaseMatrix):
             return Matrix((other.T.matvec(self.data.T)).T)  # matvec returns dense array
 
         assert isinstance(other, Matrix)
-        n, m = self.shape
-        if m != other.shape[0]:
-            raise ValueError(
-                f"Shape mismatch for matrix product: ({n}, {m}) @ {other.shape}"
-            )
+        self._check_matmul_shape(other)
         return Matrix(matmat(self.data, other.data))
 
     @overload

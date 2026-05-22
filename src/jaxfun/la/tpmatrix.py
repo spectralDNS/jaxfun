@@ -212,41 +212,10 @@ class TPMatrix(BaseMatrix):  # noqa: B903
         return TPLUFactors(lu_factors=lu_factors, scale=self.coefficient, shape=shape)
 
     def __add__(self, other):
-        from jaxfun.la import ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return self
         if isinstance(other, TPMatrix):
             return TPMatrices([self, other])
         if isinstance(other, TPMatrices):
             return TPMatrices([self, *list(other.tpmats)])
-        return NotImplemented
-
-    def __radd__(self, other):
-        return self.__add__(other)
-
-    def __sub__(self, other):
-        from jaxfun.la import ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return self
-        if isinstance(other, TPMatrix | TPMatrices):
-            return self + (-other)
-        return NotImplemented
-
-    def __rsub__(self, other):
-        from jaxfun.la import ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
-            return -self
-        if isinstance(other, TPMatrices):
-            return other - self
         return NotImplemented
 
 
@@ -407,39 +376,10 @@ class TPMatrices(BaseMatrix):
         return TPMatrices([_scale_tpmatrix(mat, alpha) for mat in self.tpmats])
 
     def __add__(self, other):
-        from jaxfun.la import ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return self
         if isinstance(other, TPMatrix):
             return TPMatrices([*list(self.tpmats), other])
         if isinstance(other, TPMatrices):
             return TPMatrices([*list(self.tpmats), *list(other.tpmats)])
-        return NotImplemented
-
-    def __radd__(self, other):
-        return self.__add__(other)
-
-    def __sub__(self, other):
-        from jaxfun.la import ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-            return self
-        if isinstance(other, TPMatrix | TPMatrices):
-            return self + (-other)
-        return NotImplemented
-
-    def __rsub__(self, other):
-        from jaxfun.la import ZeroMatrix
-
-        if isinstance(other, ZeroMatrix):
-            if self.shape != other.shape:
-                raise ValueError(f"Shape mismatch: {other.shape} vs {self.shape}")
-            return -self
         return NotImplemented
 
     def lu_factor(

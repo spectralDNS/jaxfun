@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from math import prod
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Self, overload
 
 import jax.numpy as jnp
 from flax import nnx
 from jax import Array
 
+from jaxfun.la import DiagonalMatrix
 from jaxfun.la.diamatrix import DiaMatrix, diags
 from jaxfun.la.matrix import Matrix
 
@@ -104,11 +105,20 @@ class SpecialMatrix(nnx.Pytree):
     def __rmatmul__(self, other: Array | JAXFunction) -> Array:
         return self(other)
 
+    def __add__(self, other):
+        raise NotImplementedError
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
     def __mul__(self, other: complex | Array):
         return self.scale(other)
 
     def __rmul__(self, other: complex | Array):
         return self.scale(other)
+
+    def __neg__(self):
+        return self.scale(-1)
 
     def __len__(self) -> int:
         return self.shape[0]
@@ -142,16 +152,16 @@ class IdentityMatrix(SpecialMatrix):
     def get_pivots(self) -> None:
         return None
 
-    def scale(self, alpha: complex | Array) -> DiaMatrix:
-        value = jnp.asarray(alpha, dtype=jnp.result_type(alpha, self.dtype))
-        return diags([jnp.ones(self.shape[0], dtype=value.dtype) * value], offsets=(0,))
+    def scale(self, alpha: complex | Array) -> DiagonalMatrix:
+        return DiagonalMatrix(jnp.ones(self.shape[0])).scale(alpha)
 
     def __call__(self, u: Array | JAXFunction) -> Array:
         return self._as_array(u)
 
-    def __neg__(self) -> DiaMatrix:
-        return self.scale(-1)
-
+    @overload
+    def __add__(self, other: ZeroMatrix) -> IdentityMatrix: ...
+    @overload
+    def __add__[T](self, other: T) -> T: ...
     def __add__(self, other):
         if isinstance(other, ZeroMatrix):
             _check_same_shape(self, other)
@@ -164,9 +174,10 @@ class IdentityMatrix(SpecialMatrix):
             return other + self
         return NotImplemented
 
-    def __radd__(self, other):
-        return self.__add__(other)
-
+    @overload
+    def __sub__(self, other: ZeroMatrix) -> IdentityMatrix: ...
+    @overload
+    def __sub__[T](self, other: T) -> T: ...
     def __sub__(self, other):
         if isinstance(other, ZeroMatrix):
             _check_same_shape(self, other)
@@ -179,13 +190,17 @@ class IdentityMatrix(SpecialMatrix):
             return self.to_matrix() - other
         return NotImplemented
 
-    def __rsub__(self, other):
+    @overload
+    def __rsub__(self, other: ZeroMatrix) -> IdentityMatrix: ...
+    @overload
+    def __rsub__[T](self, other: T) -> T: ...
+    def __rsub__[T](self, other: T) -> Self | T:
         if isinstance(other, ZeroMatrix):
             _check_same_shape(self, other)
             return -self
         if isinstance(other, DiaMatrix | Matrix):
             _check_same_shape(self, other)
-            return other - self
+            return other - self  # ty:ignore[invalid-return-type]
         return NotImplemented
 
 
@@ -220,44 +235,25 @@ class ZeroMatrix(SpecialMatrix):
         return jnp.zeros(self.shape[0], dtype=self.dtype)
 
     def scale(self, alpha: complex | Array) -> ZeroMatrix:
-        return ZeroMatrix(self.state_shape, dtype=jnp.result_type(alpha, self.dtype))
+        result_dtype = jnp.result_type(alpha, self.dtype)
+        if result_dtype == self.dtype:
+            return self
+        return ZeroMatrix(self.state_shape, dtype=result_dtype)
 
     def __call__(self, u: Array | JAXFunction) -> Array:
         w = self._as_array(u)
         return jnp.zeros_like(w)
 
-    def __neg__(self) -> ZeroMatrix:
-        return self
-
-    def __add__(self, other):
+    def __add__[T](self, other: T) -> T:
         if hasattr(other, "shape"):
             _check_same_shape(self, other)
-        if isinstance(other, ZeroMatrix):
-            return self
-        if isinstance(other, IdentityMatrix | DiaMatrix | Matrix):
-            return other
-        return NotImplemented
+        return other
 
-    def __radd__(self, other):
+    def __sub__[T](self, other: T) -> T:
+        return self.__add__(-other)  # ty:ignore[unsupported-operator]
+
+    def __rsub__[T](self, other: T) -> T:
         return self.__add__(other)
-
-    def __sub__(self, other):
-        if hasattr(other, "shape"):
-            _check_same_shape(self, other)
-        if isinstance(other, ZeroMatrix):
-            return self
-        if isinstance(other, IdentityMatrix | DiaMatrix | Matrix):
-            return -other
-        return NotImplemented
-
-    def __rsub__(self, other):
-        if hasattr(other, "shape"):
-            _check_same_shape(self, other)
-        if isinstance(other, ZeroMatrix):
-            return self
-        if isinstance(other, IdentityMatrix | DiaMatrix | Matrix):
-            return other
-        return NotImplemented
 
     def __getitem__(self, key: tuple[int, int], /) -> Array:
         return jnp.zeros((), dtype=self.dtype)

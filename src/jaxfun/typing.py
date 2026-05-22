@@ -20,7 +20,7 @@ from sympy.vector import (
 )
 from typing_extensions import TypedDict
 
-from jaxfun.la import MatrixProtocol
+from jaxfun.la import BaseMatrix
 from jaxfun.la.matrixprotocol import (
     DiaMatrixSolveMethod as DiaMatrixSolveMethod,
     SolverNotApplicable as SolverNotApplicable,
@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     )
     from jaxfun.galerkin.arguments import Jaxc
     from jaxfun.galerkin.orthogonal import OrthogonalSpace
-    from jaxfun.la import TensorMatrix, TPMatrices, TPMatrix
 
 
 type FloatLike = float | sp.Number
@@ -113,13 +112,12 @@ class TestSpaceKind(StrEnum):
 
 
 type DomainType = Literal["inside", "boundary", "intersection", "all"]
-type InnerBilinearResult = Array | MatrixProtocol | TPMatrix | TensorMatrix
-type InnerBilinearResults = list[Array | MatrixProtocol | TPMatrix | TensorMatrix]
+type InnerBilinearResult = Array | BaseMatrix
+type InnerBilinearResults = list[Array | BaseMatrix]
 type InnerLinearResults = list[Array]
-type GalerkinOperator = Array | MatrixProtocol | TPMatrix | TensorMatrix | TPMatrices
-type GalerkinOperatorLike = GalerkinOperator | list[GalerkinOperator]
+type GalerkinOperator = BaseMatrix
 type GalerkinAssembledForm = (
-    GalerkinOperatorLike | tuple[GalerkinOperatorLike, Array | None] | None
+    GalerkinOperator | Array | tuple[GalerkinOperator | Array, Array | None] | None
 )
 
 

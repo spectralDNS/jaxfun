@@ -10,7 +10,14 @@ import numpy as np
 import pytest
 import scipy.sparse
 
-from jaxfun.la.diamatrix import DenseIndexingWarning, DiaMatrix, LUFactors, diags
+from jaxfun.la import BaseMatrix
+from jaxfun.la.diamatrix import (
+    DenseIndexingWarning,
+    DiagonalMatrix,
+    DiaMatrix,
+    LUFactors,
+    diags,
+)
 from jaxfun.la.matrix import Matrix
 from jaxfun.la.pinned import PinnedSystem
 from jaxfun.utils.common import ulp
@@ -125,7 +132,78 @@ class TestConstruction:
     def test_diags_single_diagonal(self):
         A = diags([jnp.array([3.0, 3.0, 3.0])], offsets=(0,))
         assert A.shape == (3, 3)
+        assert isinstance(A, DiagonalMatrix)
+        assert isinstance(A, DiaMatrix)
         assert jnp.allclose(A.diagonal(), jnp.array([3.0, 3.0, 3.0]))
+
+    def test_from_dense_single_diagonal(self):
+        A = DiaMatrix.from_dense(jnp.diag(jnp.array([1.0, 2.0, 3.0])))
+
+        assert isinstance(A, DiagonalMatrix)
+        assert isinstance(A, DiaMatrix)
+        assert jnp.allclose(A.diagonal(), jnp.array([1.0, 2.0, 3.0]))
+
+    def test_diagonalmatrix_applies_coefficient_shaped_state(self):
+        A = DiagonalMatrix(jnp.array([1.0, 2.0, 3.0, 4.0]))
+        u = jnp.ones((2, 2))
+
+        assert jnp.allclose(A @ u, jnp.array([[1.0, 2.0], [3.0, 4.0]]))
+        assert jnp.allclose(A.solve(A @ u), u)
+        assert not hasattr(A, "_lu_cache")
+
+    def test_diagonalmatrix_arithmetic_preserves_diagonal_subclass(self):
+        A = DiagonalMatrix(jnp.array([1.0, 2.0, 3.0]))
+        B = DiagonalMatrix(jnp.array([4.0, 5.0, 6.0]))
+
+        C = 2.0 * A - B
+
+        assert isinstance(C, DiagonalMatrix)
+        assert jnp.allclose(C.diagonal(), jnp.array([-2.0, -1.0, 0.0]))
+
+    def test_diagonalmatrix_scaled_inside_jit(self):
+        A = DiagonalMatrix(jnp.array([1.0, 2.0, 4.0]))
+        x = jnp.array([2.0, 3.0, 5.0])
+
+        @jax.jit
+        def apply_scaled(alpha, rhs):
+            return (alpha * A) @ rhs
+
+        assert jnp.allclose(apply_scaled(0.5, x), jnp.array([1.0, 3.0, 10.0]))
+
+    def test_diagonalmatrix_astype_preserves_diagonal_subclass(self):
+        A = DiagonalMatrix(jnp.array([1.0, 2.0, 3.0]))
+        B = A.astype(jnp.complex64)
+
+        assert isinstance(B, DiagonalMatrix)
+        assert B.dtype == jnp.complex64
+        assert jnp.allclose(B.diagonal(), A.diagonal())
+
+    def test_diamatrix_diagonal_or_none_only_for_main_diagonal(self):
+        A = diags([jnp.array([1.0, 2.0, 3.0])], offsets=(0,))
+        assert isinstance(A, DiagonalMatrix)
+        assert A.is_diagonal
+        diagonal = A.diagonal_or_none()
+        assert diagonal is not None
+        assert jnp.allclose(diagonal, jnp.array([1.0, 2.0, 3.0]))
+
+        shifted = diags([jnp.array([1.0, 2.0])], offsets=(1,), shape=(3, 3))
+        assert not shifted.is_diagonal
+        assert shifted.diagonal_or_none() is None
+
+        _, tridiag = _tridiag(4)
+        assert not tridiag.is_diagonal
+        assert tridiag.diagonal_or_none() is None
+
+    def test_matrix_diagonal_or_none_checks_offdiagonal_entries(self):
+        diagonal = Matrix(jnp.diag(jnp.array([1.0, 2.0, 3.0])))
+        assert diagonal.is_diagonal
+        diagonal_values = diagonal.diagonal_or_none()
+        assert diagonal_values is not None
+        assert jnp.allclose(diagonal_values, jnp.array([1.0, 2.0, 3.0]))
+
+        dense = Matrix(jnp.array([[1.0, 0.5], [0.0, 2.0]]))
+        assert not dense.is_diagonal
+        assert dense.diagonal_or_none() is None
 
     def test_diags_scalar_broadcast(self):
         """A length-1 diagonal should be broadcast to the full diagonal length."""
@@ -767,7 +845,7 @@ class TestLU:
         lu = A.lu_factor(pivot=True)
         # L @ U == P @ A
         PA = a if lu.perm is None else a[lu.perm, :]
-        H = cast(DiaMatrix, lu.L @ lu.U)
+        H = lu.L @ lu.U
         assert jnp.allclose(H.todense(), PA, atol=ulp(100))
         # Solve A x = b
         x_true = jnp.array([1.0, 2.0, 3.0])
@@ -968,11 +1046,13 @@ class TestPin:
         _, A = _tridiag(5)
         sys = A.pin({0: 0.0})
         assert isinstance(sys, PinnedSystem)
+        assert isinstance(sys, BaseMatrix)
 
     def test_pin_returns_pinned_system_matrix(self):
         a, _ = _tridiag(5)
         sys = a.pin({0: 0.0})
         assert isinstance(sys, PinnedSystem)
+        assert isinstance(sys, BaseMatrix)
 
     def test_constraints_stored_as_sorted_tuple(self):
         _, A = _tridiag(6)
@@ -1224,7 +1304,7 @@ class TestPin:
         assert jnp.allclose(x1, x2)
 
     # ------------------------------------------------------------------
-    # Delegation / read-only MatrixProtocol surface
+    # Delegation / read-only BaseMatrix surface
     # ------------------------------------------------------------------
 
     def test_ndim(self):

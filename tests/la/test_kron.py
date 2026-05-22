@@ -214,7 +214,7 @@ class TestTpmatsToKron:
                     m.todense() if isinstance(m, DiaMatrix) else cast(Matrix, m).data
                 )
                 a0 = np.kron(a0, a1)
-            a0 = a0 * float(tpm.scale)  # ty:ignore[invalid-argument-type]
+            a0 = a0 * float(tpm.coefficient)  # ty:ignore[invalid-argument-type]
             result_np = a0 if result_np is None else result_np + a0
 
         assert np.max(np.abs(np.array(A.todense()) - result_np)) < 1e-5
@@ -225,7 +225,7 @@ class TestTpmatsToKron:
         assert isinstance(C, DiaMatrix)
 
     def test_scale_applied_once(self):
-        """Doubling tpm.scale and halving the factor matrices must give same result."""
+        """Doubling tpm.coefficient and halving factors must give same result."""
         A, _ = _poisson_tpmats(N=6)
         C_ref = A.todense()
 
@@ -241,7 +241,7 @@ class TestTpmatsToKron:
             modified.append(
                 TPMatrix(
                     mats_new,
-                    float(tpm.scale) * 2.0,  # ty:ignore[invalid-argument-type]
+                    float(tpm.coefficient) * 2.0,  # ty:ignore[invalid-argument-type]
                     global_indices=tpm.global_indices,
                 )
             )
@@ -265,7 +265,7 @@ class TestTpmatsToKron:
             for m in tpm.mats[1:]:
                 a1 = np.array(m.todense())
                 a0 = np.kron(a0, a1)
-            a0 = a0 * float(tpm.scale)  # ty:ignore[invalid-argument-type]
+            a0 = a0 * float(tpm.coefficient)  # ty:ignore[invalid-argument-type]
             result_np = a0 if result_np is None else result_np + a0
 
         assert np.max(np.abs(np.array(C.todense()) - result_np)) < ulp(100)
@@ -391,7 +391,7 @@ def _make_tpmatrix_2d(
     a0 = jax.random.normal(jax.random.PRNGKey(7), shape=(m0, n0))
     a1 = jax.random.normal(jax.random.PRNGKey(8), shape=(m1, n1))
     tp = TPMatrix(
-        [Matrix(a0), Matrix(a1)],  # ty:ignore[invalid-argument-type]
+        [Matrix(a0), Matrix(a1)],
         scale,
     )
     K = np.kron(a0, a1) * scale
@@ -407,12 +407,44 @@ def _make_tpmatrix_3d(
     for a in mats_np[1:]:
         K = np.kron(K, a)
     K = K * scale
-    tp = TPMatrix([Matrix(jnp.array(a)) for a in mats_np], scale)  # ty:ignore[invalid-argument-type]
+    tp = TPMatrix([Matrix(jnp.array(a)) for a in mats_np], scale)
     return tp, K
 
 
 class TestTPMatrixMatmul:
     """Tests for TPMatrix._matmul_array (A @ u) and _rmatmul_array (u @ A)."""
+
+    def test_diagonal_or_none_for_diagonal_factors(self):
+        d0 = diags([jnp.array([1.0, 2.0])], offsets=(0,))
+        d1 = Matrix(jnp.diag(jnp.array([3.0, 4.0, 5.0])))
+        tp = TPMatrix([d0, d1], scale=2.0)
+
+        expected = 2.0 * d0.diagonal()[:, None] * d1.diagonal()[None, :]
+        assert tp.is_diagonal
+        diagonal = tp.diagonal_or_none()
+        assert diagonal is not None
+        assert jnp.allclose(diagonal, expected)
+
+    def test_diagonal_or_none_rejects_shifted_factor(self):
+        shifted = diags([jnp.array([1.0])], offsets=(1,), shape=(2, 2))
+        diagonal = diags([jnp.array([2.0, 3.0])], offsets=(0,))
+        tp = TPMatrix([shifted, diagonal], scale=1.0)
+
+        assert not tp.is_diagonal
+        assert tp.diagonal_or_none() is None
+
+    def test_tpmatrices_diagonal_or_none_sums_diagonal_terms(self):
+        d0 = diags([jnp.array([1.0, 2.0])], offsets=(0,))
+        d1 = diags([jnp.array([3.0, 4.0, 5.0])], offsets=(0,))
+        tp1 = TPMatrix([d0, d1], scale=1.0)
+        tp2 = TPMatrix([d0, d1], scale=3.0)
+        tpmats = TPMatrices([tp1, tp2])
+
+        expected = 4.0 * d0.diagonal()[:, None] * d1.diagonal()[None, :]
+        assert tpmats.is_diagonal
+        diagonal = tpmats.diagonal_or_none()
+        assert diagonal is not None
+        assert jnp.allclose(diagonal, expected)
 
     # ------------------------------------------------------------------
     # 2-D: square factor matrices
@@ -442,7 +474,7 @@ class TestTPMatrixMatmul:
         T = _diag3(n)
         I = diags([jnp.ones(n)], offsets=(0,))
         K_dia = diakron(T, I)  # symmetric
-        tp = TPMatrix([T, I], 1.0)  # ty:ignore[invalid-argument-type]
+        tp = TPMatrix([T, I], 1.0)
         w = jax.random.normal(jax.random.PRNGKey(2), shape=(n, n))
         # A @ w (flattened) and w @ A (flattened) differ only by interpretation:
         # check against kron dense product
@@ -559,7 +591,7 @@ class TestTpmatsToScipySparse:
         result = tpmats_to_scipy_sparse(list(A.tpmats))
         assert len(result) == len(A.tpmats)
         for tpm, (f0, f1) in zip(A.tpmats, result):
-            scale = complex(tpm.scale).real
+            scale = complex(tpm.coefficient).real
             assert np.allclose(
                 f0.toarray(), np.array(tpm.mats[0].todense()) * scale, atol=1e-6
             )
@@ -569,7 +601,9 @@ class TestTpmatsToScipySparse:
         """Scale is folded into first factor, not applied twice."""
         A, _ = _poisson_tpmats(N=8)
         # Build a scaled copy
-        scaled = [TPMatrix(list(tpm.mats), scale=tpm.scale * 3) for tpm in A.tpmats]
+        scaled = [
+            TPMatrix(list(tpm.mats), scale=tpm.coefficient * 3) for tpm in A.tpmats
+        ]
         orig = tpmats_to_scipy_sparse(list(A.tpmats))
         scl = tpmats_to_scipy_sparse(scaled)
         for (o0, o1), (s0, s1) in zip(orig, scl):
@@ -586,7 +620,9 @@ class TestTpmatsToScipySparse:
     def test_scipy_kron_scale_matches_tpmats_to_kron(self):
         """Scaled tpmats_to_scipy_kron matches scaled tpmats_to_kron."""
         A, _ = _poisson_tpmats(N=8)
-        scaled = [TPMatrix(list(tpm.mats), scale=tpm.scale * 2) for tpm in A.tpmats]
+        scaled = [
+            TPMatrix(list(tpm.mats), scale=tpm.coefficient * 2) for tpm in A.tpmats
+        ]
         K_jax = np.array(tpmats_to_kron(scaled).todense())
         K_sp = tpmats_to_scipy_kron(scaled).toarray()
         assert np.allclose(K_jax, K_sp, atol=1e-5)

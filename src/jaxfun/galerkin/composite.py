@@ -12,7 +12,7 @@ from jax import Array
 from sympy import Number
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.la import DiaMatrix, Matrix, MatrixProtocol, diags
+from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import MeshKind, TestSpaceKind
 from jaxfun.utils.common import Domain, matmat, n
 
@@ -262,9 +262,7 @@ class Composite(OrthogonalSpace):
     def apply_stencil_galerkin(self, b: Matrix) -> Matrix: ...
     @overload
     def apply_stencil_galerkin(self, b: DiaMatrix) -> DiaMatrix: ...
-    @overload
-    def apply_stencil_galerkin(self, b: MatrixProtocol) -> MatrixProtocol: ...
-    def apply_stencil_galerkin(self, b: MatrixProtocol) -> MatrixProtocol:
+    def apply_stencil_galerkin(self, b: Matrix | DiaMatrix) -> Matrix | DiaMatrix:
         """Apply stencil on both sides (Galerkin mass-like transform)."""
         return self.S @ b @ self.ST
 
@@ -274,29 +272,33 @@ class Composite(OrthogonalSpace):
     def apply_stencils_petrovgalerkin(
         self, b: DiaMatrix, PT: DiaMatrix
     ) -> DiaMatrix: ...
-    @overload
     def apply_stencils_petrovgalerkin(
-        self, b: MatrixProtocol, PT: DiaMatrix
-    ) -> MatrixProtocol: ...
-    def apply_stencils_petrovgalerkin(
-        self, b: MatrixProtocol, PT: DiaMatrix
-    ) -> MatrixProtocol:
+        self, b: Matrix | DiaMatrix, PT: DiaMatrix
+    ) -> Matrix | DiaMatrix:
         """Apply test (S) and trial (P) stencils (Petrov-Galerkin)."""
         return self.S @ b @ PT
 
     @overload
     def apply_stencil_left(self, b: Array) -> Array: ...
     @overload
-    def apply_stencil_left(self, b: MatrixProtocol) -> MatrixProtocol: ...
-    def apply_stencil_left(self, b: Array | MatrixProtocol) -> Array | MatrixProtocol:
+    def apply_stencil_left(self, b: Matrix) -> Matrix: ...
+    @overload
+    def apply_stencil_left(self, b: DiaMatrix) -> DiaMatrix: ...
+    def apply_stencil_left(
+        self, b: Array | Matrix | DiaMatrix
+    ) -> Array | Matrix | DiaMatrix:
         """Left-multiply by stencil (test projection)."""
         return self.S @ b
 
     @overload
     def apply_stencil_right(self, a: Array) -> Array: ...
     @overload
-    def apply_stencil_right(self, a: MatrixProtocol) -> MatrixProtocol: ...
-    def apply_stencil_right(self, a: Array | MatrixProtocol) -> Array | MatrixProtocol:
+    def apply_stencil_right(self, a: Matrix) -> Matrix: ...
+    @overload
+    def apply_stencil_right(self, a: DiaMatrix) -> DiaMatrix: ...
+    def apply_stencil_right(
+        self, a: Array | Matrix | DiaMatrix
+    ) -> Array | Matrix | DiaMatrix:
         """Right-multiply by stencil transpose (trial projection)."""
         return a @ self.ST
 

@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from jaxfun.la.matrixprotocol import _CacheBox
+from jaxfun.la.matrixprotocol import BaseMatrix, _CacheBox
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
@@ -15,9 +15,26 @@ if TYPE_CHECKING:
 
 Array = jax.Array
 
+type _LUCache = _CacheBox[LUFactors]
+type _DiagonalCache = _CacheBox[Array]
+
+
+def _solve_diagonal(diagonal: Array, b: Array, axis: int) -> Array:
+    """Solve a main-diagonal system along one axis."""
+    if b.ndim == 1:
+        return b / diagonal
+    if diagonal.shape == b.shape:
+        return b / diagonal
+    if diagonal.size == b.size and diagonal.shape[0] != b.shape[axis % b.ndim]:
+        return (b.reshape((-1,)) / diagonal.reshape((-1,))).reshape(b.shape)
+    axis = axis % b.ndim
+    shape = [1] * b.ndim
+    shape[axis] = diagonal.shape[0]
+    return b / diagonal.reshape(tuple(shape))
+
 
 @nnx.dataclass
-class Matrix(nnx.Pytree):
+class Matrix(BaseMatrix):
     """Dense matrix class backed by a JAX 2-D array.
 
     Mirrors the interface of :class:`~jaxfun.la.sparsemat.DiaMatrix` so that
@@ -40,6 +57,7 @@ class Matrix(nnx.Pytree):
         Y = A.matvec(jnp.ones((3, 4)), axis=1)  # shape (3, 4)
     """
 
+    is_zero = False
     data: Array
 
     def __init__(self, data: Array):
@@ -116,14 +134,10 @@ class Matrix(nnx.Pytree):
         Raises:
             ValueError: if the matrix is not square.
         """
-        _box: _CacheBox[LUFactors] | None = getattr(self, "_lu_cache", None)
+        _box: _LUCache | None = getattr(self, "_lu_cache", None)
         if _box is not None:
             return _box.value
-        n, m = self.shape
-        if n != m:
-            raise ValueError(
-                f"lu_factor requires a square matrix, got shape {self.shape}"
-            )
+        n, _ = self._check_square("lu_factor")
         lu, piv = jax.scipy.linalg.lu_factor(self.data)
         if float(jnp.min(jnp.abs(jnp.diag(lu)))) == 0.0:
             raise ValueError(
@@ -171,6 +185,14 @@ class Matrix(nnx.Pytree):
             A.solve(B, axis=1)  # B shape (k, n)    → (k, n)
             A.solve(T, axis=2)  # T shape (a, b, n) → (a, b, n)
         """
+        n, m = self.shape
+        axis = axis % b.ndim
+        if b.ndim > 1 and n == m == b.size and b.shape[axis] != n:
+            return self.solve(b.reshape((-1,))).reshape(b.shape)
+
+        diagonal_box: _DiagonalCache | None = getattr(self, "_diagonal_cache", None)
+        if diagonal_box is not None:
+            return _solve_diagonal(diagonal_box.value, b, axis)
         return self.lu_factor().solve(b, axis=axis)
 
     @property
@@ -185,6 +207,25 @@ class Matrix(nnx.Pytree):
             k: Diagonal offset (0 = main, positive = upper, negative = lower).
         """
         return jnp.diag(self.data, k)
+
+    @property
+    def is_diagonal(self) -> bool:
+        """Whether this square dense matrix has only main-diagonal entries."""
+        return self.diagonal_or_none() is not None
+
+    def diagonal_or_none(self) -> Array | None:
+        """Return the main diagonal only when this matrix is purely diagonal."""
+        cached: _DiagonalCache | None = getattr(self, "_diagonal_cache", None)
+        if cached is not None:
+            return cached.value
+        n, m = self.shape
+        if n != m:
+            return None
+        diag = jnp.diag(self.data)
+        if bool(jnp.allclose(self.data, jnp.diag(diag), atol=1e-12)):
+            object.__setattr__(self, "_diagonal_cache", _CacheBox(diag))
+            return diag
+        return None
 
     def todense(self) -> Array:
         """Return the underlying ``(n, m)`` array (identity — already dense)."""
@@ -274,27 +315,19 @@ class Matrix(nnx.Pytree):
         """
         return Matrix(self.data[:n, :m])
 
-    def __mul__(self, other: complex | Array) -> Matrix:
-        return self.scale(other)
-
-    def __rmul__(self, other: complex | Array) -> Matrix:
-        return self.scale(other)
-
-    def __neg__(self) -> Matrix:
-        return self.scale(-1)
-
     def __len__(self) -> int:
         return min(self.shape)
 
-    def __add__(self, other: Matrix) -> Matrix:
-        if self.shape != other.shape:
-            raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-        return Matrix(self.data + other.data)
+    def __add__(self, other) -> Matrix:
+        from jaxfun.la import DiaMatrix
 
-    def __sub__(self, other: Matrix) -> Matrix:
-        if self.shape != other.shape:
-            raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
-        return Matrix(self.data - other.data)
+        if isinstance(other, Matrix):
+            self._check_same_shape(other)
+            return Matrix(self.data + other.data)
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
+            return Matrix(self.data + other.todense())
+        return NotImplemented
 
     def __getitem__(self, idx: int | slice | tuple | Array) -> Array:
         return self.data.__getitem__(idx)
@@ -319,17 +352,16 @@ class Matrix(nnx.Pytree):
             return matmat(self.data, other.array)
 
         if isinstance(other, Array):
+            n, m = self.shape
+            if other.ndim > 1 and (n, m) == (other.size, other.size):
+                return (self.data @ other.reshape((-1,))).reshape(other.shape)
             return matmat(self.data, other)
 
         if isinstance(other, DiaMatrix):
             return Matrix((other.T.matvec(self.data.T)).T)  # matvec returns dense array
 
         assert isinstance(other, Matrix)
-        n, m = self.shape
-        if m != other.shape[0]:
-            raise ValueError(
-                f"Shape mismatch for matrix product: ({n}, {m}) @ {other.shape}"
-            )
+        self._check_matmul_shape(other)
         return Matrix(matmat(self.data, other.data))
 
     @overload

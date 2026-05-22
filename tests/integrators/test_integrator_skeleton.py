@@ -65,7 +65,7 @@ def test_prepare_assembles_mass_and_linear_forms_for_first_order() -> None:
     expected_mass = inner(v * u_ind, sparse=True)
     expected_mass_dense = expected_mass.todense()
     if integrator.mass_operator is not None:
-        actual_mass_dense = integrator.mass_operator.todense()  # ty:ignore[unresolved-attribute]
+        actual_mass_dense = integrator.mass_operator.todense()
     else:
         assert integrator.mass_diag is not None
         actual_mass_dense = jnp.diag(integrator.mass_diag)
@@ -75,7 +75,7 @@ def test_prepare_assembles_mass_and_linear_forms_for_first_order() -> None:
     assert integrator.linear_operator is not None or integrator.linear_diag is not None
     expected_linear_dense = expected_linear.todense()
     if integrator.linear_operator is not None:
-        actual_linear_dense = integrator.linear_operator.todense()  # ty:ignore[unresolved-attribute]
+        actual_linear_dense = integrator.linear_operator.todense()
     else:
         assert integrator.linear_diag is not None
         actual_linear_dense = jnp.diag(integrator.linear_diag)
@@ -115,6 +115,6 @@ def test_prepare_assembles_weighted_time_derivative_operator() -> None:
     expected_mass_dense = expected_mass.todense()
 
     assert integrator.mass_operator is not None
-    actual_mass_dense = integrator.mass_operator.todense()  # ty:ignore[unresolved-attribute]
+    actual_mass_dense = integrator.mass_operator.todense()
     assert jnp.allclose(actual_mass_dense, expected_mass_dense)
     assert not jnp.allclose(actual_mass_dense, jnp.eye(F.num_dofs))

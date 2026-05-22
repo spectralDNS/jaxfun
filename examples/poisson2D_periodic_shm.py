@@ -3,9 +3,9 @@
 import os
 import sys
 
-import jax
+import pytest
 
-jax.config.update("jax_num_cpu_devices", 2)
+pytestmark = pytest.mark.spmd
 
 import jax.numpy as jnp
 import sympy as sp

@@ -173,5 +173,5 @@ def test_directsumtps():
     for f, v in T.tpspaces.items():
         a.append(v.evaluate_mesh(xj, T.bndvals.get(f, c), True))
     z0 = jnp.sum(jnp.array(a), axis=0)
-    z1 = T.evaluate_mesh(xj, c, True)
+    z1 = T.evaluate_mesh(list(xj), c, True)
     assert jnp.linalg.norm(z0 - z1) < jnp.sqrt(ulp(100))

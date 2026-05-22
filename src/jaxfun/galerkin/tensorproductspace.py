@@ -1057,6 +1057,14 @@ class DirectSumTPS(TensorProductSpace):
                     self.bndvals[tensorspace] = jnp.array(uh).T
         self.orthogonal = self.get_orthogonal()
 
+    @property
+    def _physical_sharding(self) -> NamedSharding:
+        return self.tpspaces[next(iter(self.tpspaces))]._physical_sharding  # type: ignore[union-attr]
+
+    @property
+    def _spectral_sharding(self) -> NamedSharding:
+        return self.tpspaces[next(iter(self.tpspaces))]._spectral_sharding  # type: ignore[union-attr]
+
     def split(
         self, spaces: list[OrthogonalSpace | DirectSum]
     ) -> dict[tuple[OrthogonalSpace, ...], TensorProductSpace]:

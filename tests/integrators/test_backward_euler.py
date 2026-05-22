@@ -189,7 +189,7 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
         N: int | None = None,
     ):
         calls.append(0)
-        return original_backward(c, kind=kind, N=N)
+        return original_backward(c, kind=kind, N=N)  # ty:ignore[invalid-argument-type]
 
     def count_eval(
         c,
@@ -198,7 +198,7 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
         N: int | None = None,
     ):
         calls.append(int(k))
-        return original_eval(c, k=k, kind=kind, N=N)
+        return original_eval(c, k=k, kind=kind, N=N)  # ty:ignore[invalid-argument-type]
 
     monkeypatch.setattr(integrator.functionspace, "backward", count_backward)
     monkeypatch.setattr(integrator.functionspace, "backward_primitive", count_eval)
@@ -251,7 +251,7 @@ def test_rk4_solve_passes_padding_to_nonlinear_backward_calls(
         N: int | None = None,
     ):
         calls.append(N)
-        return original_eval(c, k=k, kind=kind, N=N)
+        return original_eval(c, k=k, kind=kind, N=N)  # ty:ignore[invalid-argument-type]
 
     monkeypatch.setattr(integrator.functionspace, "backward_primitive", count_eval)
 

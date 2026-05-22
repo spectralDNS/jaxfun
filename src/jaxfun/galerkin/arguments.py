@@ -27,7 +27,13 @@ from sympy.vector import VectorAdd
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseScalar, CoordSys, Vector, latex_symbols
-from jaxfun.typing import FunctionSpaceType, TestSpaceType, TrialSpaceType
+from jaxfun.typing import (
+    FunctionSpaceType,
+    MeshKind,
+    Padding,
+    TestSpaceType,
+    TrialSpaceType,
+)
 
 from .composite import DirectSum
 from .orthogonal import OrthogonalSpace
@@ -686,10 +692,10 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
 
     def backward(
         self,
-        kind: str = "quadrature",
-        N: int | tuple[int, ...] | tuple[tuple[int, ...], ...] | None = None,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
+        N: Padding = None,
     ) -> Array:
-        return self.functionspace.backward(self.array, kind=kind, N=N)
+        return self.functionspace.backward(self.array, kind=kind, N=N)  # ty: ignore[invalid-argument-type]
 
     def doit(self, **hints: Any) -> Expr | AppliedUndef:
         hints["linear"] = hints.get("linear", False)

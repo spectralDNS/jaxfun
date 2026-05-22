@@ -548,7 +548,7 @@ class TensorProductSpace:
     def backward(
         self,
         c: Array,
-        kind: MeshKind = MeshKind.QUADRATURE,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
         """Backward transform.
@@ -828,7 +828,7 @@ class VectorTensorProductSpace:
     def backward(
         self,
         u: Array,
-        kind: MeshKind = MeshKind.QUADRATURE,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
         N: tuple[tuple[int | None, ...], ...] | None = None,
     ) -> Array:
         """Backward transform with optional padding."""
@@ -1059,11 +1059,15 @@ class DirectSumTPS(TensorProductSpace):
 
     @property
     def _physical_sharding(self) -> NamedSharding:
-        return self.tpspaces[next(iter(self.tpspaces))]._physical_sharding  # type: ignore[union-attr]
+        return cast(
+            NamedSharding, self.tpspaces[next(iter(self.tpspaces))]._physical_sharding
+        )
 
     @property
     def _spectral_sharding(self) -> NamedSharding:
-        return self.tpspaces[next(iter(self.tpspaces))]._spectral_sharding  # type: ignore[union-attr]
+        return cast(
+            NamedSharding, self.tpspaces[next(iter(self.tpspaces))]._spectral_sharding
+        )
 
     def split(
         self, spaces: list[OrthogonalSpace | DirectSum]
@@ -1098,7 +1102,7 @@ class DirectSumTPS(TensorProductSpace):
     def backward(
         self,
         c: Array,
-        kind: MeshKind = MeshKind.QUADRATURE,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
         """Evaluate total (homogeneous + lifting) backward transform."""

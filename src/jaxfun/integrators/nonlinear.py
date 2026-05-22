@@ -115,7 +115,7 @@ class NonlinearCompiler:
                 space: FunctionSpaceType = space,
                 jaxf: JAXFunction = jaxf,
             ) -> Array:
-                return space.backward(jaxf.array, N=N)
+                return space.backward(jaxf.array, N=N)  # ty: ignore[invalid-argument-type]
 
             return self.memoize(node, evaluate_leaf)
 
@@ -145,7 +145,7 @@ class NonlinearCompiler:
             jaxf: JAXFunction = jaxf,
             derivative_order: int | tuple[int, ...] = derivative_order,
         ) -> Array:
-            return space.backward_primitive(jaxf.array, k=derivative_order, N=N)
+            return space.backward_primitive(jaxf.array, k=derivative_order, N=N)  # ty: ignore[invalid-argument-type]
 
         return self.memoize(node, evaluate_derivative)
 

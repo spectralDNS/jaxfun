@@ -31,7 +31,7 @@ pytestmark = pytest.mark.spmd
     ids=["ChexChe", "LegxLeg", "FxF", "FxChe", "FxLeg"],
 )
 def test_forward_backward_2d_spmd(space0, space1) -> None:
-    T = TensorProduct(space0(8), space1(8))
+    T = TensorProduct(space0(16), space1(16))
     x, y = T.system.base_scalars()
     ue = sp.sin(x) * sp.sin(y)
     uh = project(ue, T)
@@ -56,7 +56,7 @@ def test_forward_backward_2d_spmd(space0, space1) -> None:
     ids=["ChexChexChe", "FxChexLeg", "FxFxLeg"],
 )
 def test_evaluate_3d_spmd(space0, space1, space2) -> None:
-    T = TensorProduct(space0(8), space1(8), space2(8))
+    T = TensorProduct(space0(16), space1(16), space2(16))
     x, y, z = T.system.base_scalars()
     ue = sp.cos(x) * sp.sin(y) * sp.cos(z)
     uh = project(ue, T)

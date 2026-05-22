@@ -372,7 +372,7 @@ def test_etdrk4_tensorproduct_solve_passes_padding_through(
         N: tuple[int, ...] | None = None,
     ):
         calls.append(N)
-        return original_eval(c, k=k, kind=kind, N=N)
+        return original_eval(c, k=k, kind=kind, N=N)  # ty:ignore[invalid-argument-type]
 
     monkeypatch.setattr(integrator.functionspace, "backward_primitive", count_eval)
     _ = integrator.solve(dt=dt, steps=steps, N=(pad, pad), progress=False)

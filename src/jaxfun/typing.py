@@ -38,12 +38,11 @@ if TYPE_CHECKING:
     from jaxfun.galerkin.orthogonal import OrthogonalSpace
     from jaxfun.la import (
         DiaMatrix,
-        IdentityMatrix,
         Matrix,
+        SpecialMatrix,
         TensorMatrix,
         TPMatrices,
         TPMatrix,
-        ZeroMatrix,
     )
 
 
@@ -124,13 +123,7 @@ type InnerBilinearResult = Array | MatrixProtocol | TPMatrix | TensorMatrix
 type InnerBilinearResults = list[Array | MatrixProtocol | TPMatrix | TensorMatrix]
 type InnerLinearResults = list[Array]
 type GalerkinOperator = (
-    DiaMatrix
-    | Matrix
-    | TPMatrix
-    | TensorMatrix
-    | TPMatrices
-    | IdentityMatrix
-    | ZeroMatrix
+    DiaMatrix | Matrix | TPMatrix | TensorMatrix | TPMatrices | SpecialMatrix
 )
 type GalerkinAssembledForm = (
     GalerkinOperator | Array | tuple[GalerkinOperator | Array, Array | None] | None

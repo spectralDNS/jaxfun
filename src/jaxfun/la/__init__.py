@@ -9,6 +9,7 @@ from .matrix import Matrix as Matrix
 from .matrixprotocol import MatrixProtocol as MatrixProtocol
 from .operators import (
     IdentityMatrix as IdentityMatrix,
+    SpecialMatrix as SpecialMatrix,
     ZeroMatrix as ZeroMatrix,
 )
 from .pinned import PinnedSystem as PinnedSystem

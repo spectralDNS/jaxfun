@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from math import prod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
 import jax.numpy as jnp
 from flax import nnx
@@ -27,10 +27,10 @@ def _check_same_shape(left, right) -> None:
         raise ValueError(f"Shape mismatch: {left.shape} vs {right.shape}")
 
 
-class IdentityMatrix(nnx.Pytree):  # noqa: B903
-    """Identity operator that preserves coefficient-array shape."""
+class SpecialMatrix(nnx.Pytree):
+    """Base class for shape-preserving special matrix operators."""
 
-    is_zero = False
+    is_diagonal = True
 
     def __init__(
         self, state_shape: int | tuple[int, ...], dtype: jnp.dtype | None = None
@@ -59,18 +59,74 @@ class IdentityMatrix(nnx.Pytree):  # noqa: B903
     def data(self) -> Array:
         return self.todense()
 
+    def diagonal(self, k: int = 0) -> Array:
+        raise NotImplementedError
+
+    def diagonal_or_none(self) -> Array:
+        return self.diagonal().reshape(self.state_shape)
+
     @property
-    def is_diagonal(self) -> bool:
-        return True
+    def T(self) -> Self:
+        return self
+
+    def todense(self) -> Array:
+        return jnp.diag(self.diagonal())
+
+    def tosparse(self, *, tol: int = 100) -> DiaMatrix:
+        return diags([self.diagonal()], offsets=(0,))
+
+    def to_matrix(self) -> Matrix:
+        return Matrix(self.todense())
+
+    def get_row(self, i: int | Array) -> Array:
+        return self.todense()[i]
+
+    def get_column(self, j: int | Array) -> Array:
+        return self.todense()[:, j]
+
+    def scale(self, alpha: complex | Array):
+        raise NotImplementedError
+
+    def astype(self, dtype: jnp.dtype) -> Self:
+        return type(self)(self.state_shape, dtype=dtype)
+
+    def _as_array(self, u: Array | JAXFunction) -> Array:
+        from jaxfun.galerkin import JAXFunction
+
+        return u.array if isinstance(u, JAXFunction) else u
+
+    def __call__(self, u: Array | JAXFunction) -> Array:
+        raise NotImplementedError
+
+    def __matmul__(self, other: Array | JAXFunction) -> Array:
+        return self(other)
+
+    def __rmatmul__(self, other: Array | JAXFunction) -> Array:
+        return self(other)
+
+    def __mul__(self, other: complex | Array):
+        return self.scale(other)
+
+    def __rmul__(self, other: complex | Array):
+        return self.scale(other)
+
+    def __len__(self) -> int:
+        return self.shape[0]
+
+    def __getitem__(self, key: tuple[int, int], /) -> Array:
+        return self.todense()[key]
+
+
+class IdentityMatrix(SpecialMatrix):
+    """Identity operator that preserves coefficient-array shape."""
+
+    is_zero = False
 
     def diagonal(self, k: int = 0) -> Array:
         if k != 0:
             n = max(self.shape[0] - abs(k), 0)
             return jnp.zeros(n, dtype=self.dtype)
         return jnp.ones(self.shape[0], dtype=self.dtype)
-
-    def diagonal_or_none(self) -> Array:
-        return jnp.ones(self.state_shape, dtype=self.dtype)
 
     def matvec(self, x: Array, axis: int = 0) -> Array:
         return x.astype(jnp.result_type(x.dtype, self.dtype), copy=False)
@@ -86,48 +142,12 @@ class IdentityMatrix(nnx.Pytree):  # noqa: B903
     def get_pivots(self) -> None:
         return None
 
-    @property
-    def T(self) -> IdentityMatrix:
-        return self
-
-    def todense(self) -> Array:
-        return jnp.eye(self.shape[0], dtype=self.dtype)
-
-    def tosparse(self, *, tol: int = 100) -> DiaMatrix:
-        return diags([jnp.ones(self.shape[0], dtype=self.dtype)], offsets=(0,))
-
-    def to_matrix(self) -> Matrix:
-        return Matrix(self.todense())
-
-    def get_row(self, i: int | Array) -> Array:
-        return self.todense()[i]
-
-    def get_column(self, j: int | Array) -> Array:
-        return self.todense()[:, j]
-
     def scale(self, alpha: complex | Array) -> DiaMatrix:
         value = jnp.asarray(alpha, dtype=jnp.result_type(alpha, self.dtype))
         return diags([jnp.ones(self.shape[0], dtype=value.dtype) * value], offsets=(0,))
 
-    def astype(self, dtype: jnp.dtype) -> IdentityMatrix:
-        return IdentityMatrix(self.state_shape, dtype=dtype)
-
     def __call__(self, u: Array | JAXFunction) -> Array:
-        from jaxfun.galerkin import JAXFunction
-
-        return u.array if isinstance(u, JAXFunction) else u
-
-    def __matmul__(self, other: Array | JAXFunction) -> Array:
-        return self(other)
-
-    def __rmatmul__(self, other: Array | JAXFunction) -> Array:
-        return self(other)
-
-    def __mul__(self, other: complex | Array) -> DiaMatrix:
-        return self.scale(other)
-
-    def __rmul__(self, other: complex | Array) -> DiaMatrix:
-        return self.scale(other)
+        return self._as_array(u)
 
     def __neg__(self) -> DiaMatrix:
         return self.scale(-1)
@@ -168,52 +188,19 @@ class IdentityMatrix(nnx.Pytree):  # noqa: B903
             return other - self
         return NotImplemented
 
-    def __len__(self) -> int:
-        return self.shape[0]
 
-    def __getitem__(self, key: tuple[int, int], /) -> Array:
-        return self.todense()[key]
-
-
-class ZeroMatrix(nnx.Pytree):  # noqa: B903
+class ZeroMatrix(SpecialMatrix):
     """Zero operator that preserves coefficient-array shape on application."""
 
     is_zero = True
-    is_diagonal = True
-
-    def __init__(
-        self, state_shape: int | tuple[int, ...], dtype: jnp.dtype | None = None
-    ) -> None:
-        self.state_shape = _as_state_shape(state_shape)
-        self._dtype = _dtype_or_default(dtype)
-
-    @property
-    def shape(self) -> tuple[int, int]:
-        n = int(prod(self.state_shape))
-        return (n, n)
-
-    @property
-    def ndim(self) -> int:
-        return 2
-
-    @property
-    def dtype(self) -> jnp.dtype:
-        return self._dtype
 
     @property
     def size(self) -> int:
         return 0
 
-    @property
-    def data(self) -> Array:
-        return self.todense()
-
     def diagonal(self, k: int = 0) -> Array:
         n = self.shape[0] if k == 0 else max(self.shape[0] - abs(k), 0)
         return jnp.zeros(n, dtype=self.dtype)
-
-    def diagonal_or_none(self) -> Array:
-        return jnp.zeros(self.state_shape, dtype=self.dtype)
 
     def matvec(self, x: Array, axis: int = 0) -> Array:
         return jnp.zeros_like(x)
@@ -226,19 +213,6 @@ class ZeroMatrix(nnx.Pytree):  # noqa: B903
     def lu_factor(self) -> ZeroMatrix:
         raise ValueError("Cannot factorize the zero operator")
 
-    @property
-    def T(self) -> ZeroMatrix:
-        return self
-
-    def todense(self) -> Array:
-        return jnp.zeros(self.shape, dtype=self.dtype)
-
-    def tosparse(self, *, tol: int = 100) -> DiaMatrix:
-        return diags([jnp.zeros(self.shape[0], dtype=self.dtype)], offsets=(0,))
-
-    def to_matrix(self) -> Matrix:
-        return Matrix(self.todense())
-
     def get_row(self, i: int | Array) -> Array:
         return jnp.zeros(self.shape[1], dtype=self.dtype)
 
@@ -248,26 +222,9 @@ class ZeroMatrix(nnx.Pytree):  # noqa: B903
     def scale(self, alpha: complex | Array) -> ZeroMatrix:
         return ZeroMatrix(self.state_shape, dtype=jnp.result_type(alpha, self.dtype))
 
-    def astype(self, dtype: jnp.dtype) -> ZeroMatrix:
-        return ZeroMatrix(self.state_shape, dtype=dtype)
-
     def __call__(self, u: Array | JAXFunction) -> Array:
-        from jaxfun.galerkin import JAXFunction
-
-        w = u.array if isinstance(u, JAXFunction) else u
+        w = self._as_array(u)
         return jnp.zeros_like(w)
-
-    def __matmul__(self, other: Array | JAXFunction) -> Array:
-        return self(other)
-
-    def __rmatmul__(self, other: Array | JAXFunction) -> Array:
-        return self(other)
-
-    def __mul__(self, other: complex | Array) -> ZeroMatrix:
-        return self.scale(other)
-
-    def __rmul__(self, other: complex | Array) -> ZeroMatrix:
-        return self.scale(other)
 
     def __neg__(self) -> ZeroMatrix:
         return self
@@ -301,9 +258,6 @@ class ZeroMatrix(nnx.Pytree):  # noqa: B903
         if isinstance(other, IdentityMatrix | DiaMatrix | Matrix):
             return other
         return NotImplemented
-
-    def __len__(self) -> int:
-        return self.shape[0]
 
     def __getitem__(self, key: tuple[int, int], /) -> Array:
         return jnp.zeros((), dtype=self.dtype)

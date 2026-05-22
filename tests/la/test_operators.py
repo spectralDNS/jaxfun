@@ -6,6 +6,7 @@ from jaxfun.la import (
     DiaMatrix,
     IdentityMatrix,
     Matrix,
+    SpecialMatrix,
     TensorMatrix,
     TPMatrices,
     TPMatrix,
@@ -18,6 +19,7 @@ def test_identity_matrix_preserves_state_shape() -> None:
     identity = IdentityMatrix((2, 3))
     x = jnp.arange(6.0).reshape((2, 3))
 
+    assert isinstance(identity, SpecialMatrix)
     assert identity.shape == (6, 6)
     assert identity.is_diagonal
     assert identity.diagonal_or_none().shape == x.shape
@@ -29,6 +31,7 @@ def test_zero_matrix_preserves_state_shape_and_rejects_solve() -> None:
     zero = ZeroMatrix((2, 3))
     x = jnp.arange(6.0).reshape((2, 3))
 
+    assert isinstance(zero, SpecialMatrix)
     assert zero.shape == (6, 6)
     assert zero.is_zero
     assert zero.is_diagonal

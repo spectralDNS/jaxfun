@@ -609,10 +609,7 @@ class TPMatricesWavenumberSolver:
         B_data_batch: Array | None = None,
         poly_offsets: tuple[int, ...] | None = None,
     ) -> None:
-        from jaxfun.la.diamatrix import (
-            LUFactors as _DiaLUFactors,
-            _lu_banded_no_pivot_kernel,
-        )
+        from jaxfun.la.diamatrix import _lu_banded_no_pivot_kernel
 
         self.poly_axis = poly_axis
         self.shape = shape
@@ -809,18 +806,6 @@ class TPMatricesWavenumberSolver:
             all_L_offsets, all_U_offsets, n_P_local, self._L_data_local.dtype
         )
 
-        # Build _lu_stacked directly from the already-stacked _local_L/_local_U.
-        # This avoids the O(n_F) Python loop + jax.tree.map(stack) of the old
-        # approach, which was a significant contributor to startup latency.
-        n = n_P_local
-        self._lu_stacked = _DiaLUFactors(
-            L=DiaMatrix(data=_local_L, offsets=all_L_offsets, shape=(n, n)),
-            U=DiaMatrix(data=_local_U, offsets=all_U_offsets, shape=(n, n)),
-            shape=(n, n),
-            perm=None,
-        )
-        self._vmap_solve2 = jax.jit(jax.vmap(lambda lu, b: lu.solve(b)))
-
         # Build per-instance JIT'd solve functions.  L/U data are fixed after
         # init and captured as closure constants; only rhs is a dynamic argument.
         _vmap_fn = self._vmap_solve
@@ -894,62 +879,21 @@ class TPMatricesWavenumberSolver:
             rhs: Right-hand side shaped ``self.shape``.
 
         Returns:
-            Solution with the same shape as ``rhs``.
+            Solution with the same shape and sharding as ``rhs``.
         """
         if len(jax.devices()) > 1:
             # Dispatch one JIT per local device (JAX async — XLA schedules
             # them concurrently).  Each JIT is communication-free and closes
             # over its own L/U slice already placed on that device.
-            n_local = jax.local_device_count()
             results = [
                 self._local_solve_jits[d](rhs.addressable_data(d))
-                for d in range(n_local)
+                for d in range(jax.local_device_count())
             ]
-            if n_local == 1:
-                return results[0]
-            # Gather to device 0 (intra-host copy on CPU) and concatenate
-            # to form the full process-local result for the caller.
-            return jnp.concatenate(
-                [jax.device_put(r, jax.local_devices()[0]) for r in results],
-                axis=0,
+            return jax.make_array_from_single_device_arrays(
+                rhs.shape, rhs.sharding, results
             )
+
         return self._solve_jit(rhs)
-
-    @jax.jit(static_argnums=(0,))
-    def solve2(self, rhs: Array) -> Array:
-        """Alternative solve that vmaps :meth:`~jaxfun.la.diamatrix.LUFactors.solve`
-        directly over a batched :class:`~jaxfun.la.diamatrix.LUFactors` pytree.
-
-        All ``LUFactors`` for the wavenumber batch share the same aligned
-        ``L``/``U`` offsets and ``shape``, so their leaves can be stacked once
-        (in ``__init__``) and ``jax.vmap`` maps ``lu.solve(b)`` over the
-        leading batch axis — no custom scan kernels required.
-
-        Args:
-            rhs: Right-hand side shaped ``self.shape``.
-
-        Returns:
-            Solution with the same shape as ``rhs``.
-        """
-        shape = self.shape
-        ndim = len(shape)
-        poly_axis = self.poly_axis
-        n_P = shape[poly_axis]
-
-        fourier_axes = [a for a in range(ndim) if a != poly_axis]
-        fourier_shape = tuple(shape[a] for a in fourier_axes)
-        n_F = int(np.prod(fourier_shape)) if fourier_shape else 1
-
-        axes_order = fourier_axes + [poly_axis]
-        rhs_2d = jnp.transpose(rhs, axes_order).reshape(n_F, n_P)
-
-        sol_2d = self._vmap_solve2(self._lu_stacked, rhs_2d)
-
-        sol_perm = sol_2d.reshape(fourier_shape + (n_P,))
-        inv_perm = [0] * ndim
-        for new_pos, old_pos in enumerate(axes_order):
-            inv_perm[old_pos] = new_pos
-        return jnp.transpose(sol_perm, inv_perm)
 
 
 class TPMatricesDenseLUFactors:

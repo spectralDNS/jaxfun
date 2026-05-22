@@ -9,8 +9,7 @@ from typing import NoReturn, TypeGuard, cast
 import jax
 import jax.numpy as jnp
 import sympy as sp
-from jax import Array
-from jax.experimental.shard_map import shard_map
+from jax import Array, shard_map
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
 from jaxfun.coordinates import CoordSys
@@ -282,7 +281,11 @@ class TensorProductSpace:
             for i in range(dim)
         ]
         if not use_einsum:
-            c = C[0] @ c @ C[1] if dim == 2 else C[2] @ (C[1] @ (C[0] @ c))
+            if dim == 2:
+                c = C[0] @ c @ C[1]
+            else:
+                for Ci in C:
+                    c = jnp.tensordot(Ci, c, axes=[[0], [0]])
         else:
             path = "i,j,ij" if dim == 2 else "i,j,k,ijk"
             c = jnp.einsum(path, *C, c)
@@ -331,8 +334,7 @@ class TensorProductSpace:
 
             # Shard C[0] along axis 1 (N_0 dim) to match c's axis-0 sharding.
             # C[1], ..., C[dim-1] are replicated so every device sees them in full.
-            mesh = self._spectral_sharding.mesh
-            C0_sharded = jax.device_put(C[0], NamedSharding(mesh, P(None, "k")))
+            C0_sharded = jax.device_put(C[0], self._physical_sharding)
 
             c_spec = self._spectral_sharding.spec
 
@@ -343,10 +345,10 @@ class TensorProductSpace:
 
             return shard_map(
                 _local_eval,
-                mesh=mesh,
+                mesh=self._spectral_sharding.mesh,
                 in_specs=(c_spec, P(None, "k")) + tuple(P() for _ in range(1, dim)),
                 out_specs=P(),
-                check_rep=False,
+                check_vma=False,
             )(c, C0_sharded, *C[1:])
         return self._evaluate_single_device(x, c, use_einsum)
 
@@ -450,10 +452,14 @@ class TensorProductSpace:
         )
 
         # All-to-all: transpose the sharding (one collective, O(N^d/P) per device).
-        new_spec: list = [None] * dim
-        for s_ax, u_ax in zip(sharded, unsharded):
-            new_spec[u_ax] = spec[s_ax]
-        transposed = NamedSharding(sharding.mesh, P(*new_spec))
+        # The two pre-built shardings are each other's transpose by construction.
+        transposed = (
+            self._physical_sharding
+            if sharding is self._spectral_sharding
+            else self._spectral_sharding
+        )
+        assert isinstance(transposed, NamedSharding)
+
         c = jax.device_put(c, transposed)
 
         # Phase 2 — originally-sharded axes: now fully local after the transpose.
@@ -534,7 +540,7 @@ class TensorProductSpace:
                 mesh=sharding.mesh,
                 in_specs=(sharding.spec,),
                 out_specs=P(*new_spec),
-                check_rep=False,
+                check_vma=False,
             )
 
         return self._spmd_local_fn_cache[cache_key](c)

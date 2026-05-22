@@ -855,7 +855,7 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
                 [jnp.broadcast_to(ui, V.tensorspaces[0].num_quad_points) for ui in uj],
                 axis=0,
             )
-        return V.forward(uj)
+        return V.forward(jax.device_put(uj, V._physical_sharding))
 
     u = TrialFunction(V)
     v = TestFunction(V)

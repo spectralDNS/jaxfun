@@ -86,7 +86,7 @@ class TestTrainer:
     def lsqr_loss_fn_and_module(self):
         """Create FlaxFunction and Loss function for testing"""
         m = MLPSpace(5, dims=1, rank=0, name="MLP")
-        u = FlaxFunction(m, "u")
+        u = FlaxFunction(m, "u", rngs=nnx.Rngs(101))
         x = jnp.array([[1.0]])
         lsqr = Loss((u, x))
         return lsqr, u

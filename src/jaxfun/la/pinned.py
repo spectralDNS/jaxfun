@@ -13,6 +13,8 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
+from jaxfun.la.matrixprotocol import BaseMatrix
+
 if TYPE_CHECKING:
     import jax
 
@@ -22,7 +24,7 @@ if TYPE_CHECKING:
 
 
 @nnx.dataclass
-class PinnedSystem(nnx.Pytree):
+class PinnedSystem(BaseMatrix):
     """A linear system with pinned (constrained) degrees of freedom.
 
     Created by calling :meth:`~jaxfun.la.DiaMatrix.pin` or
@@ -124,9 +126,13 @@ class PinnedSystem(nnx.Pytree):
         b_mod = self.fix_rhs(b, axis=axis)
         return self.matrix.solve(b_mod, axis=axis)
 
+    def scale(self, alpha: complex | Array) -> PinnedSystem:
+        """Pinned systems cannot be scaled without changing constraint rows."""
+        raise TypeError("PinnedSystem does not support scaling")
+
     # ------------------------------------------------------------------
     # Read-only delegation to the underlying modified matrix.
-    # These give PinnedSystem the inspection half of MatrixProtocol so
+    # These give PinnedSystem the inspection half of BaseMatrix so
     # it can be used wherever a read-only matrix view is expected.
     # Arithmetic methods (scale, T, __add__, …) are intentionally *not*
     # delegated because they would silently break the constraint structure.

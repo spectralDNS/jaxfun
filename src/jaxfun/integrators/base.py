@@ -2,7 +2,6 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from math import prod
 from typing import cast
 
 import jax
@@ -16,14 +15,11 @@ from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.arguments import JAXFunction
 from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import project
-from jaxfun.typing import Array, FunctionSpaceType, GalerkinOperatorLike, Padding
+from jaxfun.la import IdentityMatrix, ZeroMatrix
+from jaxfun.la.matrixprotocol import SolverNotApplicable
+from jaxfun.typing import Array, FunctionSpaceType, GalerkinOperator, Padding
 from jaxfun.utils import split_linear_nonlinear_terms, split_time_derivative_terms
-from jaxfun.utils.operator_tools import (
-    apply_operator,
-    assemble_linear_term,
-    operator_to_dense,
-    solve_operator,
-)
+from jaxfun.utils.operator_tools import assemble_linear_term
 from jaxfun.utils.sympy_factoring import time_derivative_as_operator
 
 from .nonlinear import (
@@ -31,6 +27,17 @@ from .nonlinear import (
     remove_test_function,
     replace_trial_with_jaxfunction,
 )
+
+
+def _warm_operator_solve_cache(op: GalerkinOperator) -> None:
+    """Warm native solver caches for operators that support factorization."""
+    lu_factor = getattr(op, "lu_factor", None)
+    if lu_factor is None:
+        return
+    try:
+        lu_factor()
+    except (SolverNotApplicable, ValueError, TypeError, RuntimeError):
+        return
 
 
 class BaseIntegrator(ABC, nnx.Module):
@@ -73,7 +80,6 @@ class BaseIntegrator(ABC, nnx.Module):
         self.initial_condition = initial
         self.functionspace = V
         self._state_shape = self._coefficient_shape(V)
-        self._state_size = int(prod(self._state_shape))
 
         trial, mass_expr, linear_expr, nonlinear_expr = self._extract_equation_terms(
             equation
@@ -83,22 +89,28 @@ class BaseIntegrator(ABC, nnx.Module):
         self.nonlinear_expr = nonlinear_expr
         self.has_nonlinear = bool(sp.sympify(nonlinear_expr) != 0)
 
-        mass_term = assemble_linear_term(
+        mass_operator, mass_forcing = assemble_linear_term(
             self.mass_expr, sparse=self.sparse, sparse_tol=self.sparse_tol
         )
-        if mass_term.forcing is not None:
+        if mass_forcing is not None:
             raise ValueError("Time-derivative operator assembly produced forcing")
-        self.mass_operator: GalerkinOperatorLike | None = nnx.data(mass_term.operator)
-        self.mass_diag: Array | None = nnx.data(mass_term.diagonal)
+        if mass_operator is None:
+            mass_operator = IdentityMatrix(self._state_shape)
+        self.mass_operator: GalerkinOperator = nnx.data(mass_operator)
+        self.mass_diag: Array | None = nnx.data(self.mass_operator.diagonal_or_none())
+        if self.mass_diag is None:
+            _warm_operator_solve_cache(self.mass_operator)
 
-        linear_term = assemble_linear_term(
+        linear_operator, linear_forcing = assemble_linear_term(
             self.linear_expr, sparse=self.sparse, sparse_tol=self.sparse_tol
         )
-        self.linear_operator: GalerkinOperatorLike | None = nnx.data(
-            linear_term.operator
+        if linear_operator is None:
+            linear_operator = ZeroMatrix(self._state_shape)
+        self.linear_operator: GalerkinOperator = nnx.data(linear_operator)
+        self.linear_forcing: Array | None = nnx.data(linear_forcing)
+        self.linear_diag: Array | None = nnx.data(
+            self.linear_operator.diagonal_or_none()
         )
-        self.linear_forcing: Array | None = nnx.data(linear_term.forcing)
-        self.linear_diag: Array | None = nnx.data(linear_term.diagonal)
 
         self._nonlinear_jaxfunction: AppliedUndef | None = None
         self._nonlinear_evaluator: Callable[[Array, Padding], Array] | None = None
@@ -161,25 +173,17 @@ class BaseIntegrator(ABC, nnx.Module):
             nonlinear_expr, self.functionspace, jaxfunction
         )
 
-    def _dense_matrix(
-        self,
-        operator: GalerkinOperatorLike | None,
-        diagonal: Array | None,
-    ) -> Array:
+    def _dense_matrix(self, operator: GalerkinOperator) -> Array:
         """Return a dense matrix representation of a linear operator."""
-        if diagonal is not None:
-            return jnp.diag(diagonal.reshape((-1,)))
-        if operator is None:
-            return jnp.zeros((self._state_size, self._state_size))
-        return operator_to_dense(operator)
+        return operator.todense()
 
     def mass_matrix_dense(self) -> Array:
         """Return the assembled mass operator as a dense matrix."""
-        return self._dense_matrix(self.mass_operator, self.mass_diag)
+        return self._dense_matrix(self.mass_operator)
 
     def linear_matrix_dense(self) -> Array:
         """Return the assembled linear operator as a dense matrix."""
-        return self._dense_matrix(self.linear_operator, self.linear_diag)
+        return self._dense_matrix(self.linear_operator)
 
     def initial_coefficients(self, initial: sp.Expr | Array | None = None) -> Array:
         """Return coefficient-space data for an initial condition."""
@@ -209,19 +213,11 @@ class BaseIntegrator(ABC, nnx.Module):
 
     def apply_mass(self, uh: Array) -> Array:
         """Apply the assembled mass operator to a coefficient state."""
-        if self.mass_diag is not None:
-            return self.mass_diag * uh
-        if self.mass_operator is None:
-            return uh
-        return apply_operator(self.mass_operator, uh)
+        return self.mass_operator @ uh
 
     def apply_mass_inverse(self, rhs: Array) -> Array:
         """Apply the inverse mass operator to a coefficient-space right-hand side."""
-        if self.mass_diag is not None:
-            return rhs / self.mass_diag
-        if self.mass_operator is None:
-            return rhs
-        return solve_operator(self.mass_operator, rhs)
+        return self.mass_operator.solve(rhs)
 
     def nonlinear_rhs(self, uh: Array, N: Padding = None) -> Array:
         """Return the nonlinear contribution in coefficient space."""
@@ -243,12 +239,7 @@ class BaseIntegrator(ABC, nnx.Module):
 
     def linear_rhs(self, uh: Array) -> Array:
         """Return the linear contribution after applying the inverse mass matrix."""
-        rhs = jnp.zeros_like(uh)
-        if self.linear_operator is not None:
-            if self.linear_diag is not None:
-                rhs = rhs + self.linear_diag * uh
-            else:
-                rhs = rhs + apply_operator(self.linear_operator, uh)
+        rhs = self.linear_operator @ uh
         if self.linear_forcing is not None:
             rhs = rhs + jnp.asarray(self.linear_forcing)
         return self.apply_mass_inverse(rhs)

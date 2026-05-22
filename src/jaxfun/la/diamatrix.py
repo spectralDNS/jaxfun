@@ -1,20 +1,49 @@
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, NamedTuple, TypedDict, overload
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from jaxfun.la.matrixprotocol import DiaMatrixSolveMethod, _CacheBox
+from jaxfun.la.matrixprotocol import BaseMatrix, DiaMatrixSolveMethod, _CacheBox
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
-    from jaxfun.la import Matrix, MatrixProtocol
+    from jaxfun.la import Matrix
+    from jaxfun.la.matrix import LUFactors as DenseLUFactors
     from jaxfun.la.pinned import PinnedSystem
 
 Array = jax.Array
+
+
+class _LUCache(TypedDict):
+    banded: dict[bool, LUFactors]
+    dense: DenseLUFactors | None
+
+
+def _new_lu_cache() -> _LUCache:
+    return {"banded": {}, "dense": None}
+
+
+class _RCMResult(NamedTuple):
+    matrix: DiaMatrix
+    perm: Array
+    inv_perm: Array
+
+
+class _RCMSolveEntry(NamedTuple):
+    lu: LUFactors
+    perm: Array
+    inv_perm: Array
+
+
+type _RCMSolveCache = dict[bool, _RCMSolveEntry]
+
+
+def _new_rcm_solve_cache() -> _RCMSolveCache:
+    return {}
 
 
 class DenseIndexingWarning(UserWarning):
@@ -54,8 +83,22 @@ def _warn_dense_indexing() -> None:
     )
 
 
+def _solve_diagonal(diagonal: Array, b: Array, axis: int) -> Array:
+    """Solve a main-diagonal system along one axis."""
+    if b.ndim == 1:
+        return b / diagonal
+    if diagonal.shape == b.shape:
+        return b / diagonal
+    if diagonal.size == b.size and diagonal.shape[0] != b.shape[axis % b.ndim]:
+        return (b.reshape((-1,)) / diagonal.reshape((-1,))).reshape(b.shape)
+    axis = axis % b.ndim
+    shape = [1] * b.ndim
+    shape[axis] = diagonal.shape[0]
+    return b / diagonal.reshape(tuple(shape))
+
+
 @nnx.dataclass
-class DiaMatrix(nnx.Pytree):
+class DiaMatrix(BaseMatrix):
     """Diagonal storage (DIA) sparse matrix, compatible with scipy.sparse.dia.
 
     Format:
@@ -103,6 +146,7 @@ class DiaMatrix(nnx.Pytree):
     data: Array
     offsets: tuple[int, ...]
     shape: tuple[int, int]
+    is_zero = False
 
     def __post_init__(self) -> None:
         n, m = self.shape
@@ -145,6 +189,9 @@ class DiaMatrix(nnx.Pytree):
         if not offsets:
             empty = jnp.zeros((0, m), dtype=a.dtype)
             return cls(data=empty, offsets=(), shape=(n, m))
+
+        if offsets == (0,) and n == m:
+            return DiagonalMatrix(jnp.diag(a))
 
         offsets_arr = jnp.asarray(offsets, dtype=int)
         j = jnp.arange(m)
@@ -358,21 +405,15 @@ class DiaMatrix(nnx.Pytree):
             ValueError: if the matrix is not square or the system is singular.
         """
         # --- lazy cache -------------------------------------------------
-        _box: _CacheBox[dict[bool | str, LUFactors]] | None = getattr(
-            self, "_lu_cache", None
-        )
+        _box: _CacheBox[_LUCache] | None = getattr(self, "_lu_cache", None)
         if _box is None:
-            _box = _CacheBox({})
+            _box = _CacheBox(_new_lu_cache())
             object.__setattr__(self, "_lu_cache", _box)
-        cache: dict[bool | str, LUFactors] = _box.value
+        cache = _box.value["banded"]
         if pivot in cache:
             return cache[pivot]
 
-        n, m = self.shape
-        if n != m:
-            raise ValueError(
-                f"lu_factor requires a square matrix, got shape {self.shape}"
-            )
+        n, m = self._check_square("lu_factor")
 
         offsets = self.offsets
         p = max((-k for k in offsets if k < 0), default=0)  # lower bandwidth
@@ -572,24 +613,36 @@ class DiaMatrix(nnx.Pytree):
             )
         method = DiaMatrixSolveMethod(method)
 
+        diagonal = self.diagonal_or_none()
+        if diagonal is not None:
+            return _solve_diagonal(diagonal, b, axis)
+
+        n, m = self.shape
+        axis = axis % b.ndim
+        if b.ndim > 1 and n == m == b.size and b.shape[axis] != n:
+            return self.lu_solve(
+                b.reshape((-1,)),
+                pivot=pivot,
+                method=method,
+                auto_threshold=auto_threshold,
+            ).reshape(b.shape)
+
         # ------------------------------------------------------------------
         # "banded" path (and cache hit for banded)
         # ------------------------------------------------------------------
-        _box: _CacheBox[dict[bool | str, LUFactors]] | None = getattr(
-            self, "_lu_cache", None
-        )
+        _box: _CacheBox[_LUCache] | None = getattr(self, "_lu_cache", None)
         if method == DiaMatrixSolveMethod.BANDED or (
             method == DiaMatrixSolveMethod.AUTO
             and _box is not None
-            and pivot in _box.value
+            and pivot in _box.value["banded"]
         ):
             return self.lu_factor(pivot=pivot).solve(b, axis=axis)
 
         # ------------------------------------------------------------------
         # "rcm" path (and cache hit for rcm)
         # ------------------------------------------------------------------
-        _rcm_box: _CacheBox[dict[bool, tuple[LUFactors, Array, Array]]] | None = (
-            getattr(self, "_rcm_solve_cache", None)
+        _rcm_box: _CacheBox[_RCMSolveCache] | None = getattr(
+            self, "_rcm_solve_cache", None
         )
         if method == DiaMatrixSolveMethod.RCM or (
             method == DiaMatrixSolveMethod.AUTO
@@ -600,9 +653,9 @@ class DiaMatrix(nnx.Pytree):
                 A_perm, perm, inv_perm = self.rcm()
                 lu_perm = A_perm.lu_factor(pivot=pivot)
                 if _rcm_box is None:
-                    _rcm_box = _CacheBox({})
+                    _rcm_box = _CacheBox(_new_rcm_solve_cache())
                     object.__setattr__(self, "_rcm_solve_cache", _rcm_box)
-                _rcm_box.value[pivot] = (lu_perm, perm, inv_perm)
+                _rcm_box.value[pivot] = _RCMSolveEntry(lu_perm, perm, inv_perm)
             lu_perm, perm, inv_perm = _rcm_box.value[pivot]
             ax = axis % b.ndim
             return jnp.take(
@@ -614,12 +667,13 @@ class DiaMatrix(nnx.Pytree):
         # ------------------------------------------------------------------
         if method == DiaMatrixSolveMethod.DENSE:
             if _box is None:
-                _box = _CacheBox({})
+                _box = _CacheBox(_new_lu_cache())
                 object.__setattr__(self, "_lu_cache", _box)
-            _dense_key = "_dense"
-            if _dense_key not in _box.value:
-                _box.value[_dense_key] = self.to_matrix().lu_factor()  # type: ignore[index]
-            return _box.value[_dense_key].solve(b, axis=axis)
+            dense_lu = _box.value["dense"]
+            if dense_lu is None:
+                dense_lu = self.to_matrix().lu_factor()
+                _box.value["dense"] = dense_lu
+            return dense_lu.solve(b, axis=axis)
 
         # ------------------------------------------------------------------
         # "auto": choose based on bandwidth
@@ -647,9 +701,9 @@ class DiaMatrix(nnx.Pytree):
         elif p_p * (q_p + 1) <= auto_threshold:
             lu_perm = A_perm.lu_factor(pivot=pivot)
             if _rcm_box is None:
-                _rcm_box = _CacheBox({})
+                _rcm_box = _CacheBox(_new_rcm_solve_cache())
                 object.__setattr__(self, "_rcm_solve_cache", _rcm_box)
-            _rcm_box.value[pivot] = (lu_perm, perm, inv_perm)
+            _rcm_box.value[pivot] = _RCMSolveEntry(lu_perm, perm, inv_perm)
             ax = axis % b.ndim
             return jnp.take(
                 lu_perm.solve(jnp.take(b, perm, axis=ax), axis=ax), inv_perm, axis=ax
@@ -724,6 +778,15 @@ class DiaMatrix(nnx.Pytree):
             _pick, zero_diag, (self.data, jnp.array(self.offsets, dtype=int))
         )
         return result
+
+    @property
+    def is_diagonal(self) -> bool:
+        """Whether this matrix is square and stores only the main diagonal."""
+        return self.shape[0] == self.shape[1] and self.offsets == (0,)
+
+    def diagonal_or_none(self) -> Array | None:
+        """Return the main diagonal only when this matrix is purely diagonal."""
+        return self.diagonal() if self.is_diagonal else None
 
     def get_row(self, i: int | Array) -> Array:
         """Return row ``i`` of the matrix as a dense 1-D array of length ``m``.
@@ -868,15 +931,6 @@ class DiaMatrix(nnx.Pytree):
     def size(self) -> int:
         """Return the total number of entries in the matrix (including zeros)."""
         return self._size
-
-    def __mul__(self, other: complex | Array) -> DiaMatrix:
-        return self.scale(other)
-
-    def __rmul__(self, other: complex | Array) -> DiaMatrix:
-        return self.scale(other)
-
-    def __neg__(self) -> DiaMatrix:
-        return self.scale(-1)
 
     def __len__(self) -> int:
         return min(self.shape)
@@ -1093,8 +1147,7 @@ class DiaMatrix(nnx.Pytree):
         return jnp.where(in_bounds, out, jnp.zeros((), dtype=self.data.dtype))
 
     def _merge(self, other: DiaMatrix, sign: float) -> DiaMatrix:
-        if self.shape != other.shape:
-            raise ValueError(f"Shape mismatch: {self.shape} vs {other.shape}")
+        self._check_same_shape(other)
 
         n, m = self.shape
 
@@ -1117,22 +1170,30 @@ class DiaMatrix(nnx.Pytree):
         )
         return DiaMatrix(data=result_data, offsets=all_offsets, shape=(n, m))
 
-    def __add__(self, other: DiaMatrix) -> DiaMatrix:
-        return self._merge(other, +1.0)
+    def __add__(self, other):
+        from jaxfun.la import Matrix
 
-    def __sub__(self, other: DiaMatrix) -> DiaMatrix:
-        return self._merge(other, -1.0)
+        if isinstance(other, DiaMatrix):
+            return self._merge(other, +1.0)
+        if isinstance(other, Matrix):
+            return other + self
+        return NotImplemented
+
+    def __sub__(self, other):
+        from jaxfun.la import Matrix
+
+        if isinstance(other, DiaMatrix):
+            return self._merge(other, -1.0)
+        if isinstance(other, Matrix):
+            return Matrix(self.todense() - other.data)
+        return NotImplemented
 
     @jax.jit
     def _matmul_compute(
         self, other: DiaMatrix
     ) -> tuple[Array, tuple[int, ...], tuple[int, int]]:
-        n, m = self.shape
+        n, m = self._check_matmul_shape(other)
         _, l = other.shape
-        if m != other.shape[0]:
-            raise ValueError(
-                f"Shape mismatch for matrix product: ({n}, {m}) @ {other.shape}"
-            )
 
         p_offs = self.offsets
         q_offs = other.offsets
@@ -1191,9 +1252,9 @@ class DiaMatrix(nnx.Pytree):
     def __matmul__(self, other: DiaMatrix) -> DiaMatrix: ...
     @overload
     def __matmul__(self, other: Matrix) -> Matrix: ...
-    @overload
-    def __matmul__(self, other: MatrixProtocol) -> MatrixProtocol: ...
-    def __matmul__(self, other: Array | JAXFunction | MatrixProtocol) -> Any:
+    def __matmul__(
+        self, other: Array | JAXFunction | Matrix | DiaMatrix
+    ) -> Array | DiaMatrix | Matrix:
         """Support ``A @ x`` (vector/matrix) and ``A @ B`` (DiaMatrix).
 
         DiaMatrix x DiaMatrix is computed purely in DIA format without
@@ -1229,9 +1290,9 @@ class DiaMatrix(nnx.Pytree):
     def __rmatmul__(self, other: DiaMatrix) -> DiaMatrix: ...
     @overload
     def __rmatmul__(self, other: Matrix) -> Matrix: ...
-    @overload
-    def __rmatmul__(self, other: MatrixProtocol) -> MatrixProtocol: ...
-    def __rmatmul__(self, other: Array | JAXFunction | MatrixProtocol) -> Any:
+    def __rmatmul__(
+        self, other: Array | JAXFunction | Matrix | DiaMatrix
+    ) -> Array | DiaMatrix | Matrix:
         """Support ``x @ A`` (row-vector or matrix on the left).
 
         Delegates to :meth:`rmatvec` which contracts the last axis of ``other``
@@ -1401,9 +1462,7 @@ class DiaMatrix(nnx.Pytree):
             x_perm = A_perm.solve(b[perm])
             x = x_perm[inv_perm]
         """
-        _box: _CacheBox[tuple[DiaMatrix, Array, Array]] | None = getattr(
-            self, "_rcm_cache", None
-        )
+        _box: _CacheBox[_RCMResult] | None = getattr(self, "_rcm_cache", None)
         if _box is not None:
             return _box.value
 
@@ -1419,9 +1478,97 @@ class DiaMatrix(nnx.Pytree):
             shape=(n, n),
         )
         inv_perm = jnp.argsort(perm).astype(jnp.int32)
-        result = (A_perm, perm, inv_perm)
+        result = _RCMResult(A_perm, perm, inv_perm)
         object.__setattr__(self, "_rcm_cache", _CacheBox(result))
         return result
+
+
+class DiagonalMatrix(DiaMatrix):
+    """Square main-diagonal matrix with coefficient-shaped fast paths."""
+
+    def __init__(self, diagonal: Array, dtype: jnp.dtype | None = None) -> None:
+        diagonal = jnp.asarray(diagonal, dtype=dtype)
+        if diagonal.ndim != 1:
+            raise ValueError(
+                f"DiagonalMatrix requires a 1-D diagonal, got shape {diagonal.shape}"
+            )
+        n = int(diagonal.shape[0])
+        super().__init__(data=diagonal[None, :], offsets=(0,), shape=(n, n))
+
+    @property
+    def is_diagonal(self) -> bool:
+        return True
+
+    def diagonal(self, k: int = 0) -> Array:
+        if k == 0:
+            return self.data[0]
+        n = max(self.shape[0] - abs(k), 0)
+        return jnp.zeros(n, dtype=self.data.dtype)
+
+    def diagonal_or_none(self) -> Array:
+        return self.data[0]
+
+    def matvec(self, x: Array, axis: int = 0) -> Array:
+        diagonal = self.diagonal()
+        if x.ndim == 1:
+            return diagonal * x
+        if diagonal.shape == x.shape:
+            return diagonal * x
+        axis = axis % x.ndim
+        if diagonal.size == x.size and diagonal.shape[0] != x.shape[axis]:
+            return (diagonal * x.reshape((-1,))).reshape(x.shape)
+        shape = [1] * x.ndim
+        shape[axis] = diagonal.shape[0]
+        return diagonal.reshape(tuple(shape)) * x
+
+    def lu_solve(
+        self,
+        b: Array,
+        axis: int = 0,
+        *,
+        pivot: bool = False,
+        method: DiaMatrixSolveMethod | str = DiaMatrixSolveMethod.AUTO,
+        auto_threshold: int = 100,
+    ) -> Array:
+        return _solve_diagonal(self.diagonal(), b, axis)
+
+    solve = lu_solve
+
+    def lu_factor(self, *, pivot: bool = False) -> LUFactors:
+        return LUFactors(
+            L=DiagonalMatrix(jnp.ones_like(self.diagonal())),
+            U=self,
+            shape=self.shape,
+        )
+
+    @property
+    def T(self) -> DiagonalMatrix:
+        return self
+
+    def scale(self, alpha: complex | Array) -> DiagonalMatrix:
+        return DiagonalMatrix(self.diagonal() * alpha)
+
+    def astype(self, dtype: jnp.dtype) -> DiagonalMatrix:
+        return DiagonalMatrix(self.diagonal().astype(dtype))
+
+    def __add__(self, other):
+        from jaxfun.la import Matrix
+
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
+            if other.is_diagonal:
+                return DiagonalMatrix(self.diagonal() + other.diagonal())
+            return DiaMatrix.__add__(self, other)
+        if isinstance(other, Matrix):
+            self._check_same_shape(other)
+            return other + self
+        return NotImplemented
+
+    def __sub__(self, other):
+        return self.__add__(-other)
+
+    def __rsub__(self, other):
+        return (-self).__add__(other)
 
 
 @jax.jit(static_argnums=(1, 2, 3))
@@ -1990,6 +2137,14 @@ def diags(
         n, m = shape
 
     common_dtype = jnp.result_type(*diagonals) if dtype is None else dtype
+
+    if offsets == (0,) and n == m:
+        diagonal = diagonals[0].astype(common_dtype)
+        if len(diagonal) == 1 and n > 1:
+            diagonal = jnp.broadcast_to(diagonal, (n,))
+        if len(diagonal) < n:
+            diagonal = jnp.pad(diagonal, (0, n - len(diagonal)))
+        return DiagonalMatrix(diagonal[:n])
 
     data_rows: list[Array] = []
     for d, k in zip(diagonals, offsets):

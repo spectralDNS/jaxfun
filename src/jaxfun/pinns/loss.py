@@ -4,7 +4,7 @@ from abc import abstractmethod
 from collections.abc import Callable
 from functools import partial
 from numbers import Number
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 import jax
 import jax.numpy as jnp
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 
 # Differs from jaxfun.utils.common.jacn in the last if else
-def jacn(fun: Callable[[float], Array], k: int = 1) -> Callable[[Array], Array]:
+def jacn(fun: Callable[[Array], Array], k: int = 1) -> Callable[[Array], Array]:
     """Return vectorized k-th order Jacobian of a function.
 
     Repeatedly applies jacfwd/jacrev k times (producing nested Jacobians) and
@@ -290,7 +290,7 @@ class Residual(nnx.Pytree):
                 if isinstance(module, Comp)
                 else module
             )
-            Js[key] = jacn(mod, key[2])(x)  # ty:ignore[invalid-argument-type]
+            Js[key] = jacn(mod, key[2])(x)
         return Js
 
     def eval_compute_grad(self, x: Array, module: nnx.Module, x_id: int) -> Array:
@@ -781,7 +781,7 @@ class Loss:
     @nnx.jit(static_argnums=0)
     def value_and_grad_and_JTJ(
         self, module: nnx.Module, gw: Array, xs: tuple[Array, ...]
-    ) -> tuple[Array, Array, Array]:
+    ) -> tuple[Array, nnx.State, Array]:
         """Return the loss value, gradient and JTJ
 
         Args:
@@ -799,7 +799,7 @@ class Loss:
         unravel = ravel_pytree(nnx.state(module))[1]
         JTJ = []
         grads = []
-        loss = 0
+        loss = jnp.array(0.0)
         for i, (r, dr) in enumerate(zip(res, dres, strict=True)):
             jf = ravel_pytree(dr)[0]
             N = xs[self.x_ids[i]].shape[0]
@@ -822,7 +822,8 @@ class Loss:
             )
             loss = loss + rw @ r / N
 
-        return loss, unravel(2 * sum(grads)), 2 * sum(JTJ)  # type: ignore[return-value]
+        grad = cast(nnx.State, unravel(2 * sum(grads, start=jnp.array(0.0))))
+        return loss, grad, 2 * sum(JTJ, start=jnp.array(0.0))
 
     def compute_residual_i(self, module: nnx.Module, i: int) -> Array:
         """Return the residuals for equation i
@@ -966,7 +967,7 @@ class Loss:
                 if isinstance(module, Comp)
                 else module
             )
-            Js[key] = jacn(mod, k)(xs[x_id])  # ty:ignore[invalid-argument-type]
+            Js[key] = jacn(mod, k)(xs[x_id])
         return Js
 
     def loss_with_gw(
@@ -1015,7 +1016,8 @@ class Loss:
                 for i, (eq, x_id) in enumerate(
                     zip(self.residuals, self.x_ids, strict=True)
                 )
-            ]
+            ],
+            start=jnp.array(0.0),
         )
 
 
@@ -1100,7 +1102,7 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar | sp.Symbol, ...] | None) -> Residual
         global_index=v.global_index,  # ty:ignore[unresolved-attribute]
         k=int(getattr(f, "derivative_count", "0")),
         variables=getattr(f, "variables", ()),
-    )
+    )  # ty:ignore[invalid-return-type]
 
 
 def _lookup_or_eval(
@@ -1122,7 +1124,7 @@ def _lookup_or_eval(
     key: tuple[int, int, int] = (x_id, mod_id, k)
     if key not in Js:
         # Compute gradient
-        z = jacn(module, k)(x)  # ty:ignore[invalid-argument-type]
+        z = jacn(module, k)(x)
         return z[var]
     # look up gradient
     return Js[key][var]

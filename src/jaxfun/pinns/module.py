@@ -257,7 +257,11 @@ class KANLayer(nnx.Module):
 
         self.basespaces: list[OrthogonalSpace] = (
             [
-                basespace(spectral_size, domain=domains[i], system=subsystems[i])  # type: ignore[index]
+                basespace(
+                    spectral_size,
+                    domain=domains[i],
+                    system=cast(CoordSys | None, subsystems[i]),
+                )
                 for i in range(in_features)
             ]
             if not hidden
@@ -664,7 +668,7 @@ class SpectralModule(BaseModule):
         if isinstance(self.space, OrthogonalSpace | DirectSum):
             return self.space.evaluate(x, self.kernel[0])
 
-        z = self.space.evaluate(x, self.kernel, True)
+        z = self.space.evaluate(x, self.kernel[...], True)
         if self.space.rank == 0:
             return jnp.expand_dims(z, -1)
         return z
@@ -993,14 +997,18 @@ class FlaxFunction(Function):
         args = self.get_args(Cartesian=False)
 
         if V.rank == 0:
-            return Function(
-                self.fun_str,
-                global_index=0,
-                functionspace_name=V.name,
-                rank_parent=V.rank,
-                module=self.module,
-                argument=ArgumentTag.JAXFUNC,
-            )(*args)  # type: ignore[return-value]
+            function = cast(
+                Callable[..., AppliedUndef],
+                Function(
+                    self.fun_str,
+                    global_index=0,
+                    functionspace_name=V.name,
+                    rank_parent=V.rank,
+                    module=self.module,
+                    argument=ArgumentTag.JAXFUNC,
+                ),
+            )
+            return function(*args)
 
         if V.rank == 1:
             b = V.system.base_vectors()

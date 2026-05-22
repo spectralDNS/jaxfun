@@ -1,11 +1,17 @@
 from .blocktpmatrix import BlockTPMatrix as BlockTPMatrix
 from .diamatrix import (
+    DiagonalMatrix as DiagonalMatrix,
     DiaMatrix as DiaMatrix,
     diags as diags,
     diakron as diakron,
 )
 from .matrix import Matrix as Matrix
-from .matrixprotocol import MatrixProtocol as MatrixProtocol
+from .matrixprotocol import BaseMatrix as BaseMatrix
+from .operators import (
+    IdentityMatrix as IdentityMatrix,
+    SpecialMatrix as SpecialMatrix,
+    ZeroMatrix as ZeroMatrix,
+)
 from .pinned import PinnedSystem as PinnedSystem
 from .tensormatrix import TensorMatrix as TensorMatrix
 from .tpmatrix import (

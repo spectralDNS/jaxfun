@@ -5,27 +5,26 @@ from flax import nnx
 
 from jaxfun.typing import Array, Padding
 
-from .base import BaseIntegrator
+from .base import BaseIntegrator, _warm_operator_solve_cache
 
 
 class BackwardEuler(BaseIntegrator):
     """First-order implicit Euler for linear terms (IMEX for nonlinear terms)."""
 
     _system_diag: Array | None = None
-    _system_matrix: Array | None = None
+    _system_operator = None
 
     def setup(self, dt: float) -> None:
         """Precompute the implicit system matrix for the given step size."""
-        if self.linear_operator is None:
+        self._system_diag = None
+        self._system_operator = None
+
+        if self.linear_operator.is_zero:
             return
 
-        if self.mass_diag is not None and self.linear_diag is not None:
-            self._system_diag = nnx.data(self.mass_diag - dt * self.linear_diag)
-            return
-
-        mass_mat = self.mass_matrix_dense()
-        linear_mat = self.linear_matrix_dense()
-        self._system_matrix = nnx.data(mass_mat - dt * linear_mat)
+        self._system_operator = nnx.data(self.mass_operator - dt * self.linear_operator)
+        self._system_diag = nnx.data(self._system_operator.diagonal_or_none())
+        _warm_operator_solve_cache(self._system_operator)
 
     def step(self, u_hat: Array, dt: float, N: Padding = None) -> Array:
         """Advance one backward-Euler step in coefficient space."""
@@ -35,10 +34,6 @@ class BackwardEuler(BaseIntegrator):
         if self.has_nonlinear:
             rhs = rhs + dt * self.nonlinear_rhs_scalar_product(u_hat, N)
 
-        if self._system_diag is not None:
-            return rhs / self._system_diag
-        if self._system_matrix is not None:
-            return jnp.linalg.solve(self._system_matrix, rhs.reshape((-1,))).reshape(
-                rhs.shape
-            )
+        if self._system_operator is not None:
+            return self._system_operator.solve(rhs)
         return self.apply_mass_inverse(rhs)

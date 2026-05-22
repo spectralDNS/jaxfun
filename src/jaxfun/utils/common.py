@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Concatenate, NamedTuple, Protocol, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast
 
 import jax
 import jax.numpy as jnp
@@ -32,16 +32,12 @@ __all__ = (
 )
 
 
-# TODO: Add typehints for this
-def jit_vmap[SelfT, **P](
+def jit_vmap[FuncT: Callable[..., Array]](
     in_axes: int | None | tuple[int | None, ...] = 0,
     out_axes: Any = 0,
     static_argnums: int | tuple[int, ...] | None = 0,
     ndim: int = 0,
-) -> Callable[
-    [Callable[Concatenate[SelfT, Array, P], Array]],
-    Callable[Concatenate[SelfT, Array, P], Array],
-]:
+) -> Callable[[FuncT], FuncT]:
     """Decorator that JIT compiles a function and applies vmap if the first argument is
     an array with dimensions > ndim. If the first argument is a scalar, or an array of
     dimensions = ndim, then the function is merely jitted.
@@ -61,31 +57,19 @@ def jit_vmap[SelfT, **P](
     """
     in_axes = (None,) + in_axes if isinstance(in_axes, tuple) else (None, in_axes)
 
-    def wrap(
-        func: Callable[Concatenate[SelfT, Array, P], Array],
-    ) -> Callable[Concatenate[SelfT, Array, P], Array]:
+    def wrap(func: FuncT) -> FuncT:
         @wraps(func)
-        def wrapper(
-            self: SelfT, x: Array, /, *args: P.args, **kwargs: P.kwargs
-        ) -> Array:
+        def wrapper(self: Any, x: Any, /, *args: Any, **kwargs: Any) -> Array:
+            x = jnp.asarray(x)
             if x.ndim == ndim:
                 return func(self, x, *args, **kwargs)
 
             mapped = jax.vmap(func, in_axes=in_axes, out_axes=out_axes)
             return mapped(self, x, *args, **kwargs)
 
-        return cast(
-            Callable[Concatenate[SelfT, Array, P], Array],
-            jax.jit(wrapper, static_argnums=static_argnums),
-        )
+        return cast(FuncT, jax.jit(wrapper, static_argnums=static_argnums))
 
-    return cast(
-        Callable[
-            [Callable[Concatenate[SelfT, Array, P], Array]],
-            Callable[Concatenate[SelfT, Array, P], Array],
-        ],
-        wrap,
-    )
+    return wrap
 
 
 class Domain(NamedTuple):

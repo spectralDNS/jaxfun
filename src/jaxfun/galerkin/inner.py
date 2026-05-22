@@ -515,7 +515,7 @@ def process_results(
         return ares1D, bresults
 
     assert not isinstance(test_space, OrthogonalSpace)
-    if len(jax.devices()) > 1:
+    if len(jax.devices()) > 1 and len(bresults) > 0:
         bresults: Array = jax.device_put(bresults, test_space._spectral_sharding)
 
     if len(aresults) > 0:

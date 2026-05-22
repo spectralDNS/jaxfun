@@ -626,20 +626,23 @@ class TPMatricesWavenumberSolver:
             q = max((o for o in poly_offsets if o > 0), default=0)
             center = p
             bw = p + q + 1
-            all_L_offsets: tuple[int, ...] = tuple(o for o in poly_offsets if o < 0)
-            all_U_offsets: tuple[int, ...] = tuple(o for o in poly_offsets if o >= 0)
 
-            def _batch_lu(data: Array) -> tuple[Array, Array]:
+            def _batch_lu(
+                data: Array,
+            ) -> tuple[Array, Array, tuple[int, ...], tuple[int, ...]]:
                 """Batched LU for a slice of B_data_batch.
 
                 Converts DIA format → band, runs all LU factorisations in one
-                vmapped XLA call, then extracts L/U diagonal data.
+                vmapped XLA call, extracts the full band range to capture any
+                LU fill-in at gap positions, then prunes diagonals that are
+                zero across all wavenumbers before returning.
 
                 Args:
                     data: shape (n_batch, n_diags, n_P)
 
                 Returns:
-                    (L_data, U_data) each shape (n_batch, n_offsets, n_P)
+                    (L_data, U_data, L_offsets, U_offsets) where L_data and
+                    U_data have shape (n_batch, n_nonzero_offsets, n_P).
                 """
                 n_batch = data.shape[0]
                 band_rows = jnp.array([center + off for off in poly_offsets])
@@ -651,13 +654,21 @@ class TPMatricesWavenumberSolver:
                 band_lu = jax.jit(
                     jax.vmap(lambda b: _lu_banded_no_pivot_kernel(b, p, q, center))
                 )(band)
+                # Full-range extraction captures fill-in at gap positions.
                 L = jnp.stack(
-                    [band_lu[:, center + off, :] for off in all_L_offsets], axis=1
+                    [band_lu[:, center + off, :] for off in range(-p, 0)], axis=1
                 )
                 U = jnp.stack(
-                    [band_lu[:, center + off, :] for off in all_U_offsets], axis=1
+                    [band_lu[:, center + off, :] for off in range(0, q + 1)], axis=1
                 )
-                return L, U
+                # Prune diagonals that are zero across all wavenumbers.  The
+                # fill-in pattern is structural (same for every k), so a global
+                # check across all local wavenumbers is sufficient.
+                _L_nz = np.any(np.abs(np.array(L)) > 0, axis=(0, 2))
+                _U_nz = np.any(np.abs(np.array(U)) > 0, axis=(0, 2))
+                L_offs = tuple(o for o, nz in zip(range(-p, 0), _L_nz) if nz)
+                U_offs = tuple(o for o, nz in zip(range(0, q + 1), _U_nz) if nz)
+                return L[:, _L_nz, :], U[:, _U_nz, :], L_offs, U_offs
 
             if len(jax.devices()) > 1:
                 if poly_axis == 0:
@@ -672,7 +683,9 @@ class TPMatricesWavenumberSolver:
                 proc_dev_offset = jax.process_index() * n_local
                 k_start = proc_dev_offset * n_F_per_device
                 k_end = k_start + n_local * n_F_per_device
-                _local_L, _local_U = _batch_lu(B_data_batch[k_start:k_end])
+                _local_L, _local_U, all_L_offsets, all_U_offsets = _batch_lu(
+                    B_data_batch[k_start:k_end]
+                )
                 self._L_per_device = [
                     jax.device_put(
                         _local_L[d * n_F_per_device : (d + 1) * n_F_per_device],
@@ -690,7 +703,9 @@ class TPMatricesWavenumberSolver:
                 self._L_data_local = _local_L
                 self._U_data_local = _local_U
             else:
-                _local_L, _local_U = _batch_lu(B_data_batch)
+                _local_L, _local_U, all_L_offsets, all_U_offsets = _batch_lu(
+                    B_data_batch
+                )
                 self._L_data_local: Array = _local_L
                 self._U_data_local: Array = _local_U
 
@@ -702,8 +717,11 @@ class TPMatricesWavenumberSolver:
             )
             n_P_local = B_matrices[0].shape[0]
             _all_offsets = sorted({off for B in B_matrices for off in B.offsets})
-            all_L_offsets = tuple(o for o in _all_offsets if o < 0)
-            all_U_offsets = tuple(o for o in _all_offsets if o >= 0)
+            _p = max((-o for o in _all_offsets if o < 0), default=0)
+            _q = max((o for o in _all_offsets if o > 0), default=0)
+            # Full contiguous range so LU fill-in within [-p, q] is not dropped.
+            all_L_offsets = tuple(range(-_p, 0))
+            all_U_offsets = tuple(range(0, _q + 1))
 
             def _align_data(
                 dia_mat: DiaMatrix, target_offsets: tuple[int, ...]
@@ -727,6 +745,11 @@ class TPMatricesWavenumberSolver:
                     )
                 n_total = len(jax.devices())
                 n_local = jax.local_device_count()
+                assert n_F % n_total == 0, (
+                    "Number of Fourier modes (n_F) must be divisible by total number "
+                    "of devices for multi-process solve. Got n_F={n_F}, "
+                    f"n_total={n_total}."
+                )
                 n_F_per_device = n_F // n_total
                 proc_dev_offset = jax.process_index() * n_local
                 k_start = proc_dev_offset * n_F_per_device
@@ -738,6 +761,13 @@ class TPMatricesWavenumberSolver:
                 _local_U = jnp.stack(
                     [_align_data(lu.U, all_U_offsets) for lu in _local_lu]
                 )
+                # Prune structurally-zero diagonals.
+                _L_nz = np.any(np.abs(np.array(_local_L)) > 0, axis=(0, 2))
+                _U_nz = np.any(np.abs(np.array(_local_U)) > 0, axis=(0, 2))
+                all_L_offsets = tuple(o for o, nz in zip(all_L_offsets, _L_nz) if nz)
+                all_U_offsets = tuple(o for o, nz in zip(all_U_offsets, _U_nz) if nz)
+                _local_L = _local_L[:, _L_nz, :]
+                _local_U = _local_U[:, _U_nz, :]
                 self._L_per_device = [
                     jax.device_put(
                         _local_L[d * n_F_per_device : (d + 1) * n_F_per_device],
@@ -762,6 +792,13 @@ class TPMatricesWavenumberSolver:
                 _local_U = jnp.stack(
                     [_align_data(lu.U, all_U_offsets) for lu in _local_lu]
                 )
+                # Prune structurally-zero diagonals.
+                _L_nz = np.any(np.abs(np.array(_local_L)) > 0, axis=(0, 2))
+                _U_nz = np.any(np.abs(np.array(_local_U)) > 0, axis=(0, 2))
+                all_L_offsets = tuple(o for o, nz in zip(all_L_offsets, _L_nz) if nz)
+                all_U_offsets = tuple(o for o, nz in zip(all_U_offsets, _U_nz) if nz)
+                _local_L = _local_L[:, _L_nz, :]
+                _local_U = _local_U[:, _U_nz, :]
                 self._L_data_local: Array = _local_L
                 self._U_data_local: Array = _local_U
 

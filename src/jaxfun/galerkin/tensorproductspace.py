@@ -298,16 +298,15 @@ class TensorProductSpace:
         which is summed locally and then all-reduced across MPI processes so
         that every process holds the same replicated result.
 
-        For single-device: x is a stacked (n_pts, d) or (d,) array evaluated
-        via the jit-vmapped single-device path.
+        For single-device: x is a stacked (n_pts, d) array evaluated via the
+        jit-vmapped single-device path.
 
         Args:
-            x: Stacked coordinate array, shape (n_pts, d) for a batch or (d,)
-               for a single point.
+            x: Stacked coordinate array, shape (n_pts, d).
             c: Coefficient tensor; expected to carry spectral sharding in the
                SPMD case.
             use_einsum: Passed through to the single-device path (unused in
-               the SPMD path).
+               the SPMD path, which is using einsum).
 
         Returns:
             Scalar or (n_pts,) array of evaluated values; replicated in SPMD.
@@ -565,7 +564,7 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._spectral_sharding is not None:
+        if self._spectral_sharding is not None and len(c.devices()) > 1:
             return self._apply_separable_spmd(c, fns, self._spectral_sharding)
         for fn in fns:
             c = fn(c)
@@ -584,7 +583,7 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._physical_sharding is not None:
+        if self._physical_sharding is not None and len(u.devices()) > 1:
             return self._apply_separable_spmd(u, fns, self._physical_sharding)
         for fn in fns:
             u = fn(u)
@@ -599,7 +598,7 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._physical_sharding is not None:
+        if self._physical_sharding is not None and len(u.devices()) > 1:
             return self._apply_separable_spmd(u, fns, self._physical_sharding)
         for fn in fns:
             u = fn(u)
@@ -632,7 +631,7 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._spectral_sharding is not None:
+        if self._spectral_sharding is not None and len(c.devices()) > 1:
             return self._apply_separable_spmd(c, fns, self._spectral_sharding)
         for fn in fns:
             c = fn(c)

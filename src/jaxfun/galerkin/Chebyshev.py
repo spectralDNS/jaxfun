@@ -200,7 +200,7 @@ class Chebyshev(Jacobi):
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
-        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int | None = None
+        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
     ) -> Array:
         """Return Chebyshev series evaluated at quadrature points.
 

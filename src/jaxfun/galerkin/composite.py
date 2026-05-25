@@ -176,7 +176,7 @@ class Composite(OrthogonalSpace):
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
-        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int | None = None
+        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
     ) -> Array:
         """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
@@ -567,7 +567,7 @@ class DirectSum:
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward(
-        self, c: Array, kind: MeshKind = MeshKind.QUADRATURE, N: int | None = None
+        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
     ) -> Array:
         """Return backward transform."""
         return self.orthogonal.backward(self.to_orthogonal(c), kind, N)

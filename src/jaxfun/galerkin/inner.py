@@ -1,5 +1,6 @@
 from typing import Any, Literal, TypeGuard, cast, overload
 
+import jax
 import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
@@ -499,6 +500,10 @@ def process_results(
 
         return ares1D, bresults
 
+    assert not isinstance(test_space, OrthogonalSpace)
+    if len(jax.devices()) > 1 and len(bresults) > 0:
+        bresults: Array = jax.device_put(bresults, test_space._spectral_sharding)
+
     if len(aresults) > 0:
         # aresults is an empty list or a list of TPMatrix/TensorMatrix objects.
 
@@ -835,7 +840,7 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
                 [jnp.broadcast_to(ui, V.tensorspaces[0].num_quad_points) for ui in uj],
                 axis=0,
             )
-        return V.forward(uj)
+        return V.forward(jax.device_put(uj, V._physical_sharding))
 
     u = TrialFunction(V)
     v = TestFunction(V)

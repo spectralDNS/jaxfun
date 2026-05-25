@@ -1,11 +1,22 @@
-# Solve Poisson's equation in 2D
+# Solve Poisson's equation in 2D using 2 local devices and sharding.
+# ruff: noqa: E402
 import os
-import sys
+
+import pytest
+
+pytestmark = pytest.mark.spmd
+
+# Note that jax.config.update("jax_num_cpu_devices", 2) is set in conftest.py
+# for this example to work with pytest and github actions. To run this example
+# locally, make sure to set the number of CPU devices to 2 or more here or via
+# environment variable:
+# import jax
+# jax.config.update("jax_num_cpu_devices", 2)
+# The example should also run with distributed devices and not just local, but
+# that requires additional setup using jax.distributed.initialize.
 
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import sympy as sp
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction, x, y
 from jaxfun.galerkin.Fourier import Fourier
@@ -14,13 +25,13 @@ from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
-from jaxfun.utils.common import lambdify, n, ulp
+from jaxfun.utils.common import lambdify, ulp
 
 ue = (1 - y**2) * (sp.cos(2 * x)) * sp.exp(sp.cos(sp.pi * y))
 
-M, N = 80, 20
+M, N = 60, 20
 bcs = {"left": {"D": ue.subs(y, -1)}, "right": {"D": ue.subs(y, 1)}}
-D = FunctionSpace(M, Legendre, bcs, scaling=n + 1, name="D", fun_str="psi")
+D = FunctionSpace(M, Legendre, bcs, name="D", fun_str="psi")
 F = FunctionSpace(N, Fourier, name="F", fun_str="E")
 T = TensorProduct(F, D, name="T")
 v = TestFunction(T, name="v")
@@ -30,40 +41,25 @@ u = TrialFunction(T, name="u")
 x, y = T.system.base_scalars()
 ue = T.system.expr_psi_to_base_scalar(ue)
 
-# A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=True)
+# Returned b is sharded.
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 
+# Parallel solve across all devices. uh will be sharded as b.
 uh = A.solve(b)
 
 N = 100
 uj = T.backward(uh, N=(2 * N, 2 * M))
 xj = T.mesh(N=(2 * N, 2 * M), broadcast=True)
 uej = lambdify((x, y), ue)(*xj)
-
 error = jnp.linalg.norm(uj - uej) / N
+
+uhn = T.forward(uj)
+
+error_fwd = jnp.linalg.norm(uhn - uh) / N
+
 if "PYTEST" in os.environ:
     assert error < ulp(100), error
-    sys.exit(1)
+    assert error_fwd < ulp(1000), error_fwd
 
+print("Error roundtrip transforms =", error_fwd)
 print("Error =", error)
-
-f, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4))
-xj = T.mesh(N=(2 * N, 2 * M), broadcast=False)
-ax1.contourf(xj[1], xj[0], uj.real)
-ax2.contourf(xj[1], xj[0], uej.real)
-ax2.set_autoscalex_on(False)
-c3 = ax3.contourf(xj[1], xj[0], (uej - uj).real)
-axins = inset_axes(
-    ax3,
-    width="5%",  # width = 10% of parent_bbox width
-    height="100%",  # height : 50%
-    loc=6,
-    bbox_to_anchor=(1.05, 0.0, 1, 1),
-    bbox_transform=ax3.transAxes,
-    borderpad=0,
-)
-cbar = plt.colorbar(c3, cax=axins)
-ax1.set_title("Jaxfun")
-ax2.set_title("Exact")
-ax3.set_title("Error")
-plt.show()

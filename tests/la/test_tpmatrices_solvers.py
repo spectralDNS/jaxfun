@@ -154,17 +154,6 @@ def test_tpmats_wavenumber_factor_type_error():
 
 
 # ---------------------------------------------------------------------------
-# TPMatricesWavenumberSolver.solve2
-# ---------------------------------------------------------------------------
-
-
-def test_wavenumber_solver_solve2_agrees_with_solve():
-    _, A, b, _ = _poisson_fourier_poly_2d(16, Legendre.Legendre)
-    wn = tpmats_wavenumber_factor(A)
-    assert float(jnp.max(jnp.abs(wn.solve(b) - wn.solve2(b)))) < float(ulp(100))
-
-
-# ---------------------------------------------------------------------------
 # tpmats_dense_lu_factor / TPMatricesDenseLUFactors
 # ---------------------------------------------------------------------------
 

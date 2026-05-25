@@ -34,6 +34,11 @@ jobs:
           uv run pytest -m 'not slow'
           uv run pytest --float64 -m 'not slow'
 
+      - name: Run SPMD tests (2 virtual CPU devices)
+        run: |
+          uv run pytest --num-devices=2
+          uv run pytest --float64 --num-devices=2
+
       - name: Run slow demo tests
         run: |
           uv run pytest -m slow

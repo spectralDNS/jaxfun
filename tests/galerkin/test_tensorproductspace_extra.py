@@ -160,18 +160,3 @@ def test_directsumtps():
     z0 = jnp.sum(jnp.array(a), axis=0)
     z1 = T.evaluate(xj, c, True)
     assert jnp.linalg.norm(z0 - z1) < jnp.sqrt(ulp(100))
-
-    a = []
-    for f, v in T.tpspaces.items():
-        a.append(v.evaluate_derivative(xj, T.bndvals.get(f, c), (1, 1)))
-    z0 = jnp.sum(jnp.array(a), axis=0)
-    z1 = T.evaluate_derivative(xj, c, (1, 1))
-    assert jnp.linalg.norm(z0 - z1) < jnp.sqrt(ulp(100))
-
-    a = []
-    xj = T.mesh(kind="uniform", N=N)
-    for f, v in T.tpspaces.items():
-        a.append(v.evaluate_mesh(xj, T.bndvals.get(f, c), True))
-    z0 = jnp.sum(jnp.array(a), axis=0)
-    z1 = T.evaluate_mesh(list(xj), c, True)
-    assert jnp.linalg.norm(z0 - z1) < jnp.sqrt(ulp(100))

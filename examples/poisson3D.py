@@ -27,7 +27,7 @@ A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 
 uh = A.solve(b, method="lu")
 
-uj = T.backward(uh, kind="uniform", N=(20, 20, 20))
+uj = T.evaluate_mesh(uh, kind="uniform", N=(20, 20, 20))
 xj = T.mesh(kind="uniform", N=(20, 20, 20))
 uej = lambdify((x, y, z), ue)(*xj)
 error = jnp.linalg.norm(uj - uej) / jnp.sqrt(T.dim)

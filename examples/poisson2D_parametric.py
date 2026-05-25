@@ -69,13 +69,13 @@ uh = A.solve(b)
 N = 100
 xij, etaj = T.mesh(kind="uniform", N=(N, N))
 xc, yc = T.cartesian_mesh(kind="uniform", N=(N, N))
-uj = T.backward(uh, kind="uniform", N=(N, N))
+uj = T.evaluate_mesh(uh, kind="uniform", N=(N, N))
 uej = lambdify((xi, eta), ue)(xij, etaj)
 
 error = jnp.linalg.norm(uj - uej) / N
 if "PYTEST" in os.environ:
     assert error < ulp(1000)
-    sys.exit(1)
+    sys.exit(0)
 
 print("Error =", error)
 

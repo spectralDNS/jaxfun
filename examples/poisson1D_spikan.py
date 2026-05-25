@@ -6,6 +6,7 @@ import time
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
+from flax import nnx
 
 from jaxfun.operators import Div, Grad
 from jaxfun.pinns import FlaxFunction, Loss, Trainer
@@ -18,7 +19,7 @@ from jaxfun.utils.common import Domain, ulp
 domain = Domain(-jnp.pi, jnp.pi)
 V = sPIKANSpace(4, [8], dims=1, rank=0, name="V", domains=[domain])
 # V = KANMLPSpace(4, [16], dims=1, rank=0, name="V", domains=[domain])
-w = FlaxFunction(V, name="w")
+w = FlaxFunction(V, name="w", rngs=nnx.Rngs(101))
 
 i = sp.symbols("i", integer=True)
 x = V.system.x
@@ -47,7 +48,7 @@ print(f"L-BFGS time {time.time() - t1:.1f}s")
 error = jnp.sqrt(loss_fn(w.module))
 if "PYTEST" in os.environ:
     assert error < 1e-1, error
-    sys.exit(1)
+    sys.exit(0)
 
 print(f"L2 Error {error:.2e} ({error / ulp(1):.1f} ulp)")
 xj = jnp.linspace(float(domain.lower), float(domain.upper), 1000)

@@ -7,7 +7,6 @@ from sympy import Expr, Symbol
 from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.la import DiaMatrix, Matrix, diags
-from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, dst, jit_vmap
 
 from .Jacobi import Jacobi
@@ -92,7 +91,7 @@ class ChebyshevU(Jacobi):
 
         Args:
             N: Number of quadrature points (defaults self.num_quad_points
-               if 0).
+               if None).
 
         Returns:
             Tuple (x, w) of nodes and weights.
@@ -159,10 +158,8 @@ class ChebyshevU(Jacobi):
     def norm_squared(self) -> Array:
         return jnp.full(self.N, jnp.pi / 2)
 
-    @jax.jit(static_argnums=(0, 2, 3))
-    def backward(
-        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
-    ) -> Array:
+    @jax.jit(static_argnums=(0, 2))
+    def backward(self, c: Array, N: int | None = None) -> Array:
         """Return Chebyshev series U_k evaluated at quadrature points.
 
         Args:
@@ -172,9 +169,6 @@ class ChebyshevU(Jacobi):
             Reversed coefficient array.
         """
         n: int = self.num_quad_points if N is None else N
-
-        if MeshKind(kind) is not MeshKind.QUADRATURE:
-            return super().backward(c, kind=kind, N=n)  # Does not require padding of c
 
         if n > len(c):
             c = jnp.pad(c, (0, n - len(c)))

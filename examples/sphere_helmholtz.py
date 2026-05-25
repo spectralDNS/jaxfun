@@ -64,7 +64,7 @@ uej = lambdify((theta, phi), ue)(rj, tj)
 error = jnp.linalg.norm(uj - uej) / 100
 if "PYTEST" in os.environ:
     assert error < ulp(1000), error
-    sys.exit(1)
+    sys.exit(0)
 
 print("Error =", error)
 

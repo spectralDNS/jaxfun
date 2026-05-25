@@ -33,14 +33,14 @@ A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
 uh = A.solve(b, method="lu")
 
 N = 100
-uj = T.backward(uh, kind="uniform", N=(N, N))
+uj = T.evaluate_mesh(uh, kind="uniform", N=(N, N))
 xj = T.mesh(kind="uniform", N=(N, N), broadcast=True)
 uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
 if "PYTEST" in os.environ:
     assert error < ulp(1000), error
-    sys.exit(1)
+    sys.exit(0)
 
 print("Error =", error)
 

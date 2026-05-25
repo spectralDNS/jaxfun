@@ -80,4 +80,4 @@ print_error(t0)
 if "PYTEST" in os.environ:
     error = jnp.linalg.norm((w.module(t0) - uej(t0)) / len(t0))
     assert error < 1e-4, error
-    sys.exit(1)
+    sys.exit(0)

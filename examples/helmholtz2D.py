@@ -43,14 +43,14 @@ A, L = inner(v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True)
 un = A.solve(L, method="kron", kron_method="banded")
 
 N = 100
-uj = T.backward(un, kind="uniform", N=(N, N))
+uj = T.evaluate_mesh(un, kind="uniform", N=(N, N))
 xj = T.mesh(kind="uniform", N=(N, N))
 uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
 if "PYTEST" in os.environ:
     assert error < ulp(1000), error
-    sys.exit(1)
+    sys.exit(0)
 
 print("Error =", error)
 

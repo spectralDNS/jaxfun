@@ -39,7 +39,7 @@ uej = lambdify(D.system.x, ue)(xj)
 error = jnp.linalg.norm(uj - uej)
 if "PYTEST" in os.environ:
     assert error < jnp.sqrt(ulp(10)), error
-    sys.exit(1)
+    sys.exit(0)
 
 print("Error =", error)
 plt.plot(xj, uej, "r")

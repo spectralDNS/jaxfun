@@ -1,11 +1,19 @@
 # Solve Poisson's equation in 2D using 2 local devices and sharding.
 # ruff: noqa: E402
 import os
-import sys
 
 import pytest
 
 pytestmark = pytest.mark.spmd
+
+# Note that jax.config.update("jax_num_cpu_devices", 2) is set in conftest.py
+# for this example to work with pytest and github actions. To run this example
+# locally, make sure to set the number of CPU devices to 2 or more here or via
+# environment variable:
+# import jax
+# jax.config.update("jax_num_cpu_devices", 2)
+# The example should also run with distributed devices and not just local, but
+# that requires additional setup using jax.distributed.initialize.
 
 import jax.numpy as jnp
 import sympy as sp
@@ -52,7 +60,6 @@ error_fwd = jnp.linalg.norm(uhn - uh) / N
 if "PYTEST" in os.environ:
     assert error < ulp(100), error
     assert error_fwd < ulp(1000), error_fwd
-    sys.exit(1)
 
 print("Error roundtrip transforms =", error_fwd)
 print("Error =", error)

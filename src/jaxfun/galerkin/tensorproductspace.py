@@ -1058,16 +1058,12 @@ class DirectSumTPS(TensorProductSpace):
         self.orthogonal = self.get_orthogonal()
 
     @property
-    def _physical_sharding(self) -> NamedSharding:
-        return cast(
-            NamedSharding, self.tpspaces[next(iter(self.tpspaces))]._physical_sharding
-        )
+    def _physical_sharding(self) -> NamedSharding | None:
+        return self.tpspaces[next(iter(self.tpspaces))]._physical_sharding
 
     @property
-    def _spectral_sharding(self) -> NamedSharding:
-        return cast(
-            NamedSharding, self.tpspaces[next(iter(self.tpspaces))]._spectral_sharding
-        )
+    def _spectral_sharding(self) -> NamedSharding | None:
+        return self.tpspaces[next(iter(self.tpspaces))]._spectral_sharding
 
     def split(
         self, spaces: list[OrthogonalSpace | DirectSum]

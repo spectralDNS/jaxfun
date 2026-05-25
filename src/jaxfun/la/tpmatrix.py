@@ -767,8 +767,11 @@ class TPMatricesWavenumberSolver:
                 # Prune diagonals that are zero across all wavenumbers.  The
                 # fill-in pattern is structural (same for every k), so a global
                 # check across all local wavenumbers is sufficient.
-                _L_nz = np.any(np.abs(np.array(L)) > 0, axis=(0, 2))
-                _U_nz = np.any(np.abs(np.array(U)) > 0, axis=(0, 2))
+                # _L_nz = np.any(np.abs(np.array(L)) > 0, axis=(0, 2))
+                # _U_nz = np.any(np.abs(np.array(U)) > 0, axis=(0, 2))
+                _L_nz = jax.device_get(jnp.any(jnp.abs(L) > 0, axis=(0, 2)))
+                _U_nz = jax.device_get(jnp.any(jnp.abs(U) > 0, axis=(0, 2)))
+
                 L_offs = tuple(o for o, nz in zip(range(-p, 0), _L_nz) if nz)
                 U_offs = tuple(o for o, nz in zip(range(0, q + 1), _U_nz) if nz)
                 return L[:, _L_nz, :], U[:, _U_nz, :], L_offs, U_offs
@@ -850,7 +853,7 @@ class TPMatricesWavenumberSolver:
                 n_local = jax.local_device_count()
                 assert n_F % n_total == 0, (
                     "Number of Fourier modes (n_F) must be divisible by total number "
-                    "of devices for multi-process solve. Got n_F={n_F}, "
+                    f"of devices for multi-process solve. Got n_F={n_F}, "
                     f"n_total={n_total}."
                 )
                 n_F_per_device = n_F // n_total
@@ -987,7 +990,7 @@ class TPMatricesWavenumberSolver:
         Returns:
             Solution with the same shape and sharding as ``rhs``.
         """
-        if len(jax.devices()) > 1:
+        if len(rhs.devices()) > 1:
             # Dispatch one JIT per local device (JAX async — XLA schedules
             # them concurrently).  Each JIT is communication-free and closes
             # over its own L/U slice already placed on that device.

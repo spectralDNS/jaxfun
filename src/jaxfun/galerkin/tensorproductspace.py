@@ -72,9 +72,7 @@ class TensorProductSpace:
         self._spmd_mesh = Mesh(jax.devices(), ("k",))
         # Sharding of arrays in spectral coefficient space.
         self._spectral_sharding: NamedSharding | None = (
-            None
-            if len(jax.devices()) == 1
-            else NamedSharding(self._spmd_mesh, P("k", None))
+            None if len(jax.devices()) == 1 else NamedSharding(self._spmd_mesh, P("k"))
         )
         # Sharding of arrays in physical space.
         self._physical_sharding: NamedSharding | None = (

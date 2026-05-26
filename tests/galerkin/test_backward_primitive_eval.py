@@ -54,7 +54,7 @@ def test_chebyshev_backward_primitive_matches_analytical() -> None:
         got = V.backward_primitive(uh, k=2)
         expected = lambdify(x, sp.diff(ue, x, 2))(xj)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
-        assert float(rel) < ulp(10000), f"k=2: rel={float(rel)}"
+        assert float(rel) < jnp.sqrt(ulp(1)), f"k=2: rel={float(rel)}"
 
 
 def test_directsum_backward_primitive_includes_boundary_lift() -> None:

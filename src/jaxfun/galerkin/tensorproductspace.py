@@ -309,12 +309,14 @@ class TensorProductSpace:
                     jnp.einsum(einsum_str, C0_loc, *C_rest_loc, c_loc), "k"
                 )
 
-            return shard_map(
-                _local_eval,
-                mesh=self._spectral_sharding.mesh,
-                in_specs=(c_spec, P(None, "k")) + tuple(P() for _ in range(1, dim)),
-                out_specs=P(),
-                check_vma=False,
+            return jax.jit(
+                shard_map(
+                    _local_eval,
+                    mesh=self._spectral_sharding.mesh,
+                    in_specs=(c_spec, P(None, "k")) + tuple(P() for _ in range(1, dim)),
+                    out_specs=P(),
+                    check_vma=False,
+                )
             )(c, C0_sharded, *C[1:])
 
         return self._evaluate_single_device(x, c)
@@ -675,13 +677,13 @@ class VectorTensorProductSpace:
         self._spectral_sharding: NamedSharding | None = (
             None
             if len(jax.devices()) == 1
-            else NamedSharding(self._spmd_mesh, P(None, "k", None))
+            else NamedSharding(self._spmd_mesh, P(None, "k"))
         )
         # Sharding of arrays in physical space.
         self._physical_sharding: NamedSharding | None = (
             None
             if len(jax.devices()) == 1
-            else NamedSharding(self._spmd_mesh, P(None, None, "k", None))
+            else NamedSharding(self._spmd_mesh, P(None, None, "k"))
         )
 
     def __len__(self) -> int:

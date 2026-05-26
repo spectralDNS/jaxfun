@@ -459,9 +459,12 @@ class TensorProductSpace:
             ]
             unsharded = [ax for ax in range(dim) if ax not in sharded]
 
-            new_spec: list = [None] * dim
-            for s_ax, u_ax in zip(sharded, unsharded):
-                new_spec[u_ax] = spec[s_ax]
+            transposed = (
+                self._physical_sharding
+                if sharding is self._spectral_sharding
+                else self._spectral_sharding
+            )
+            assert isinstance(transposed, NamedSharding)
 
             def _kernel(c_loc: Array) -> Array:
                 # Phase 1 — unsharded axes: fully local, no communication.
@@ -485,7 +488,7 @@ class TensorProductSpace:
                     _kernel,
                     mesh=sharding.mesh,
                     in_specs=(sharding.spec,),
-                    out_specs=P(*new_spec),
+                    out_specs=transposed.spec,
                     check_vma=False,
                 )
             )

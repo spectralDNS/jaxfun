@@ -183,9 +183,10 @@ class OrthogonalSpace(BaseSpace):
         Returns:
             Array of shape (N,) containing series evaluation at mesh points.
         """
+        kind = MeshKind(kind)
         if kind is MeshKind.QUADRATURE:
             return self.backward(c, N)
-        assert kind == MeshKind.UNIFORM, f"Unsupported mesh kind: {kind}"
+        assert kind is MeshKind.UNIFORM, f"Unsupported mesh kind: {kind}"
         xj = self.mesh(kind=kind, N=N)
         return self.evaluate(xj, c)
 

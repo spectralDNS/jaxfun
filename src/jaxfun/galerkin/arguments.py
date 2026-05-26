@@ -782,7 +782,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
     def evaluate_mesh(
         self, kind: MeshKind | str = MeshKind.QUADRATURE, N: Padding = None
     ) -> Array:
-        """Evaluate the JAXFunction at given points x in the physical domain.
+        """Evaluate the JAXFunction at tensor mesh in the physical domain.
 
         Args:
             kind: Mesh type (quadrature, uniform).

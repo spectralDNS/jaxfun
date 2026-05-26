@@ -146,7 +146,7 @@ class TensorProductSpace:
         Args:
             kind: Mesh type for backward evaluation (MeshKind.QUADRATURE or
             MeshKind.UNIFORM).
-            N: Optional per-axis counts (defaults each to space.N).
+            N: Optional per-axis counts (defaults each to space.num_quad_points).
             broadcast: If True broadcast each axis array to nd-grid shape.
 
         Returns:
@@ -214,7 +214,6 @@ class TensorProductSpace:
             u = space.map_expr_reference_domain(u)
         return u
 
-    @jax.jit(static_argnums=(0, 2, 3))
     def evaluate_mesh(
         self,
         c: Array,
@@ -232,11 +231,12 @@ class TensorProductSpace:
         Returns:
             Array of evaluated field values with broadcast shape.
         """
+        kind = MeshKind(kind)
         N = tuple(
             self.basespaces[ax].num_quad_points if N is None else N[ax]
             for ax in range(len(self))
         )
-        cache_key = ("evaluate_mesh", N)
+        cache_key = ("evaluate_mesh", kind, N)
         if cache_key not in self._spmd_local_fn_cache:
             self._spmd_local_fn_cache[cache_key] = tuple(
                 self._build_local_apply_fn(
@@ -247,7 +247,7 @@ class TensorProductSpace:
             )
         fns = self._spmd_local_fn_cache[cache_key]
         if self._spectral_sharding is not None and len(c.devices()) > 1:
-            return self._apply_separable_spmd(c, fns, self._spectral_sharding)
+            return self._apply_separable_spmd_shard_map(c, fns, self._spectral_sharding)
         for fn in fns:
             c = fn(c)
         return c

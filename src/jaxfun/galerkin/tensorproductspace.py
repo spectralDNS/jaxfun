@@ -295,29 +295,37 @@ class TensorProductSpace:
                 for i in range(dim)
             ]
 
-            dc = "abcdef"[:dim]
-            einsum_str = ",".join(f"j{ch}" for ch in dc) + f",{dc}->j"
+            cache_key = ("evaluate_spmd",)
+            if cache_key not in self._spmd_local_fn_cache:
+                dc = "abcdef"[:dim]
+                einsum_str = ",".join(f"j{ch}" for ch in dc) + f",{dc}->j"
 
-            # Shard C[0] along axis 1 (N_0 dim) to match c's axis-0 sharding.
-            # C[1], ..., C[dim-1] are replicated so every device sees them in full.
-            C0_sharded = jax.device_put(C[0], self._physical_sharding)
+                c_spec = self._spectral_sharding.spec
+                mesh = self._spectral_sharding.mesh
+                physical_sharding = self._physical_sharding
 
-            c_spec = self._spectral_sharding.spec
+                def _local_eval(c_loc, C0_loc, *C_rest_loc):
+                    return jax.lax.psum(
+                        jnp.einsum(einsum_str, C0_loc, *C_rest_loc, c_loc), "k"
+                    )
 
-            def _local_eval(c_loc, C0_loc, *C_rest_loc):
-                return jax.lax.psum(
-                    jnp.einsum(einsum_str, C0_loc, *C_rest_loc, c_loc), "k"
-                )
+                def _jitted(c, C0, *C_rest):
+                    # Scatter C0 to P(None, "k") inside JIT so XLA can fuse the
+                    # scatter collective with the shard_map kernel rather than
+                    # performing an eager host-memory round-trip.
+                    C0_sharded = jax.device_put(C0, physical_sharding)
+                    return shard_map(
+                        _local_eval,
+                        mesh=mesh,
+                        in_specs=(c_spec, P(None, "k"))
+                        + tuple(P() for _ in range(1, dim)),
+                        out_specs=P(),
+                        check_vma=False,
+                    )(c, C0_sharded, *C_rest)
 
-            return jax.jit(
-                shard_map(
-                    _local_eval,
-                    mesh=self._spectral_sharding.mesh,
-                    in_specs=(c_spec, P(None, "k")) + tuple(P() for _ in range(1, dim)),
-                    out_specs=P(),
-                    check_vma=False,
-                )
-            )(c, C0_sharded, *C[1:])
+                self._spmd_local_fn_cache[cache_key] = jax.jit(_jitted)
+
+            return self._spmd_local_fn_cache[cache_key](c, C[0], *C[1:])
 
         return self._evaluate_single_device(x, c)
 

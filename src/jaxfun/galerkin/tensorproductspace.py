@@ -480,12 +480,14 @@ class TensorProductSpace:
                     c_loc = fns[ax](c_loc)
                 return c_loc
 
-            self._spmd_local_fn_cache[cache_key] = shard_map(
-                _kernel,
-                mesh=sharding.mesh,
-                in_specs=(sharding.spec,),
-                out_specs=P(*new_spec),
-                check_vma=False,
+            self._spmd_local_fn_cache[cache_key] = jax.jit(
+                shard_map(
+                    _kernel,
+                    mesh=sharding.mesh,
+                    in_specs=(sharding.spec,),
+                    out_specs=P(*new_spec),
+                    check_vma=False,
+                )
             )
 
         return self._spmd_local_fn_cache[cache_key](c)
@@ -515,7 +517,7 @@ class TensorProductSpace:
             )
         fns = self._spmd_local_fn_cache[cache_key]
         if self._spectral_sharding is not None and len(c.devices()) > 1:
-            return self._apply_separable_spmd(c, fns, self._spectral_sharding)
+            return self._apply_separable_spmd_shard_map(c, fns, self._spectral_sharding)
         for fn in fns:
             c = fn(c)
         return c
@@ -534,7 +536,7 @@ class TensorProductSpace:
             )
         fns = self._spmd_local_fn_cache[cache_key]
         if self._physical_sharding is not None and len(u.devices()) > 1:
-            return self._apply_separable_spmd(u, fns, self._physical_sharding)
+            return self._apply_separable_spmd_shard_map(u, fns, self._physical_sharding)
         for fn in fns:
             u = fn(u)
         return u
@@ -549,7 +551,7 @@ class TensorProductSpace:
             )
         fns = self._spmd_local_fn_cache[cache_key]
         if self._physical_sharding is not None and len(u.devices()) > 1:
-            return self._apply_separable_spmd(u, fns, self._physical_sharding)
+            return self._apply_separable_spmd_shard_map(u, fns, self._physical_sharding)
         for fn in fns:
             u = fn(u)
         return u
@@ -580,7 +582,7 @@ class TensorProductSpace:
             )
         fns = self._spmd_local_fn_cache[cache_key]
         if self._spectral_sharding is not None and len(c.devices()) > 1:
-            return self._apply_separable_spmd(c, fns, self._spectral_sharding)
+            return self._apply_separable_spmd_shard_map(c, fns, self._spectral_sharding)
         for fn in fns:
             c = fn(c)
         return c

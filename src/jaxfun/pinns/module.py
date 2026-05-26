@@ -668,7 +668,7 @@ class SpectralModule(BaseModule):
         if isinstance(self.space, OrthogonalSpace | DirectSum):
             return self.space.evaluate(x, self.kernel[0])
 
-        z = self.space.evaluate(x, self.kernel[...], True)
+        z = self.space.evaluate(x, self.kernel[...])
         if self.space.rank == 0:
             return jnp.expand_dims(z, -1)
         return z

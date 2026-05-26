@@ -774,12 +774,11 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         assert isinstance(
             functionspace, TensorProductSpace | VectorTensorProductSpace | DirectSumTPS
         )
-        z = functionspace.evaluate(x, self.array, True)
+        z = functionspace.evaluate(x, self.array)
         if functionspace.rank == 0:
             return jnp.expand_dims(z, -1)
         return z
 
-    @jax.jit(static_argnums=(0, 1, 2))
     def evaluate_mesh(
         self, kind: MeshKind | str = MeshKind.QUADRATURE, N: Padding = None
     ) -> Array:

@@ -330,7 +330,7 @@ def _(mo):
 @app.cell
 def _(P, plt, uh):
     xc, yc = P.cartesian_mesh(kind="uniform", N=(100, 100))
-    uj = P.backward(uh, kind="uniform", N=(100, 100))
+    uj = P.evaluate_mesh(uh, kind="uniform", N=(100, 100))
     fig = plt.figure(figsize=(8, 6))
     ax = fig.gca()
     ax.contourf(xc, yc, uj.real, 50)

@@ -214,7 +214,6 @@ class TensorProductSpace:
             u = space.map_expr_reference_domain(u)
         return u
 
-    # Cannot jit_vmap since tensor product mesh.
     @jax.jit(static_argnums=(0, 2, 3))
     def evaluate_mesh(
         self,
@@ -222,7 +221,7 @@ class TensorProductSpace:
         kind: MeshKind | str = MeshKind.QUADRATURE,
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
-        """Evaluate expansion on tensor-product mesh arrays.
+        """Evaluate expansion on tensor-product mesh.
 
         Args:
             c: Coefficient array
@@ -253,8 +252,8 @@ class TensorProductSpace:
             c = fn(c)
         return c
 
-    @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
-    def _evaluate_single_device(self, x: Array, c: Array, use_einsum: bool) -> Array:
+    @jit_vmap(in_axes=(0, None), static_argnums=(0,), ndim=1)
+    def _evaluate_single_device(self, x: Array, c: Array) -> Array:
         """Evaluate expansion at scattered points — single-device path."""
         dim = len(self)
         T = self.basespaces
@@ -262,18 +261,10 @@ class TensorProductSpace:
             T[i].eval_basis_functions(T[i].map_reference_domain(x[i]))
             for i in range(dim)
         ]
-        if not use_einsum:
-            if dim == 2:
-                c = C[0] @ c @ C[1]
-            else:
-                for Ci in C:
-                    c = jnp.tensordot(Ci, c, axes=[[0], [0]])
-        else:
-            path = "i,j,ij" if dim == 2 else "i,j,k,ijk"
-            c = jnp.einsum(path, *C, c)
-        return c
+        path = "i,j,ij" if dim == 2 else "i,j,k,ijk"
+        return jnp.einsum(path, *C, c)
 
-    def evaluate(self, x: Array, c: Array, use_einsum: bool = False) -> Array:
+    def evaluate(self, x: Array, c: Array) -> Array:
         """Evaluate expansion at scattered points.
 
         For SPMD (multi-device): c carries spectral sharding P("k", None).
@@ -290,8 +281,6 @@ class TensorProductSpace:
             x: Stacked coordinate array, shape (n_pts, d).
             c: Coefficient tensor; expected to carry spectral sharding in the
                SPMD case.
-            use_einsum: Passed through to the single-device path (unused in
-               the SPMD path, which is using einsum).
 
         Returns:
             Scalar or (n_pts,) array of evaluated values; replicated in SPMD.
@@ -308,9 +297,6 @@ class TensorProductSpace:
                 for i in range(dim)
             ]
 
-            # Build einsum string for arbitrary dim:
-            #   C[0]:"ja", C[1]:"jb", ..., c_loc:"ab..." → "j"
-            # Contracts all spectral axes; j is the evaluation-point axis.
             dc = "abcdef"[:dim]
             einsum_str = ",".join(f"j{ch}" for ch in dc) + f",{dc}->j"
 
@@ -332,7 +318,8 @@ class TensorProductSpace:
                 out_specs=P(),
                 check_vma=False,
             )(c, C0_sharded, *C[1:])
-        return self._evaluate_single_device(x, c, use_einsum)
+
+        return self._evaluate_single_device(x, c)
 
     def get_orthogonal(self) -> TensorProductSpace:
         """Return underlying orthogonal basis instance."""
@@ -735,14 +722,13 @@ class VectorTensorProductSpace:
         """Return raw modal shape (N0, N1, ...)."""
         return (self.dims,) + self.tensorspaces[0].shape()
 
-    @jit_vmap(in_axes=(0, None, None), static_argnums=(0, 3), ndim=1)
-    def evaluate(self, x: Array, c: Array, use_einsum: bool) -> Array:
+    @jit_vmap(in_axes=(0, None), static_argnums=(0,), ndim=1)
+    def evaluate(self, x: Array, c: Array) -> Array:
         """Evaluate vector expansion at scattered points.
 
         Args:
             x: Array of per-axis coordinates stacked (N, d).
             c: Coefficient array shaped (dims, N0, N1, ...).
-            use_einsum: Whether to use einsum contraction.
 
         Returns:
             Evaluated values with shape determined by leading dims of x.
@@ -750,7 +736,7 @@ class VectorTensorProductSpace:
         vals = []
         for i, space in enumerate(self.tensorspaces):
             ci = c[i]
-            vi = space.evaluate(x, ci, use_einsum)
+            vi = space.evaluate(x, ci)
             vals.append(vi)
         return jnp.array(vals)
 
@@ -1067,9 +1053,9 @@ class DirectSumTPS(TensorProductSpace):
             "Scalar product requires homogeneous test space (call on get_homogeneous())"
         )
 
-    def evaluate(self, x: Array, c: Array, use_einsum: bool = False) -> Array:
+    def evaluate(self, x: Array, c: Array) -> Array:
         """Evaluate direct sum tensor product expansion at scattered points."""
-        return self.orthogonal.evaluate(x, self.to_orthogonal(c), use_einsum)
+        return self.orthogonal.evaluate(x, self.to_orthogonal(c))
 
     def evaluate_mesh(
         self,

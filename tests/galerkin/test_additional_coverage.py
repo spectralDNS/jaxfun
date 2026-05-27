@@ -15,7 +15,7 @@ from jaxfun.galerkin import (
 )
 from jaxfun.galerkin.arguments import JAXFunction, ScalarFunction, VectorFunction
 from jaxfun.galerkin.forms import split_coeff
-from jaxfun.galerkin.inner import inner, project
+from jaxfun.galerkin.inner import inner, inner_items, project
 from jaxfun.galerkin.tensorproductspace import (
     DirectSumTPS,
     VectorTensorProductSpace,
@@ -41,13 +41,12 @@ def test_vector_tensor_product_space_and_jaxfunction_latex_and_matmul():
     assert right.shape == (C.N, C.N)
 
 
-def test_inner_return_all_items_and_sparse_paths():
+def test_inner_items_and_sparse_paths():
     C = Chebyshev.Chebyshev(5)
     x = C.system.x
     u = TrialFunction(C)
     v = TestFunction(C)
-    # return_all_items True
-    Aall, Ball = inner(v * u + x * v * u, return_all_items=True)
+    Aall, Ball = inner_items(v * u + x * v * u)
     assert isinstance(Aall, list) and len(Aall) >= 1
     # sparse conversion 1D
     As = inner(v * u, sparse=True)

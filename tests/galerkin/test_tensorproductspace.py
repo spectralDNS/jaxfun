@@ -123,7 +123,7 @@ def test_inner_multivar_expression():
     assert isinstance(A, TensorMatrix)
 
 
-def test_process_results_linear_only():
+def test_inner_linear_only():
     # Only linear form L(v)
     C = Chebyshev.Chebyshev(6)
     v = TestFunction(C)

@@ -31,10 +31,12 @@ def split_operator_and_forcing(
     form: GalerkinAssembledForm,
 ) -> AssembledTerm:
     """Split an assembled Galerkin form into operator and forcing pieces."""
-    if isinstance(form, list):
+    if isinstance(form, list) or (
+        isinstance(form, tuple) and any(isinstance(part, list) for part in form)
+    ):
         raise ValueError(
             "`assemble_linear_term` expects collapsed assembly output. "
-            "Raw operator lists are only produced by inner(..., return_all_items=True)."
+            "Raw operator lists are only produced by inner_items(...)."
         )
 
     if form is None:

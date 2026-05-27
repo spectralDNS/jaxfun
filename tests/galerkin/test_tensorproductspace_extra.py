@@ -17,7 +17,7 @@ from jaxfun.galerkin import (
     Ultraspherical,
     VectorTensorProductSpace,
 )
-from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.inner import inner, inner_items
 from jaxfun.galerkin.tensorproductspace import DirectSumTPS
 from jaxfun.la import TPMatrix
 from jaxfun.utils.common import ulp
@@ -72,7 +72,7 @@ def test_multivar_and_linear_bcs_branch():
     from jaxfun.galerkin import JAXFunction
 
     jf = JAXFunction(coeffs, T)
-    A = inner((sp.sqrt(x + y) * u * v) + jf * v, return_all_items=True)
+    A = inner_items((sp.sqrt(x + y) * u * v) + jf * v)
     # Should return tuple (aresults,bresults)
     assert isinstance(A, tuple)
 

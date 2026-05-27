@@ -436,7 +436,6 @@ def _(Div, Grad, Legendre, alpha, jnp, lambdify, ue, x, xj):
         - (Div(Grad(q)) + alpha * q) * (Div(Grad(ue)) + alpha * ue),
         sparse=True,
         sparse_tol=1000,
-        return_all_items=False,
     )
     uh = jnp.linalg.solve(A.todense(), L)
     uj = D.evaluate(xj, uh)

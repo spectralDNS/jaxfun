@@ -184,9 +184,7 @@ def _assemble_inner_items(
     bresults: list[Array] = []
 
     for a0 in context.a_forms:
-        aitems, bitems = _assemble_bilinear_form(
-            a0, context, use_precomputed_matrices
-        )
+        aitems, bitems = _assemble_bilinear_form(a0, context, use_precomputed_matrices)
         aresults.extend(aitems)
         bresults.extend(bitems)
 
@@ -239,22 +237,12 @@ def _assemble_bilinear_factor(
     assert _has_globalindex(u)
 
     N = _quad_points_for_space(num_quad_points, vf)
-    z = inner_bilinear(
-        ai,
-        vf,
-        uf,
-        scale,
-        is_multivar,
-        N,
-        use_precomputed_matrices,
-    )
+    z = inner_bilinear(ai, vf, uf, scale, is_multivar, N, use_precomputed_matrices)
     return z, (v.global_index, u.global_index), uf
 
 
 def _assemble_bilinear_form(
-    a0: InnerResultDict,
-    context: _InnerContext,
-    use_precomputed_matrices: bool,
+    a0: InnerResultDict, context: _InnerContext, use_precomputed_matrices: bool
 ) -> InnerItems:
     mats: list[_BilinearMat] = []
     coeffs = split_coeff(a0["coeff"])
@@ -268,11 +256,7 @@ def _assemble_bilinear_form(
     for ai in _form_factors(a0):
         is_multivar = "multivar" in a0 or "jaxfunction" in a0
         z, global_indices, uf = _assemble_bilinear_factor(
-            ai,
-            sc,
-            is_multivar,
-            context.num_quad_points,
-            use_precomputed_matrices,
+            ai, sc, is_multivar, context.num_quad_points, use_precomputed_matrices
         )
         trial.append(uf)
         if isinstance(uf, BCGeneric):
@@ -311,9 +295,7 @@ def _assemble_bilinear_form(
         )
 
     if len(mats) > 1:
-        return _assemble_separable_bilinear_form(
-            coeffs, mats, trial, has_bcs, context
-        )
+        return _assemble_separable_bilinear_form(coeffs, mats, trial, has_bcs, context)
 
     return aresults, bresults
 
@@ -354,9 +336,7 @@ def _assemble_multivar_bilinear_form(
         scales.append(a0["multivar"])
     if "jaxfunction" in a0:
         scales.append(
-            evaluate_jaxfunction_expr_quad(
-                a0["jaxfunction"], N=context.num_quad_points
-            )
+            evaluate_jaxfunction_expr_quad(a0["jaxfunction"], N=context.num_quad_points)
         )
     Am = assemble_multivar(mats_, scales, context.test_space)
     if has_bcs:
@@ -448,9 +428,7 @@ def _assemble_separable_bilinear_form(
             )
             aresults.append(
                 TPMatrix(
-                    [cast(BaseMatrix, m[0]) for m in mats],
-                    1,
-                    global_indices=gi[0],
+                    [cast(BaseMatrix, m[0]) for m in mats], 1, global_indices=gi[0]
                 )
             )
 
@@ -479,29 +457,20 @@ def _assemble_linear_factor(
     vf = v.functionspace
     assert isinstance(vf, OrthogonalSpace)
     assert _has_globalindex(v)
-    z = inner_linear(
-        bi,
-        vf,
-        scale,
-        is_multivar,
-        _quad_points_for_space(num_quad_points, vf),
-    )
+    quads = _quad_points_for_space(num_quad_points, vf)
+    z = inner_linear(bi, vf, scale, is_multivar, quads)
     return z, v.global_index
 
 
-def _assemble_linear_form(
-    b0: InnerResultDict,
-    context: _InnerContext,
-) -> list[Array]:
+def _assemble_linear_form(b0: InnerResultDict, context: _InnerContext) -> list[Array]:
     scale = _linear_form_scale(b0, len(context.a_forms) > 0)
     bs: list[Array | tuple[Array]] = []
     global_index = 0
     is_multivar = "multivar" in b0 or "jaxfunction" in b0
+    quads = context.num_quad_points
 
     for bi in _form_factors(b0):
-        z, global_index = _assemble_linear_factor(
-            bi, scale, is_multivar, context.num_quad_points
-        )
+        z, global_index = _assemble_linear_factor(bi, scale, is_multivar, quads)
         scale = 1
         bs.append(z)
 
@@ -512,20 +481,12 @@ def _assemble_linear_form(
         isinstance(test_space, TensorProductSpace | VectorTensorProductSpace)
         and len(test_space) == 2
     ):
-        return [
-            _assemble_linear_tensor2d(
-                b0, bs, test_space, context.num_quad_points, global_index
-            )
-        ]
+        return [_assemble_linear_tensor2d(b0, bs, test_space, quads, global_index)]
     if (
         isinstance(test_space, TensorProductSpace | VectorTensorProductSpace)
         and len(test_space) == 3
     ):
-        return [
-            _assemble_linear_tensor3d(
-                b0, bs, test_space, context.num_quad_points, global_index
-            )
-        ]
+        return [_assemble_linear_tensor3d(b0, bs, test_space, quads, global_index)]
     return []
 
 
@@ -545,9 +506,7 @@ def _assemble_linear_tensor2d(
                 *test_space.mesh(N=num_quad_points)
             )
         if "jaxfunction" in b0:
-            uj *= evaluate_jaxfunction_expr_quad(
-                b0["jaxfunction"], N=num_quad_points
-            )
+            uj *= evaluate_jaxfunction_expr_quad(b0["jaxfunction"], N=num_quad_points)
         if "jaxfunction" not in b0 and "multivar" not in b0:
             raise ValueError("Expected multivar or jaxfunction key in b0")
         res = bs[0][0].T @ uj @ bs[1][0]
@@ -572,17 +531,14 @@ def _assemble_linear_tensor3d(
                 *test_space.mesh(N=num_quad_points)
             )
         elif "jaxfunction" in b0:
-            uj = evaluate_jaxfunction_expr_quad(
-                b0["jaxfunction"], N=num_quad_points
-            )
+            uj = evaluate_jaxfunction_expr_quad(b0["jaxfunction"], N=num_quad_points)
         else:
             raise ValueError("Expected multivar or jaxfunction key in b0")
         res = jnp.einsum("il,jm,kn,ijk->lmn", bs[0][0], bs[1][0], bs[2][0], uj)
         return vectorize_bresult(res, test_space, global_index)
 
     res = jnp.multiply.outer(
-        jnp.multiply.outer(cast(Array, bs[0]), cast(Array, bs[1])),
-        cast(Array, bs[2]),
+        jnp.multiply.outer(cast(Array, bs[0]), cast(Array, bs[1])), cast(Array, bs[2])
     )
     return vectorize_bresult(res, test_space, global_index)
 
@@ -628,10 +584,7 @@ def _finalize_inner_result(
         if len(aresults) > 0:
             if not sparse:
                 ares1D: Matrix = Matrix(
-                    jnp.sum(
-                        jnp.array([a.todense() for a in aresults]),
-                        axis=0,
-                    )
+                    jnp.sum(jnp.array([a.todense() for a in aresults]), axis=0)
                 )
             else:
                 # Matrices are either Matrix or DiaMatrix. Convert matrices to DiaMatrix
@@ -675,8 +628,7 @@ def _finalize_inner_result(
         elif all(isinstance(a, TensorMatrix) for a in aresults):
             if rank == 0:
                 array = jnp.sum(
-                    jnp.array([cast(TensorMatrix, a).data for a in aresults]),
-                    axis=0,
+                    jnp.array([cast(TensorMatrix, a).data for a in aresults]), axis=0
                 )
                 aresults: TensorMatrix = TensorMatrix(array)
             else:

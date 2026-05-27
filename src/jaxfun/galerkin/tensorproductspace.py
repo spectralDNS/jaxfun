@@ -265,31 +265,17 @@ class TensorProductSpace:
     def evaluate(self, x: Array, c: Array) -> Array:
         """Evaluate expansion at scattered points.
 
-        For SPMD (multi-device): c carries spectral sharding P("k", None).
-        The per-axis evaluation matrices C[i] are computed once on the calling
-        process (fully replicated, since x may be as small as one point).
-        Each local addressable shard of c contributes a partial contraction
-        which is summed locally and then all-reduced across MPI processes so
-        that every process holds the same replicated result.
-
-        For single-device: x is a stacked (n_pts, d) array evaluated via the
-        jit-vmapped single-device path.
-
         Args:
             x: Stacked coordinate array, shape (n_pts, d).
-            c: Coefficient tensor; expected to carry spectral sharding in the
-               SPMD case.
+            c: Coefficient tensor
 
         Returns:
-            Scalar or (n_pts,) array of evaluated values; replicated in SPMD.
+            Scalar or (n_pts,) array of evaluated values.
         """
         if self._spectral_sharding is not None and len(c.devices()) > 1:
             dim = len(self)
             T = self.basespaces
 
-            # Per-axis evaluation matrices — fully replicated.
-            # eval_basis_functions is @jit_vmap'd: 1-D input (n_pts,) → (n_pts, N).
-            # x has shape (n_pts, dim); x[:, i] gives axis-i coordinates.
             C = [
                 T[i].eval_basis_functions(T[i].map_reference_domain(x[:, i]))
                 for i in range(dim)
@@ -310,9 +296,6 @@ class TensorProductSpace:
                     )
 
                 def _jitted(c, C0, *C_rest):
-                    # Scatter C0 to P(None, "k") inside JIT so XLA can fuse the
-                    # scatter collective with the shard_map kernel rather than
-                    # performing an eager host-memory round-trip.
                     C0_sharded = jax.device_put(C0, physical_sharding)
                     return shard_map(
                         _local_eval,
@@ -335,6 +318,15 @@ class TensorProductSpace:
         return TensorProductSpace(
             orthogonal_spaces, system=self.system, name=self.name + "o"
         )
+
+    def get_transposed_sharding(self, sharding: NamedSharding) -> NamedSharding:
+        """Return the sharding with unsharded and sharded axes transposed."""
+        if sharding is self._spectral_sharding:
+            return self._physical_sharding
+        elif sharding is self._physical_sharding:
+            return self._spectral_sharding
+        else:
+            raise ValueError("Provided sharding does not match spectral or physical.")
 
     def _build_local_apply_fn(self, ax: int, fn: ArrayFun) -> ArrayFun:
         """Return a ``jax.jit(jax.vmap(...))`` that applies *fn* along *ax*.
@@ -406,12 +398,7 @@ class TensorProductSpace:
 
         # All-to-all: transpose the sharding (one collective, O(N^d/P) per device).
         # The two pre-built shardings are each other's transpose by construction.
-        transposed = (
-            self._physical_sharding
-            if sharding is self._spectral_sharding
-            else self._spectral_sharding
-        )
-        assert isinstance(transposed, NamedSharding)
+        transposed = self.get_transposed_sharding(sharding)
 
         c = jax.device_put(c, transposed)
 
@@ -467,12 +454,7 @@ class TensorProductSpace:
             ]
             unsharded = [ax for ax in range(dim) if ax not in sharded]
 
-            transposed = (
-                self._physical_sharding
-                if sharding is self._spectral_sharding
-                else self._spectral_sharding
-            )
-            assert isinstance(transposed, NamedSharding)
+            transposed = self.get_transposed_sharding(sharding)
 
             def _kernel(c_loc: Array) -> Array:
                 # Phase 1 — unsharded axes: fully local, no communication.
@@ -601,25 +583,21 @@ class TensorProductSpace:
     def to_orthogonal(self, c: Array) -> Array:
         """Return coefficients c mapped to underlying orthogonal basis."""
         dim = len(self)
+        if self._spectral_sharding is not None and len(c.devices()) > 1:
+            S = [s.S for s in self.basespaces]
+            cache_key = "to_orthogonal"
+            if cache_key not in self._spmd_local_fn_cache:
+                self._spmd_local_fn_cache[cache_key] = tuple(
+                    self._build_local_apply_fn(ax, S[ax].rmatvec) for ax in range(dim)
+                )
+            fns = self._spmd_local_fn_cache[cache_key]
+            result = self._apply_separable_spmd_shard_map(
+                c, fns, self._spectral_sharding
+            )
+            return jax.device_put(result, self._spectral_sharding)
         if dim == 2:
-            if self._spectral_sharding is not None and len(c.devices()) > 1:
-                S = [s.S for s in self.basespaces]
-                cache_key = "to_orthogonal"
-                if cache_key not in self._spmd_local_fn_cache:
-                    self._spmd_local_fn_cache[cache_key] = tuple(
-                        self._build_local_apply_fn(ax, S[ax].rmatvec)
-                        for ax in range(dim)
-                    )
-                fns = self._spmd_local_fn_cache[cache_key]
-                result = self._apply_separable_spmd(c, fns, self._spectral_sharding)
-                return jax.device_put(result, self._spectral_sharding)
             S = [s.S for s in self.basespaces]
             return S[0].T @ c @ S[1]
-
-        if self._spectral_sharding is not None:
-            raise NotImplementedError(
-                "to_orthogonal with SPMD sharding is not implemented yet for dim > 2"
-            )
         S = [s.S.todense() for s in self.basespaces]
         return jnp.einsum("is,jp,kl,ijk->spl", *S, c)
 
@@ -627,24 +605,18 @@ class TensorProductSpace:
         """Return coefficients c mapped from underlying orthogonal basis."""
         S = [s.get_inverse_stencil() for s in self.basespaces]
         dim = len(self)
+        if self._physical_sharding is not None and len(c.devices()) > 1:
+            cache_key = "from_orthogonal"
+            if cache_key not in self._spmd_local_fn_cache:
+                self._spmd_local_fn_cache[cache_key] = tuple(
+                    self._build_local_apply_fn(ax, lambda x, _S=S[ax]: jnp.dot(x, _S))
+                    for ax in range(dim)
+                )
+            fns = self._spmd_local_fn_cache[cache_key]
+            c = jax.device_put(c, self._physical_sharding)
+            return self._apply_separable_spmd_shard_map(c, fns, self._physical_sharding)
         if dim == 2:
-            if self._physical_sharding is not None and len(c.devices()) > 1:
-                cache_key = "from_orthogonal"
-                if cache_key not in self._spmd_local_fn_cache:
-                    self._spmd_local_fn_cache[cache_key] = tuple(
-                        self._build_local_apply_fn(
-                            ax, lambda x, _S=S[ax]: jnp.dot(x, _S)
-                        )
-                        for ax in range(dim)
-                    )
-                fns = self._spmd_local_fn_cache[cache_key]
-                c = jax.device_put(c, self._physical_sharding)
-                return self._apply_separable_spmd(c, fns, self._physical_sharding)
             return S[0].T @ c @ S[1]
-        if self._physical_sharding is not None:
-            raise NotImplementedError(
-                "from_orthogonal with SPMD sharding is not implemented yet for dim > 2"
-            )
         return jnp.einsum("is,jp,kl,ijk->spl", *S, c)
 
 
@@ -735,7 +707,6 @@ class VectorTensorProductSpace:
         """Return raw modal shape (N0, N1, ...)."""
         return (self.dims,) + self.tensorspaces[0].shape()
 
-    @jit_vmap(in_axes=(0, None), static_argnums=(0,), ndim=1)
     def evaluate(self, x: Array, c: Array) -> Array:
         """Evaluate vector expansion at scattered points.
 
@@ -809,6 +780,13 @@ class VectorTensorProductSpace:
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
             ci = space.to_orthogonal(c[i])
+            coeffs.append(ci)
+        return jnp.stack(coeffs)
+
+    def from_orthogonal(self, c: Array) -> Array:
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.from_orthogonal(c[i])
             coeffs.append(ci)
         return jnp.stack(coeffs)
 

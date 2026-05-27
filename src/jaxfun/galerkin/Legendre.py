@@ -250,7 +250,7 @@ class Legendre(Jacobi):
             return M if A is None else A.T @ M
 
         if j == 0 and i in (1, 2):
-            m = u._matrices(i, (self, j), q=q)
+            m = u._matrices(j, (self, i), q=q)
             if m is not None:
                 return m.T
             return None

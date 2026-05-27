@@ -582,19 +582,15 @@ def _finalize_inner_result(
 
     if dims == 1:
         if len(aresults) > 0:
-            if not sparse:
-                ares1D: Matrix = Matrix(
-                    jnp.sum(jnp.array([a.todense() for a in aresults]), axis=0)
-                )
-            else:
-                # Matrices are either Matrix or DiaMatrix. Convert matrices to DiaMatrix
-                adia = [a.tosparse(tol=sparse_tol) for a in aresults]
-                ares1D: DiaMatrix = sum(adia[1:], adia[0])
+            amats: list[Matrix | DiaMatrix] = []
+            for a in aresults:
+                amats.append(a.tosparse(tol=sparse_tol) if sparse else a.to_matrix())
+            ares1D = sum(amats[1:], amats[0])
 
-        if ares1D and len(bresults) == 0:
+        if ares1D is not None and len(bresults) == 0:
             return ares1D
 
-        if not ares1D and len(bresults) > 0:
+        if ares1D is None and len(bresults) > 0:
             return bresults
 
         return ares1D, bresults
@@ -626,13 +622,10 @@ def _finalize_inner_result(
                 )
 
         elif all(isinstance(a, TensorMatrix) for a in aresults):
-            if rank == 0:
-                array = jnp.sum(
-                    jnp.array([cast(TensorMatrix, a).data for a in aresults]), axis=0
-                )
-                aresults: TensorMatrix = TensorMatrix(array)
-            else:
+            if rank != 0:
                 raise NotImplementedError("Rank >0 TensorMatrix not implemented")
+            aresults: list[TensorMatrix] = cast(list[TensorMatrix], aresults)
+            aresults: TensorMatrix = sum(aresults[1:], aresults[0])
 
         else:
             raise ValueError("Inconsistent matrix types in aresults")

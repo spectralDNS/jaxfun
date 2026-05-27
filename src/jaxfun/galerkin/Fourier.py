@@ -4,11 +4,20 @@ import sympy as sp
 from jax import Array
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.la import DiaMatrix, diags
+from jaxfun.la import DiagonalMatrix, DiaMatrix, diags
 from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, jit_vmap
 
 from .orthogonal import OrthogonalSpace
+
+
+@jax.jit(static_argnums=(0, 1))
+def _fourier_wavenumbers(N: int, eliminate_highest_freq: bool = False) -> Array:
+    indices = jnp.arange(N)
+    k = jnp.where(indices < (N + 1) // 2, indices, indices - N)
+    if eliminate_highest_freq and N % 2 == 0:
+        k = k.at[N // 2].set(0)
+    return k
 
 
 class Fourier(OrthogonalSpace):
@@ -188,10 +197,7 @@ class Fourier(OrthogonalSpace):
             Integer array of length N with ordering from fftfreq.
         """
         N = self.N if N is None else N
-        k = jnp.fft.fftfreq(N, 1 / N).astype(int)
-        if eliminate_highest_freq and N % 2 == 0:
-            k = k.at[N // 2].set(0)
-        return k
+        return _fourier_wavenumbers(N, eliminate_highest_freq)
 
     def norm_squared(self) -> Array:
         """Return L2 norm squared of each basis function over [0, 2π]."""
@@ -245,6 +251,8 @@ class Fourier(OrthogonalSpace):
         Returns:
             DiaMatrix diagonal matrix or None if combination unsupported.
         """
+        if q != 0:
+            return None
         u, j = trial
         assert isinstance(u, Fourier), (
             "Trial spaces must be Fourier for Fourier matrices"
@@ -252,10 +260,7 @@ class Fourier(OrthogonalSpace):
         k = (1j * self.wavenumbers()) ** j * (-1j * u.wavenumbers()) ** i
         if (i + j) % 2 == 0:
             k = k.real
-        if q == 0:
-            return diags(
-                [k * self.norm_squared()],
-                offsets=(0,),
-                shape=(self.N, u.N),
-            )
-        return None
+        diagonal = k * 2 * jnp.pi
+        if self.N == u.N:
+            return DiagonalMatrix(diagonal)
+        return diags([diagonal], offsets=(0,), shape=(self.N, u.N))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import sympy as sp
+from flax import nnx
 from jax import Array
 
 from jaxfun.coordinates import CoordSys
@@ -14,6 +15,23 @@ from jaxfun.utils.fastgl import leggauss
 
 from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
+
+
+@nnx.jit(static_argnums=(0, 1))
+def _dense_derivative_matrix(
+    test_modes: int, trial_modes: int, derivative: int
+) -> Matrix:
+    """Return dense Legendre first/second derivative coupling matrices."""
+    rows = jnp.arange(test_modes)[:, None]
+    cols = jnp.arange(trial_modes)[None, :]
+    offsets = cols - rows
+    mask = (offsets >= derivative) & ((offsets - derivative) % 2 == 0)
+    values = jax.lax.select(
+        derivative == 1,
+        jnp.full((test_modes, trial_modes), 2),
+        cols * (cols + 1) - rows * (rows + 1),
+    )
+    return Matrix(jnp.where(mask, values, 0.0))
 
 
 class Legendre(Jacobi):
@@ -225,47 +243,17 @@ class Legendre(Jacobi):
             M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
             return M if A is None else A.T @ M
 
-        if i == 0 and j == 1:
-            if u.N < 2:
+        if i == 0 and j in (1, 2):
+            if j >= u.N:
                 return None
-            M = diags(
-                [jnp.full(u.N - k, 2.0) for k in jnp.arange(1, u.N, 2).tolist()],
-                offsets=tuple(jnp.arange(1, u.N, 2).tolist()),
-                shape=(self.N, u.N),
-            ).to_matrix()  # Matrix is upper triangular, better and faster to use dense.
+            M = _dense_derivative_matrix(self.N, u.N, j)
             return M if A is None else A.T @ M
 
-        if i == 1 and j == 0:
-            m = u._matrices(j, (self, i), q=q)
+        if j == 0 and i in (1, 2):
+            m = u._matrices(i, (self, j), q=q)
             if m is not None:
                 return m.T
             return None
-        if i == 0 and j == 2:
-            k = jnp.arange(max(self.N, u.N))
-            offsets = jnp.arange(2, u.N, 2).tolist()
-            if len(offsets) == 0:
-                return None
-
-            def _getkey(j):
-                Q = min(self.N, u.N - j)
-                return (
-                    (k[:Q] + 0.5)
-                    * (k[j : (Q + j)] * (k[j : (Q + j)] + 1) - k[:Q] * (k[:Q] + 1))
-                    * 2.0
-                    / (2 * k[:Q] + 1)
-                )
-
-            M = diags(
-                [_getkey(j) for j in offsets],
-                offsets=tuple(offsets),
-                shape=(self.N, u.N),
-            ).to_matrix()  # Matrix is upper triangular, better and faster to use dense.
-            return M if A is None else A.T @ M
-
-        if i == 2 and j == 0:
-            m = u._matrices(j, (self, i), q=q)
-            if m is not None:
-                return m.T
 
         return None
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import sympy as sp
+from flax import nnx
 from jax import Array
 from sympy import Expr, Symbol
 
@@ -16,6 +17,23 @@ from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
 
 n = sp.Symbol("n", integer=True)
+
+
+@nnx.jit(static_argnums=(0, 1))
+def _dense_derivative_matrix(
+    test_modes: int, trial_modes: int, derivative: int
+) -> Matrix:
+    """Return dense Chebyshev first/second derivative coupling matrices."""
+    rows = jnp.arange(test_modes)[:, None]
+    cols = jnp.arange(trial_modes)[None, :]
+    offsets = cols - rows
+    mask = (offsets >= derivative) & ((offsets - derivative) % 2 == 0)
+    values = jax.lax.select(
+        derivative == 1,
+        jnp.broadcast_to(jnp.pi * cols, (test_modes, trial_modes)),
+        cols * (cols**2 - rows**2) * jnp.pi / 2,
+    )
+    return Matrix(jnp.where(mask, values, 0.0))
 
 
 class Chebyshev(Jacobi):
@@ -416,29 +434,10 @@ class Chebyshev(Jacobi):
                 m = m.T
             return m
 
-        offsets = jnp.arange(j, u.N, 2)
-        if len(offsets) == 0:
+        if j >= u.N:
             return None
-        k = jnp.arange(max(self.N, u.N))
 
-        def _getkey1(offset):
-            Q = min(self.N, u.N - offset)
-            return jnp.pi * k[offset : (Q + offset)]
-
-        def _getkey2(offset):
-            Q = min(self.N, u.N - offset)
-            return (
-                k[offset : (Q + offset)]
-                * (k[offset : (Q + offset)] ** 2 - k[:Q] ** 2)
-                * jnp.pi
-                / 2
-            )
-
-        _getkey = _getkey1 if j == 1 else _getkey2
-
-        M = diags(
-            [_getkey(m) for m in offsets], tuple(offsets.tolist()), (self.N, u.N)
-        ).to_matrix()  # Matrix is upper triangular, better and faster to use dense.
+        M = _dense_derivative_matrix(self.N, u.N, j)
         return M if A is None else A.T @ M
 
 

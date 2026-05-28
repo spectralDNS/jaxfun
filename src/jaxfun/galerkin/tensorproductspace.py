@@ -326,8 +326,12 @@ class TensorProductSpace:
     ) -> Array:
         """Backward transform.
 
-        In the SPMD case the separable transform runs outside JIT on each
-        device's addressable shard, eliminating spurious all-gather ops.
+        Args:
+            c: Coefficient array.
+            N: Optional per-axis counts (defaults each to space.num_quad_points).
+
+        Returns:
+            Array of backward transform values on quadrature mesh.
         """
         N = tuple(
             self.basespaces[ax].num_quad_points if N is None else N[ax]
@@ -353,7 +357,14 @@ class TensorProductSpace:
         return c
 
     def scalar_product(self, u: Array) -> Array:
-        """Return tensor of inner products along each axis (separable)."""
+        """Return tensor of inner products along each axis (separable).
+
+        Args:
+            u: Input array.
+
+        Returns:
+            Array of inner products along each axis.
+        """
         sg = self.system.sg
         if sg != 1:
             sg = lambdify(self.system.base_scalars(), sg)(*self.mesh())
@@ -374,7 +385,14 @@ class TensorProductSpace:
         return u
 
     def forward(self, u: Array) -> Array:
-        """Forward transform with optional truncation."""
+        """Forward transform with optional truncation.
+
+        Args:
+            u: Input array.
+
+        Returns:
+            Array of forward transform values.
+        """
         cache_key = ("forward",)
         if cache_key not in self._spmd_local_fn_cache:
             self._spmd_local_fn_cache[cache_key] = tuple(
@@ -396,7 +414,16 @@ class TensorProductSpace:
         k: tuple[int, ...],
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
-        """Evaluate the field or mixed derivatives on a tensor-product mesh."""
+        """Evaluate the field or mixed derivatives on a tensor-product mesh.
+
+        Args:
+            c: Coefficient array.
+            k: Tuple of derivative orders along each axis.
+            N: Optional per-axis counts (defaults each to space.num_quad_points).
+
+        Returns:
+            Array of backward primitive values on tensor-product mesh.
+        """
         N = tuple(
             self.basespaces[ax].num_quad_points if N is None else N[ax]
             for ax in range(len(self))
@@ -425,7 +452,14 @@ class TensorProductSpace:
         return c
 
     def to_orthogonal(self, c: Array) -> Array:
-        """Return coefficients c mapped to underlying orthogonal basis."""
+        """Return coefficients c mapped to underlying orthogonal basis.
+
+        Args:
+            c: Coefficient array.
+
+        Returns:
+            Array of coefficients in the orthogonal basis.
+        """
         dim = len(self)
         sharding = self._spectral_sharding
         if dim == 2:
@@ -446,7 +480,14 @@ class TensorProductSpace:
         return z
 
     def from_orthogonal(self, c: Array) -> Array:
-        """Return coefficients c mapped from underlying orthogonal basis."""
+        """Return coefficients c mapped from underlying orthogonal basis.
+
+        Args:
+            c: Coefficient array.
+
+        Returns:
+            Array of coefficients in the original basis.
+        """
         sharding = self._spectral_sharding
         S = [s.get_inverse_stencil() for s in self.basespaces]
         dim = len(self)
@@ -566,7 +607,16 @@ class VectorTensorProductSpace:
         kind: MeshKind | str = MeshKind.QUADRATURE,
         N: tuple[tuple[int | None, ...], ...] | None = None,
     ) -> Array:
-        """Evaluate vector expansion on a mesh with optional padding."""
+        """Evaluate vector expansion on a mesh with optional padding.
+
+        Args:
+            u: Input array.
+            kind: Type of mesh to evaluate on.
+            N: Optional per-axis counts (defaults each to space.num_quad_points).
+
+        Returns:
+            Array of evaluated values on the mesh.
+        """
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
             ci = space.evaluate_mesh(u[i], kind=kind, N=N[i] if N is not None else None)
@@ -574,7 +624,14 @@ class VectorTensorProductSpace:
         return jnp.stack(coeffs)
 
     def forward(self, u: Array) -> Array:
-        """Forward transform with optional truncation."""
+        """Forward transform with optional truncation.
+
+        Args:
+            u: Input array.
+
+        Returns:
+            Array of forward transform values.
+        """
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
             ci = space.forward(u[i])
@@ -582,6 +639,13 @@ class VectorTensorProductSpace:
         return jnp.stack(coeffs)
 
     def scalar_product(self, u: Array) -> Array:
+        """Return tensor of inner products along each axis (separable).
+        Args:
+            u: Input array.
+
+        Returns:
+            Array of inner products along each axis.
+        """
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
             ci = space.scalar_product(u[i])
@@ -593,7 +657,15 @@ class VectorTensorProductSpace:
         u: Array,
         N: tuple[tuple[int | None, ...], ...] | None = None,
     ) -> Array:
-        """Backward transform with optional padding."""
+        """Backward transform with optional padding.
+
+        Args:
+            u: Input array.
+            N: Optional per-axis counts (defaults each to space.num_quad_points).
+
+        Returns:
+            Array of backward transform values.
+        """
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
             ci = space.backward(u[i], N=N[i] if N is not None else None)
@@ -606,6 +678,16 @@ class VectorTensorProductSpace:
         k: tuple[int, ...],
         N: tuple[tuple[int | None, ...], ...] | None = None,
     ) -> Array:
+        """Backward primitive transform with optional padding.
+
+        Args:
+            u: Input array.
+            k: Tuple of derivative orders.
+            N: Optional per-axis counts (defaults each to space.num_quad_points).
+
+        Returns:
+            Array of backward primitive transform values.
+        """
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
             ci = space.backward_primitive(u[i], k=k, N=N[i] if N is not None else None)
@@ -613,6 +695,14 @@ class VectorTensorProductSpace:
         return jnp.stack(coeffs)
 
     def to_orthogonal(self, c: Array) -> Array:
+        """Convert coefficients to orthogonal basis.
+
+        Args:
+            c: Input array of coefficients.
+
+        Returns:
+            Array of coefficients in orthogonal basis.
+        """
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
             ci = space.to_orthogonal(c[i])
@@ -620,6 +710,14 @@ class VectorTensorProductSpace:
         return jnp.stack(coeffs)
 
     def from_orthogonal(self, c: Array) -> Array:
+        """Convert coefficients from orthogonal basis.
+
+        Args:
+            c: Input array of coefficients.
+
+        Returns:
+            Array of coefficients in the original basis.
+        """
         coeffs = []
         for i, space in enumerate(self.tensorspaces):
             ci = space.from_orthogonal(c[i])
@@ -860,22 +958,18 @@ class DirectSumTPS(TensorProductSpace):
         c: Array,
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
-        """Evaluate total (homogeneous + lifting) backward transform."""
         return self.orthogonal.backward(self.to_orthogonal(c), N=N)
 
     def forward(self, u: Array) -> Array:
-        """Solve projection for homogeneous coefficients (lifting removed)."""
         d = self.orthogonal.forward(u)
         return self.from_orthogonal(d)
 
     def scalar_product(self, c: Array) -> NoReturn:  # ty:ignore[invalid-method-override]
-        """Disabled scalar product (non-homogeneous test space)."""
         raise RuntimeError(
             "Scalar product requires homogeneous test space (call on get_homogeneous())"
         )
 
     def evaluate(self, x: Array, c: Array) -> Array:
-        """Evaluate direct sum tensor product expansion at scattered points."""
         return self.orthogonal.evaluate(x, self.to_orthogonal(c))
 
     def evaluate_mesh(
@@ -884,7 +978,6 @@ class DirectSumTPS(TensorProductSpace):
         kind: MeshKind | str = MeshKind.QUADRATURE,
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
-        """Evaluate expansion on tensor mesh (summing lifting parts)."""
         return self.orthogonal.evaluate_mesh(self.to_orthogonal(c), kind=kind, N=N)
 
     def backward_primitive(
@@ -893,11 +986,9 @@ class DirectSumTPS(TensorProductSpace):
         k: tuple[int, ...],
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
-        """Evaluate total (homogeneous + lifting) backward transform."""
         return self.orthogonal.backward_primitive(self.to_orthogonal(c), k=k, N=N)
 
     def to_orthogonal(self, c: Array) -> Array:
-        """Return coefficients c mapped to underlying orthogonal basis."""
         result = self.get_homogeneous().to_orthogonal(c)
 
         for f, v in self.tpspaces.items():
@@ -913,7 +1004,6 @@ class DirectSumTPS(TensorProductSpace):
         return result
 
     def from_orthogonal(self, c: Array) -> Array:
-        """Return coefficients c mapped from underlying orthogonal basis."""
         # Note that c may be replicated, because the orthogonal space is not the
         # same as the original space, so we can't assume the sharding is compatible.
 

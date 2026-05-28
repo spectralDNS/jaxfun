@@ -30,7 +30,9 @@ v = TestFunction(P, name="v")
 u = TrialFunction(D, name="u")
 ue = D.system.expr_psi_to_base_scalar(ue)
 
-A, L = inner(v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True)
+A, L = inner(
+    v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True, kind="system"
+)
 
 xj = D.mesh(kind="uniform", N=100)
 uh = A.solve(L)

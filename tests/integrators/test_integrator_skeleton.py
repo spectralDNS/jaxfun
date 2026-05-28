@@ -62,7 +62,7 @@ def test_prepare_assembles_mass_and_linear_forms_for_first_order() -> None:
     assert integrator.mass_operator is not None or integrator.mass_diag is not None
 
     u_ind = TrialFunction(F, name="u", transient=False)
-    expected_mass = inner(v * u_ind, sparse=True)
+    expected_mass = inner(v * u_ind, sparse=True, kind="bilinear")
     expected_mass_dense = expected_mass.todense()
     if integrator.mass_operator is not None:
         actual_mass_dense = integrator.mass_operator.todense()
@@ -71,7 +71,9 @@ def test_prepare_assembles_mass_and_linear_forms_for_first_order() -> None:
         actual_mass_dense = jnp.diag(integrator.mass_diag)
     assert jnp.allclose(actual_mass_dense, expected_mass_dense)
 
-    expected_linear = inner(-(v * nu**2 * u_ind.diff(x, 3)), sparse=True)
+    expected_linear = inner(
+        -(v * nu**2 * u_ind.diff(x, 3)), sparse=True, kind="bilinear"
+    )
     assert integrator.linear_operator is not None or integrator.linear_diag is not None
     expected_linear_dense = expected_linear.todense()
     if integrator.linear_operator is not None:
@@ -111,7 +113,7 @@ def test_prepare_assembles_weighted_time_derivative_operator() -> None:
     )
 
     u_ind = TrialFunction(F, name="u", transient=False)
-    expected_mass = inner(v * rho * u_ind, sparse=True)
+    expected_mass = inner(v * rho * u_ind, sparse=True, kind="bilinear")
     expected_mass_dense = expected_mass.todense()
 
     assert integrator.mass_operator is not None

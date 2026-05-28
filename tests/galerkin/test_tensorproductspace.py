@@ -1,5 +1,3 @@
-from typing import cast
-
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -28,7 +26,7 @@ def test_tensorproduct_forward_backward_padding_fourier():
     x, y = T.system.base_scalars()
     u = TrialFunction(T)
     v = TestFunction(T)
-    M, b = inner(v * (u - sp.sin(x) * sp.sin(y)))
+    M, b = inner(v * (u - sp.sin(x) * sp.sin(y)), kind="system")
     assert isinstance(M, TPMatrix)
     # Solve
     uh = M.solve(b)
@@ -50,7 +48,10 @@ def test_tensorproduct_directsum_tps_forward_backward():
     x, y = T.system.base_scalars()
     u = TrialFunction(T)
     v = TestFunction(T)
-    A, b = inner(sp.diff(u, x) * sp.diff(v, x) + sp.diff(u, y) * sp.diff(v, y))
+    A, b = inner(
+        sp.diff(u, x) * sp.diff(v, x) + sp.diff(u, y) * sp.diff(v, y),
+        kind="system",
+    )
     # Ensure we got list of TPMatrix objects
     assert isinstance(A, TPMatrices)
     # Add rhs from non-zero bc lifting by calling backward on zero coeffs.
@@ -68,7 +69,7 @@ def test_tp_matrix_and_preconditioner():
     T = TensorProduct(C, L)
     v = TestFunction(T)
     u = TrialFunction(T)
-    A = inner(v * u)
+    A = inner(v * u, kind="bilinear")
     assert isinstance(A, TPMatrix)
     X = jax.random.normal(jax.random.PRNGKey(0), shape=T.num_dofs)
     Y = A @ X
@@ -118,18 +119,18 @@ def test_inner_multivar_expression():
     x, y = T.system.base_scalars()
     u = TrialFunction(T)
     v = TestFunction(T)
-    A = inner(sp.sqrt(x + y) * u * v)
+    A = inner(sp.sqrt(x + y) * u * v, kind="bilinear")
     # For multivar coefficient we expect TensorMatrix object(s)
     assert isinstance(A, TensorMatrix)
 
 
-def test_process_results_linear_only():
+def test_inner_linear_only():
     # Only linear form L(v)
     C = Chebyshev.Chebyshev(6)
     v = TestFunction(C)
     x = C.system.x
-    b = inner(sp.sin(x) * v)
-    assert cast(jax.Array, b).shape[0] == C.N
+    b = inner(sp.sin(x) * v, kind="linear")
+    assert b.shape[0] == C.N
 
 
 def test_inner_returns_matrix_and_vector_with_bcs():
@@ -139,9 +140,7 @@ def test_inner_returns_matrix_and_vector_with_bcs():
     v = TestFunction(V)
     u = TrialFunction(V)
     x = V[0].system.x if isinstance(V, DirectSum) else V.system.x
-    A, b = inner(v * u + x * v * u)
-    A = cast(jax.Array, A)
-    b = cast(jax.Array, b)
+    A, b = inner(v * u + x * v * u, kind="system")
     # A is dense matrix, b vector
     assert A.shape[0] == A.shape[1]
     assert b.shape[0] == A.shape[0]

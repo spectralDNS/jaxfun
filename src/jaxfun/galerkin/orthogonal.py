@@ -508,7 +508,9 @@ class OrthogonalSpace(BaseSpace):
 
         if z is not None:
             df = float(self.domain_factor)
-            z = z * (scale * df ** (i + j - 1))
+            factor = scale * df ** (i + j - 1)
+            if isinstance(factor, jax.Array) or factor != 1:
+                z = z * factor
 
         return z
 

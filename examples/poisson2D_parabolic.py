@@ -40,7 +40,7 @@ tau, sigma = C.base_scalars()
 ue = (tau * (1 - tau)) ** 2 * (1 - sigma**2) ** 1 * sp.sin(4 * sp.pi * sigma)
 
 # Assemble linear system of equations
-A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue))) * C.sg, sparse=True)
+A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue))) * C.sg, sparse=True, kind="system")
 
 un = A.solve(b)
 

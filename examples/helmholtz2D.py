@@ -38,7 +38,9 @@ u = TrialFunction(T, name="u")
 # Method of manufactured solution
 ue = T.system.expr_psi_to_base_scalar(ue)
 
-A, L = inner(v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True)
+A, L = inner(
+    v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True, kind="system"
+)
 
 un = A.solve(L, method="kron", kron_method="banded")
 

@@ -173,18 +173,37 @@ class DiaMatrix(BaseMatrix):
 
         from jaxfun.utils.common import ulp
 
+        if offsets is None:
+            a_np = np.asarray(a)
+            n, m = a_np.shape
+            max_abs = np.abs(a_np).max()
+            atol = (np.nextafter(max_abs, max_abs + 1) - max_abs) * tol
+            offsets = tuple(
+                k for k in range(-(n - 1), m) if np.any(np.abs(a_np.diagonal(k)) > atol)
+            )
+
+            if not offsets:
+                empty = jnp.zeros((0, m), dtype=a_np.dtype)
+                return cls(data=empty, offsets=(), shape=(n, m))
+
+            if offsets == (0,) and n == m:
+                return DiagonalMatrix(jnp.asarray(np.diag(a_np)))
+
+            data = np.zeros((len(offsets), m), dtype=a_np.dtype)
+            for p, k in enumerate(offsets):
+                col_start = max(0, k)
+                row_start = max(0, -k)
+                diag_len = min(m - col_start, n - row_start)
+                if diag_len > 0:
+                    rows = np.arange(row_start, row_start + diag_len)
+                    cols = np.arange(col_start, col_start + diag_len)
+                    data[p, col_start : col_start + diag_len] = a_np[rows, cols]
+            return cls(data=jnp.asarray(data), offsets=offsets, shape=(n, m))
+
         a = jnp.asarray(a)
         n, m = a.shape
 
         atol: Array = ulp(jnp.abs(a).max()) * tol
-
-        if offsets is None:
-            # Use NumPy for the detection loop to avoid ~(n+m) separate JAX
-            # device dispatches, which dominate runtime for large matrices.
-            a_np = np.asarray(a)
-            offsets = tuple(
-                k for k in range(-(n - 1), m) if np.any(np.abs(a_np.diagonal(k)) > atol)
-            )
 
         if not offsets:
             empty = jnp.zeros((0, m), dtype=a.dtype)
@@ -1547,6 +1566,14 @@ class DiagonalMatrix(DiaMatrix):
 
     def scale(self, alpha: complex | Array) -> DiagonalMatrix:
         return DiagonalMatrix(self.diagonal() * alpha)
+
+    def power(self, q: int) -> DiagonalMatrix:
+        return DiagonalMatrix(self.diagonal() ** q)
+
+    def crop(self, n: int, m: int) -> DiagonalMatrix | DiaMatrix:
+        if n != m:
+            return super().crop(n, m)
+        return DiagonalMatrix(self.diagonal()[:n])
 
     def astype(self, dtype: jnp.dtype) -> DiagonalMatrix:
         return DiagonalMatrix(self.diagonal().astype(dtype))

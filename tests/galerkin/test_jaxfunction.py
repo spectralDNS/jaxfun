@@ -1,3 +1,5 @@
+from typing import cast
+
 import jax.numpy as jnp
 import pytest
 import sympy as sp
@@ -19,6 +21,7 @@ from jaxfun.galerkin import (
 )
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
+from jaxfun.la import TPMatrix
 from jaxfun.operators import Div, Dot, Grad
 from jaxfun.utils.common import ulp
 
@@ -62,10 +65,10 @@ def test_jaxfunction(space: type[OrthogonalSpace], domain: Domain | None):
     D = space(N, domain=domain)
     u = TrialFunction(D)
     v = TestFunction(D)
-    A = inner(u * v)
+    A = inner(u * v, kind="bilinear")
     uf = JAXFunction(jnp.ones(N), D)
     b0 = A @ uf
-    b1 = inner(v * uf)
+    b1 = inner(v * uf, kind="linear")
     assert jnp.linalg.norm(b0 - b1) < ulp(100)
 
 
@@ -75,10 +78,10 @@ def test_jaxfunction_directsum(jspace: type[Jacobi.Jacobi], domain: Domain | Non
     D = FunctionSpace(N, jspace, bcs=bcs, domain=domain, name="D")
     u = TrialFunction(D)
     v = TestFunction(D)
-    A, b = inner(u * v)
+    A, b = inner(u * v, kind="system")
     uf = JAXFunction(jnp.ones(D.num_dofs), D)
     b0 = A @ uf - b
-    b1 = inner(v * uf)
+    b1 = inner(v * uf, kind="linear")
     assert jnp.linalg.norm(b0 - b1) < ulp(100)
 
 
@@ -88,10 +91,10 @@ def test_jaxfunction_diff(space: type[OrthogonalSpace], domain: Domain | None):
     x = D.system.x
     u = TrialFunction(D)
     v = TestFunction(D)
-    A = inner(u.diff(x) * v)
+    A = inner(u.diff(x) * v, kind="bilinear")
     uf = JAXFunction(jnp.ones(D.num_dofs), D)
     b0 = A @ uf
-    b1 = inner(v * uf.diff(x))
+    b1 = inner(v * uf.diff(x), kind="linear")
     assert jnp.linalg.norm(b0 - b1) < ulp(100)
 
 
@@ -101,9 +104,9 @@ def test_jaxfunction_nonlin(space: type[OrthogonalSpace], domain: Domain | None)
     u = TrialFunction(D)
     v = TestFunction(D)
     uf = JAXFunction(jnp.ones(D.num_dofs), D)
-    A = inner(u * v * uf)
+    A = inner(u * v * uf, kind="bilinear")
     b0 = A @ uf
-    b1 = inner(v * uf**2)
+    b1 = inner(v * uf**2, kind="linear")
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(100))
 
 
@@ -116,9 +119,9 @@ def test_jaxfunction_directsum_nonlin(
     u = TrialFunction(D)
     v = TestFunction(D)
     uf = JAXFunction(jnp.ones(D.num_dofs), D)
-    A, b = inner(u * v * uf)
+    A, b = inner(u * v * uf, kind="system")
     b0 = A @ uf - b
-    b1 = inner(v * uf**2)
+    b1 = inner(v * uf**2, kind="linear")
     assert jnp.linalg.norm(b0 - b1) < ulp(1000)
 
 
@@ -129,9 +132,9 @@ def test_jaxfunction_nonlin_diff(space: type[OrthogonalSpace], domain: Domain | 
     u = TrialFunction(D)
     v = TestFunction(D)
     uf = JAXFunction(jnp.ones(D.num_dofs), D)
-    A = inner(u.diff(x) * v * uf.diff(x))
+    A = inner(u.diff(x) * v * uf.diff(x), kind="bilinear")
     b0 = A @ uf
-    b1 = inner(v * (uf.diff(x)) ** 2)
+    b1 = inner(v * (uf.diff(x)) ** 2, kind="linear")
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(1000))
 
 
@@ -141,12 +144,12 @@ def test_jaxfunction_2d(space: type[OrthogonalSpace], domain: Domain | None):
     T = TensorProduct(D, D)
     u = TrialFunction(T)
     v = TestFunction(T)
-    A = inner(u * v)
+    A = cast(TPMatrix, inner(u * v, kind="bilinear"))
     uf = JAXFunction(jnp.ones((N, N)), T)
     b0 = A.todense() @ uf.array.ravel()
     b1 = A.mats[0] @ uf @ A.mats[1].T
     assert jnp.linalg.norm(b0 - b1.ravel()) < ulp(10)
-    z = inner(uf * v)
+    z = inner(uf * v, kind="linear")
     assert jnp.linalg.norm(z.ravel() - b0) < ulp(10)
 
 
@@ -157,14 +160,14 @@ def test_jaxfunction_directsum_2d(jspace: type[Jacobi.Jacobi], domain: Domain | 
     T = TensorProduct(D, D, name="T")
     u = TrialFunction(T)
     v = TestFunction(T)
-    A, b = inner(u * v)
+    A, b = inner(u * v, kind="system")
     w = JAXFunction(jnp.ones(T.num_dofs), T, name="uf")
     b0 = A @ w - b
-    b1 = inner(v * w)
+    b1 = inner(v * w, kind="linear")
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(1))
-    C, c = inner(Div(Grad(u)) * v)
+    C, c = inner(Div(Grad(u)) * v, kind="system")
     b0 = C @ w - c
-    b1 = inner(v * Div(Grad(w)))
+    b1 = inner(v * Div(Grad(w)), kind="linear")
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(1))
 
 
@@ -174,10 +177,10 @@ def test_jaxfunction_diff_2d(space: type[OrthogonalSpace], domain: Domain | None
     T = TensorProduct(D, D, name="T")
     u = TrialFunction(T)
     v = TestFunction(T)
-    A = inner(Div(Grad(u)) * v)
+    A = inner(Div(Grad(u)) * v, kind="bilinear")
     w = JAXFunction(jnp.ones(T.num_dofs), T, name="w")
     b0 = A @ w
-    b1 = inner(v * Div(Grad(w)))
+    b1 = inner(v * Div(Grad(w)), kind="linear")
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(10))
 
 
@@ -188,9 +191,9 @@ def test_jaxfunction_nonlin_2d(space: type[OrthogonalSpace], domain: Domain | No
     u = TrialFunction(T)
     v = TestFunction(T)
     w = JAXFunction(jnp.ones(T.num_dofs), T, name="w")
-    A = inner(u * v * w)
+    A = inner(u * v * w, kind="bilinear")
     b0 = A @ w
-    b1 = inner(v * w**2)
+    b1 = inner(v * w**2, kind="linear")
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(1000))
 
 
@@ -204,9 +207,9 @@ def test_jaxfunction_nonlingrad_2d(
     u = TrialFunction(T)
     v = TestFunction(T)
     w = JAXFunction(jnp.ones(T.num_dofs), T, name="w")
-    A = inner(w * Dot(Grad(v), Grad(u)))
+    A = inner(w * Dot(Grad(v), Grad(u)), kind="bilinear")
     b0 = A @ w
-    b1 = inner(0.5 * Dot(Grad(v), Grad(w**2)))
+    b1 = inner(0.5 * Dot(Grad(v), Grad(w**2)), kind="linear")
     assert jnp.linalg.norm(b0 - b1) / jnp.linalg.norm(b0) < jnp.sqrt(ulp(10))
 
 
@@ -217,10 +220,10 @@ def test_jaxfunction_2d_vector(space: type[OrthogonalSpace], domain: Domain | No
     V = VectorTensorProductSpace(T, name="V")
     u = TrialFunction(V)
     v = TestFunction(V)
-    A = inner(Dot(u, v))
+    A = inner(Dot(u, v), kind="bilinear")
     uf = JAXFunction(jnp.ones((2, N, N)), V)
     b0 = A @ uf.array
-    b1 = inner(Dot(uf, v))
+    b1 = inner(Dot(uf, v), kind="linear")
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(10))
 
 

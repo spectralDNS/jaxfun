@@ -42,7 +42,7 @@ x, y = T.system.base_scalars()
 ue = T.system.expr_psi_to_base_scalar(ue)
 
 # Returned b is sharded.
-A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
+A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
 
 # Parallel solve across all devices. uh will be sharded as b.
 uh = A.solve(b)

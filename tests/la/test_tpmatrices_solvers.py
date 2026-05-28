@@ -1,3 +1,5 @@
+from typing import cast
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -17,6 +19,7 @@ from jaxfun.galerkin.inner import inner
 from jaxfun.la import (
     BaseMatrix,
     BlockTPMatrix,
+    TPMatrices,
     TPMatrix,
     tpmats_to_kron,
 )
@@ -54,8 +57,8 @@ def _poisson_poly2d(N: int, poly, sparse: bool = True):
     v, u = TestFunction(T), TrialFunction(T)
     x, y = T.system.base_scalars()
     ue = (1 - x**2) * (1 - y**2)
-    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=sparse)
-    return T, A, b, ue
+    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=sparse, kind="system")
+    return T, cast(TPMatrices, A), b, ue
 
 
 def _poisson_fourier_poly_2d(N: int, poly, sparse: bool = True):
@@ -66,8 +69,8 @@ def _poisson_fourier_poly_2d(N: int, poly, sparse: bool = True):
     v, u = TestFunction(T), TrialFunction(T)
     x, y = T.system.base_scalars()
     ue = sp.cos(2 * x) * (1 - y**2)
-    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=sparse)
-    return T, A, b, ue
+    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=sparse, kind="system")
+    return T, cast(TPMatrices, A), b, ue
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +308,7 @@ def test_tpmatrices_solve_fourier_fourier_legendre_3d():
     v, u = TestFunction(T), TrialFunction(T)
     x, y, z = T.system.base_scalars()
     ue = sp.cos(2 * x) * sp.cos(2 * y) * (1 - z**2)
-    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
+    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
 
     lu = A.lu_factor()
     assert isinstance(lu, TPMatricesWavenumberSolver)

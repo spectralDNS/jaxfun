@@ -52,6 +52,7 @@ ue = sph(6, 3, theta, phi)
 A, b = inner(
     (v * (2 * u - Div(Grad(u))) - v * (2 * ue - Div(Grad(ue)))),
     sparse=True,
+    kind="system",
 )
 
 un = A.solve(b)

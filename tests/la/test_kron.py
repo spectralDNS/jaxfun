@@ -71,8 +71,8 @@ def _poisson_tpmats(N: int = 8) -> tuple[TPMatrices, jnp.ndarray]:
     v, u = TestFunction(T), TrialFunction(T)
     x, y = T.system.base_scalars()
     ue = (1 - x**2) * (1 - y**2)
-    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
-    return A, b
+    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
+    return cast(TPMatrices, A), b
 
 
 def _biharmonic_tpmats(N: int = 8) -> tuple[TPMatrices, jnp.ndarray]:
@@ -92,8 +92,9 @@ def _biharmonic_tpmats(N: int = 8) -> tuple[TPMatrices, jnp.ndarray]:
     A, b = inner(
         Div(Grad(Div(Grad(u)))) * v - Div(Grad(Div(Grad(ue_sym)))) * v,
         sparse=True,
+        kind="system",
     )
-    return A, b
+    return cast(TPMatrices, A), b
 
 
 class TestDiakron:

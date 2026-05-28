@@ -3,6 +3,15 @@ import os
 import pytest
 
 
+@pytest.fixture(autouse=True, scope="module")
+def clear_jax_caches_after_module():
+    yield
+
+    import jax
+
+    jax.clear_caches()
+
+
 def pytest_addoption(parser) -> None:
     parser.addoption("--float64", action="store_true", default=False)
     parser.addoption(

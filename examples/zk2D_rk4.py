@@ -81,7 +81,7 @@ if "PYTEST" in os.environ:
     uT_phys = V.backward(states[-1]).real
     assert jnp.isfinite(uT_phys).all()
     assert float(jnp.linalg.norm(uT_phys - u0_phys)) > 1e-8
-    sys.exit(1)
+    sys.exit(0)
 
 states_phys = backward_saved_states(states)
 x_plot, y_plot = V.mesh(broadcast=False)

@@ -3,11 +3,11 @@ import pytest
 
 from jaxfun.galerkin import FunctionSpace, TensorProduct
 from jaxfun.galerkin.Chebyshev import Chebyshev
-from jaxfun.galerkin.ChebyshevU import ChebyshevU
 from jaxfun.galerkin.Jacobi import Jacobi
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.galerkin.Ultraspherical import Ultraspherical
 from jaxfun.utils import Domain, ulp
+
+pytestmark = pytest.mark.spmd
 
 
 @pytest.fixture(
@@ -18,27 +18,11 @@ def domain(request: pytest.FixtureRequest) -> Domain:
 
 
 @pytest.fixture(
-    params=(Legendre, Chebyshev, ChebyshevU, Jacobi, Ultraspherical),
-    ids=("Legendre", "Chebyshev", "ChebyshevU", "Jacobi", "Ultraspherical"),
+    params=(Legendre, Chebyshev),
+    ids=("Legendre", "Chebyshev"),
 )
 def jspace(request: pytest.FixtureRequest) -> type[Jacobi]:
     return request.param
-
-
-def test_to_from_orthogonal_1d(jspace: type[Jacobi], domain: Domain):
-    N = 16
-    bcs = {"left": {"D": 0}, "right": {"D": 0}}
-    D = FunctionSpace(N, jspace, domain=domain, bcs=bcs)
-    u = jnp.ones(D.num_dofs)
-    assert jnp.linalg.norm(u - D.from_orthogonal(D.to_orthogonal(u))) < ulp(100)
-
-
-def test_to_from_orthogonal_1d_directsum(jspace: type[Jacobi], domain: Domain):
-    N = 16
-    bcs = {"left": {"D": 1}, "right": {"D": 1}}
-    D = FunctionSpace(N, jspace, domain=domain, bcs=bcs)
-    u = jnp.ones(D.num_dofs)
-    assert jnp.linalg.norm(u - D.from_orthogonal(D.to_orthogonal(u))) < ulp(100)
 
 
 def test_to_from_orthogonal_2d(jspace: type[Jacobi], domain: Domain):

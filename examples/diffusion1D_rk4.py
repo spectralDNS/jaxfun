@@ -64,7 +64,7 @@ u_ex_j = lambdify(x, u_ex)(xj)
 error = jnp.linalg.norm(u_num - u_ex_j)
 if "PYTEST" in os.environ:
     assert error < 5e-2, error
-    sys.exit(1)
+    sys.exit(0)
 
 print("Relative L2 error =", float(error))
 plt.plot(xj, lambdify(x, u0)(xj), "--k", label="initial")

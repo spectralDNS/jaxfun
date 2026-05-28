@@ -174,23 +174,20 @@ class Composite(OrthogonalSpace):
         """Evaluate constrained expansion at X with composite coeffs c."""
         return self.orthogonal._evaluate(X, self.to_orthogonal(c))
 
-    @jax.jit(static_argnums=(0, 2, 3))
-    def backward(
-        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
-    ) -> Array:
+    @jax.jit(static_argnums=(0, 2))
+    def backward(self, c: Array, N: int | None = None) -> Array:
         """Inverse transform (physical -> coefficients) via underlying basis."""
-        return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
+        return self.orthogonal.backward(self.to_orthogonal(c), N)
 
-    @jax.jit(static_argnums=(0, 2, 3, 4))
+    @jax.jit(static_argnums=(0, 2, 3))
     def backward_primitive(
         self,
         c: Array,
         k: int = 0,
-        kind: MeshKind = MeshKind.QUADRATURE,
         N: int | None = None,
     ) -> Array:
         """Inverse transform (physical -> coefficients) via underlying basis."""
-        return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, kind, N)
+        return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, N)
 
     @jax.jit(static_argnums=(0, 2))
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
@@ -565,23 +562,20 @@ class DirectSum:
         """Evaluate direct-sum expansion at points x."""
         return self.orthogonal.evaluate(x, self.to_orthogonal(c))
 
-    @jax.jit(static_argnums=(0, 2, 3))
-    def backward(
-        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
-    ) -> Array:
+    @jax.jit(static_argnums=(0, 2))
+    def backward(self, c: Array, N: int | None = None) -> Array:
         """Return backward transform."""
-        return self.orthogonal.backward(self.to_orthogonal(c), kind, N)
+        return self.orthogonal.backward(self.to_orthogonal(c), N)
 
-    @jax.jit(static_argnums=(0, 2, 3, 4))
+    @jax.jit(static_argnums=(0, 2, 3))
     def backward_primitive(
         self,
         c: Array,
         k: int = 0,
-        kind: MeshKind = MeshKind.QUADRATURE,
         N: int | None = None,
     ) -> Array:
         """Return backward transform for k-th derivative."""
-        return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, kind, N)
+        return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, N)
 
     @jax.jit(static_argnums=0)
     def forward(self, uj: Array) -> Array:
@@ -592,12 +586,6 @@ class DirectSum:
     def scalar_product(self, uj: Array) -> Array:
         """Return scalar product <u, φ_i> for direct-sum basis."""
         return self[0].scalar_product(uj)  # No BC part in test functions
-
-    @jax.jit(static_argnums=(0, 3))
-    def evaluate_derivative(self, x: Array, c: Array, k: int = 0) -> float:
-        """Evaluate k-th derivative at X (composite + boundary)."""
-        c0 = self.to_orthogonal(c)
-        return self.orthogonal.evaluate_derivative(x, c0, k)
 
     def get_homogeneous(self) -> Composite:
         """Return homogeneous Composite part of the direct sum."""

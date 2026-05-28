@@ -1,4 +1,3 @@
-import jax
 import jax.numpy as jnp
 import pytest
 import sympy as sp
@@ -223,32 +222,6 @@ def test_jaxfunction_2d_vector(space: type[OrthogonalSpace], domain: Domain | No
     b0 = A @ uf.array
     b1 = inner(Dot(uf, v))
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(10))
-
-
-def test_evaluate_derivative():
-    N = 24 if jax.config.jax_enable_x64 else 16  # ty:ignore[unresolved-attribute]
-    D = Legendre.Legendre(N)
-    T = TensorProduct(D, D, name="T")
-    x, y = T.system.base_scalars()
-    ue = sp.sin(sp.pi * x) * sp.cos(sp.pi * y)
-    w = JAXFunction(ue, T, name="w")
-    xj, yj = T.mesh()
-
-    dw_dx = T.evaluate_derivative((xj, yj), w.array, k=(1, 0))
-    dw_dx_analytic = JAXFunction(sp.diff(ue, x), T).backward()
-    assert jnp.linalg.norm(dw_dx - dw_dx_analytic) < jnp.sqrt(ulp(100))
-
-    dw_dy = T.evaluate_derivative((xj, yj), w.array, k=(0, 1))
-    dw_dy_analytic = JAXFunction(sp.diff(ue, y), T).backward()
-    assert jnp.linalg.norm(dw_dy - dw_dy_analytic) < jnp.sqrt(ulp(100))
-
-    dw_dx_dy = T.evaluate_derivative((xj, yj), w.array, k=(1, 1))
-    dw_dx_dy_analytic = JAXFunction(sp.diff(ue, x, y), T).backward()
-    assert jnp.linalg.norm(dw_dx_dy - dw_dx_dy_analytic) < jnp.sqrt(ulp(1000))
-
-    # dw_dx_dy2 = T.evaluate_derivative((xj, yj), w.array, k=(1, 2))
-    # dw_dx_dy2_analytic = JAXFunction(sp.diff(ue, x, y, y), T).backward()
-    # assert jnp.linalg.norm(dw_dx_dy2 - dw_dx_dy2_analytic) < jnp.sqrt(ulp(1000))
 
 
 def test_jaxfunction_vector(jspace: type[OrthogonalSpace], domain: Domain | None):

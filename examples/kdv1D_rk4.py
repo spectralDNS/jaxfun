@@ -68,7 +68,7 @@ if "PYTEST" in os.environ:
     uhat_T = states[-1]
     u_num = V.backward(uhat_T).real
     assert jnp.isfinite(u_num).all()
-    sys.exit(1)
+    sys.exit(0)
 
 states_phys = jnp.array([V.backward(uhat).real for uhat in states])
 

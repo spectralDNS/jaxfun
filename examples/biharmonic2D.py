@@ -43,13 +43,13 @@ uh = A.solve(b)
 
 N = 100
 xj = T.mesh(kind="uniform", N=(N, N))
-uj = T.backward(uh, kind="uniform", N=(N, N))
+uj = T.evaluate_mesh(uh, kind="uniform", N=(N, N))
 uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
 if "PYTEST" in os.environ:
     assert error < ulp(100), error
-    sys.exit(1)
+    sys.exit(0)
 
 print("Error =", error)
 

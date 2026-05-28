@@ -62,7 +62,7 @@ print("Error", error)
 
 if "PYTEST" in os.environ:
     assert error < ulp(1000000), (error, ulp(1000000))
-    sys.exit(1)
+    sys.exit(0)
 
 
 fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(10, 5))

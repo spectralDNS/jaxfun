@@ -152,8 +152,7 @@ def test_tensorproductspace_3d_paths_and_mapping():
     uh = T3.backward(c)
     assert uh.shape == u.shape
     # Evaluate path
-    mesh = T3.mesh()
-    val = T3.evaluate_mesh(mesh, c)
+    val = T3.evaluate_mesh(c)
     # evaluation returns broadcasted shape (dim interleaved); collapse via squeeze
     assert jnp.squeeze(val).shape == u.shape
     # Mapping of expression through composed map_expr_true_domain

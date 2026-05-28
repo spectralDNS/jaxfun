@@ -692,10 +692,9 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
 
     def backward(
         self,
-        kind: MeshKind | str = MeshKind.QUADRATURE,
         N: Padding = None,
     ) -> Array:
-        return self.functionspace.backward(self.array, kind=kind, N=N)  # ty: ignore[invalid-argument-type]
+        return self.functionspace.backward(self.array, N=N)  # ty: ignore[invalid-argument-type]
 
     def doit(self, **hints: Any) -> Expr | AppliedUndef:
         hints["linear"] = hints.get("linear", False)
@@ -775,26 +774,21 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         assert isinstance(
             functionspace, TensorProductSpace | VectorTensorProductSpace | DirectSumTPS
         )
-        z = functionspace.evaluate(x, self.array, True)
+        z = functionspace.evaluate(x, self.array)
         if functionspace.rank == 0:
             return jnp.expand_dims(z, -1)
         return z
 
-    @jax.jit(static_argnums=0)
-    def evaluate_mesh(self, x: Array | list[Array]) -> Array:
-        """Evaluate the JAXFunction at given points x in the physical domain.
+    def evaluate_mesh(
+        self, kind: MeshKind | str = MeshKind.QUADRATURE, N: Padding = None
+    ) -> Array:
+        """Evaluate the JAXFunction at tensor mesh in the physical domain.
 
         Args:
-            x: Cartesian product coordinates. For example, for a 2D tensor product
-            space, x should be a list of two arrays [x1, x2], where x1 and x2 are 1D
-            arrays of coordinates in each dimension. Such a mesh is formed by calling
-            self.functionspace.mesh().
+            kind: Mesh type (quadrature, uniform).
+            N: Optional padding for the number of points in each dimension.
         """
-        if isinstance(self.functionspace, OrthogonalSpace | DirectSum):
-            assert isinstance(x, Array)
-            return self.functionspace.evaluate(x, self.array)
-
-        return self.functionspace.evaluate_mesh(x, self.array, True)
+        return self.functionspace.evaluate_mesh(self.array, kind=kind, N=N)  # ty:ignore[invalid-argument-type]
 
 
 def evaluate_jaxfunction_expr_quad(

@@ -18,6 +18,8 @@ import sympy as sp
 from jaxfun.galerkin import (
     Chebyshev,
     Fourier,
+    FunctionSpace,
+    JAXFunction,
     Legendre,
     TensorProduct,
 )
@@ -107,3 +109,43 @@ def test_scalar_product_3d_spmd(space0, space1, space2) -> None:
     u = jax.device_put(jnp.ones(T.shape()), T._physical_sharding)
     uh = T.scalar_product(u)
     assert uh.sharding == T._spectral_sharding
+
+
+@pytest.mark.parametrize("domain", [(-1, 1), (0, 2), (-2, 2)])
+def test_backward_primitive_tps_2d(domain):
+    N = 16
+    D = FunctionSpace(N, Legendre.Legendre, domain=domain)
+    T = TensorProduct(D, D)
+    x, y = T.system.base_scalars()
+    f = sp.sin(x) * sp.cos(y)
+    uf = JAXFunction(f, T)
+    du = JAXFunction(sp.diff(f, x, y), T)
+    df = T.backward_primitive(uf.array, (1, 1))
+    error = jnp.linalg.norm(df - du.backward())
+
+    assert error < jnp.sqrt(ulp(100))
+    if jax.config.jax_enable_x64:  # ty:ignore[unresolved-attribute]
+        du = JAXFunction(sp.diff(f, x, 2, y, 1), T)
+        df = T.backward_primitive(uf.array, (2, 1))
+        error = jnp.linalg.norm(df - du.backward())
+        assert error < jnp.sqrt(ulp(100)), error
+
+
+@pytest.mark.parametrize("domain", [(-1, 1), (0, 2), (-2, 2)])
+def test_backward_primitive_tps_3d(domain):
+    if jax.config.jax_enable_x64:  # ty:ignore[unresolved-attribute]
+        N = 16
+        D = FunctionSpace(N, Legendre.Legendre, domain=domain)
+        T = TensorProduct(D, D, D)
+        x, y, z = T.system.base_scalars()
+        f = sp.sin(x) * sp.cos(y) * sp.sin(z)
+        uf = JAXFunction(f, T)
+        du = JAXFunction(sp.diff(f, x, y, z), T)
+        df = T.backward_primitive(uf.array, (1, 1, 1))
+        error = jnp.linalg.norm(df - du.backward())
+
+        assert error < jnp.sqrt(ulp(100))
+        du = JAXFunction(sp.diff(f, x, 2, y, 1, z, 1), T)
+        df = T.backward_primitive(uf.array, (2, 1, 1))
+        error = jnp.linalg.norm(df - du.backward())
+        assert error < jnp.sqrt(ulp(100)), error

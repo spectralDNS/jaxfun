@@ -38,6 +38,8 @@ jobs:
         run: |
           uv run pytest --num-devices=2
           uv run pytest --float64 --num-devices=2
+          uv run pytest -m slow --num-devices=2
+          uv run pytest --float64 -m slow --num-devices=2
 
       - name: Run slow demo tests
         run: |

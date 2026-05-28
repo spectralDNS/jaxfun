@@ -29,7 +29,7 @@ dependencies = [
 
 [tool.pytest.ini_options]
 markers = [ "slow: marks tests as slow (select with '-m slow')" ]
-addopts = [ "-m", "not slow", "-n", "2" ]
+addopts = [ "-m", "not slow", "-n", "logical" ]
 filterwarnings = [
   "ignore::DeprecationWarning:flax",
 ]

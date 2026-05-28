@@ -11,7 +11,6 @@ from jaxfun.galerkin.Fourier import Fourier as FourierSpace
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.integrators import ETDRK4, RK4, BackwardEuler
 from jaxfun.operators import Constant, Div, Grad
-from jaxfun.typing import MeshKind
 from jaxfun.utils.common import lambdify, n, ulp
 
 
@@ -151,9 +150,8 @@ def test_rk4_nonlinear_rhs_uses_direct_jaxfunction_evaluation() -> None:
     uhat = integrator.initial_coefficients()
     nonlinear = integrator.nonlinear_rhs(uhat)
 
-    xj = V.mesh()
     u_phys = V.backward(uhat)
-    ux_phys = V.evaluate_derivative(xj, uhat, k=1)
+    ux_phys = V.backward_primitive(uhat, k=1)
     expected = V.forward(-u_phys * ux_phys)
 
     assert jnp.allclose(nonlinear, expected, atol=5 * ulp(2.0))
@@ -176,7 +174,7 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
     integrator = RK4(V, weak_form, time=(0.0, 0.01), initial=sp.sin(x), sparse=True)
     uhat = integrator.initial_coefficients()
     u_phys = V.backward(uhat)
-    ux_phys = V.evaluate_derivative(V.mesh(), uhat, k=1)
+    ux_phys = V.backward_primitive(uhat, k=1)
     expected = V.forward(-((u_phys + ux_phys) ** 2))
 
     calls: list[int] = []
@@ -185,20 +183,18 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
 
     def count_backward(
         c,
-        kind: MeshKind = MeshKind.QUADRATURE,
         N: int | None = None,
     ):
         calls.append(0)
-        return original_backward(c, kind=kind, N=N)  # ty:ignore[invalid-argument-type]
+        return original_backward(c, N=N)  # ty:ignore[invalid-argument-type]
 
     def count_eval(
         c,
         k: int = 0,
-        kind: MeshKind = MeshKind.QUADRATURE,
         N: int | None = None,
     ):
         calls.append(int(k))
-        return original_eval(c, k=k, kind=kind, N=N)  # ty:ignore[invalid-argument-type]
+        return original_eval(c, k=k, N=N)  # ty:ignore[invalid-argument-type]
 
     monkeypatch.setattr(integrator.functionspace, "backward", count_backward)
     monkeypatch.setattr(integrator.functionspace, "backward_primitive", count_eval)
@@ -247,11 +243,10 @@ def test_rk4_solve_passes_padding_to_nonlinear_backward_calls(
     def count_eval(
         c,
         k: int = 0,
-        kind: MeshKind = MeshKind.QUADRATURE,
         N: int | None = None,
     ):
         calls.append(N)
-        return original_eval(c, k=k, kind=kind, N=N)  # ty:ignore[invalid-argument-type]
+        return original_eval(c, k=k, N=N)  # ty:ignore[invalid-argument-type]
 
     monkeypatch.setattr(integrator.functionspace, "backward_primitive", count_eval)
 
@@ -330,10 +325,9 @@ def test_rk4_tensorproduct_nonlinear_rhs_uses_mixed_derivative_path() -> None:
     uhat = integrator.initial_coefficients()
     nonlinear = integrator.nonlinear_rhs(uhat)
 
-    xj = list(V.mesh())
     u_phys = V.backward(uhat)
-    ux_phys = V.evaluate_derivative(xj, uhat, k=(1, 0))
-    uy_phys = V.evaluate_derivative(xj, uhat, k=(0, 1))
+    ux_phys = V.backward_primitive(uhat, k=(1, 0))
+    uy_phys = V.backward_primitive(uhat, k=(0, 1))
     expected = V.forward(-(u_phys * ux_phys + u_phys * uy_phys))
 
     assert jnp.allclose(nonlinear, expected, atol=5 * ulp(0.5))

@@ -135,7 +135,7 @@ def _():
         F = inner(2 * v)
         h = A.solve(F, method="lu")
         xj = T.mesh(kind="uniform", N=(50, 50), broadcast=False)
-        plt.contourf(xj[0], xj[1], T.backward(h, kind="uniform", N=(50, 50)))
+        plt.contourf(xj[0], xj[1], T.evaluate_mesh(h, kind="uniform", N=(50, 50)))
         plt.colorbar()
         plt.show()
         return JAXFunction(h, T, name="h")
@@ -193,8 +193,7 @@ def _(mo):
 
 @app.cell
 def _(h):
-    xj = h.functionspace.mesh()
-    hj = h.evaluate_mesh(xj)
+    hj = h.evaluate_mesh(kind="quadrature")
     print(hj.shape)
     return (hj,)
 

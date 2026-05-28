@@ -60,7 +60,7 @@ error = jnp.linalg.norm(u_num - u_ex_j)
 if "PYTEST" in os.environ:
     # Backward Euler is diffusive for pure advection; keep tolerance loose.
     assert error < 0.35, error
-    sys.exit(1)
+    sys.exit(0)
 
 print("L2 error =", float(error))
 plt.plot(xj, lambdify(x, u0)(xj), "--k", label="initial")

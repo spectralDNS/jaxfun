@@ -120,22 +120,6 @@ class OrthogonalSpace(BaseSpace):
         assert len(c) <= self.N, f"Coefficient length {len(c)} exceeds N={self.N}"
         return self.eval_basis_functions(X)[..., : len(c)] @ c
 
-    @jax.jit(static_argnums=(0, 3))
-    def evaluate_derivative(self, x: Array, c: Array, k: int = 0) -> Array:
-        """Evaluate truncated series sum_k c_k psi_k(x).
-
-        Args:
-            x: Evaluation point(s) in real coordinates.
-            c: Coefficient vector ( <= self.N).
-            k: Derivative order (default 0 -> function value).
-        Returns:
-            Array of shape like x containing series evaluation.
-        """
-        assert len(c) <= self.N, f"Coefficient length {len(c)} exceeds N={self.N}"
-        X = self.map_reference_domain(x)
-        df = float(self.domain_factor**k)
-        return df * self.evaluate_basis_derivative(X, k)[..., : len(c)] @ c
-
     @jax.jit(static_argnums=0)
     def vandermonde(self, X: Array) -> Array:
         r"""Return pseudo-Vandermonde matrix V_{m,k}=psi_k(X_m).
@@ -150,18 +134,61 @@ class OrthogonalSpace(BaseSpace):
 
     @abstractmethod
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
-        """Evaluate single basis function psi_i at point X."""
+        """Evaluate single basis function psi_i at point X.
+
+        Args:
+            X: Evaluation point(s) in reference coordinates.
+            i: Basis index (0 <= i < N).
+
+        Returns:
+            Array of shape like X containing basis function values.
+        """
         pass
 
     @abstractmethod
     def eval_basis_functions(self, X: float | Array) -> Array:
-        """Evaluate all basis functions psi_0..psi_{N-1} at X."""
+        """Evaluate all basis functions psi_0..psi_{N-1} at X.
+
+        Args:
+            X: Evaluation point(s) in reference coordinates.
+
+        Returns:
+            Array of shape (len(X), N) containing basis function values.
+        """
         pass
 
     @jax.jit(static_argnums=(0, 2))
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
-        """Return k-th derivative Vandermonde."""
+        """Return k-th derivative Vandermonde.
+
+        Args:
+            X: 1D array of sample points (reference domain).
+            k: Derivative order (default 0 -> function values).
+        Returns:
+            Array shape (len(X), N) with k-th derivatives of basis functions.
+        """
         return jacn(self.eval_basis_functions, k)(X)
+
+    @jax.jit(static_argnums=(0, 2, 3))
+    def evaluate_mesh(
+        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
+    ) -> Array:
+        """Evaluate series at mesh points of given kind.
+
+        Args:
+            c: Coefficients of orthogonal series (length <= self.N).
+            kind: Type of mesh to use (QUADRATURE or UNIFORM).
+            N: Number of points. Must be >= self._num_quad_points.
+
+        Returns:
+            Array of shape (N,) containing series evaluation at mesh points.
+        """
+        kind = MeshKind(kind)
+        if kind is MeshKind.QUADRATURE:
+            return self.backward(c, N)
+        assert kind is MeshKind.UNIFORM, f"Unsupported mesh kind: {kind}"
+        xj = self.mesh(kind=kind, N=N)
+        return self.evaluate(xj, c)
 
     @abstractmethod
     def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
@@ -176,34 +203,39 @@ class OrthogonalSpace(BaseSpace):
         """
         pass
 
-    @jax.jit(static_argnums=(0, 2, 3))
-    def backward(
-        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
-    ) -> Array:
-        """Implementation of backward transform."""
-        xj = self.mesh(kind=kind, N=N)
+    @jax.jit(static_argnums=(0, 2))
+    def backward(self, c: Array, N: int | None = None) -> Array:
+        """Return series evaluation at quadrature points (possibly with padding).
+
+        Args:
+            c: Coefficients of orthogonal series (length <= self.N).
+            N: Number of points. Must be >= self._num_quad_points. Defaults to
+                self._num_quad_points.
+
+        Returns:
+            Array of shape (N,) containing series evaluation at quadrature points.
+        """
+        xj = self.mesh(kind=MeshKind.QUADRATURE, N=N)
         return self.evaluate(xj, c)
 
-    @jax.jit(static_argnums=(0, 2, 3, 4))
+    @jax.jit(static_argnums=(0, 2, 3))
     def backward_primitive(
         self,
         c: Array,
         k: int = 0,
-        kind: MeshKind = MeshKind.QUADRATURE,
         N: int | None = None,
     ) -> Array:
-        r"""Evaluate ``u(x_i)`` or ``\frac{d^k u}{dx^k}`` in physical space.
+        r"""Evaluate ``u(x_i)`` or ``\frac{d^k u(x_i)}{dx^k}`` in physical space
+        for quadrature points x_i.
 
         Args:
             c: Coefficients of orthogonal series (length <= self.N).
             k: Derivative order (default 0 -> function value).
-            kind: Mesh type for backward evaluation (MeshKind.QUADRATURE or
-                MeshKind.UNIFORM).
-            N: Number of points. Must be >= self._num_quad_points.
+            N: Number of points. Must be >= self._num_quad_points, defaults to
+                self._num_quad_points.
         """
-        N = self.num_quad_points if N is None else N
         df = float(self.domain_factor**k)
-        return df * self.backward(self.derivative_coeffs(c, k), kind=kind, N=N)
+        return df * self.backward(self.derivative_coeffs(c, k), N=N)
 
     def mass_matrix(self) -> DiaMatrix:
         """Return diagonal mass matrix (orthogonality) in sparse format."""
@@ -391,15 +423,15 @@ class OrthogonalSpace(BaseSpace):
                 MeshKind.UNIFORM).
             N: Number of points (defaults to self.num_quad_points).
         """
+        N = self.num_quad_points if N is None else N
         kind = MeshKind(kind)
         if kind is MeshKind.QUADRATURE:
             return self.map_true_domain(self.quad_points_and_weights(N)[0])
         a, b = self.domain
-        M = N if N is not None else self.num_quad_points
-        return jnp.linspace(float(a), float(b), M)
+        return jnp.linspace(float(a), float(b), N)
 
     def cartesian_mesh(
-        self, kind: MeshKind | str = MeshKind.QUADRATURE, N: int = 0
+        self, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
     ) -> tuple[Array, ...]:
         """Return physical Cartesian mesh (tuple) for current coordinate system."""
         rv = self.system._position_vector

@@ -115,7 +115,7 @@ if "PYTEST" in os.environ:
     assert jnp.isfinite(psi_states).all()
     assert density_change > 0.1, density_change
     assert mass_drift < 1e-3, mass_drift
-    sys.exit(1)
+    sys.exit(0)
 
 gif_path = Path(
     os.environ.get("NLS_GIF_PATH", Path(__file__).with_name("nls1d_etdrk4.gif"))

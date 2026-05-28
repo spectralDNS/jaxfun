@@ -114,15 +114,12 @@ class Fourier(OrthogonalSpace):
         z = (1j * v) ** k * y
         return z
 
-    @jax.jit(static_argnums=(0, 2, 3))
-    def backward(
-        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
-    ) -> Array:
+    @jax.jit(static_argnums=(0, 2))
+    def backward(self, c: Array, N: int | None = None) -> Array:
         """Inverse FFT (possible padding) to physical space.
 
         Args:
             c: Coefficient array.
-            kind: Integration strategy (unused placeholder).
             N: Transform length. If N > len(c), pads coefficients with zeros in the
                 middle (high wavenumbers).
 
@@ -228,8 +225,8 @@ class Fourier(OrthogonalSpace):
         """
         # Both quadrature and uniform meshes are equispaced for Fourier, so ignore kind.
         a, b = self.domain
-        M = N if N is not None else self.num_quad_points
-        return jnp.linspace(float(a), float(b), M, endpoint=False)
+        N = self.num_quad_points if N is None else N
+        return jnp.linspace(float(a), float(b), N, endpoint=False)
 
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0

@@ -3,7 +3,6 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import sympy as sp
-from flax import nnx
 from jax import Array
 from sympy import Expr, Symbol
 
@@ -19,10 +18,10 @@ from .orthogonal import OrthogonalSpace
 n = sp.Symbol("n", integer=True)
 
 
-@nnx.jit(static_argnums=(0, 1))
-def _dense_derivative_matrix(
+@jax.jit(static_argnums=(0, 1))
+def _dense_derivative_matrix_data(
     test_modes: int, trial_modes: int, derivative: int
-) -> Matrix:
+) -> Array:
     """Return dense Chebyshev first/second derivative coupling matrices."""
     rows = jnp.arange(test_modes)[:, None]
     cols = jnp.arange(trial_modes)[None, :]
@@ -33,7 +32,13 @@ def _dense_derivative_matrix(
         jnp.broadcast_to(jnp.pi * cols, (test_modes, trial_modes)),
         cols * (cols**2 - rows**2) * jnp.pi / 2,
     )
-    return Matrix(jnp.where(mask, values, 0.0))
+    return jnp.where(mask, values, 0.0)
+
+
+def _dense_derivative_matrix(
+    test_modes: int, trial_modes: int, derivative: int
+) -> Matrix:
+    return Matrix(_dense_derivative_matrix_data(test_modes, trial_modes, derivative))
 
 
 class Chebyshev(Jacobi):

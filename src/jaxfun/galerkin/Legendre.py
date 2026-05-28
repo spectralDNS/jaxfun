@@ -3,7 +3,6 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import sympy as sp
-from flax import nnx
 from jax import Array
 
 from jaxfun.coordinates import CoordSys
@@ -17,10 +16,10 @@ from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
 
 
-@nnx.jit(static_argnums=(0, 1))
-def _dense_derivative_matrix(
+@jax.jit(static_argnums=(0, 1))
+def _dense_derivative_matrix_data(
     test_modes: int, trial_modes: int, derivative: int
-) -> Matrix:
+) -> Array:
     """Return dense Legendre first/second derivative coupling matrices."""
     rows = jnp.arange(test_modes)[:, None]
     cols = jnp.arange(trial_modes)[None, :]
@@ -31,7 +30,13 @@ def _dense_derivative_matrix(
         jnp.full((test_modes, trial_modes), 2),
         cols * (cols + 1) - rows * (rows + 1),
     )
-    return Matrix(jnp.where(mask, values, 0.0))
+    return jnp.where(mask, values, 0.0)
+
+
+def _dense_derivative_matrix(
+    test_modes: int, trial_modes: int, derivative: int
+) -> Matrix:
+    return Matrix(_dense_derivative_matrix_data(test_modes, trial_modes, derivative))
 
 
 class Legendre(Jacobi):

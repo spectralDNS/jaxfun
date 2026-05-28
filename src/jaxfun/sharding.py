@@ -18,7 +18,7 @@ def get_transposed_sharding(sharding: NamedSharding) -> NamedSharding:
     elif sharding.spec == P(None, "k"):
         return spectral_sharding
     else:
-        raise ValueError("Provided sharding does not match spectral or physical.")
+        raise ValueError(f"Provided {sharding} does not match spectral or physical.")
 
 
 def _build_local_apply_fn(dim: int, ax: int, fn: ArrayFun) -> ArrayFun:
@@ -105,6 +105,7 @@ def _apply_separable_spmd_shard_map(
     return cache[cache_key](c)
 
 
+# Experimental:
 def _apply_separable_spmd(
     c: Array,
     fns: tuple[ArrayFun, ...],

@@ -10,6 +10,7 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array, shard_map
+from jax._src.sharding import IndivisibleError
 from jax.sharding import NamedSharding, PartitionSpec as P
 
 from jaxfun.coordinates import CoordSys
@@ -287,7 +288,7 @@ class TensorProductSpace:
                 einsum_str = ",".join(f"j{ch}" for ch in dc) + f",{dc}->j"
 
                 c_spec = spectral_sharding.spec
-                mesh = spectral_sharding.mesh
+                p_spec = physical_sharding.spec
 
                 def _local_eval(c_loc, C0_loc, *C_rest_loc):
                     return jax.lax.psum(
@@ -298,9 +299,8 @@ class TensorProductSpace:
                     C0_sharded = jax.device_put(C0, physical_sharding)
                     return shard_map(
                         _local_eval,
-                        mesh=mesh,
-                        in_specs=(c_spec, P(None, "k"))
-                        + tuple(P() for _ in range(1, dim)),
+                        mesh=spectral_sharding.mesh,
+                        in_specs=(c_spec, p_spec) + tuple(P() for _ in range(1, dim)),
                         out_specs=P(),
                         check_vma=False,
                     )(c, C0_sharded, *C_rest)
@@ -426,43 +426,36 @@ class TensorProductSpace:
     def to_orthogonal(self, c: Array) -> Array:
         """Return coefficients c mapped to underlying orthogonal basis."""
         dim = len(self)
-        if self._spectral_sharding and len(c.devices()) > 1:
-            S = [s.S for s in self.basespaces]
-            cache_key = "to_orthogonal"
-            if cache_key not in self._spmd_local_fn_cache:
-                self._spmd_local_fn_cache[cache_key] = tuple(
-                    _build_local_apply_fn(dim, ax, S[ax].rmatvec) for ax in range(dim)
-                )
-            fns = self._spmd_local_fn_cache[cache_key]
-            result = _apply_separable_spmd_shard_map(
-                c, fns, spectral_sharding, self._spmd_local_fn_cache
-            )
-            return jax.device_put(result, spectral_sharding)
+        sharding = self._spectral_sharding
         if dim == 2:
             S = [s.S for s in self.basespaces]
-            return S[0].T @ c @ S[1]
-        S = [s.S.todense() for s in self.basespaces]
-        return jnp.einsum("is,jp,kl,ijk->spl", *S, c)
+            z = S[0].T @ c @ S[1]
+        else:
+            S = [s.S for s in self.basespaces]
+            # z = jnp.einsum("is,jp,kl,ijk->spl", *S, c)
+            z = c
+            for i, Si in enumerate(S):
+                z = Si.rmatvec(z, axis=i)
+
+        if sharding:  # return sharded if possible, otherwise fallback to replicated
+            try:
+                return jax.device_put(z, sharding)
+            except IndivisibleError:
+                pass
+        return z
 
     def from_orthogonal(self, c: Array) -> Array:
         """Return coefficients c mapped from underlying orthogonal basis."""
+        sharding = self._spectral_sharding
         S = [s.get_inverse_stencil() for s in self.basespaces]
         dim = len(self)
-        if self._physical_sharding and len(c.devices()) > 1:
-            cache_key = "from_orthogonal"
-            if cache_key not in self._spmd_local_fn_cache:
-                self._spmd_local_fn_cache[cache_key] = tuple(
-                    _build_local_apply_fn(dim, ax, lambda x, _S=S[ax]: jnp.dot(x, _S))
-                    for ax in range(dim)
-                )
-            fns = self._spmd_local_fn_cache[cache_key]
-            c = jax.device_put(c, self._physical_sharding)
-            return _apply_separable_spmd_shard_map(
-                c, fns, self._physical_sharding, self._spmd_local_fn_cache
-            )
-        if dim == 2:
-            return S[0].T @ c @ S[1]
-        return jnp.einsum("is,jp,kl,ijk->spl", *S, c)
+        z = S[0].T @ c @ S[1] if dim == 2 else jnp.einsum("is,jp,kl,ijk->spl", *S, c)
+        if sharding:  # return sharded if possible, otherwise fallback to replicated
+            try:
+                return jax.device_put(z, sharding)
+            except IndivisibleError:
+                pass
+        return z
 
 
 class VectorTensorProductSpace:
@@ -904,50 +897,39 @@ class DirectSumTPS(TensorProductSpace):
 
     def to_orthogonal(self, c: Array) -> Array:
         """Return coefficients c mapped to underlying orthogonal basis."""
-        result: Array | None = None
-        sharding = self.orthogonal._spectral_sharding
+        result = self.get_homogeneous().to_orthogonal(c)
+
         for f, v in self.tpspaces.items():
             inp = self.bndvals.get(f, c)
-            ai = v.to_orthogonal(inp)
-            # bndvals are computed replicated (local).  When inp is bndvals
-            # rather than c, ai is a single-device array; shard it to the
-            # spectral sharding so it can be combined with the sharded result
-            # from c.
-            if sharding is not None and inp is not c:
-                ai = jax.device_put(ai, sharding)
-            if result is None:
-                result = ai
-            else:
-                result = result + jnp.pad(
-                    ai,
-                    [
-                        (0, result.shape[0] - ai.shape[0]),
-                        (0, result.shape[1] - ai.shape[1]),
-                    ],
-                )
-        assert result is not None
+            if inp is c:
+                continue
+            ai = v.to_orthogonal(inp)  # sharded if possible
+            result = result + jnp.pad(
+                ai,
+                [(0, result.shape[i] - ai.shape[i]) for i in range(c.ndim)],
+            )
+
         return result
 
     def from_orthogonal(self, c: Array) -> Array:
         """Return coefficients c mapped from underlying orthogonal basis."""
-        result: Array | None = None
-        sharding = self.orthogonal._spectral_sharding
+        # Note that c may be replicated, because the orthogonal space is not the
+        # same as the original space, so we can't assume the sharding is compatible.
+
+        result: Array = jnp.zeros(1)
+
         for f, v in self.tpspaces.items():
-            if f in self.bndvals:
-                ai = -v.to_orthogonal(self.bndvals[f])
-                if sharding is not None:
-                    ai = jax.device_put(ai, sharding)
-            else:
-                ai = c
-            if result is None:
-                result = ai
-            else:
-                result = result + jnp.pad(
-                    ai,
-                    [
-                        (0, result.shape[0] - ai.shape[0]),
-                        (0, result.shape[1] - ai.shape[1]),
-                    ],
-                )
-        assert result is not None
+            inp = self.bndvals.get(f, c)
+            if inp is c:
+                continue
+            ai = -v.to_orthogonal(inp)  # sharded if possible
+            result = result + jnp.pad(
+                ai,
+                [(0, c.shape[i] - ai.shape[i]) for i in range(c.ndim)],
+            )
+        # ensure replicated result is on same sharding as c
+        try:
+            result = c + jax.device_put(result, c.sharding)
+        except IndivisibleError:
+            result = c + result
         return self.get_homogeneous().from_orthogonal(result)

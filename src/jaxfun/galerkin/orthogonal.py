@@ -45,8 +45,8 @@ class OrthogonalSpace(BaseSpace):
 
     Attributes:
         N: Number of modes.
-        _domain: Physical Domain (None -> reference).
-        _num_quad_points: Default quadrature resolution (== N).
+        domain: Physical Domain (None -> reference).
+        num_quad_points: Default quadrature resolution (== N).
         S: Stencil matrix (identity here; overridden in Composite).
         stencil: Dict describing diagonal shifts (0:1 for identity).
         orthogonal: Self alias (Composite replaces with underlying).
@@ -178,7 +178,7 @@ class OrthogonalSpace(BaseSpace):
         Args:
             c: Coefficients of orthogonal series (length <= self.N).
             kind: Type of mesh to use (QUADRATURE or UNIFORM).
-            N: Number of points. Must be >= self._num_quad_points.
+            N: Number of points. Must be >= self.num_quad_points.
 
         Returns:
             Array of shape (N,) containing series evaluation at mesh points.
@@ -209,8 +209,8 @@ class OrthogonalSpace(BaseSpace):
 
         Args:
             c: Coefficients of orthogonal series (length <= self.N).
-            N: Number of points. Must be >= self._num_quad_points. Defaults to
-                self._num_quad_points.
+            N: Number of points. Must be >= self.num_quad_points. Defaults to
+                self.num_quad_points.
 
         Returns:
             Array of shape (N,) containing series evaluation at quadrature points.
@@ -231,8 +231,8 @@ class OrthogonalSpace(BaseSpace):
         Args:
             c: Coefficients of orthogonal series (length <= self.N).
             k: Derivative order (default 0 -> function value).
-            N: Number of points. Must be >= self._num_quad_points, defaults to
-                self._num_quad_points.
+            N: Number of points. Must be >= self.num_quad_points, defaults to
+                self.num_quad_points.
         """
         df = float(self.domain_factor**k)
         return df * self.backward(self.derivative_coeffs(c, k), N=N)

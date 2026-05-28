@@ -4,7 +4,7 @@ import sympy as sp
 from jax import Array
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.la import DiagonalMatrix, DiaMatrix, diags
+from jaxfun.la import DiaMatrix, diags
 from jaxfun.typing import MeshKind
 from jaxfun.utils.common import Domain, jit_vmap
 
@@ -261,6 +261,4 @@ class Fourier(OrthogonalSpace):
         if (i + j) % 2 == 0:
             k = k.real
         diagonal = k * 2 * jnp.pi
-        if self.N == u.N:
-            return DiagonalMatrix(diagonal)
         return diags([diagonal], offsets=(0,), shape=(self.N, u.N))

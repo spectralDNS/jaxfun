@@ -1567,6 +1567,14 @@ class DiagonalMatrix(DiaMatrix):
     def scale(self, alpha: complex | Array) -> DiagonalMatrix:
         return DiagonalMatrix(self.diagonal() * alpha)
 
+    def power(self, q: int) -> DiagonalMatrix:
+        return DiagonalMatrix(self.diagonal() ** q)
+
+    def crop(self, n: int, m: int) -> DiagonalMatrix | DiaMatrix:
+        if n != m:
+            return super().crop(n, m)
+        return DiagonalMatrix(self.diagonal()[:n])
+
     def astype(self, dtype: jnp.dtype) -> DiagonalMatrix:
         return DiagonalMatrix(self.diagonal().astype(dtype))
 

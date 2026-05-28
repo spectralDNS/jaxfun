@@ -46,9 +46,9 @@ u = TrialFunction(D)
 t = C.t  # use the same coordinate as u and v
 
 ue = sp.sin(4 * sp.pi * t)
-b = inner(-v * Div(Grad(ue)))
+b = inner(-v * Div(Grad(ue)), kind="linear")
 # b = inner(-v*sp.Derivative(ue, t, 2))
-A = inner(-v * Div(Grad(u)), sparse=True)
+A = inner(-v * Div(Grad(u)), sparse=True, kind="bilinear")
 
 u_hat = A.solve(b)
 

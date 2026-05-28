@@ -58,7 +58,11 @@ def _quad_matrix(space, dv: int, du: int, q: int = 0) -> jnp.ndarray:
     v = TestFunction(space)
     u = TrialFunction(space)
     x = space.system.x
-    A = inner(x**q * v.diff(x, dv) * u.diff(x, du), use_precomputed_matrices=False)
+    A = inner(
+        x**q * v.diff(x, dv) * u.diff(x, du),
+        use_precomputed_matrices=False,
+        kind="bilinear",
+    )
     return A.todense()
 
 
@@ -67,7 +71,11 @@ def _quad_matrix_pg(test_space, trial_space, du: int, q: int = 0) -> jnp.ndarray
     v = TestFunction(test_space)
     u = TrialFunction(trial_space)
     x = test_space.system.x
-    A = inner(x**q * v * u.diff(x, du), use_precomputed_matrices=False)
+    A = inner(
+        x**q * v * u.diff(x, du),
+        use_precomputed_matrices=False,
+        kind="bilinear",
+    )
     return A.todense()
 
 
@@ -264,7 +272,12 @@ class TestPoly5FirstDerivativeMatrixPGWithCoefficient:
         u = TrialFunction(U)
         v = TestFunction(V)
         x = U.system.x
-        M = inner(x**q * v * u.diff(x, 1), sparse=True, use_precomputed_matrices=True)
+        M = inner(
+            x**q * v * u.diff(x, 1),
+            sparse=True,
+            use_precomputed_matrices=True,
+            kind="bilinear",
+        )
         assert M is not None
         ref = _quad_matrix_pg(V, U, 1, q)
         err = float(jnp.linalg.norm(M.todense() - ref))

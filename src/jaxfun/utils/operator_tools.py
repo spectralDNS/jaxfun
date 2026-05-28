@@ -61,7 +61,5 @@ def assemble_linear_term(
     if sp.sympify(expr) == 0:
         return None, None
 
-    linear_form = cast(
-        GalerkinAssembledForm, inner(expr, sparse=sparse, sparse_tol=sparse_tol)
-    )
+    linear_form = inner(expr, sparse=sparse, sparse_tol=sparse_tol)
     return split_operator_and_forcing(linear_form)

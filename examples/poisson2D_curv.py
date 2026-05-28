@@ -36,7 +36,7 @@ ue = (1 - r) * (sp.S.Half - r) * theta * (sp.pi / 2 - theta)
 
 # Assemble linear system of equations
 # A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
-A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue))), sparse=True)
+A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue))), sparse=True, kind="system")
 
 uh = A.solve(b)
 

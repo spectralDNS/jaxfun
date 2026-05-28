@@ -1,5 +1,3 @@
-from typing import cast
-
 import jax
 import jax.numpy as jnp
 
@@ -21,7 +19,7 @@ def test_scalar_vector_function_print_and_backward():
     jf = JAXFunction(coeffs, C, name="U")
     u = TrialFunction(C)
     v = TestFunction(C)
-    M, b = inner(v * (u - jf))
+    M, b = inner(v * (u - jf), kind="system")
     uh = M.solve(b)
     assert jnp.linalg.norm(uh - coeffs) < ulp(100)
     # Should approximate jf coefficients (diagonal mass matrix scaling)
@@ -34,9 +32,8 @@ def test_forms_split_linear_and_bilinear():
     u = TrialFunction(V)
     x = V[0].system.x if isinstance(V, DirectSum) else V.system.x
     # Form with bilinear and linear parts
-    A = inner(x * v * u + v * u)
+    A = inner(x * v * u + v * u, kind="bilinear")
     assert hasattr(A, "shape")
-    A = cast(jax.Array, A)
     assert A.shape[0] == A.shape[1]
 
 

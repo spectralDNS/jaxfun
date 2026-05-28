@@ -1,6 +1,7 @@
 # Solve Poisson's equation
 import os
 import sys
+from typing import cast
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -10,6 +11,7 @@ from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
+from jaxfun.la import DiaMatrix
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, ulp
 
@@ -22,8 +24,8 @@ u = TrialFunction(D)
 x = D.system.x  # use the same coordinate as u and v
 ue = sp.cos(2 * x) + sp.I * sp.sin(1 * x)
 
-A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
-A_pin = A.pin({0: 0.0})
+A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
+A_pin = cast(DiaMatrix, A).pin({0: 0.0})
 uh = A_pin.solve(b)
 
 uj = D.backward(uh)

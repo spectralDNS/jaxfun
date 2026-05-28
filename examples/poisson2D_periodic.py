@@ -31,7 +31,7 @@ x, y = T.system.base_scalars()
 ue = T.system.expr_psi_to_base_scalar(ue)
 
 # A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=True)
-A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True)
+A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
 
 uh = A.solve(b)
 

@@ -1,4 +1,4 @@
-from jaxfun.typing import MeshKind as MeshKind
+from jaxfun.typing import InnerKind as InnerKind, MeshKind as MeshKind
 
 from . import (
     Chebyshev as Chebyshev,

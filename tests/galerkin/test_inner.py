@@ -1,4 +1,4 @@
-from typing import cast
+from typing import assert_type, cast
 
 import jax
 import jax.numpy as jnp
@@ -9,6 +9,7 @@ from scipy.integrate import dblquad
 from jaxfun.galerkin import (
     Composite,
     FunctionSpace,
+    InnerKind,
     JAXFunction,
     TensorProduct,
     TestFunction,
@@ -18,7 +19,8 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.la import DiaMatrix
+from jaxfun.la import BaseMatrix, DiaMatrix, TPMatrices
+from jaxfun.typing import GalerkinAssembledForm
 from jaxfun.utils import ulp
 
 
@@ -51,6 +53,52 @@ def test_inner(space: type[Legendre] | type[Chebyshev]) -> None:
     a0 = answer2[space.__name__]
     for d in (-3, -1, 1, 3):
         assert jnp.allclose(M_arr.diagonal(d), a0[d], atol=1000 * ulp(1.0))
+
+
+def test_inner_kind_checked_return_types() -> None:
+    V = Legendre(8)
+    x = V.system.x
+    u = TrialFunction(V)
+    v = TestFunction(V)
+
+    raw = inner(v * u, sparse=True)
+    A = inner(v * u, sparse=True, kind=InnerKind.BILINEAR)
+    b = inner(x * v, kind=InnerKind.LINEAR)
+    A_str, b_str = inner(v * (u - x), sparse=True, kind="system")
+    A_enum, b_enum = inner(v * (u - x), sparse=True, kind=InnerKind.SYSTEM)
+
+    assert_type(raw, GalerkinAssembledForm)
+    assert_type(A, BaseMatrix)
+    assert_type(b, jax.Array)
+    assert_type((A_str, b_str), tuple[BaseMatrix, jax.Array])
+    assert_type((A_enum, b_enum), tuple[BaseMatrix, jax.Array])
+
+    assert isinstance(A, BaseMatrix)
+    assert isinstance(b, jax.Array)
+    assert isinstance(A_str, BaseMatrix)
+    assert isinstance(b_str, jax.Array)
+    assert jnp.allclose(A_str.todense(), A_enum.todense())
+    assert jnp.allclose(b_str, b_enum)
+
+
+def test_inner_kind_rejects_mismatches_and_unknown_strings() -> None:
+    V = Legendre(8)
+    x = V.system.x
+    u = TrialFunction(V)
+    v = TestFunction(V)
+
+    with pytest.raises(
+        ValueError, match="kind=<InnerKind.SYSTEM: 'system'>.*assembled bilinear"
+    ):
+        inner(v * u, kind=InnerKind.SYSTEM)
+
+    with pytest.raises(
+        ValueError, match="kind=<InnerKind.BILINEAR: 'bilinear'>.*assembled linear"
+    ):
+        inner(x * v, kind=InnerKind.BILINEAR)
+
+    with pytest.raises(ValueError, match="'unknown' is not a valid InnerKind"):
+        inner(v * u, kind=cast(InnerKind, "unknown"))
 
 
 # Some data from shenfun
@@ -274,13 +322,13 @@ def test_bilinear_inner(space):
     f = [sp.sin(x), a]
     l0 = []
     for fi in f:
-        l0.append(inner(v * u * fi))
+        l0.append(inner(v * u * fi, kind="bilinear"))
 
     assert jnp.allclose(l0[0].data, l0[1].data, atol=ulp(100))
 
     l1 = []
     for fi in f:
-        l1.append(inner(v.diff(x, 1) * u * fi))
+        l1.append(inner(v.diff(x, 1) * u * fi, kind="bilinear"))
     assert jnp.allclose(l1[0].data, l1[1].data, atol=ulp(1000)), jnp.max(
         jnp.abs(l1[0].data - l1[1].data)
     )
@@ -294,8 +342,8 @@ def test_inner_padding_resolved(
     x = D.system.x
     uf = JAXFunction(sp.sin(x * 2 * sp.pi), D)
     v = TestFunction(D)
-    y0 = inner(v * uf**2, num_quad_points=None)
-    y1 = inner(v * uf**2, num_quad_points=48)
+    y0 = inner(v * uf**2, num_quad_points=None, kind="linear")
+    y1 = inner(v * uf**2, num_quad_points=48, kind="linear")
     # Since the function is well-resolved with 36 modes, we expect no
     # aliasing and thus the same result with or without padding
     assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
@@ -312,8 +360,8 @@ def test_inner_padding_not_resolved(
     x = D.system.x
     uf = JAXFunction(sp.sin(x * 2 * sp.pi), D)
     v = TestFunction(D)
-    y0 = inner(v * uf**2, num_quad_points=None)
-    y1 = inner(v * uf**2, num_quad_points=12)
+    y0 = inner(v * uf**2, num_quad_points=None, kind="linear")
+    y1 = inner(v * uf**2, num_quad_points=12, kind="linear")
     # Since the function is not well-resolved with 8 modes, we expect
     # aliasing and thus different results with or without padding
     assert not jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
@@ -335,8 +383,8 @@ def test_inner_padding_resolved_2d(
     f = sp.sin(x * 2 * sp.pi) * sp.sin(y * 2 * sp.pi)
     uf = JAXFunction(f, T)
     v = TestFunction(T)
-    y0 = inner(v * uf**2, num_quad_points=None)
-    y1 = inner(v * uf**2, num_quad_points=(48, 48))
+    y0 = inner(v * uf**2, num_quad_points=None, kind="linear")
+    y1 = inner(v * uf**2, num_quad_points=(48, 48), kind="linear")
     # Since the function is well-resolved with 36 modes, we expect no
     # aliasing and thus the same result with or without padding
     assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
@@ -355,8 +403,8 @@ def test_inner_padding_not_resolved_2d(
     f = sp.sin(x * 2 * sp.pi) * sp.sin(y * 2 * sp.pi)
     uf = JAXFunction(f, T)
     v = TestFunction(T)
-    y0 = inner(v * uf**2, num_quad_points=None)
-    y1 = inner(v * uf**2, num_quad_points=(12, 12))
+    y0 = inner(v * uf**2, num_quad_points=None, kind="linear")
+    y1 = inner(v * uf**2, num_quad_points=(12, 12), kind="linear")
     # Since the function is not well-resolved with 8 modes, we expect
     # aliasing and thus different results with or without padding
     assert not jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
@@ -373,8 +421,8 @@ def test_inner_padding_Fourier() -> None:
     x = F.system.x
     uf = JAXFunction(sp.exp(4j * x), F)
     v = TestFunction(F)
-    y0 = inner(v * uf**2, num_quad_points=None)
-    y1 = inner(v * uf**2, num_quad_points=9)
+    y0 = inner(v * uf**2, num_quad_points=None, kind="linear")
+    y1 = inner(v * uf**2, num_quad_points=9, kind="linear")
     # uf**2 has wavenumber 8, which is above the Nyquist wavenumber of 6,
     # thus aliased to wavenumber 2. With padding, no aliasing occurs and
     # we correctly get zero when truncating to 6 wavenumbers.
@@ -392,8 +440,8 @@ def test_inner_padding_Fourier_2d() -> None:
     x, y = T.system.base_scalars()
     uf = JAXFunction(sp.exp(4j * x) * sp.exp(4j * y), T)
     v = TestFunction(T)
-    y0 = inner(v * uf**2, num_quad_points=None)
-    y1 = inner(v * uf**2, num_quad_points=(9, 9))
+    y0 = inner(v * uf**2, num_quad_points=None, kind="linear")
+    y1 = inner(v * uf**2, num_quad_points=(9, 9), kind="linear")
     assert jnp.linalg.norm(y1) < jnp.sqrt(ulp(100))  # No aliasing - thus zero
     assert abs(y0[2, 2] - (2 * jnp.pi) ** 2) < jnp.sqrt(ulp(100))  # Aliasing error
     y2 = T.forward(uf.backward() ** 2)
@@ -411,8 +459,8 @@ def test_inner_padding_composite_resolved(
     x = D.system.x
     uf = JAXFunction(sp.sin(x * 2 * sp.pi), D)
     v = TestFunction(D)
-    y0 = inner(v * uf**2, num_quad_points=None)
-    y1 = inner(v * uf**2, num_quad_points=48)
+    y0 = inner(v * uf**2, num_quad_points=None, kind="linear")
+    y1 = inner(v * uf**2, num_quad_points=48, kind="linear")
     # Since the function is well-resolved with 36 modes, we expect no
     # aliasing and thus the same result with or without padding
     assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
@@ -430,8 +478,8 @@ def test_inner_padding_directsum_resolved(
     x = D.system.x
     uf = JAXFunction(sp.cos(x * 2 * sp.pi), D)
     v = TestFunction(D)
-    y0 = inner(v * uf**2, num_quad_points=None)
-    y1 = inner(v * uf**2, num_quad_points=48)
+    y0 = inner(v * uf**2, num_quad_points=None, kind="linear")
+    y1 = inner(v * uf**2, num_quad_points=48, kind="linear")
     # Since the function is well-resolved with 36 modes, we expect no
     # aliasing and thus the same result with or without padding
     assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
@@ -456,8 +504,8 @@ def test_inner_padding_directsumtps_resolved_2d(
     f = T.system.expr_psi_to_base_scalar(f)
     uf = JAXFunction(f, T)
     v = TestFunction(T)
-    y0 = inner(v * uf**2, num_quad_points=None)
-    y1 = inner(v * uf**2, num_quad_points=(48, 48))
+    y0 = inner(v * uf**2, num_quad_points=None, kind="linear")
+    y1 = inner(v * uf**2, num_quad_points=(48, 48), kind="linear")
     # Since the function is well-resolved with 36 modes, we expect no
     # aliasing and thus the same result with or without padding
     assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
@@ -477,10 +525,15 @@ def test_inner_exact_poly():
     ).n()
 
     # Check that without padding we get wrong result
-    A = inner(x**2 * v * u, use_precomputed_matrices=False)
+    A = inner(x**2 * v * u, use_precomputed_matrices=False, kind="bilinear")
     assert not jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
     # Check that with padding we get correct result
-    A = inner(x**2 * v * u, num_quad_points=7, use_precomputed_matrices=False)
+    A = inner(
+        x**2 * v * u,
+        num_quad_points=7,
+        use_precomputed_matrices=False,
+        kind="bilinear",
+    )
     assert jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
 
 
@@ -498,14 +551,23 @@ def test_inner_exact_poly_2d():
     ).n()
 
     # Check that without padding we get wrong result
-    B = inner((x**2 + y**2) * v * u, use_precomputed_matrices=False)
+    B = cast(
+        TPMatrices,
+        inner((x**2 + y**2) * v * u, use_precomputed_matrices=False, kind="bilinear"),
+    )
     A = B.tpmats[0].mats[0].data
     assert not jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
     A = B.tpmats[1].mats[1].data
     assert not jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
     # Check that with padding we get correct result
-    B = inner(
-        (x**2 + y**2) * v * u, num_quad_points=(7, 7), use_precomputed_matrices=False
+    B = cast(
+        TPMatrices,
+        inner(
+            (x**2 + y**2) * v * u,
+            num_quad_points=(7, 7),
+            use_precomputed_matrices=False,
+            kind="bilinear",
+        ),
     )
     A = B.tpmats[0].mats[0].data
     assert jnp.allclose(A[N - 1, N - 1], float(t), atol=jnp.sqrt(ulp(100)))
@@ -535,11 +597,11 @@ def test_inner_exact_jaxfunction_2d():
     uf = JAXFunction(x**2 + y**2, T)
 
     # Check that without padding we get wrong result
-    B = inner(uf * v * u)
+    B = inner(uf * v * u, kind="bilinear")
     A = B.data
     assert not jnp.allclose(A[-1, -1, -1, -1], float(t), atol=jnp.sqrt(ulp(100)))
     # Check that with padding we get correct result
-    B = inner(uf * v * u, num_quad_points=(7, 7))
+    B = inner(uf * v * u, num_quad_points=(7, 7), kind="bilinear")
     A = B.data
     assert jnp.allclose(A[-1, -1, -1, -1], float(t), atol=jnp.sqrt(ulp(100)))
 
@@ -570,12 +632,16 @@ def test_inner_exact_multivar_2d():
     x, y = T.system.base_scalars()
 
     # Check that without padding we get wrong result
-    B = inner(sp.sqrt(x**2 + y**2) * v * u)
+    B = inner(sp.sqrt(x**2 + y**2) * v * u, kind="bilinear")
     A = B.data
     assert not jnp.allclose(A[-1, -1, -1, -1], float(t), atol=jnp.sqrt(ulp(100)))
     # Check that with padding we can get correct result (much padding since not
     # polynomial coefficient)
-    B = inner(sp.sqrt(x**2 + y**2) * v * u, num_quad_points=(32, 32))
+    B = inner(
+        sp.sqrt(x**2 + y**2) * v * u,
+        num_quad_points=(32, 32),
+        kind="bilinear",
+    )
     A = B.data
     assert jnp.allclose(A[-1, -1, -1, -1], float(t), atol=jnp.sqrt(ulp(100))), abs(
         A[-1, -1, -1, -1] - float(t)

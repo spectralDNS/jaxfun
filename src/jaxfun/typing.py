@@ -82,6 +82,15 @@ class MeshKind(StrEnum):
     UNIFORM = "uniform"
 
 
+class InnerKind(StrEnum):
+    BILINEAR = "bilinear"
+    LINEAR = "linear"
+    SYSTEM = "system"
+
+
+type InnerKindLike = InnerKind | Literal["bilinear", "linear", "system"]
+
+
 class TestSpaceKind(StrEnum):
     GALERKIN = "Galerkin"
     G = "Galerkin"

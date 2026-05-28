@@ -4,7 +4,6 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,9 +14,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  fast:
-    name: fast tests
+  quick:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: fast tests
+            command: uv run pytest -m "not slow and not integration and not examples and not pinn and not gpu and not spmd"
+
+          - name: fast tests, x64
+            command: uv run pytest --float64 -m "not slow and not integration and not examples and not pinn and not gpu and not spmd"
+
+          - name: smoke tests
+            command: uv run pytest -m smoke
+
     steps:
       - uses: actions/checkout@v6
 
@@ -29,12 +41,38 @@ jobs:
       - name: Sync deps
         run: uv sync --frozen --all-groups
 
-      - name: Run fast tests
-        run: uv run pytest -m "not slow and not integration and not examples and not pinn and not gpu and not spmd"
+      - name: Run tests
+        run: ${{ matrix.command }}
 
-  fast-float64:
-    name: fast tests, x64
+  full:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: integration tests
+            command: uv run pytest -m "integration and not slow and not spmd and not pinn and not examples and not gpu"
+
+          - name: slow tests
+            command: uv run pytest -m "slow and not examples and not spmd and not pinn and not gpu"
+
+          - name: example tests
+            command: uv run pytest -m "examples and not spmd and not gpu"
+
+          - name: PINN tests
+            command: uv run pytest -m "pinn and not gpu"
+
+          - name: SPMD tests
+            command: uv run pytest --num-devices=2 -m "spmd and not slow and not examples and not pinn and not gpu"
+
+          - name: SPMD tests, x64
+            command: uv run pytest --float64 --num-devices=2 -m "spmd and not slow and not examples and not pinn and not gpu"
+
+          - name: SPMD example tests
+            command: uv run pytest --num-devices=2 -m "spmd and examples and not gpu"
+
     steps:
       - uses: actions/checkout@v6
 
@@ -46,148 +84,5 @@ jobs:
       - name: Sync deps
         run: uv sync --frozen --all-groups
 
-      - name: Run fast tests in x64 mode
-        run: uv run pytest --float64 -m "not slow and not integration and not examples and not pinn and not gpu and not spmd"
-
-  smoke:
-    name: smoke tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv with caching
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Sync deps
-        run: uv sync --frozen --all-groups
-
-      - name: Run smoke tests
-        run: uv run pytest -m smoke
-
-  integration:
-    name: integration tests
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv with caching
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Sync deps
-        run: uv sync --frozen --all-groups
-
-      - name: Run integration tests
-        run: uv run pytest -m "integration and not slow and not spmd and not pinn and not examples and not gpu"
-
-  slow:
-    name: slow tests
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv with caching
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Sync deps
-        run: uv sync --frozen --all-groups
-
-      - name: Run slow non-example tests
-        run: uv run pytest -m "slow and not examples and not spmd and not pinn and not gpu"
-
-  examples:
-    name: example tests
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv with caching
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Sync deps
-        run: uv sync --frozen --all-groups
-
-      - name: Run example tests
-        run: uv run pytest -m "examples and not spmd and not gpu"
-
-  pinn:
-    name: PINN tests
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv with caching
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Sync deps
-        run: uv sync --frozen --all-groups
-
-      - name: Run PINN tests
-        run: uv run pytest -m "pinn and not gpu"
-
-  spmd:
-    name: SPMD tests
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv with caching
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Sync deps
-        run: uv sync --frozen --all-groups
-
-      - name: Run SPMD tests
-        run: uv run pytest --num-devices=2 -m "spmd and not slow and not examples and not pinn and not gpu"
-
-  spmd-float64:
-    name: SPMD tests, x64
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv with caching
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Sync deps
-        run: uv sync --frozen --all-groups
-
-      - name: Run SPMD tests in x64 mode
-        run: uv run pytest --float64 --num-devices=2 -m "spmd and not slow and not examples and not pinn and not gpu"
-
-  spmd-examples:
-    name: SPMD example tests
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv with caching
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Sync deps
-        run: uv sync --frozen --all-groups
-
-      - name: Run SPMD example tests
-        run: uv run pytest --num-devices=2 -m "spmd and examples and not gpu"
+      - name: Run tests
+        run: ${{ matrix.command }}

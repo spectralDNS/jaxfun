@@ -13,9 +13,9 @@ physical_sharding = NamedSharding(spmd_mesh, P(None, "k"))
 
 def get_transposed_sharding(sharding: NamedSharding) -> NamedSharding:
     """Return the sharding with unsharded and sharded axes transposed."""
-    if sharding.spec == P("k"):
+    if sharding == spectral_sharding:
         return physical_sharding
-    elif sharding.spec == P(None, "k"):
+    elif sharding == physical_sharding:
         return spectral_sharding
     else:
         raise ValueError(f"Provided {sharding} does not match spectral or physical.")

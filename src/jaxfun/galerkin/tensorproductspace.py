@@ -10,7 +10,6 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array, shard_map
-from jax._src.sharding import IndivisibleError
 from jax.sharding import NamedSharding, PartitionSpec as P
 
 from jaxfun.coordinates import CoordSys
@@ -29,6 +28,8 @@ from .orthogonal import OrthogonalSpace
 
 tensor_product_symbol = "\u2297"
 multiplication_sign = "\u00d7"
+
+IndivisibleError = ValueError
 
 
 class TensorProductSpace:

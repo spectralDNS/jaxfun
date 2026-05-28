@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import pytest
 import sympy as sp
@@ -12,6 +13,9 @@ from jaxfun.galerkin.inner import project
 from jaxfun.utils.common import lambdify, ulp
 
 pytestmark = pytest.mark.spmd
+
+if jax.device_count() not in (1, 2, 4):
+    pytest.skip("SPMD tests require 1, 2 or 4 devices", allow_module_level=True)
 
 
 # ---------------------------------------------------------------------------

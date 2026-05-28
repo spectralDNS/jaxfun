@@ -37,7 +37,6 @@ if TYPE_CHECKING:
     from jaxfun.galerkin.arguments import Jaxc
     from jaxfun.galerkin.orthogonal import OrthogonalSpace
 
-
 type FloatLike = float | sp.Number
 type Padding = int | tuple[int | None, ...] | tuple[tuple[int | None, ...], ...] | None
 type FunctionSpaceType = (

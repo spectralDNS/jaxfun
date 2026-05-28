@@ -12,7 +12,8 @@ from jaxfun.utils import ulp
 
 pytestmark = pytest.mark.spmd
 
-assert jax.device_count() in (1, 2, 4), "SPMD tests require 1, 2 or 4 devices"
+if jax.device_count() not in (1, 2, 4):
+    pytest.skip("SPMD tests require 1, 2 or 4 devices", allow_module_level=True)
 
 
 @pytest.fixture(

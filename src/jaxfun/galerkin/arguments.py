@@ -792,7 +792,9 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
 
 
 def evaluate_jaxfunction_expr_quad(
-    a: Basic, jaxf: JAXFunction | None = None, N: int | tuple[int, ...] | None = None
+    a: Basic,
+    jaxf: JAXFunction | None = None,
+    N: int | tuple[int | None, ...] | None = None,
 ) -> Array:
     """Evaluate a symbolic JAXFunction expression on the quadrature mesh."""
     from jaxfun.integrators.nonlinear import compile_nonlinear_evaluator

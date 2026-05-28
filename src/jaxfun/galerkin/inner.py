@@ -53,7 +53,7 @@ from .tensorproductspace import (
     VectorTensorProductSpace,
 )
 
-type _NumQuadPoints = int | tuple[int, ...]
+type _NumQuadPoints = int | tuple[int | None, ...]
 type _BilinearFactor = tuple[Array, Array] | Matrix | DiaMatrix
 type _BilinearMat = tuple[_BilinearFactor, tuple[int, int]]
 type _InnerTerm = tuple[BaseMatrix | None, Array | None]
@@ -75,7 +75,7 @@ def inner(
     expr: sp.Expr,
     sparse: bool = False,
     sparse_tol: int = 1000,
-    num_quad_points: int | tuple[int, ...] | None = None,
+    num_quad_points: int | tuple[int | None, ...] | None = None,
     use_precomputed_matrices: bool = True,
     *,
     kind: Literal[InnerKind.BILINEAR, "bilinear"],
@@ -85,7 +85,7 @@ def inner(
     expr: sp.Expr,
     sparse: bool = False,
     sparse_tol: int = 1000,
-    num_quad_points: int | tuple[int, ...] | None = None,
+    num_quad_points: int | tuple[int | None, ...] | None = None,
     use_precomputed_matrices: bool = True,
     *,
     kind: Literal[InnerKind.LINEAR, "linear"],
@@ -95,7 +95,7 @@ def inner(
     expr: sp.Expr,
     sparse: bool = False,
     sparse_tol: int = 1000,
-    num_quad_points: int | tuple[int, ...] | None = None,
+    num_quad_points: int | tuple[int | None, ...] | None = None,
     use_precomputed_matrices: bool = True,
     *,
     kind: Literal[InnerKind.SYSTEM, "system"],
@@ -105,7 +105,7 @@ def inner(
     expr: sp.Expr,
     sparse: bool = False,
     sparse_tol: int = 1000,
-    num_quad_points: int | tuple[int, ...] | None = None,
+    num_quad_points: int | tuple[int | None, ...] | None = None,
     use_precomputed_matrices: bool = True,
     *,
     kind: None = None,
@@ -115,7 +115,7 @@ def inner(
     expr: sp.Expr,
     sparse: bool = False,
     sparse_tol: int = 1000,
-    num_quad_points: int | tuple[int, ...] | None = None,
+    num_quad_points: int | tuple[int | None, ...] | None = None,
     use_precomputed_matrices: bool = True,
     *,
     kind: InnerKindLike,
@@ -124,7 +124,7 @@ def inner(
     expr: sp.Expr,
     sparse: bool = False,
     sparse_tol: int = 1000,
-    num_quad_points: int | tuple[int, ...] | None = None,
+    num_quad_points: int | tuple[int | None, ...] | None = None,
     use_precomputed_matrices: bool = True,
     *,
     kind: InnerKind | str | None = None,
@@ -218,7 +218,7 @@ def _validate_inner_kind(
 
 def inner_items(
     expr: sp.Expr,
-    num_quad_points: int | tuple[int, ...] | None = None,
+    num_quad_points: int | tuple[int | None, ...] | None = None,
     use_precomputed_matrices: bool = True,
 ) -> InnerItems:
     r"""Assemble Galerkin inner products and return unsummed raw term lists.
@@ -233,7 +233,7 @@ def inner_items(
 
 def _prepare_inner_context(
     expr: sp.Expr,
-    num_quad_points: int | tuple[int, ...] | None,
+    num_quad_points: int | tuple[int | None, ...] | None,
 ) -> _InnerContext:
     V, U = get_basisfunctions(expr)
     assert V is not None, "No TestFunction found in expression"

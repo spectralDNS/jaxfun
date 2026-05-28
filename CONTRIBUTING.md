@@ -26,8 +26,11 @@ uv run pre-commit install
 Run tests:
 
 ```bash
-uv run pytest -q
+uv run pytest
 ```
+
+See [docs/testing.md](docs/testing.md) for marker-specific commands and test
+tier guidance.
 
 Run pre-commit checks locally before pushing:
 
@@ -54,6 +57,7 @@ uv run pre-commit run --all-files
 - Add tests for new features or bug fixes
 - Aim for coverage >= existing module average; avoid regressions
 - Use parametrization for concise test cases
+- Mark expensive tests with the appropriate pytest tier marker
 
 ## Documentation
 

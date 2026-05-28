@@ -5,6 +5,8 @@ from flax import nnx
 from jaxfun.pinns.embeddings import Embedding, FourierEmbs, PeriodEmbs
 from jaxfun.utils.common import ulp
 
+pytestmark = pytest.mark.pinn
+
 
 def test_period_embs_values_and_shape_nontrainable():
     # Embed only the first axis -> output is [cos(p*x0), sin(p*x0), x1]

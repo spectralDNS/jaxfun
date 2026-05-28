@@ -16,6 +16,8 @@ from jaxfun.operators import Constant
 from jaxfun.utils import ulp
 from jaxfun.utils.common import lambdify
 
+pytestmark = pytest.mark.integration
+
 
 def _count_primitive(jpr, primitive: str) -> int:
     total = 0

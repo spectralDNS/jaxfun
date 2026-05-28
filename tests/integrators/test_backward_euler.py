@@ -13,6 +13,8 @@ from jaxfun.integrators import ETDRK4, RK4, BackwardEuler
 from jaxfun.operators import Constant, Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
+pytestmark = pytest.mark.integration
+
 
 def test_backward_euler_linear_advection_fourier() -> None:
     N = 32

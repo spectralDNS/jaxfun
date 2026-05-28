@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+import pytest
 import sympy as sp
 
 from jaxfun import Domain
@@ -6,6 +7,8 @@ from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Fourier import Fourier as FourierSpace
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.integrators import ETDRK4
+
+pytestmark = pytest.mark.integration
 
 
 def test_etdrk4_focusing_nls_soliton_tracks_exact_short_time() -> None:

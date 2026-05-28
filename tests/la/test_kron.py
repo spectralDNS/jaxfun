@@ -17,6 +17,7 @@ from typing import cast
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from jaxfun.galerkin import (
     FunctionSpace,
@@ -39,6 +40,8 @@ from jaxfun.la import (
 from jaxfun.la.diamatrix import diakron
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import n as sym_n, ulp
+
+pytestmark = pytest.mark.integration
 
 
 def _diag3(n: int) -> DiaMatrix:

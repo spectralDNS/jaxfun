@@ -6,6 +6,8 @@ from flax import nnx
 
 from jaxfun.pinns import FlaxFunction, Loss, MLPSpace, optimizer as opt_mod
 
+pytestmark = pytest.mark.pinn
+
 
 class DummyModule(nnx.Module):
     def __init__(self):

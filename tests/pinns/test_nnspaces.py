@@ -5,6 +5,8 @@ import sympy as sp
 from jaxfun.coordinates import BaseScalar, BaseTime
 from jaxfun.pinns.nnspaces import MLPSpace, MLPVectorSpace, NNSpace, PirateSpace
 
+pytestmark = pytest.mark.pinn
+
 
 def test_nnspace_basic_attributes_and_out_size():
     ns = NNSpace(dims=3, rank=2, transient=False, name="testNN")

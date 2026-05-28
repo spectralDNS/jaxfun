@@ -36,6 +36,8 @@ from jaxfun.la.tpmatrix import (
 from jaxfun.operators import Div, Dot, Grad
 from jaxfun.utils.common import lambdify, ulp
 
+pytestmark = pytest.mark.integration
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

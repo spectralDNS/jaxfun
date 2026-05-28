@@ -22,10 +22,6 @@ def pytest_configure(config) -> None:
     if n > 1:
         jax.config.update("jax_num_cpu_devices", n)
     os.environ["PYTEST"] = "True"
-    config.addinivalue_line(
-        "markers",
-        "spmd: mark test as requiring multiple JAX devices (pass --num-devices=N to enable)",  # noqa: E501
-    )
 
 
 def pytest_collection_modifyitems(config, items) -> None:

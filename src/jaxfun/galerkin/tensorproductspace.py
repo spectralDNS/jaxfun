@@ -243,7 +243,7 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if len(c.devices()) > 1:
+        if self._spectral_sharding and len(c.devices()) > 1:
             return _apply_separable_spmd_shard_map(
                 c, fns, spectral_sharding, self._spmd_local_fn_cache
             )
@@ -273,7 +273,7 @@ class TensorProductSpace:
         Returns:
             Scalar or (n_pts,) array of evaluated values.
         """
-        if len(c.devices()) > 1:
+        if self._spectral_sharding and len(c.devices()) > 1:
             dim = len(self)
             T = self.basespaces
 

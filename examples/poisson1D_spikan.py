@@ -17,7 +17,7 @@ from jaxfun.utils import lambdify
 from jaxfun.utils.common import Domain, ulp
 
 domain = Domain(-jnp.pi, jnp.pi)
-V = sPIKANSpace(4, [8], dims=1, rank=0, name="V", domains=[domain])
+V = sPIKANSpace(4, [10], dims=1, rank=0, name="V", domains=[domain])
 # V = KANMLPSpace(4, [16], dims=1, rank=0, name="V", domains=[domain])
 w = FlaxFunction(V, name="w", rngs=nnx.Rngs(101))
 

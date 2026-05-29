@@ -56,7 +56,8 @@ with `-n0` unless the test has its own serialization mechanism.
 
 ## CI Tiers
 
-Pull requests run fast default tests, fast x64 tests, and the smoke suite.
+Pull requests and branch pushes run fast default tests, fast x64 tests, and the
+smoke suite.
 
 Pushes to `main`, manual workflow runs, and the nightly schedule also run
 integration, slow, example, PINN, SPMD, and SPMD x64 jobs. The jobs are split

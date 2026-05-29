@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import pytest
 import sympy as sp
 
 from jaxfun.galerkin import (
@@ -17,6 +18,8 @@ from jaxfun.galerkin.composite import DirectSum
 from jaxfun.galerkin.inner import inner
 from jaxfun.la import TensorMatrix, TPMatrices, TPMatrix
 from jaxfun.utils.common import ulp
+
+pytestmark = pytest.mark.integration
 
 
 def test_tensorproduct_forward_backward_padding_fourier():

@@ -25,6 +25,8 @@ from jaxfun.la import TPMatrix
 from jaxfun.operators import Div, Dot, Grad
 from jaxfun.utils.common import ulp
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture(params=(None, Domain(-2, 2)), ids=("domain-default", "domain-mapped"))
 def domain(request: pytest.FixtureRequest) -> Domain | None:

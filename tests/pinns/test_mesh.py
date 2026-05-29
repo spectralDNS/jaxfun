@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+import pytest
 from flax import nnx
 
 from jaxfun.pinns.mesh import (
@@ -17,6 +18,8 @@ from jaxfun.pinns.mesh import (
 )
 from jaxfun.utils import leggauss
 from jaxfun.utils.common import ulp
+
+pytestmark = pytest.mark.pinn
 
 
 def _meshgrid_flatten(x, y):

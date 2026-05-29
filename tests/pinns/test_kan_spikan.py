@@ -7,6 +7,8 @@ from flax import nnx
 from jaxfun.coordinates import BaseTime, CartCoordSys, x
 from jaxfun.pinns import module as mod, nnspaces as nns
 
+pytestmark = pytest.mark.pinn
+
 
 def test_kanlayer_forward_shape_and_params():
     rngs = nnx.Rngs(0)

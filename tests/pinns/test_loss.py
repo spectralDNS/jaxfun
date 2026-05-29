@@ -22,6 +22,8 @@ from jaxfun.pinns.loss import (
 )
 from jaxfun.pinns.module import FlaxFunction, MLPSpace
 
+pytestmark = pytest.mark.pinn
+
 
 @pytest.fixture
 def base_scalars():

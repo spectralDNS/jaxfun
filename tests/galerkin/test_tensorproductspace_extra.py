@@ -22,6 +22,8 @@ from jaxfun.galerkin.tensorproductspace import DirectSumTPS
 from jaxfun.la import TPMatrix
 from jaxfun.utils.common import ulp
 
+pytestmark = pytest.mark.integration
+
 
 def test_directsum_two_inhomogeneous_bnd_assembly_and_backward():
     # Exercise two_inhomogeneous branch lines 211-233 etc.

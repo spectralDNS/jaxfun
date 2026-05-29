@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+import pytest
 from flax import nnx
 
 from jaxfun.galerkin import Legendre, TensorProduct
@@ -12,6 +13,8 @@ from jaxfun.pinns.module import (
     SpectralModule,
 )
 from jaxfun.pinns.nnspaces import MLPSpace, PirateSpace
+
+pytestmark = pytest.mark.pinn
 
 
 def test_rwflinear_forward_shapes_and_bias():

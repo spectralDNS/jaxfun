@@ -28,8 +28,23 @@ dependencies = [
 ]
 
 [tool.pytest.ini_options]
-markers = [ "slow: marks tests as slow (select with '-m slow')" ]
-addopts = [ "-m", "not slow", "-n", "logical" ]
+markers = [
+  "slow: long-running tests excluded from local default",
+  "integration: solves a complete problem or exercises several subsystems",
+  "smoke: small end-to-end test suitable for every PR",
+  "spmd: requires multiple JAX devices",
+  "pinn: neural-network/PINN tests",
+  "examples: runs example scripts",
+  "serial: must not run under xdist",
+  "gpu: requires GPU backend",
+]
+addopts = [
+  "--strict-markers",
+  "-m",
+  "not slow and not integration and not examples and not pinn and not gpu and not spmd",
+  "-n",
+  "logical",
+]
 filterwarnings = [
   "ignore::DeprecationWarning:flax",
 ]

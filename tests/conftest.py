@@ -3,6 +3,15 @@ import os
 import pytest
 
 
+@pytest.fixture(autouse=True, scope="module")
+def clear_jax_caches_after_module():
+    yield
+
+    import jax
+
+    jax.clear_caches()
+
+
 def pytest_addoption(parser) -> None:
     parser.addoption("--float64", action="store_true", default=False)
     parser.addoption(
@@ -22,10 +31,6 @@ def pytest_configure(config) -> None:
     if n > 1:
         jax.config.update("jax_num_cpu_devices", n)
     os.environ["PYTEST"] = "True"
-    config.addinivalue_line(
-        "markers",
-        "spmd: mark test as requiring multiple JAX devices (pass --num-devices=N to enable)",  # noqa: E501
-    )
 
 
 def pytest_collection_modifyitems(config, items) -> None:

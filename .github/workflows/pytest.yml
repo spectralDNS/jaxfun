@@ -4,7 +4,6 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,33 +14,82 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: python
+  quick:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: fast tests
+            command: uv run pytest -m "not slow and not integration and not examples and not pinn and not gpu and not spmd"
+
+          - name: fast tests, x64
+            command: uv run pytest --float64 -m "not slow and not integration and not examples and not pinn and not gpu and not spmd"
+
+          - name: smoke tests
+            command: uv run pytest -m smoke
+
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install uv (with caching)
-        uses: astral-sh/setup-uv@v7
+      - name: Install uv with caching
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
 
-      - name: Sync deps once
+      - name: Sync deps
         run: uv sync --frozen --all-groups
 
-      - name: Run fast tests (default, excludes slow)
-        run: |
-          uv run pytest -m 'not slow'
-          uv run pytest --float64 -m 'not slow'
+      - name: Run tests
+        run: ${{ matrix.command }}
 
-      - name: Run SPMD tests (2 virtual CPU devices)
-        run: |
-          uv run pytest --num-devices=2
-          uv run pytest --float64 --num-devices=2
-          uv run pytest -m slow --num-devices=2
-          uv run pytest --float64 -m slow --num-devices=2
+  full:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: integration tests
+            command: uv run pytest -m "integration and not slow and not spmd and not pinn and not examples and not gpu"
 
-      - name: Run slow demo tests
-        run: |
-          uv run pytest -m slow
-          uv run pytest --float64 -m slow
+          - name: slow tests
+            command: uv run pytest -m "slow and not examples and not spmd and not pinn and not gpu"
+
+          - name: example tests
+            command: uv run pytest -m "examples and not spmd and not gpu"
+
+          - name: example tests, x64
+            command: uv run pytest --float64 -m "examples and not spmd and not gpu"
+
+          - name: PINN tests
+            command: uv run pytest -m "pinn and not gpu"
+
+          - name: SPMD tests
+            command: uv run pytest --num-devices=2 -m "spmd and not slow and not examples and not pinn and not gpu"
+
+          - name: SPMD tests, x64
+            command: uv run pytest --float64 --num-devices=2 -m "spmd and not slow and not examples and not pinn and not gpu"
+
+          - name: SPMD example tests
+            command: uv run pytest --num-devices=2 -m "spmd and examples and not gpu"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv with caching
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+        with:
+          enable-cache: true
+
+      - name: Sync deps
+        run: uv sync --frozen --all-groups
+
+      - name: Run tests
+        run: ${{ matrix.command }}

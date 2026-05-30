@@ -84,14 +84,6 @@ class BoundaryConditions(dict):
                 ls.append(val[1] if isinstance(val, tuple | list) else val)
         return ls
 
-    def orderedkeys(self) -> list[Number]:
-        """Return boundary condition values in same order as orderednames()."""
-        ls = []
-        for lr in ("left", "right"):
-            for key in sorted(self[lr].keys()):
-                ls.append(key)
-        return ls
-
     def num_bcs(self) -> int:
         """Return number of scalar boundary conditions."""
         return len(self.orderedvals())
@@ -458,7 +450,12 @@ class BCGeneric(Composite):
 
     def bnd_vals(self) -> Array:
         """Return ordered boundary values vector."""
-        return jnp.array(self.bcs.orderedvals(), dtype=float)
+        return jnp.array(
+            [
+                complex(s) if sp.sympify(s).has(sp.I) else float(s)
+                for s in self.bcs.orderedvals()
+            ]
+        )
 
     @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int | None = None) -> Array:

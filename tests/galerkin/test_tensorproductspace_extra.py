@@ -5,10 +5,12 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
+from jaxfun.coordinates import x, y, z
 from jaxfun.galerkin import (
     Chebyshev,
     ChebyshevU,
     DirectSum,
+    Fourier,
     FunctionSpace,
     Legendre,
     TensorProduct,
@@ -17,16 +19,16 @@ from jaxfun.galerkin import (
     Ultraspherical,
     VectorTensorProductSpace,
 )
-from jaxfun.galerkin.inner import inner, inner_items
+from jaxfun.galerkin.inner import inner, inner_items, project
 from jaxfun.galerkin.tensorproductspace import DirectSumTPS
 from jaxfun.la import TPMatrix
-from jaxfun.utils.common import ulp
+from jaxfun.operators import Div, Grad
+from jaxfun.utils.common import lambdify, ulp
 
 pytestmark = pytest.mark.integration
 
 
 def test_directsum_two_inhomogeneous_bnd_assembly_and_backward():
-    # Exercise two_inhomogeneous branch lines 211-233 etc.
     bcs1 = {"left": {"D": 1}, "right": {"D": 2}}
     bcs2 = {"left": {"D": 3}, "right": {"D": 4}}
     F1 = FunctionSpace(5, Legendre.Legendre, bcs=bcs1)
@@ -39,9 +41,91 @@ def test_directsum_two_inhomogeneous_bnd_assembly_and_backward():
     # Coefficient array for homogeneous parts
     hom0 = F1[0]
     hom1 = F2[0]
-    c = jnp.zeros((hom0.dim, hom1.dim))
+    c = jnp.ones((hom0.dim, hom1.dim))
     u = T.backward(c)  # triggers boundary reconstruction path
     assert u.shape[0] == hom0.num_quad_points and u.shape[1] == hom1.num_quad_points
+
+
+def test_directsumtps_poisson_3d():
+    global x, y, z
+
+    N = 20
+    ue = sp.sin(2 * x) * sp.exp(2 * y + z * sp.I)
+    bcsy = {
+        "left": {"D": ue.subs(y, -1)},
+        "right": {"D": ue.subs(y, 1)},
+    }
+    bcsz = {
+        "left": {"D": ue.subs(z, -1)},
+        "right": {"D": ue.subs(z, 1)},
+    }
+
+    F = Fourier.Fourier(N)
+    Dy = FunctionSpace(N, Chebyshev.Chebyshev, bcs=bcsy)
+    Dz = FunctionSpace(N + 2, Chebyshev.Chebyshev, bcs=bcsz)
+    T = TensorProduct(F, Dy, Dz)
+    v = TestFunction(T)
+    u = TrialFunction(T)
+    ue = T.system.expr_psi_to_base_scalar(ue)
+    x, y, z = T.system.base_scalars()
+
+    A, b = inner(Div(Grad(u)) * v - Div(Grad(ue)) * v, kind="system")
+
+    uh = A.solve(b, method="lu")
+    uj = T.backward(uh)
+    uej = lambdify((x, y, z), ue)(*T.mesh())
+    error = jnp.linalg.norm(uj - uej)
+    assert error < jnp.sqrt(ulp(1))
+
+    f = T.forward(uj)
+    error = jnp.linalg.norm(f - uh)
+    assert error < ulp(1000)
+
+
+def test_directsumtps_biharmonic_dirichlet_3d():
+    global x, y, z
+
+    N = 20
+    ue = sp.sin(2 * x) * sp.exp(4 * y + z * sp.I)
+    bcsy = {
+        "left": {"D": ue.subs(y, -1)},
+        "right": {"D": ue.subs(y, 1)},
+    }
+    bcsz = {
+        "left": {"D": ue.subs(z, -1), "N": ue.diff(z, 1).subs(z, -1)},
+        "right": {"D": ue.subs(z, 1), "N": ue.diff(z, 1).subs(z, 1)},
+    }
+
+    F = Fourier.Fourier(N)
+    Dy = FunctionSpace(N, Chebyshev.Chebyshev, bcs=bcsy)
+    Dz = FunctionSpace(N + 2, Chebyshev.Chebyshev, bcs=bcsz)
+    T = TensorProduct(F, Dy, Dz)
+    v = TestFunction(T)
+    u = TrialFunction(T)
+    x, y, z = T.system.base_scalars()
+    ue = T.system.expr_psi_to_base_scalar(ue)
+
+    if jax.config.jax_enable_x64:  # ty:ignore[unresolved-attribute]
+        A, b = inner(
+            (Div(Grad(u)) + u.diff(z, 4)) * v - (Div(Grad(ue)) + ue.diff(z, 4)) * v,
+            kind="system",
+        )
+
+        uh = A.solve(b, method="lu")
+        uj = T.backward(uh)
+        uej = lambdify((x, y, z), ue)(*T.mesh())
+        error = jnp.linalg.norm(uj - uej)
+        assert error < jnp.sqrt(ulp(1))
+
+        f = T.forward(uj)
+        error = jnp.linalg.norm(f - uh)
+        assert error < ulp(1000)
+    else:
+        uh = project(ue, T)
+        uj = T.backward(uh)
+        f = T.forward(uj)
+        error = jnp.linalg.norm(f - uh)
+        assert error < ulp(1000)
 
 
 def test_tensorproduct_get_homogeneous():

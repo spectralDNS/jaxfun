@@ -802,6 +802,8 @@ class DirectSumTPS(TensorProductSpace):
         system: CoordSys,
         name: str = "DSTPS",
     ) -> None:
+        import numpy as np
+
         from jaxfun.galerkin.inner import project, project1D
 
         self.basespaces: list[OrthogonalSpace | DirectSum] = basespaces
@@ -848,11 +850,14 @@ class DirectSumTPS(TensorProductSpace):
             bc0bcs = copy.deepcopy(bc0.bcs)
             bc1bcs = copy.deepcopy(bc1.bcs)
 
-            def lr(bcz: BCGeneric, z: str) -> sp.Number | float:
-                return {"left": bcz.domain.lower, "right": bcz.domain.upper}[z]
+            def lr(bcz: BCGeneric, z: str) -> float:
+                return {
+                    "left": float(bcz.domain.lower),
+                    "right": float(bcz.domain.upper),
+                }[z]
 
             for bcthis, bcother, zother in zip(
-                [bc0bcs, bc1bcs], [bc1bcs, bc0bcs], [bc1, bc0], strict=True
+                [bc0bcs, bc1bcs], [bc1bcs, bc0bcs], [bc1, bc0], strict=False
             ):
                 assert isinstance(bcthis, BoundaryConditions)
                 assert isinstance(bcother, BoundaryConditions)
@@ -867,25 +872,26 @@ class DirectSumTPS(TensorProductSpace):
                         z = lr(zother, lr_other)
                         for key in bco:
                             if key == "D":
-                                fun = sp.sympify(bcval).subs(s, z)
-                                if len(fun.free_symbols) == 0:
-                                    bco[key] = float(fun)
+                                f = sp.sympify(bcval).subs(s, z)
+                                if len(f.free_symbols) == 0:
+                                    bco[key] = complex(f) if f.has(sp.I) else float(f)
                                 else:
-                                    bco[key] = fun
+                                    bco[key] = f
                             elif key[0] == "N":
-                                # Neumann bcs must be normalized.
                                 nd = 1 if len(key) == 1 else int(key[1])
-                                dt = sp.sympify(bcval).diff(s, nd) / df**nd
-                                fun = dt.subs(s, z)
-                                if len(fun.free_symbols) == 0:
-                                    bco[key] = float(fun)
+                                f = (sp.sympify(bcval).diff(s, nd) / df**nd).subs(s, z)
+                                if len(f.free_symbols) == 0:
+                                    bco[key] = complex(f) if f.has(sp.I) else float(f)
                                 else:
-                                    bco[key] = fun
+                                    bco[key] = f
+
                     bcall[-1].append(bcs)
 
+            # Use np because orderedvals may contain sympy expressions.
+            bvals = np.array([z.orderedvals() for z in bcall[0]])
+
             if len(basespaces) == 2:
-                # Here values from bcall[1] are transposed of bcall[0], so using only bcall[0]  # noqa: E501
-                self.bndvals[bcspaces] = jnp.array([z.orderedvals() for z in bcall[0]])
+                self.bndvals[bcspaces] = jnp.array(bvals)
 
         self.tpspaces: dict[tuple[OrthogonalSpace, ...], TensorProductSpace] = (
             self.split(basespaces)
@@ -917,7 +923,6 @@ class DirectSumTPS(TensorProductSpace):
                         )
                         bco.bcs = bcall[bcsindex[0]][j]
                         otherspace: DirectSum = cast(Composite, otherspace) + bco
-
                     uh.append(project1D(bc, otherspace))
 
                 if bcsindex[0] == 0:
@@ -965,12 +970,11 @@ class DirectSumTPS(TensorProductSpace):
 
             elif len(otherspaces) == 1 and len(bcspaces) == 2:
                 uh: list[Array] = []
-                for bc0 in bcall[0][0].orderedvals():
-                    for bc1 in bcall[0][1].orderedvals():
-                        uh.append(project(bc0 * bc1, otherspaces[0]))
-
+                for bci in bcall[0]:
+                    for bc0 in bci.orderedvals():
+                        uh.append(project(bc0, otherspaces[0]))
                 self.bndvals[tensorspace] = jnp.array(uh).T.reshape(
-                    (-1, bcall[0][0].num_bcs(), bcall[0][1].num_bcs())
+                    (-1, len(bcall[0]), len(bcall[1]))
                 )
 
         self.orthogonal = self.get_orthogonal()

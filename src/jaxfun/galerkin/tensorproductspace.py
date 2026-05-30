@@ -873,9 +873,10 @@ class DirectSumTPS(TensorProductSpace):
                                 else:
                                     bco[key] = fun
                             elif key[0] == "N":
+                                # Neumann bcs must be normalized.
                                 nd = 1 if len(key) == 1 else int(key[1])
-                                df = sp.sympify(bcval).diff(s, nd) / df**nd
-                                fun = df.subs(s, z)
+                                dt = sp.sympify(bcval).diff(s, nd) / df**nd
+                                fun = dt.subs(s, z)
                                 if len(fun.free_symbols) == 0:
                                     bco[key] = float(fun)
                                 else:
@@ -883,6 +884,7 @@ class DirectSumTPS(TensorProductSpace):
                     bcall[-1].append(bcs)
 
             if len(basespaces) == 2:
+                # Here values from bcall[1] are transposed of bcall[0], so using only bcall[0]  # noqa: E501
                 self.bndvals[bcspaces] = jnp.array([z.orderedvals() for z in bcall[0]])
 
         self.tpspaces: dict[tuple[OrthogonalSpace, ...], TensorProductSpace] = (
@@ -900,6 +902,7 @@ class DirectSumTPS(TensorProductSpace):
             bcsindex: list[int] = [
                 i for i, p in enumerate(tensorspace) if isinstance(p, BCGeneric)
             ]
+
             if len(otherspaces) == 0:
                 continue
             elif len(otherspaces) == 1 and len(bcspaces) == 1:
@@ -916,6 +919,7 @@ class DirectSumTPS(TensorProductSpace):
                         otherspace: DirectSum = cast(Composite, otherspace) + bco
 
                     uh.append(project1D(bc, otherspace))
+
                 if bcsindex[0] == 0:
                     self.bndvals[tensorspace] = jnp.array(uh)
                 else:
@@ -939,13 +943,16 @@ class DirectSumTPS(TensorProductSpace):
                             cast(Composite, tensorspace[ind_other]) + bco
                         )
 
+                    newspaces = [
+                        copy.deepcopy(space) for space in [otherspaces[0], otherbc]
+                    ]
                     othertpspace = TensorProduct(
-                        *[copy.deepcopy(space) for space in [otherspaces[0], otherbc]],
+                        *newspaces,
                         system=CartCoordSys(
                             "T",
                             (
-                                otherspaces[0].system.base_scalars()[0],
-                                otherbc.system.base_scalars()[0],
+                                newspaces[0].system.base_scalars()[0],
+                                newspaces[1].system.base_scalars()[0],
                             ),
                         ),
                     )
@@ -958,15 +965,13 @@ class DirectSumTPS(TensorProductSpace):
 
             elif len(otherspaces) == 1 and len(bcspaces) == 2:
                 uh: list[Array] = []
-                for i, bc0 in enumerate(bcspaces[0].bcs.orderedvals()):
-                    x0 = bcspaces[0].system.base_scalars()[0]
-                    for j, bc1 in enumerate(bcspaces[1].bcs.orderedvals()):
-                        x1 = bcspaces[1].system.base_scalars()[0]
-                        bx = bc0.subs(x1, bcspaces[0].domain[i])
-                        by = bc1.subs(x0, bcspaces[1].domain[j])
-                        uh.append(project(bx * by, otherspaces[0]))
+                for bc0 in bcall[0][0].orderedvals():
+                    for bc1 in bcall[0][1].orderedvals():
+                        uh.append(project(bc0 * bc1, otherspaces[0]))
 
-                self.bndvals[tensorspace] = jnp.array(uh).T.reshape((-1, 2, 2))
+                self.bndvals[tensorspace] = jnp.array(uh).T.reshape(
+                    (-1, bcall[0][0].num_bcs(), bcall[0][1].num_bcs())
+                )
 
         self.orthogonal = self.get_orthogonal()
 

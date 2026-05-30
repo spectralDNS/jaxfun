@@ -157,6 +157,7 @@ def FunctionSpace(
             kwb["name"] = kw["name"] + "_b"
         if "fun_str" in kw:
             kwb["fun_str"] = kw["fun_str"] + "_b"
+
         B = BCGeneric(
             bcs.num_bcs(),
             space,

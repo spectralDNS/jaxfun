@@ -802,8 +802,6 @@ class DirectSumTPS(TensorProductSpace):
         system: CoordSys,
         name: str = "DSTPS",
     ) -> None:
-        import numpy as np
-
         from jaxfun.galerkin.inner import project, project1D
 
         self.basespaces: list[OrthogonalSpace | DirectSum] = basespaces
@@ -887,11 +885,10 @@ class DirectSumTPS(TensorProductSpace):
 
                     bcall[-1].append(bcs)
 
-            # Use np because orderedvals may contain sympy expressions.
-            bvals = np.array([z.orderedvals() for z in bcall[0]])
-
             if len(basespaces) == 2:
-                self.bndvals[bcspaces] = jnp.array(bvals)
+                self.bndvals[bcspaces] = jnp.array(
+                    [z.orderedvals() for z in bcall[0]], dtype=float
+                )
 
         self.tpspaces: dict[tuple[OrthogonalSpace, ...], TensorProductSpace] = (
             self.split(basespaces)

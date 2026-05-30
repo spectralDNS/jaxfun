@@ -5,7 +5,6 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
-from jaxfun.coordinates import x, y, z
 from jaxfun.galerkin import (
     Chebyshev,
     ChebyshevU,
@@ -47,7 +46,7 @@ def test_directsum_two_inhomogeneous_bnd_assembly_and_backward():
 
 
 def test_directsumtps_poisson_3d():
-    global x, y, z
+    from jaxfun.coordinates import x, y, z
 
     N = 20
     ue = sp.sin(2 * x) * sp.exp(2 * y + z * sp.I)
@@ -83,7 +82,7 @@ def test_directsumtps_poisson_3d():
 
 
 def test_directsumtps_biharmonic_dirichlet_3d():
-    global x, y, z
+    from jaxfun.coordinates import x, y, z
 
     N = 20
     ue = sp.sin(2 * x) * sp.exp(4 * y + z * sp.I)

@@ -40,7 +40,7 @@ class BoundaryConditions(dict):
 
     Args:
         bc: User dictionary (partial). Missing sides are filled.
-        domain: Physical domain (unused here, kept for future features).
+        domain: Physical domain.
 
     Attributes:
         left/right: Dicts of condition_code -> value.

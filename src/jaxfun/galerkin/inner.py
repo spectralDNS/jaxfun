@@ -495,7 +495,6 @@ def _assemble_separable_bilinear_form(
         fun = _separable_boundary_values(context.trial_space, coeffs, trial, gi)
         sign = _linear_sign(context.all_linear)
         res = TPMatrix(mats_, sign) @ fun
-        # res = sign * (mats_[0] @ fun @ mats_[1].T)
         bresult = vectorize_bresult(res, context.test_space, gi[0][0])
 
     else:

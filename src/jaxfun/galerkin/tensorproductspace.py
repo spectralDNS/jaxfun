@@ -738,7 +738,6 @@ def TensorProduct(
 
     Handles:
       * Deep copy of bases to assign distinct coordinate subsystems
-      * Name disambiguation for repeated space names
       * Propagation of subsystem coordinates into Composite / DirectSum
 
     If any axis is a DirectSum (inhomogeneous BC), returns DirectSumTPS.
@@ -774,7 +773,7 @@ def TensorProduct(
             space.basespaces[1].system = space.system
             space.basespaces[1].orthogonal.system = space.system
 
-    if jnp.any(jnp.array([isinstance(s, DirectSum) for s in basespaces_list])):
+    if any(isinstance(s, DirectSum) for s in basespaces_list):
         return DirectSumTPS(basespaces_list, system, name)
 
     assert all(isinstance(s, OrthogonalSpace | DirectSum) for s in basespaces_list)

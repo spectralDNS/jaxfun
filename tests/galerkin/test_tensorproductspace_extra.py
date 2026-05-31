@@ -22,7 +22,7 @@ from jaxfun.galerkin.inner import inner, inner_items, project
 from jaxfun.galerkin.tensorproductspace import DirectSumTPS
 from jaxfun.la import TPMatrix
 from jaxfun.operators import Div, Grad
-from jaxfun.utils.common import lambdify, ulp
+from jaxfun.utils.common import Domain, lambdify, ulp
 
 pytestmark = pytest.mark.integration
 
@@ -86,18 +86,25 @@ def test_directsumtps_biharmonic_dirichlet_3d():
 
     N = 20
     ue = sp.sin(2 * x) * sp.exp(4 * y + z * sp.I)
+    domain = Domain(-0.5, 0.5)
     bcsy = {
-        "left": {"D": ue.subs(y, -1)},
-        "right": {"D": ue.subs(y, 1)},
+        "left": {"D": ue.subs(y, domain.lower)},
+        "right": {"D": ue.subs(y, domain.upper)},
     }
     bcsz = {
-        "left": {"D": ue.subs(z, -1), "N": ue.diff(z, 1).subs(z, -1)},
-        "right": {"D": ue.subs(z, 1), "N": ue.diff(z, 1).subs(z, 1)},
+        "left": {
+            "D": ue.subs(z, domain.lower),
+            "N": ue.diff(z, 1).subs(z, domain.lower),
+        },
+        "right": {
+            "D": ue.subs(z, domain.upper),
+            "N": ue.diff(z, 1).subs(z, domain.upper),
+        },
     }
 
     F = Fourier.Fourier(N)
-    Dy = FunctionSpace(N, Chebyshev.Chebyshev, bcs=bcsy)
-    Dz = FunctionSpace(N + 2, Chebyshev.Chebyshev, bcs=bcsz)
+    Dy = FunctionSpace(N, Chebyshev.Chebyshev, bcs=bcsy, domain=domain)
+    Dz = FunctionSpace(N + 2, Chebyshev.Chebyshev, bcs=bcsz, domain=domain)
     T = TensorProduct(F, Dy, Dz)
     v = TestFunction(T)
     u = TrialFunction(T)

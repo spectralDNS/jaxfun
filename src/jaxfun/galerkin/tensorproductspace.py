@@ -833,9 +833,9 @@ class DirectSumTPS(TensorProductSpace):
                         if len(sp.sympify(v).free_symbols) > 0:
                             val[key] = system.expr_psi_to_base_scalar(v)
 
-        two_inhomogeneous = False
-        bcall: list[list[BoundaryConditions]] = []
-        if len(bcindices) == 2:
+        has_two_inhomogeneous = len(bcindices) == 2
+        projected_bcs: list[list[BoundaryConditions]] = []
+        if has_two_inhomogeneous:
             # If there are two DirectSums, we need to project to the other for each.
             # When projecting to the other space, we need to use the BC values
             # corresponding to the current space's BC values.
@@ -843,7 +843,7 @@ class DirectSumTPS(TensorProductSpace):
                 cast(DirectSum, basespaces[bcindices[0]]).basespaces[1],
                 cast(DirectSum, basespaces[bcindices[1]]).basespaces[1],
             )
-            two_inhomogeneous = bcspaces
+            bc_pair = bcspaces
             bc0, bc1 = bcspaces
             bc0bcs = copy.deepcopy(bc0.bcs)
             bc1bcs = copy.deepcopy(bc1.bcs)
@@ -857,11 +857,7 @@ class DirectSumTPS(TensorProductSpace):
             for bcthis, bcother, zother in zip(
                 [bc0bcs, bc1bcs], [bc1bcs, bc0bcs], [bc1, bc0], strict=False
             ):
-                assert isinstance(bcthis, BoundaryConditions)
-                assert isinstance(bcother, BoundaryConditions)
-                assert isinstance(zother, BCGeneric)
-
-                bcall.append([])
+                projected_bcs.append([])
                 df = 2.0 / (zother.domain.upper - zother.domain.lower)
                 s = zother.system.base_scalars()[0]
                 for bcval in bcthis.orderedvals():
@@ -883,12 +879,7 @@ class DirectSumTPS(TensorProductSpace):
                                 else:
                                     bco[key] = f
 
-                    bcall[-1].append(bcs)
-
-            if len(basespaces) == 2:
-                self.bndvals[bcspaces] = jnp.array(
-                    [z.orderedvals() for z in bcall[0]], dtype=float
-                )
+                    projected_bcs[-1].append(bcs)
 
         self.tpspaces: dict[tuple[OrthogonalSpace, ...], TensorProductSpace] = (
             self.split(basespaces)
@@ -907,18 +898,18 @@ class DirectSumTPS(TensorProductSpace):
             ]
 
             if len(otherspaces) == 0:
-                continue
+                self.bndvals[tensorspace] = jnp.array(
+                    [z.orderedvals() for z in projected_bcs[0]], dtype=float
+                )
+
             elif len(otherspaces) == 1 and len(bcspaces) == 1:
                 bcspace = bcspaces[0]
-                otherspace = otherspaces[0]
                 uh: list[Array] = []
                 for j, bc in enumerate(bcspace.bcs.orderedvals()):
                     otherspace: OrthogonalSpace = otherspaces[0]
-                    if two_inhomogeneous:
-                        bco: BCGeneric = copy.deepcopy(
-                            two_inhomogeneous[(bcsindex[0] + 1) % 2]
-                        )
-                        bco.bcs = bcall[bcsindex[0]][j]
+                    if has_two_inhomogeneous:
+                        bco: BCGeneric = copy.deepcopy(bc_pair[(bcsindex[0] + 1) % 2])
+                        bco.bcs = projected_bcs[bcsindex[0]][j]
                         otherspace: DirectSum = cast(Composite, otherspace) + bco
                     uh.append(project1D(bc, otherspace))
 
@@ -936,11 +927,9 @@ class DirectSumTPS(TensorProductSpace):
                 uh: list[Array] = []
                 for j, bc in enumerate(bcspace.bcs.orderedvals()):
                     otherbc = tensorspace[ind_other]
-                    if two_inhomogeneous:
-                        bco: BCGeneric = copy.deepcopy(
-                            two_inhomogeneous[0 if bcind == 2 else 1]
-                        )
-                        bco.bcs = bcall[bcind - 1][j]
+                    if has_two_inhomogeneous:
+                        bco: BCGeneric = copy.deepcopy(bc_pair[0 if bcind == 2 else 1])
+                        bco.bcs = projected_bcs[bcind - 1][j]
                         otherbc: DirectSum = (
                             cast(Composite, tensorspace[ind_other]) + bco
                         )
@@ -967,11 +956,11 @@ class DirectSumTPS(TensorProductSpace):
 
             elif len(otherspaces) == 1 and len(bcspaces) == 2:
                 uh: list[Array] = []
-                for bci in bcall[0]:
+                for bci in projected_bcs[0]:
                     for bc0 in bci.orderedvals():
                         uh.append(project(bc0, otherspaces[0]))
                 self.bndvals[tensorspace] = jnp.array(uh).T.reshape(
-                    (-1, len(bcall[0]), len(bcall[1]))
+                    (-1, len(projected_bcs[0]), len(projected_bcs[1]))
                 )
 
         self.orthogonal = self.get_orthogonal()

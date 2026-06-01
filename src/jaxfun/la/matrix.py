@@ -117,6 +117,24 @@ class Matrix(BaseMatrix):
         y_moved = y2d.reshape((n,) + rest_shape)
         return jnp.moveaxis(y_moved, 0, axis)
 
+    def rmatvec(self, x: Array, axis: int = 0) -> Array:
+        """Multiply ``x`` along ``axis`` by the transpose ``A^T``.
+
+        Args:
+            x:    Input array.  ``x.shape[axis]`` must equal ``n``.
+            axis: The axis of ``x`` along which the matrix acts.  The output
+                  has the same shape as ``x`` except ``shape[axis]`` becomes
+                  ``m``.
+
+        Examples::
+
+            A.rmatvec(x)  # x shape (n,)      → (m,)
+            A.rmatvec(X, axis=0)  # X shape (n, k)    → (m, k)
+            A.rmatvec(X, axis=1)  # X shape (k, n)    → (k, m)
+            A.rmatvec(T, axis=2)  # T shape (a, b, n) → (a, b, m)
+        """
+        return self.T.matvec(x, axis=axis)
+
     def lu_factor(self) -> LUFactors:
         """Compute the LU factorisation of this (square) matrix.
 

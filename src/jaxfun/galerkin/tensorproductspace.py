@@ -460,17 +460,11 @@ class TensorProductSpace:
         Returns:
             Array of coefficients in the orthogonal basis.
         """
-        dim = len(self)
         sharding = self._spectral_sharding
-        if dim == 2:
-            S = [s.S for s in self.basespaces]
-            z = S[0].T @ c @ S[1]
-        else:
-            S = [s.S for s in self.basespaces]
-            # z = jnp.einsum("is,jp,kl,ijk->spl", *S, c)
-            z = c
-            for i, Si in enumerate(S):
-                z = Si.rmatvec(z, axis=i)
+        S = [s.S for s in self.basespaces]
+        z = c
+        for i, Si in enumerate(S):
+            z = Si.rmatvec(z, axis=i)
 
         if sharding:  # return sharded if possible, otherwise fallback to replicated
             try:
@@ -483,15 +477,19 @@ class TensorProductSpace:
         """Return coefficients c mapped from underlying orthogonal basis.
 
         Args:
-            c: Coefficient array.
+            c: Coefficient array in orthogonal basis.
 
         Returns:
             Array of coefficients in the original basis.
         """
+        from jaxfun.la import Matrix
+
         sharding = self._spectral_sharding
-        S = [s.get_inverse_stencil() for s in self.basespaces]
-        dim = len(self)
-        z = S[0].T @ c @ S[1] if dim == 2 else jnp.einsum("is,jp,kl,ijk->spl", *S, c)
+        S = [Matrix(s.get_inverse_stencil()) for s in self.basespaces]
+        z = c
+        for i, Si in enumerate(S):
+            z = Si.rmatvec(z, axis=i)
+
         if sharding:  # return sharded if possible, otherwise fallback to replicated
             try:
                 return jax.device_put(z, sharding)
@@ -748,7 +746,7 @@ def TensorProduct(
         name: Base name for the tensor product space(s).
 
     Returns:
-        TensorProductSpace or DirectSumTPS.
+        Instance of TensorProductSpace or DirectSumTPS.
     """
     from jaxfun.coordinates import CartCoordSys, x, y, z
 
@@ -790,6 +788,11 @@ class DirectSumTPS(TensorProductSpace):
     contributions needed to evaluate / transform functions with
     inhomogeneous boundary conditions in one or two dimensions.
 
+    Args:
+        basespaces: List of 1D spaces, some of which may be DirectSums.
+        system: Global coordinate system.
+        name: Base name for the tensor product space.
+
     Attributes:
         tpspaces: Mapping from tuples of 1D spaces -> TensorProductSpace.
         bndvals: Dict storing boundary lifting coefficient arrays.
@@ -812,14 +815,6 @@ class DirectSumTPS(TensorProductSpace):
         self._physical_sharding = physical_sharding if len(jax.devices()) > 1 else None
 
         # Normalize symbolic BC expressions to base scalar form
-        bcindices = [
-            i for i, space in enumerate(basespaces) if isinstance(space, DirectSum)
-        ]
-        if len(basespaces) == 3 and bcindices[0] == 0:
-            raise ValueError(
-                "DirectSum cannot be the first space in a 3D tensor product."
-            )
-
         for space in basespaces:
             if space.bcs is None:
                 continue
@@ -832,7 +827,15 @@ class DirectSumTPS(TensorProductSpace):
                         if len(sp.sympify(v).free_symbols) > 0:
                             val[key] = system.expr_psi_to_base_scalar(v)
 
+        bcindices = [
+            i for i, space in enumerate(basespaces) if isinstance(space, DirectSum)
+        ]
+        if len(basespaces) == 3 and bcindices[0] == 0:
+            raise ValueError(
+                "DirectSum cannot be the first space in a 3D tensor product."
+            )
         has_two_inhomogeneous = len(bcindices) == 2
+
         projected_bcs: list[list[BoundaryConditions]] = []
         if has_two_inhomogeneous:
             # If there are two DirectSums, we need to project to the other for each.

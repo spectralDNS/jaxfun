@@ -774,7 +774,7 @@ def TensorProduct(
     if any(isinstance(s, DirectSum) for s in basespaces_list):
         return DirectSumTPS(basespaces_list, system, name)
 
-    assert all(isinstance(s, OrthogonalSpace | DirectSum) for s in basespaces_list)
+    assert all(isinstance(s, OrthogonalSpace) for s in basespaces_list)
     return TensorProductSpace(
         cast(list[OrthogonalSpace], basespaces_list), system, name
     )

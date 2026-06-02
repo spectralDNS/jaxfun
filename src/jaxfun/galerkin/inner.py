@@ -492,10 +492,9 @@ def _assemble_separable_bilinear_form(
 
     assert isinstance(context.test_space, TensorProductSpace | VectorTensorProductSpace)
     if has_bcs:
-        assert len(mats_) == 2
         fun = _separable_boundary_values(context.trial_space, coeffs, trial, gi)
         sign = _linear_sign(context.all_linear)
-        res = sign * (mats_[0] @ fun @ mats_[1].T)
+        res = TPMatrix(mats_, sign) @ fun
         bresult = vectorize_bresult(res, context.test_space, gi[0][0])
 
     else:

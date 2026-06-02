@@ -40,10 +40,19 @@ class BoundaryConditions(dict):
 
     Args:
         bc: User dictionary (partial). Missing sides are filled.
-        domain: Physical domain (unused here, kept for future features).
+        domain: Physical domain.
 
     Attributes:
         left/right: Dicts of condition_code -> value.
+
+    Note:
+        Neumann boundary conditions are normalized to domain if input dict is
+        not already a BoundaryConditions instance. This ensures correct scaling
+        of Neumann BCs when using non-standard domains. Hence, if passing a
+        dict, the user can specify Neumann values in physical units and they
+        will be normalized appropriately. If passing a BoundaryConditions
+        instance, it is assumed that the values are already normalized (e.g.
+        if the instance was created with a non-standard domain).
     """
 
     def __init__(self, bc: dict, domain: Domain | None = None) -> None:
@@ -52,6 +61,13 @@ class BoundaryConditions(dict):
         bcs = {"left": {}, "right": {}}
         bcs.update(copy.deepcopy(bc))
         dict.__init__(self, bcs)
+        if not isinstance(bc, BoundaryConditions):  # Normalize if dict was passed in
+            df = 2 / (domain.upper - domain.lower)
+            for val in self.values():
+                for k, v in val.items():
+                    if k[0] == "N":
+                        nd = int(k[1:]) if len(k) > 1 else 1
+                        val[k] = v / df**nd
 
     def orderednames(self) -> list[str]:
         """Return ordered boundary condition codes (prefixed with L/R)."""
@@ -434,7 +450,12 @@ class BCGeneric(Composite):
 
     def bnd_vals(self) -> Array:
         """Return ordered boundary values vector."""
-        return jnp.array(self.bcs.orderedvals(), dtype=float)
+        return jnp.array(
+            [
+                complex(s) if sp.sympify(s).has(sp.I) else float(s)
+                for s in self.bcs.orderedvals()
+            ]
+        )
 
     @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int | None = None) -> Array:

@@ -482,13 +482,11 @@ class TensorProductSpace:
         Returns:
             Array of coefficients in the original basis.
         """
-        from jaxfun.la import Matrix
-
         sharding = self._spectral_sharding
-        S = [Matrix(s.get_inverse_stencil()) for s in self.basespaces]
+        P = [(s.P, s.S) for s in self.basespaces]
         z = c
-        for i, Si in enumerate(S):
-            z = Si.rmatvec(z, axis=i)
+        for i, (Pi, Si) in enumerate(P):
+            z = Pi.solve(Si.matvec(z, axis=i), axis=i)
 
         if sharding:  # return sharded if possible, otherwise fallback to replicated
             try:

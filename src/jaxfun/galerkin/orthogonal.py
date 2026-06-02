@@ -48,6 +48,7 @@ class OrthogonalSpace(BaseSpace):
         domain: Physical Domain (None -> reference).
         num_quad_points: Default quadrature resolution (== N).
         S: Stencil matrix (identity here; overridden in Composite).
+        P: DiaMatrix representing S @ S.T.
         stencil: Dict describing diagonal shifts (0:1 for identity).
         orthogonal: Self alias (Composite replaces with underlying).
     """
@@ -72,8 +73,8 @@ class OrthogonalSpace(BaseSpace):
         self.bcs: BoundaryConditions | None = None
         self.orthogonal: Self = self
         self.stencil = {0: 1}
-        self.S = diags([jnp.ones(N)], offsets=(0,), shape=(N, N))
-        self.S_inv: Array | None = None
+        self.S: DiaMatrix = diags([jnp.ones(N)], offsets=(0,), shape=(N, N))
+        self.P: DiaMatrix = self.S
         super().__init__(system, name, fun_str)
 
     @abstractmethod
@@ -449,13 +450,6 @@ class OrthogonalSpace(BaseSpace):
     def get_orthogonal(self) -> Self:
         """Return self (orthogonal space is self; overridden in Composite)."""
         return self
-
-    @jax.jit(static_argnums=0)
-    def get_inverse_stencil(self) -> Array:
-        """Return inverse of stencil matrix S."""
-        if self.S_inv is None:
-            self.S_inv = jnp.linalg.pinv(self.S.todense())
-        return self.S_inv
 
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0

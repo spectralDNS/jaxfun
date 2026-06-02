@@ -177,6 +177,8 @@ class Composite(OrthogonalSpace):
         self.stencil = {(si[0]): si[1] / scaling for si in sorted(stencil.items())}
         self.S: DiaMatrix = self.stencil_to_diamatrix()
         self.ST: DiaMatrix = self.S.T
+        self.P: DiaMatrix = self.S @ self.ST
+        self.P.lu_factor()  # Pre-factor to allow jitted solves
         self._mass_matrix: DiaMatrix = self._compute_mass_matrix()
         self._mass_matrix.lu_factor()
 
@@ -269,7 +271,7 @@ class Composite(OrthogonalSpace):
     @jax.jit(static_argnums=0)
     def from_orthogonal(self, a: Array) -> Array:
         """Map underlying orthogonal coefficients -> composite coefficients."""
-        return a @ self.get_inverse_stencil()
+        return self.P.solve(self.S @ a)
 
     @overload
     def apply_stencil_galerkin(self, b: Matrix) -> Matrix: ...

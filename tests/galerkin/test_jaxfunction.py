@@ -6,6 +6,7 @@ import sympy as sp
 
 from jaxfun import Domain
 from jaxfun.galerkin import (
+    CartesianProduct,
     Chebyshev,
     ChebyshevU,
     Fourier,
@@ -219,14 +220,16 @@ def test_jaxfunction_2d_vector(space: type[OrthogonalSpace], domain: Domain | No
     N = 8
     D = space(N, domain=domain)
     T = TensorProduct(D, D)
-    V = VectorTensorProductSpace(T, name="V")
+    V = CartesianProduct(T, T, name="V", rank=1)
     u = TrialFunction(V)
     v = TestFunction(V)
     A = inner(Dot(u, v), kind="bilinear")
-    uf = JAXFunction(jnp.ones((2, N, N)), V)
+    uf = JAXFunction(tuple((jnp.ones((N, N)), jnp.ones((N, N)))), V)
     b0 = A @ uf.array
     b1 = inner(Dot(uf, v), kind="linear")
-    assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(10))
+    assert all(
+        jnp.linalg.norm(b0[i] - b1[i]) < jnp.sqrt(ulp(10)) for i in range(len(b0))
+    )
 
 
 def test_jaxfunction_vector(jspace: type[OrthogonalSpace], domain: Domain | None):

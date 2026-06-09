@@ -141,6 +141,7 @@ class Composite(OrthogonalSpace):
         stencil: Ordered dict of diagonal shift -> expression / scaling.
         S: Sparse (DiaMatrix) stencil matrix.
         ST: Pre-computed transpose of S for efficiency.
+        P: Sparse (DiaMatrix) representing S @ S.T.
         scaling: Scaling expression applied to user stencil.
     """
 
@@ -438,7 +439,7 @@ class BCGeneric(Composite):
         self.orthogonal.N = S.shape[1]
         self.orthogonal._num_quad_points = num_quad_points
         self.S = DiaMatrix.from_dense(S.__array__().astype(float))
-        self.ST: DiaMatrix = self.S.T  # pre-computed transpose; avoids creating
+        self.ST: DiaMatrix = self.S.T
 
     @property
     def dim(self) -> int:

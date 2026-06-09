@@ -13,8 +13,10 @@ from jaxfun.la.matrixprotocol import BaseMatrix, _CacheBox
 from jaxfun.la.tpmatrix import TPMatrices, TPMatrix, tpmats_to_kron
 
 if TYPE_CHECKING:
-    from jaxfun.galerkin import JAXFunction
-    from jaxfun.galerkin.tensorproductspace import VectorTensorProductSpace
+    from jaxfun.galerkin import (
+        CartesianProductSpace,
+        JAXFunction,
+    )
 
 type _SparseMatrixCache = _CacheBox[DiaMatrix]
 
@@ -24,8 +26,8 @@ class BlockTPMatrix(BaseMatrix):
 
     Args:
         tpmats: List of TPMatrix objects.
-        test_space: VectorTensorProductSpace descriptor for the test space.
-        trial_space: VectorTensorProductSpace descriptor for the trial space.
+        test_space: descriptor for the (leaf) test space.
+        trial_space: descriptor for the (leaf) trial space.
 
     Attributes:
         blocks: list of TPMatrix objects.
@@ -35,19 +37,16 @@ class BlockTPMatrix(BaseMatrix):
     def __init__(
         self,
         tpmats: list[TPMatrix],
-        test_space: VectorTensorProductSpace,
-        trial_space: VectorTensorProductSpace,
+        test_space: CartesianProductSpace,
+        trial_space: CartesianProductSpace,
     ) -> None:
         self.tpmats = nnx.List(tpmats)
         self.test_space = test_space
         self.trial_space = trial_space
         self.shape = (self.test_space.dim, self.trial_space.dim)
-        self.test_block_sizes: tuple[int, ...] = tuple(
-            int(self.test_space[i].dim) for i in range(self.test_space.dims)
-        )
-        self.trial_block_sizes: tuple[int, ...] = tuple(
-            int(self.trial_space[i].dim) for i in range(self.trial_space.dims)
-        )
+        self.test_block_sizes: tuple[int, ...] = self.test_space.block_sizes
+        self.trial_block_sizes: tuple[int, ...] = self.trial_space.block_sizes
+
         # Pre-compute one combined matrix per (test_block, trial_block) pair so
         # that matvec, todense and tosparse each iterate over at most one entry
         # per block instead of one entry per contributing TPMatrix.
@@ -77,12 +76,13 @@ class BlockTPMatrix(BaseMatrix):
         )
 
     @jax.jit
-    def _matmul_array(self, w: Array) -> Array:
-        out = jnp.zeros_like(w)
+    def _matmul_array(self, w: tuple[Array]) -> tuple[Array]:
+        out = []
+        flat_spaces = self.test_space.flatten()
         for s, block_mat in self._combined_blocks.items():
             bi, bj = map(int, s.split(","))
-            out = out.at[bi].add((block_mat @ w[bj].ravel()).reshape(out[bi].shape))
-        return out
+            out.append((block_mat @ w[bj].ravel()).reshape(flat_spaces[bi].num_dofs))
+        return tuple(out)
 
     def slice(self, indices: tuple[int, ...]) -> tuple[slice, ...]:  # ty:ignore[invalid-type-form]
         """Return slice object for block matrix indices."""
@@ -200,7 +200,7 @@ class BlockTPMatrix(BaseMatrix):
         """Return number of rows (test space dimension)."""
         return self.shape[0]
 
-    def solve(self, b: Array) -> Array:
+    def solve(self, b: BlockArray) -> BlockArray:  # ty:ignore[invalid-method-override]
         """Solve ``M x = b``.
 
         When all factor matrices are :class:`~jaxfun.la.DiaMatrix` instances,
@@ -213,9 +213,82 @@ class BlockTPMatrix(BaseMatrix):
         :class:`~jaxfun.la.Matrix`.
         """
         all_dia = all(isinstance(m, DiaMatrix) for m in self._combined_blocks.values())
+        x = b.flatten()
         if all_dia:
             A_perm, perm, inv_perm = self.tosparse().rcm()
-            x_perm = A_perm.solve(b.ravel()[perm])
-            return x_perm[inv_perm].reshape(b.shape)
+            x_perm = A_perm.solve(x[perm])
+            return BlockArray(b.cartspace, flat_array=x_perm[inv_perm])
         M = self.to_matrix()
-        return M.solve(b.ravel()).reshape(b.shape)
+        return BlockArray(b.cartspace, flat_array=M.solve(x))
+
+
+class IndexedArray(nnx.Pytree):
+    def __init__(self, i: int, data: Array):
+        self.data = data
+        self.i = i
+
+
+class BlockArray(nnx.Pytree):
+    """Block of Array objects.
+
+    Args:
+        cartspace: descriptor for the (leaf) space.
+        indexed_arrays: List of IndexedArray objects.
+        flat_array: 1D Array of length cartspace.dim.
+
+    Attributes:
+        data: nnx.List of Arrays representing each block.
+        block_sizes: tuple of ints, dim of each block.
+        num_dofs: tuple of tuple of ints, num_dof of each block.
+        cartspace: CartesianProductSpace.
+    """
+
+    def __init__(
+        self,
+        cartspace: CartesianProductSpace,
+        indexed_arrays: list[IndexedArray] | None = None,
+        flat_array: Array | None = None,
+    ) -> None:
+        self.data: nnx.List[Array] = nnx.List([])
+        self.cartspace = cartspace
+        self.block_sizes: tuple[int, ...] = self.cartspace.block_sizes
+        self.num_dofs: tuple[tuple[int, ...], ...] = self.cartspace.num_dofs
+        for _ in range(cartspace.num_components):
+            self.data.append(jnp.zeros(()))
+        if indexed_arrays is not None:
+            self += indexed_arrays
+        if flat_array is not None:
+            self += self.from_flat_array(flat_array)
+
+    def _broadcast_data(self) -> tuple[Array, ...]:
+        return tuple(
+            d if d.shape != () else jnp.broadcast_to(d, self.num_dofs[i])
+            for i, d in enumerate(self.data)
+        )
+
+    def array(self) -> tuple[Array, ...]:
+        return tuple(self._broadcast_data())
+
+    def flatten(self) -> Array:
+        a = [d.ravel() for d in self._broadcast_data()]
+        return jnp.concatenate(tuple(a))
+
+    def from_flat_array(self, x: Array) -> list[IndexedArray]:
+        s0: int = 0
+        d: list[IndexedArray] = []
+        for i, s1 in enumerate(self.block_sizes):
+            d.append(IndexedArray(i, x[slice(s0, s0 + s1)].reshape(self.num_dofs[i])))
+            s0 = s1
+        return d
+
+    def __add__(self, b: IndexedArray | list[IndexedArray]):
+        b: list[IndexedArray] = [b] if isinstance(b, IndexedArray) else b
+        for bi in b:
+            self.data[bi.i] += bi.data
+        return self
+
+    def __sub__(self, b: IndexedArray | list[IndexedArray]):
+        b: list[IndexedArray] = [b] if isinstance(b, IndexedArray) else b
+        for bi in b:
+            self.data[bi.i] -= bi.data
+        return self

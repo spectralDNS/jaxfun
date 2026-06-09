@@ -21,13 +21,14 @@ from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
 from jaxfun.coordinates import BaseTime, CoordSys
-from jaxfun.galerkin import Chebyshev, DirectSum
-from jaxfun.galerkin.arguments import ArgumentTag
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
-from jaxfun.galerkin.tensorproductspace import (
+from jaxfun.galerkin import (
+    Chebyshev,
+    DirectSum,
     TensorProductSpace,
     VectorTensorProductSpace,
 )
+from jaxfun.galerkin.arguments import ArgumentTag
+from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.typing import Activation
 from jaxfun.utils.common import Domain, lambdify
 
@@ -627,17 +628,19 @@ class SpectralModule(BaseModule):
             self.kernel: nnx.Param[Array] = nnx.Param(w * x[None, :])
 
         elif basespace.dims == 2:
-            w = kernel_init(rngs(), basespace.num_dofs)
             if isinstance(basespace, TensorProductSpace):
+                w = kernel_init(rngs(), basespace.num_dofs)
                 x = jnp.logspace(0, -6, basespace.num_dofs[0])
                 y = jnp.logspace(0, -6, basespace.num_dofs[1])
                 self.kernel = nnx.Param(x[:, None] * y[None, :] * w)
             elif isinstance(basespace, VectorTensorProductSpace):
-                x = jnp.logspace(0, -6, basespace.num_dofs[1])
-                y = jnp.logspace(0, -6, basespace.num_dofs[2])
-                self.kernel: nnx.Param[Array] = nnx.Param(
-                    (x[None, :, None] * y[None, None, :]) * w
-                )
+                c = []
+                for b in basespace:
+                    w = kernel_init(rngs(), b.num_dofs)
+                    x = jnp.logspace(0, -6, b.num_dofs[0])
+                    y = jnp.logspace(0, -6, b.num_dofs[1])
+                    c.append((x[:, None] * y[None, :]) * w)
+                self.kernel: nnx.Param[tuple[Array, ...]] = nnx.Param(tuple(c))
 
         self.space = basespace
         self.name = name
@@ -652,9 +655,9 @@ class SpectralModule(BaseModule):
         """Return spatial dimensionality of the basespace."""
         return self.space.dims
 
-    def set_kernel(self, kernel: Array) -> None:
+    def set_kernel(self, kernel: Array | tuple[Array, ...]) -> None:
         """Set kernel parameters directly."""
-        self.kernel = nnx.Param(kernel)
+        self.kernel: nnx.Param[Array | tuple[Array, ...]] = nnx.Param(kernel)
 
     def __call__(self, x: Array) -> Array:
         """Evaluate spectral expansion at coordinates.
@@ -668,7 +671,11 @@ class SpectralModule(BaseModule):
         if isinstance(self.space, OrthogonalSpace | DirectSum):
             return self.space.evaluate(x, self.kernel[0])
 
-        z = self.space.evaluate(x, self.kernel[...])
+        if isinstance(self.space, TensorProductSpace):
+            z = self.space.evaluate(x, cast(Array, self.kernel))
+        elif isinstance(self.space, VectorTensorProductSpace):
+            z = self.space.evaluate(x, cast(tuple[Array, ...], self.kernel))
+
         if self.space.rank == 0:
             return jnp.expand_dims(z, -1)
         return z

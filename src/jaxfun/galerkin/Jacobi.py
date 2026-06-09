@@ -229,7 +229,7 @@ class Jacobi(OrthogonalSpace):
         if self.alpha != self.beta:
             bb = sp.lambdify(n, self.b(n + 1, n + 1), modules="jax")(jnp.arange(N))
 
-        x0: Array = jnp.array(0.0)
+        x0: Array = jnp.zeros((), dtype=c.dtype)
         if N == 0:
             return x0
         x1: Array = c[-1] / bm[-1]

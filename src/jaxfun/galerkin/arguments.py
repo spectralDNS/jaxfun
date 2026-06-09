@@ -10,11 +10,12 @@ Key constructs:
     * JAXFunction: Galerkin functions with JAX-backed coefficients.
 """
 
-import itertools
+from __future__ import annotations
+
 from abc import abstractmethod
 from enum import Enum, unique
 from functools import partial
-from typing import Any, Literal, Self, cast
+from typing import Any, Literal, Self, TypeVar, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -27,21 +28,26 @@ from sympy.vector import VectorAdd
 
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseScalar, CoordSys, Vector, latex_symbols
+from jaxfun.galerkin.cartesianproductspace import (
+    CartesianProductSpace,
+    VectorTensorProductSpace,
+)
 from jaxfun.typing import (
+    ComputationalSpaceType,
     FunctionSpaceType,
     MeshKind,
     Padding,
+    ScalarSpaceType,
     TestSpaceType,
     TrialSpaceType,
 )
 
 from .composite import DirectSum
 from .orthogonal import OrthogonalSpace
-from .tensorproductspace import (
-    DirectSumTPS,
-    TensorProductSpace,
-    VectorTensorProductSpace,
-)
+from .tensorproductspace import DirectSumTPS, TensorProductSpace
+
+_CompositeSpaceT = TypeVar("_CompositeSpaceT", bound=CartesianProductSpace)
+_ScalarSpaceT = TypeVar("_ScalarSpaceT", bound=ScalarSpaceType)
 
 t, x, y, z = sp.symbols("t,x,y,z", real=True)
 
@@ -63,8 +69,9 @@ def get_arg(p: Any) -> ArgumentTag:
 def get_BasisFunction(
     name: str,
     *,
-    global_index: int,
+    vector_index: int,
     local_index: int,
+    global_index: int,
     rank: int,
     offset: int,
     functionspace: BaseSpace,
@@ -78,8 +85,9 @@ def get_BasisFunction(
 
     Args:
         name: Base name (usually space.fun_str).
-        global_index: Global component index for vector-valued spaces.
+        vector_index: Component index for vector-valued spaces.
         local_index: Local index within a 1D factor space.
+        global_index: Global index for scalar functionspace.
         rank: Tensor rank of the overall function space (0 or 1).
         offset: Shift applied to index selection (test vs trial).
         functionspace: Parent function space object.
@@ -101,7 +109,7 @@ def get_BasisFunction(
         if cls.rank == 0:
             return lhs + rhs
         elif cls.rank == 1:
-            sup = "^{(" + str(cls.global_index) + ")}"
+            sup = "^{(" + str(cls.vector_index) + ")}"
             return lhs + sup + rhs
         raise NotImplementedError("Rank > 1 basis functions not supported.")
 
@@ -118,7 +126,7 @@ def get_BasisFunction(
         if cls.rank == 0:
             s = lhs + rhs
         elif cls.rank == 1:
-            sup = "^{(" + str(cls.global_index) + ")}"
+            sup = "^{(" + str(cls.vector_index) + ")}"
             s = lhs + sup + rhs
         else:
             raise NotImplementedError("Rank > 1 basis functions not supported.")
@@ -126,8 +134,9 @@ def get_BasisFunction(
 
     b: AppliedUndef = sp.Function(
         name,
-        global_index=global_index,
+        vector_index=vector_index,
         local_index=local_index,
+        global_index=global_index,
         rank=rank,
         offset=offset,
         functionspace=functionspace,
@@ -141,7 +150,9 @@ def get_BasisFunction(
     return b
 
 
-def _get_computational_function(arg: str, V: TestSpaceType) -> Expr | AppliedUndef:
+def _get_computational_function(
+    arg: str, V: ComputationalSpaceType
+) -> Expr | AppliedUndef:
     """Return symbolic test or trial function in computational coordinates.
 
     Dispatches on space type and builds a product (scalar) or VectorAdd
@@ -160,8 +171,9 @@ def _get_computational_function(arg: str, V: TestSpaceType) -> Expr | AppliedUnd
         assert base_scalars[0].is_Symbol
         return get_BasisFunction(
             V.fun_str,
-            global_index=0,
+            vector_index=0,
             local_index=0,
+            global_index=getattr(V, "global_index", 0),
             rank=0,
             offset=offset,
             functionspace=V,
@@ -173,8 +185,9 @@ def _get_computational_function(arg: str, V: TestSpaceType) -> Expr | AppliedUnd
         return sp.Mul.fromiter(
             get_BasisFunction(
                 v.fun_str,
-                global_index=0,
+                vector_index=0,
                 local_index=getattr(a, "_id", [0])[0],
+                global_index=getattr(V, "global_index", 0),
                 rank=0,
                 offset=offset,
                 functionspace=v,
@@ -184,25 +197,26 @@ def _get_computational_function(arg: str, V: TestSpaceType) -> Expr | AppliedUnd
             for a, v in zip(base_scalars, V.basespaces, strict=False)
         )
 
-    elif isinstance(V, VectorTensorProductSpace):
-        b = V.system.base_vectors()
-        return VectorAdd.fromiter(
-            sp.Mul.fromiter(
-                get_BasisFunction(
-                    v.fun_str,
-                    global_index=i,
-                    local_index=getattr(a, "_id", [0])[0],
-                    rank=1,
-                    offset=offset,
-                    functionspace=v,
-                    argument=ArgumentTag.TEST if arg == "test" else ArgumentTag.TRIAL,
-                    arg=a,
-                )
-                for a, v in zip(base_scalars, Vi, strict=False)
+    assert isinstance(V, VectorTensorProductSpace)
+    b = V.system.base_vectors()
+    return VectorAdd.fromiter(
+        sp.Mul.fromiter(
+            get_BasisFunction(
+                v.fun_str,
+                vector_index=i,
+                local_index=getattr(a, "_id", [0])[0],
+                global_index=getattr(Vi, "global_index", 0),
+                rank=1,
+                offset=offset,
+                functionspace=v,
+                argument=ArgumentTag.TEST if arg == "test" else ArgumentTag.TRIAL,
+                arg=a,
             )
-            * b[i]
-            for i, Vi in enumerate(V)
+            for a, v in zip(base_scalars, Vi, strict=False)
         )
+        * b[i]
+        for i, Vi in enumerate(V)
+    )
 
 
 class BaseFunction(Function):
@@ -263,6 +277,10 @@ class ExpansionFunction(BaseFunction):
                 name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return f"{name}({self.c_names}; {self.functionspace.name})"
 
+    def __getitem__(self, i: int) -> sp.Expr:
+        assert isinstance(self.functionspace, CartesianProductSpace)
+        return self.__class__(self.functionspace[i], name=self.name[i])
+
 
 # NOTE
 # Need a unique Symbol in order to create a new TestFunction/TrialFunction for a new
@@ -287,37 +305,26 @@ class TestFunction(ExpansionFunction):
         coors = V.system
         obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
         obj.argument = ArgumentTag.TEST
-        if isinstance(V, DirectSum):
-            obj.functionspace = V[0]
-        elif isinstance(V, TensorProductSpace | DirectSumTPS):
-            f = []
-            vname = V.name
-            for space in V.basespaces:
-                if isinstance(space, DirectSum):
-                    f.append(space[0])
-                else:
-                    f.append(space)
-            obj.functionspace = TensorProductSpace(f, name=vname, system=V.system)
-        elif isinstance(V, VectorTensorProductSpace):
-            f = []
-            vname = V.name
-            for space in V:
-                g = []
-                for s in space:
-                    if isinstance(s, DirectSum):
-                        g.append(s[0])
-                    else:
-                        g.append(s)
-                f.append(TensorProductSpace(g, name=vname, system=V.system))
-            obj.functionspace = VectorTensorProductSpace(tuple(f), name=V.name)
-        else:
+
+        if isinstance(V, DirectSum | DirectSumTPS | CartesianProductSpace):
+            obj.functionspace = V.get_homogeneous()
+        elif isinstance(V, OrthogonalSpace | TensorProductSpace):
             obj.functionspace = V
+        else:
+            raise ValueError("Unknown test space")
+
         obj.name = name if name is not None else "TestFunction"
         obj.own_name = "TestFunction"
         return obj
 
     def doit(self, **hints: Any) -> Expr | AppliedUndef:
-        return _get_computational_function("test", self.functionspace)
+        if self.functionspace.rank < 0:
+            raise ValueError(
+                "TestFunction expansion not possible for CartesianProductSpace"
+            )
+        return _get_computational_function(
+            "test", cast(ComputationalSpaceType, self.functionspace)
+        )
 
 
 class TrialFunction(ExpansionFunction):
@@ -359,40 +366,33 @@ class TrialFunction(ExpansionFunction):
         comp_fun = partial(_get_computational_function, "trial")
         if isinstance(fspace, DirectSum):
             return sp.Add.fromiter(comp_fun(f) for f in fspace.basespaces)
-        elif isinstance(fspace, TensorProductSpace):
-            spaces = fspace.basespaces
-            f = []
-            for space in spaces:
-                if isinstance(space, DirectSum):
-                    f.append(space)
-                else:
-                    f.append([space])
-            tensorspaces = itertools.product(*f)
-            return sp.Add.fromiter(
-                comp_fun(TensorProductSpace(s, fspace.system, f"{fspace.name}{i}"))
-                for i, s in enumerate(tensorspaces)
-            )
+
+        elif isinstance(fspace, DirectSumTPS):
+            return sp.Add.fromiter(comp_fun(f) for f in fspace.tpspaces.values())
+
         elif isinstance(fspace, VectorTensorProductSpace):
             vector = []
-            for i, (bi, tpspaces) in enumerate(
-                zip(fspace.system.base_vectors(), fspace.tensorspaces, strict=True)
+            for i, (bi, tpspace) in enumerate(
+                zip(
+                    fspace.system.base_vectors(),
+                    fspace.flatten(),
+                    strict=True,
+                )
             ):
-                fi = []
-                spaces = tpspaces.basespaces
-                for space in spaces:
-                    if isinstance(space, DirectSum):
-                        fi.append(space)
-                    else:
-                        fi.append([space])
-                tpspaces = itertools.product(*fi)
+                tpspaces = (
+                    tpspace.tpspaces.values()
+                    if isinstance(tpspace, DirectSumTPS)
+                    else [tpspace]
+                )
+
                 for Vi in tpspaces:
-                    T = TensorProductSpace(Vi, fspace.system, f"{fspace.name}{i}")
-                    f = (
+                    vector.append(
                         sp.Mul.fromiter(
                             get_BasisFunction(
                                 v.fun_str,
-                                global_index=i,
+                                vector_index=i,
                                 local_index=getattr(a, "_id", [0])[0],
+                                global_index=getattr(Vi, "global_index", 0),
                                 rank=1,
                                 offset=fspace.dims,
                                 functionspace=v,
@@ -400,15 +400,14 @@ class TrialFunction(ExpansionFunction):
                                 arg=a,
                             )
                             for a, v in zip(
-                                fspace.system.base_scalars(), T, strict=True
+                                fspace.system.base_scalars(), Vi, strict=True
                             )
                         )
                         * bi
                     )
-                    vector.append(f)
             return VectorAdd.fromiter(vector)
 
-        return comp_fun(fspace)
+        return comp_fun(cast(ComputationalSpaceType, fspace))
 
 
 class ScalarFunction(BaseFunction):
@@ -662,103 +661,143 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         name: Optional name for the JAXFunction object.
     """
 
-    array: Array
+    array: Array | tuple[Array, ...]
     argument: Literal[ArgumentTag.JAXFUNC]
     functionspace: SpaceT
 
     def __new__(
         cls,
-        array: Array | sp.Expr,
+        array: Array | tuple[Array, ...] | sp.Expr | sp.Tuple,
         V: SpaceT,
         name: str | None = None,
     ) -> Self:
+        from .inner import project
+
         coors: CoordSys = V.system
         obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
         if isinstance(array, sp.Expr):
-            from .inner import project
+            array = project(array, cast(ScalarSpaceType, V))
 
-            array = project(array, V)
+        elif isinstance(array, sp.Tuple):
+            array = project(array, cast(CartesianProductSpace, V))
+
         obj.array = array
-        dof_shape = V.num_dofs if V.dims > 1 else (V.num_dofs,)
-        assert array.shape == dof_shape, (
-            f"Array shape {array.shape} does not match number of DOFs {V.num_dofs} for function space {V.name}"  # noqa: E501
-        )
-
         obj.functionspace = V
         obj.argument = ArgumentTag.JAXFUNC
         obj.name = name if name is not None else "JAXFunction"
         obj.own_name = "JAXFunction"
         return obj
 
+    @overload
     def backward(
-        self,
-        N: Padding = None,
-    ) -> Array:
+        self: JAXFunction[_CompositeSpaceT], N: Padding = None
+    ) -> tuple[Array, ...]: ...
+    @overload
+    def backward(self: JAXFunction[_ScalarSpaceT], N: Padding = None) -> Array: ...
+    def backward(self, N: Padding = None) -> Array | tuple[Array, ...]:
         return self.functionspace.backward(self.array, N=N)  # ty: ignore[invalid-argument-type]
 
     def doit(self, **hints: Any) -> Expr | AppliedUndef:
         hints["linear"] = hints.get("linear", False)
-        fs = self.functionspace
-        rank = getattr(fs, "rank", 0)
+        V = self.functionspace
 
         if hints.get("linear", True):
-            trial = TrialFunction(fs).doit()
-            offset = 1 if isinstance(fs, OrthogonalSpace | DirectSum) else fs.dims
+            trial = TrialFunction(V).doit()
+            offset = 1 if isinstance(V, OrthogonalSpace | DirectSum) else V.dims
             local_indices = slice(offset, 2 * offset)
             global_index = 0
             hat = f"\\hat{{{self.name}}}"
-            if rank == 0:
+            if V.rank == 0:
                 name = "".join((hat, "_{", indices[local_indices], "}"))
-                return Jaxc(self.array, fs, name=name) * trial
+                return Jaxc(cast(Array, self.array), V, name=name) * trial
 
-            assert rank == 1
-            assert isinstance(fs, VectorTensorProductSpace)
-            s = []
-            for k, v in cast(Vector, trial).components.items():
-                global_index = k._id[0]
-                name = "".join(
-                    (hat, "_{", indices[local_indices], "}^{(", str(global_index), ")}")
+            elif V.rank == 1:
+                assert isinstance(V, VectorTensorProductSpace)
+                s = []
+                for k, v in cast(Vector, trial).components.items():
+                    global_index = k._id[0]
+                    name = "".join(
+                        (
+                            hat,
+                            "_{",
+                            indices[local_indices],
+                            "}^{(",
+                            str(global_index),
+                            ")}",
+                        )
+                    )
+                    s.append(
+                        Jaxc(self.array[global_index], V[global_index], name=name)
+                        * k
+                        * v
+                    )
+                return trial.func(*s)
+
+            else:
+                raise ValueError(
+                    "Unranked Composite space not supported for linear expansion."
                 )
-                s.append(
-                    Jaxc(self.array[global_index], fs[global_index], name=name) * k * v
-                )
-            return trial.func(*s)
 
         # Nonlinear case, return a multivar function.
-        if rank == 0:
+        if V.rank == 0:
             return get_JAXFunction(
                 self.name,
-                array=self.array,
+                array=cast(Array, self.array),
                 global_index=0,
                 rank=0,
-                functionspace=fs,
+                functionspace=V,
                 argument=ArgumentTag.JAXFUNC,
-                args=fs.system.base_scalars(),
+                args=V.system.base_scalars(),
             )
 
-        assert rank == 1
-        assert isinstance(fs, VectorTensorProductSpace)
+        elif V.rank == 1:
+            assert isinstance(V, VectorTensorProductSpace)
 
-        return VectorAdd.fromiter(
-            get_JAXFunction(
-                "".join((self.name, "^{(", str(i), ")}")),
-                array=self.array[i],
-                global_index=i,
-                rank=0,
-                functionspace=fs[i],
-                argument=ArgumentTag.JAXFUNC,
-                args=fs.system.base_scalars(),
+            return VectorAdd.fromiter(
+                get_JAXFunction(
+                    "".join((self.name, "^{(", str(i), ")}")),
+                    array=self.array[i],
+                    global_index=i,
+                    rank=0,
+                    functionspace=V[i],
+                    argument=ArgumentTag.JAXFUNC,
+                    args=V.system.base_scalars(),
+                )
+                * bi
+                for i, bi in enumerate(V.system.base_vectors())
             )
-            * bi
-            for i, bi in enumerate(fs.system.base_vectors())
-        )
 
+        else:
+            raise ValueError(
+                "Unranked Composite space not supported for nonlinear expansion."
+            )
+
+    @overload
+    def __matmul__(
+        self: JAXFunction[_CompositeSpaceT], a: tuple[Array, ...]
+    ) -> tuple[Array, ...]: ...
+    @overload
+    def __matmul__(self: JAXFunction[_ScalarSpaceT], a: Array) -> Array: ...
     @jax.jit(static_argnums=0)
-    def __matmul__(self, a: Array) -> Array:
+    def __matmul__(self, a: Array | tuple[Array, ...]) -> Array | tuple[Array, ...]:
+        if isinstance(self.array, tuple):
+            assert isinstance(a, tuple) and len(self.array) == len(a)
+            return tuple(ai @ ai_ for ai, ai_ in zip(self.array, a))
+        assert isinstance(a, Array)
         return self.array @ a
 
+    @overload
+    def __rmatmul__(
+        self: JAXFunction[_CompositeSpaceT], a: tuple[Array, ...]
+    ) -> tuple[Array, ...]: ...
+    @overload
+    def __rmatmul__(self: JAXFunction[_ScalarSpaceT], a: Array) -> Array: ...
     @jax.jit(static_argnums=0)
-    def __rmatmul__(self, a: Array) -> Array:
+    def __rmatmul__(self, a: Array | tuple[Array, ...]) -> Array | tuple[Array, ...]:
+        if isinstance(self.array, tuple):
+            assert isinstance(a, tuple) and len(self.array) == len(a)
+            return tuple(ai_ @ ai for ai, ai_ in zip(a, self.array))
+        assert isinstance(a, Array)
         return a @ self.array
 
     @jax.jit(static_argnums=0)
@@ -768,14 +807,12 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         Args:
             x: Coordinates (N, d). Created by calling self.functionspace.flatmesh().
         """
-        functionspace = self.functionspace
-        if isinstance(functionspace, OrthogonalSpace | DirectSum):
-            return functionspace.evaluate(x, self.array)
-        assert isinstance(
-            functionspace, TensorProductSpace | VectorTensorProductSpace | DirectSumTPS
-        )
-        z = functionspace.evaluate(x, self.array)
-        if functionspace.rank == 0:
+        V = cast(FunctionSpaceType, self.functionspace)
+        if isinstance(V, OrthogonalSpace | DirectSum | TensorProductSpace):
+            return V.evaluate(x, cast(Array, self.array))
+
+        z = V.evaluate(x, cast(tuple[Array, ...], self.array))
+        if V.rank == 0:
             return jnp.expand_dims(z, -1)
         return z
 
@@ -793,19 +830,64 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
 
 def evaluate_jaxfunction_expr_quad(
     a: Basic,
-    jaxf: JAXFunction | None = None,
     N: int | tuple[int | None, ...] | None = None,
 ) -> Array:
-    """Evaluate a symbolic JAXFunction expression on the quadrature mesh."""
+    """Evaluate a symbolic JAXFunction expression on the quadrature mesh.
+
+    Args:
+        a: SymPy expression potentially containing JAXFunction objects.
+        N: Optional padding for the number of quadrature points in each dimension.
+    """
     from jaxfun.integrators.nonlinear import compile_nonlinear_evaluator
 
-    if jaxf is None:
-        from .forms import get_jaxfunctions
+    from .forms import get_jaxfunctions
 
-        jaxf: set[JAXFunction] = get_jaxfunctions(a)
-        assert len(jaxf) == 1, "Single JAXFunction not found in expression."
-        jaxf: JAXFunction = jaxf.pop()
+    jaxfs: set[JAXFunction] = get_jaxfunctions(a)
 
+    if len(jaxfs) > 1:
+        # Multiple JAXFunction components present.  Split into
+        # per-component sub-expressions and evaluate each independently.
+
+        if isinstance(a, sp.Add):
+            result = jnp.asarray(0.0)
+            for arg in a.args:
+                result = result + evaluate_jaxfunction_expr_quad(arg, N=N)
+            return result
+
+        if not isinstance(a, sp.Mul):
+            raise NotImplementedError(
+                f"Multiple JAXFunctions in non-Mul expression not supported: {a}"
+            )
+        # Partition args by the identity of the single JAXFunction they
+        # depend on.  Args that share the same JAXFunction (e.g.
+        # U^(0) and d(U^(0))/dx) are grouped together so the nonlinear
+        # compiler can handle them as a single sub-expression.
+        groups: dict[int, sp.Expr] = {}
+        for arg in a.args:
+            arg_jaxfs = get_jaxfunctions(arg)
+            if len(arg_jaxfs) == 0:
+                # Static/numeric factor: attach to an arbitrary group so it
+                # is folded in; use key -1 to signal "no JAXFunction".
+                key = -1
+            elif len(arg_jaxfs) == 1:
+                key = id(next(iter(arg_jaxfs)))
+            else:
+                # arg itself has multiple JAXFunctions — treat as its own
+                # group and let the recursion resolve it.
+                key = id(arg)
+            groups[key] = cast(sp.Expr, groups.get(key, sp.Integer(1)) * arg)
+
+        result = jnp.asarray(1.0)
+        for key, sub_expr in groups.items():
+            if key == -1:
+                # Pure numeric/symbolic constant — evaluate to a scalar.
+                result = result * float(sub_expr)
+            else:
+                result = result * evaluate_jaxfunction_expr_quad(sub_expr, N=N)
+        return result
+
+    assert len(jaxfs) == 1, "Single JAXFunction not found in expression."
+    jaxf = jaxfs.pop()
     V = jaxf.functionspace
     fun = compile_nonlinear_evaluator(cast(sp.Expr, a), V, cast(AppliedUndef, jaxf))
-    return fun(jaxf.array, N)
+    return fun(cast(Array, jaxf.array), N)

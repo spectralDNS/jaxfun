@@ -29,6 +29,7 @@ from jaxfun.la.matrixprotocol import (
 if TYPE_CHECKING:
     from jaxfun.coordinates import BaseDyadic, BaseScalar, BaseVector
     from jaxfun.galerkin import (
+        CartesianProductSpace,
         DirectSum,
         DirectSumTPS,
         TensorProductSpace,
@@ -43,11 +44,31 @@ type FunctionSpaceType = (
     OrthogonalSpace
     | TensorProductSpace
     | VectorTensorProductSpace
+    | CartesianProductSpace
     | DirectSum
     | DirectSumTPS
 )
 type TrialSpaceType = FunctionSpaceType
-type TestSpaceType = OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+type TestSpaceType = (
+    OrthogonalSpace
+    | TensorProductSpace
+    | VectorTensorProductSpace
+    | CartesianProductSpace
+)
+type ComputationalSpaceType = (
+    OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+)
+type RankedTrialSpaceType = (
+    OrthogonalSpace
+    | TensorProductSpace
+    | VectorTensorProductSpace
+    | DirectSum
+    | DirectSumTPS
+)
+type RankedTestSpaceType = (
+    OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+)
+type ScalarSpaceType = OrthogonalSpace | TensorProductSpace | DirectSum | DirectSumTPS
 
 type VectorLike = BaseVector | Vector | VectorAdd | VectorMul | VectorZero
 type DyadicLike = BaseDyadic | Dyadic | DyadicAdd | DyadicMul | DyadicZero

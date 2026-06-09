@@ -214,11 +214,17 @@ def test_vectortensorproductspace_to_orthogonal():
     T = TensorProduct(F1, F2)
     V = VectorTensorProductSpace(T, name="V")
     O = V.get_orthogonal()
-    c = jax.random.normal(jax.random.PRNGKey(0), shape=V.num_dofs)
+    c = tuple(
+        jax.random.normal(jax.random.PRNGKey(i), shape=Vi.num_dofs)
+        for i, Vi in enumerate(V.tensorspaces)
+    )
     c0 = V.to_orthogonal(c)
     y0 = V.backward(c)
     y1 = O.backward(c0)
-    assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
+    assert all(
+        jnp.linalg.norm(y0[i] - y1[i]) < jnp.sqrt(ulp(100))
+        for i in range(len(V.tensorspaces))
+    )
 
 
 def test_directsumtps():

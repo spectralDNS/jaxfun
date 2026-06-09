@@ -196,7 +196,7 @@ class Legendre(Jacobi):
             return self.derivative_coeffs(self.derivative_coeffs(c, k - 1), 1)
 
         N: int = c.shape[0] - 1
-        x0: Array = jnp.array(0.0)
+        x0: Array = jnp.zeros((), dtype=c.dtype)
         if N == 0:
             return jnp.array([x0])
         x1: Array = c[-1] * (2 * N - 1)

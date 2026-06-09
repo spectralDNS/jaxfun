@@ -19,12 +19,14 @@ from jaxfun.la import (
 )
 from jaxfun.typing import (
     CoeffDict,
+    FunctionSpaceType,
     GalerkinAssembledForm,
     InnerItems,
     InnerKind,
     InnerKindLike,
     InnerResultDict,
-    TestSpaceType,
+    RankedTestSpaceType,
+    ScalarSpaceType,
     TrialSpaceType,
 )
 from jaxfun.utils.common import lambdify, matmat
@@ -35,6 +37,10 @@ from .arguments import (
     TrialFunction,
     evaluate_jaxfunction_expr_quad,
     get_arg,
+)
+from .cartesianproductspace import (
+    CartesianProductSpace,
+    VectorTensorProductSpace,
 )
 from .composite import BCGeneric, Composite, DirectSum
 from .forms import (
@@ -50,7 +56,6 @@ from .orthogonal import OrthogonalSpace
 from .tensorproductspace import (
     DirectSumTPS,
     TensorProductSpace,
-    VectorTensorProductSpace,
 )
 
 type _NumQuadPoints = int | tuple[int | None, ...]
@@ -62,7 +67,7 @@ type _LinearFactor = Array | tuple[Array]
 
 @dataclass(frozen=True)
 class _InnerContext:
-    test_space: TestSpaceType
+    test_space: RankedTestSpaceType
     trial_space: TrialSpaceType | None
     a_forms: list[InnerResultDict]
     b_forms: list[InnerResultDict]
@@ -237,9 +242,20 @@ def _prepare_inner_context(
 ) -> _InnerContext:
     V, U = get_basisfunctions(expr)
     assert V is not None, "No TestFunction found in expression"
+    if isinstance(V, set):
+        assert len(V) == 1, "More than one testfunction found in expression"
+        V = V.pop()
     assert _has_testspace(V), "TestFunction has no associated function space"
-    test_space = V.functionspace
-    trial_space: TrialSpaceType | None = getattr(U, "functionspace", None)
+    test_space = cast(RankedTestSpaceType, V.functionspace)
+    if isinstance(U, set):
+        leaf = set(
+            cast(CartesianProductSpace, cast(TrialFunction, u).functionspace).leaf
+            for u in U
+        )
+        assert len(leaf) == 1
+        trial_space = leaf.pop()
+    else:
+        trial_space: TrialSpaceType | None = getattr(U, "functionspace", None)
     measure = test_space.system.sg
     allforms = split(expr * measure)
     a_forms = allforms["bilinear"]
@@ -318,6 +334,9 @@ def _assemble_bilinear_factor(
     assert v is not None and u is not None, (
         "Both test and trial functions required in bilinear form"
     )
+    if isinstance(v, set) and isinstance(u, set):
+        raise ValueError("Too many test/trial functions found in bilinear form")
+
     assert _has_testspace(v), "TestFunction has no associated function space"
     assert _has_functionspace(u), "TrialFunction has no associated function space"
     vf = v.functionspace
@@ -397,10 +416,11 @@ def _multivar_boundary_values(
     trial: list[OrthogonalSpace],
     gi: list[tuple[int, int]],
 ) -> Array:
-    assert isinstance(trial_space, DirectSumTPS | VectorTensorProductSpace)
+    assert isinstance(trial_space, DirectSumTPS | CartesianProductSpace)
     if isinstance(trial_space, DirectSumTPS):
         return trial_space.bndvals[tuple(trial)]
-    dsspace = trial_space[gi[1][1]]
+    assert isinstance(trial_space, CartesianProductSpace)
+    dsspace = trial_space.flatten()[gi[1][1]]
     assert isinstance(dsspace, DirectSumTPS)
     return dsspace.bndvals[tuple(trial)]
 
@@ -424,6 +444,7 @@ def _assemble_multivar_bilinear_form(
     gi = [m[1] for m in mats]
 
     scales = []
+
     if "multivar" in a0:
         scales.append(a0["multivar"])
     if "jaxfunction" in a0:
@@ -461,19 +482,19 @@ def _separable_boundary_values(
     if trial_space is not None:
         if isinstance(trial_space, DirectSumTPS):
             return trial_space.bndvals[tuple(trial)]
-        if isinstance(trial_space, VectorTensorProductSpace):
-            dsspace = trial_space[gi[1][1]]
+        if isinstance(trial_space, CartesianProductSpace):
+            dsspace = trial_space.flatten()[gi[1][1]]
             assert isinstance(dsspace, DirectSumTPS)
             return dsspace.bndvals[tuple(trial)]
         raise NotImplementedError(
-            "BCs only implemented for TensorProductSpace and VectorTensorProductSpace"
+            "BCs only implemented for TensorProductSpace and CartesianProductSpace"
         )
 
     jfs = coeffs["linear"]["jaxcoeff"].functionspace
-    assert isinstance(jfs, DirectSumTPS | VectorTensorProductSpace)
+    assert isinstance(jfs, DirectSumTPS | CartesianProductSpace)
     if isinstance(jfs, DirectSumTPS):
         return jfs.bndvals[tuple(trial)]
-    dsspace = jfs.tensorspaces[gi[1][1]]
+    dsspace = jfs.flatten()[gi[1][1]]
     assert isinstance(dsspace, DirectSumTPS)
     return dsspace.bndvals[tuple(trial)]
 
@@ -515,7 +536,7 @@ def _assemble_separable_bilinear_form(
                 context.test_space, TensorProductSpace | VectorTensorProductSpace
             )
             assert isinstance(
-                context.trial_space, TensorProductSpace | VectorTensorProductSpace
+                context.trial_space, TensorProductSpace | CartesianProductSpace
             )
             aresult = TPMatrix(
                 [cast(BaseMatrix, m[0]) for m in mats], 1, global_indices=gi[0]
@@ -572,7 +593,7 @@ def _assemble_linear_form(b0: InnerResultDict, context: _InnerContext) -> Array 
     ):
         return _assemble_linear_tensor2d(b0, bs, test_space, quads, global_index)
     if (
-        isinstance(test_space, TensorProductSpace | VectorTensorProductSpace)
+        isinstance(test_space, TensorProductSpace | CartesianProductSpace)
         and len(test_space) == 3
     ):
         return _assemble_linear_tensor3d(b0, bs, test_space, quads, global_index)
@@ -644,7 +665,7 @@ def vectorize_bresult(
 def _finalize_inner_result(
     aresults: list[BaseMatrix],
     bresults: list[Array],
-    test_space: TestSpaceType,
+    test_space: RankedTestSpaceType,
     trial_space: TrialSpaceType | None,
     sparse: bool,
     sparse_tol: int,
@@ -690,6 +711,8 @@ def _finalize_inner_result(
 
     if len(aresults) > 0:
         # aresults is an empty list or a list of TPMatrix/TensorMatrix objects.
+        assert trial_space is not None
+        assert not isinstance(trial_space, OrthogonalSpace | DirectSum)
 
         if all(isinstance(a, TPMatrix) for a in aresults):
             tpresults = cast(list[TPMatrix], aresults)
@@ -704,8 +727,8 @@ def _finalize_inner_result(
             elif rank == 1:
                 aresult = BlockTPMatrix(
                     tpresults,
-                    cast(VectorTensorProductSpace, test_space),
-                    cast(VectorTensorProductSpace, trial_space),
+                    cast(CartesianProductSpace, test_space.leaf),
+                    cast(CartesianProductSpace, trial_space.leaf),
                 )
 
         elif all(isinstance(a, TensorMatrix) for a in aresults):
@@ -801,8 +824,8 @@ def inner_bilinear(
             continue
 
         jaxfunction = get_jaxfunctions(aii)
-        if len(jaxfunction) == 1:
-            scale *= evaluate_jaxfunction_expr_quad(aii, jaxfunction.pop(), N=N)
+        if len(jaxfunction) >= 1:
+            scale *= evaluate_jaxfunction_expr_quad(aii, N=N)
             continue
         elif len(jaxfunction) > 1:
             raise ValueError("Multiple JAXFunctions found in single bilinear form")
@@ -901,12 +924,12 @@ def inner_linear(
                 continue
 
             jaxfunction = get_jaxfunctions(bii)
-            if len(jaxfunction) == 1:
-                jaxf = jaxfunction.pop()
-                assert jaxf.functionspace.orthogonal.__class__ == vo.__class__, (
-                    "JAXFunction space must match test function space"
-                )
-                uj *= evaluate_jaxfunction_expr_quad(bii, jaxf, N=N)
+            if len(jaxfunction) >= 1:
+                for jaxf in jaxfunction:
+                    assert jaxf.functionspace.orthogonal.__class__ == vo.__class__, (
+                        "JAXFunction space must match test function space"
+                    )
+                uj *= evaluate_jaxfunction_expr_quad(bii, N=N)
                 continue
             # bii contains coordinates in the domain of v, e.g., (r, theta) for polar
             # Need to compute bii as bii(x(X)), since we use quadrature points
@@ -990,7 +1013,13 @@ def project1D(ue: sp.Expr, V: OrthogonalSpace | Composite | DirectSum) -> Array:
     return uh
 
 
-def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
+@overload
+def project(ue: sp.Expr, V: VectorTensorProductSpace) -> tuple[Array, ...]: ...
+@overload
+def project(ue: sp.Tuple, V: CartesianProductSpace) -> tuple[Array, ...]: ...
+@overload
+def project(ue: sp.Expr, V: ScalarSpaceType) -> Array: ...
+def project(ue: sp.Expr | sp.Tuple, V: FunctionSpaceType) -> Array | tuple[Array, ...]:
     """Project expression onto (possibly tensor) space V.
 
     Args:
@@ -1003,23 +1032,27 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
     from jaxfun.operators import Dot
 
     if V.dims == 1:
-        assert isinstance(V, OrthogonalSpace | Composite | DirectSum)
+        assert isinstance(V, OrthogonalSpace | DirectSum)
+        assert isinstance(ue, sp.Expr)
         return project1D(ue, V)
 
-    if len(get_jaxfunctions(ue)) == 0:
-        assert not isinstance(V, OrthogonalSpace | Composite | DirectSum)
+    if len(get_jaxfunctions(ue if isinstance(ue, sp.Expr) else sum(ue))) == 0:
+        assert not isinstance(V, OrthogonalSpace | DirectSum)
         if V.rank == 0:
+            assert isinstance(ue, sp.Expr)
             uj = lambdify(V.system.base_scalars(), ue)(*V.mesh())
             uj = jnp.broadcast_to(uj, V.num_quad_points)
-        elif V.rank == 1:
-            assert isinstance(V, VectorTensorProductSpace)
+        else:
             s = V.system.base_scalars()
             bv = V.system.base_vectors()
-            uj = (lambdify(s, Dot(ue, n).doit())(*V.mesh()) for n in bv)
-            uj = jnp.stack(
-                [jnp.broadcast_to(ui, V.tensorspaces[0].num_quad_points) for ui in uj],
-                axis=0,
-            )
+            if V.rank == 1:  # VectorTensorProductSpace
+                assert isinstance(ue, sp.Expr)
+                uj = (lambdify(s, Dot(ue, n).doit())(*V.mesh()) for n in bv)
+            else:
+                assert isinstance(V, CartesianProductSpace)
+                assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
+                uj = (lambdify(s, (uei).doit())(*V.mesh()) for uei in ue)
+            uj = tuple([jnp.broadcast_to(ui, V.num_quad_points) for ui in uj])
         return V.forward(jax.device_put(uj, V._physical_sharding))
 
     u = TrialFunction(V)
@@ -1032,5 +1065,11 @@ def project(ue: sp.Expr, V: TrialSpaceType) -> Array:
         assert isinstance(V, VectorTensorProductSpace)
         A, b = inner(Dot(v, (u - ue)), kind=InnerKind.SYSTEM)
         uh = A.solve(b)
+
+    else:
+        assert isinstance(V, CartesianProductSpace)
+        assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
+        spaces = V.flatten()
+        return tuple(project(cast(sp.Expr, uei), spaces[i]) for i, uei in enumerate(ue))
 
     return uh

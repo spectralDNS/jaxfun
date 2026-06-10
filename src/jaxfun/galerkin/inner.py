@@ -10,8 +10,10 @@ from jax import Array
 
 from jaxfun.la import (
     BaseMatrix,
+    BlockArray,
     BlockTPMatrix,
     DiaMatrix,
+    IndexedArray,
     Matrix,
     TensorMatrix,
     TPMatrices,
@@ -61,8 +63,8 @@ from .tensorproductspace import (
 type _NumQuadPoints = int | tuple[int | None, ...]
 type _BilinearFactor = tuple[Array, Array] | Matrix | DiaMatrix
 type _BilinearMat = tuple[_BilinearFactor, tuple[int, int]]
-type _InnerTerm = tuple[BaseMatrix | None, Array | None]
-type _LinearFactor = Array | tuple[Array]
+type _InnerTerm = tuple[BaseMatrix | None, IndexedArray | None]
+type _LinearFactor = Array | tuple[Array, ...]
 
 
 @dataclass(frozen=True)
@@ -94,7 +96,7 @@ def inner(
     use_precomputed_matrices: bool = True,
     *,
     kind: Literal[InnerKind.LINEAR, "linear"],
-) -> Array: ...
+) -> Array | BlockArray: ...
 @overload
 def inner(
     expr: sp.Expr,
@@ -104,7 +106,7 @@ def inner(
     use_precomputed_matrices: bool = True,
     *,
     kind: Literal[InnerKind.SYSTEM, "system"],
-) -> tuple[BaseMatrix, Array]: ...
+) -> tuple[BaseMatrix, Array | BlockArray]: ...
 @overload
 def inner(
     expr: sp.Expr,
@@ -206,10 +208,10 @@ def _coerce_inner_kind(kind: InnerKind | str) -> InnerKind:
 
 def _validate_inner_kind(
     result: GalerkinAssembledForm, kind: InnerKind
-) -> BaseMatrix | Array | tuple[BaseMatrix, Array]:
+) -> BaseMatrix | Array | BlockArray | tuple[BaseMatrix, Array | BlockArray]:
     if isinstance(result, BaseMatrix):
         actual = InnerKind.BILINEAR
-    elif isinstance(result, Array):
+    elif isinstance(result, Array | BlockArray):
         actual = InnerKind.LINEAR
     else:
         actual = InnerKind.SYSTEM
@@ -218,7 +220,7 @@ def _validate_inner_kind(
         raise ValueError(
             f"inner(..., kind={kind!r}) assembled {actual.value}; expected {kind}"
         )
-    return result  # ty:ignore[invalid-return-type]
+    return result
 
 
 def inner_items(
@@ -285,7 +287,7 @@ def _assemble_inner_items(
     use_precomputed_matrices: bool,
 ) -> InnerItems:
     aresults: list[BaseMatrix] = []
-    bresults: list[Array] = []
+    bresults: list[IndexedArray] = []
 
     for a0 in context.a_forms:
         aitem, bitem = _assemble_bilinear_form(a0, context, use_precomputed_matrices)
@@ -360,7 +362,7 @@ def _assemble_bilinear_form(
     sc = coeffs.get("bilinear", 1)
 
     aresult: BaseMatrix | None = None
-    bresult: Array | None = None
+    bresult: IndexedArray | None = None
     trial: list[OrthogonalSpace] = []
     has_bcs = False
 
@@ -382,12 +384,17 @@ def _assemble_bilinear_form(
             continue
         if isinstance(uf, BCGeneric) and context.test_space.dims == 1:
             sign = _linear_sign(context.all_linear)
-            bresult = sign * (z @ jnp.array(uf.bcs.orderedvals(), dtype=float))
+            bresult = IndexedArray(  # global_indices currently not used in 1D, but kept here for future developments  # noqa: E501
+                global_indices[0],
+                sign * (z @ jnp.array(uf.bcs.orderedvals(), dtype=float)),
+            )
             continue
         if "linear" in coeffs and context.test_space.dims == 1:
             sign = _linear_sign(context.all_linear)
             scale = coeffs["linear"].get("scale", 1) * sign
-            bresult = scale * (z @ coeffs["linear"]["jaxcoeff"].array)
+            bresult = IndexedArray(
+                global_indices[0], scale * (z @ coeffs["linear"]["jaxcoeff"].array)
+            )
 
         sc = 1
         mats.append((z, global_indices))
@@ -434,7 +441,7 @@ def _assemble_multivar_bilinear_form(
     context: _InnerContext,
 ) -> _InnerTerm:
     aresult: BaseMatrix | None = None
-    bresult: Array | None = None
+    bresult: IndexedArray | None = None
     assert len(mats) == 2
     assert isinstance(context.test_space, TensorProductSpace)
     mats_ = [
@@ -456,7 +463,7 @@ def _assemble_multivar_bilinear_form(
         sign = _linear_sign(context.all_linear)
         fun = _multivar_boundary_values(context.trial_space, trial, gi)
         res = sign * jnp.einsum("ikjl,kl->ij", Am, fun)
-        bresult = vectorize_bresult(res, context.test_space, gi[0][0])
+        bresult = IndexedArray(gi[0][0], res)
 
     else:
         if "linear" in coeffs:
@@ -464,7 +471,7 @@ def _assemble_multivar_bilinear_form(
             res = sign * jnp.einsum(
                 "ikjl,kl->ij", Am, coeffs["linear"]["jaxcoeff"].array
             )
-            bresult = vectorize_bresult(res, context.test_space, gi[0][0])
+            bresult = IndexedArray(gi[0][0], res)
 
         if "bilinear" in coeffs:
             assert isinstance(context.trial_space, TensorProductSpace)
@@ -507,7 +514,7 @@ def _assemble_separable_bilinear_form(
     context: _InnerContext,
 ) -> _InnerTerm:
     aresult: BaseMatrix | None = None
-    bresult: Array | None = None
+    bresult: IndexedArray | None = None
     mats_: list[Matrix | DiaMatrix] = [cast(Matrix | DiaMatrix, m[0]) for m in mats]
     gi = [m[1] for m in mats]
 
@@ -516,7 +523,7 @@ def _assemble_separable_bilinear_form(
         fun = _separable_boundary_values(context.trial_space, coeffs, trial, gi)
         sign = _linear_sign(context.all_linear)
         res = TPMatrix(mats_, sign) @ fun
-        bresult = vectorize_bresult(res, context.test_space, gi[0][0])
+        bresult = IndexedArray(gi[0][0], res)
 
     else:
         if "linear" in coeffs:
@@ -528,8 +535,7 @@ def _assemble_separable_bilinear_form(
             )
             for i, mat in enumerate(mats_):
                 res = mat.matvec(res, axis=i)
-
-            bresult = vectorize_bresult(res, context.test_space, gi[0][0])
+            bresult = IndexedArray(gi[0][0], res)
 
         if "bilinear" in coeffs:
             assert isinstance(
@@ -560,7 +566,7 @@ def _assemble_linear_factor(
     scale: float | complex,
     is_multivar: bool,
     num_quad_points: _NumQuadPoints,
-) -> tuple[Array | tuple[Array], int]:
+) -> tuple[Array | tuple[Array, ...], int]:
     v, _ = get_basisfunctions(bi)
     assert v is not None, "Test function required in linear form"
     assert _has_functionspace(v)
@@ -572,7 +578,9 @@ def _assemble_linear_factor(
     return z, v.global_index
 
 
-def _assemble_linear_form(b0: InnerResultDict, context: _InnerContext) -> Array | None:
+def _assemble_linear_form(
+    b0: InnerResultDict, context: _InnerContext
+) -> IndexedArray | None:
     scale = _linear_form_scale(b0, len(context.a_forms) > 0)
     bs: list[_LinearFactor] = []
     global_index = 0
@@ -586,7 +594,7 @@ def _assemble_linear_form(b0: InnerResultDict, context: _InnerContext) -> Array 
 
     test_space = context.test_space
     if isinstance(test_space, OrthogonalSpace):
-        return cast(Array, bs[0])
+        return IndexedArray(0, cast(Array, bs[0]))
     if (
         isinstance(test_space, TensorProductSpace | VectorTensorProductSpace)
         and len(test_space) == 2
@@ -606,7 +614,7 @@ def _assemble_linear_tensor2d(
     test_space: TensorProductSpace | VectorTensorProductSpace,
     num_quad_points: _NumQuadPoints,
     global_index: int,
-) -> Array:
+) -> IndexedArray:
     if isinstance(bs[0], tuple):
         assert isinstance(num_quad_points, tuple)
         uj = jnp.array(1.0)
@@ -620,10 +628,10 @@ def _assemble_linear_tensor2d(
         if "jaxfunction" not in b0 and "multivar" not in b0:
             raise ValueError("Expected multivar or jaxfunction key in b0")
         res = bs[0][0].T @ uj @ bs[1][0]
-        return vectorize_bresult(res, test_space, global_index)
+        return IndexedArray(global_index, res)
 
     res = jnp.multiply.outer(cast(Array, bs[0]), cast(Array, bs[1]))
-    return vectorize_bresult(res, test_space, global_index)
+    return IndexedArray(global_index, res)
 
 
 def _assemble_linear_tensor3d(
@@ -632,7 +640,7 @@ def _assemble_linear_tensor3d(
     test_space: TensorProductSpace | VectorTensorProductSpace,
     num_quad_points: _NumQuadPoints,
     global_index: int,
-) -> Array:
+) -> IndexedArray:
     if isinstance(bs[0], tuple):
         assert isinstance(num_quad_points, tuple)
         if "multivar" in b0:
@@ -645,26 +653,17 @@ def _assemble_linear_tensor3d(
         else:
             raise ValueError("Expected multivar or jaxfunction key in b0")
         res = jnp.einsum("il,jm,kn,ijk->lmn", bs[0][0], bs[1][0], bs[2][0], uj)
-        return vectorize_bresult(res, test_space, global_index)
+        return IndexedArray(global_index, res)
 
     res = jnp.multiply.outer(
         jnp.multiply.outer(cast(Array, bs[0]), cast(Array, bs[1])), cast(Array, bs[2])
     )
-    return vectorize_bresult(res, test_space, global_index)
-
-
-def vectorize_bresult(
-    res: Array, space: TensorProductSpace | VectorTensorProductSpace, global_index: int
-) -> Array:
-    if not isinstance(space, VectorTensorProductSpace):
-        return res
-    out = jnp.zeros((space.dims,) + res.shape, dtype=res.dtype)
-    return out.at[global_index].set(res)
+    return IndexedArray(global_index, res)
 
 
 def _finalize_inner_result(
     aresults: list[BaseMatrix],
-    bresults: list[Array],
+    bresults: list[IndexedArray],
     test_space: RankedTestSpaceType,
     trial_space: TrialSpaceType | None,
     sparse: bool,
@@ -682,12 +681,18 @@ def _finalize_inner_result(
     Returns:
         Matrix, vector, (matrix, vector), tensor-product operator, or None.
     """
+    assert test_space is not None
     dims: int = test_space.dims
     rank: int = test_space.rank
 
-    bresult: Array | None = None
+    bresult: Array | BlockArray | None = None
     if len(bresults) > 0:
-        bresult = jnp.sum(jnp.array(bresults), axis=0)
+        if rank == 0:
+            bresult = jnp.sum(jnp.array([d.data for d in bresults]), axis=0)
+        else:
+            bresult = BlockArray(
+                cast(CartesianProductSpace, test_space).leaf, indexed_arrays=bresults
+            )
 
     aresult: BaseMatrix | None = None
 
@@ -699,11 +704,11 @@ def _finalize_inner_result(
             aresult = sum(amats[1:], amats[0])
 
         if aresult is None:
-            return bresult
+            return cast(Array, bresult)
         if bresult is None:
             return aresult
 
-        return aresult, bresult
+        return aresult, cast(Array, bresult)
 
     assert not isinstance(test_space, OrthogonalSpace)
     if len(jax.devices()) > 1 and bresult is not None:
@@ -749,6 +754,8 @@ def _finalize_inner_result(
             return bresult
         case aresult, bresult:
             return aresult, bresult
+
+    raise ValueError("Something wrong in _finalize_inner_result")
 
 
 @overload
@@ -1070,6 +1077,6 @@ def project(ue: sp.Expr | sp.Tuple, V: FunctionSpaceType) -> Array | tuple[Array
         assert isinstance(V, CartesianProductSpace)
         assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
         spaces = V.flatten()
-        return tuple(project(cast(sp.Expr, uei), spaces[i]) for i, uei in enumerate(ue))
+        uh = tuple(project(cast(sp.Expr, uei), spaces[i]) for i, uei in enumerate(ue))
 
     return uh

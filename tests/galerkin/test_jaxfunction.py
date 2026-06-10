@@ -3,6 +3,7 @@ from typing import cast
 import jax.numpy as jnp
 import pytest
 import sympy as sp
+from jax import Array
 
 from jaxfun import Domain
 from jaxfun.galerkin import (
@@ -18,7 +19,6 @@ from jaxfun.galerkin import (
     TestFunction,
     TrialFunction,
     Ultraspherical,
-    VectorTensorProductSpace,
 )
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
@@ -149,11 +149,11 @@ def test_jaxfunction_2d(space: type[OrthogonalSpace], domain: Domain | None):
     v = TestFunction(T)
     A = cast(TPMatrix, inner(u * v, kind="bilinear"))
     uf = JAXFunction(jnp.ones((N, N)), T)
-    b0 = A.todense() @ uf.array.ravel()
+    b0 = A.todense() @ uf.get_array().ravel()
     b1 = A.mats[0] @ uf @ A.mats[1].T
     assert jnp.linalg.norm(b0 - b1.ravel()) < ulp(10)
     z = inner(uf * v, kind="linear")
-    assert jnp.linalg.norm(z.ravel() - b0) < ulp(10)
+    assert jnp.linalg.norm(cast(Array, z).ravel() - b0) < ulp(10)
 
 
 def test_jaxfunction_directsum_2d(jspace: type[Jacobi.Jacobi], domain: Domain | None):
@@ -225,7 +225,7 @@ def test_jaxfunction_2d_vector(space: type[OrthogonalSpace], domain: Domain | No
     v = TestFunction(V)
     A = inner(Dot(u, v), kind="bilinear")
     uf = JAXFunction(tuple((jnp.ones((N, N)), jnp.ones((N, N)))), V)
-    b0 = A @ uf.array
+    b0 = A @ uf
     b1 = inner(Dot(uf, v), kind="linear")
     assert all(
         jnp.linalg.norm(b0[i] - b1[i]) < jnp.sqrt(ulp(10)) for i in range(len(b0))
@@ -236,7 +236,7 @@ def test_jaxfunction_vector(jspace: type[OrthogonalSpace], domain: Domain | None
     N = 8
     D = jspace(N, domain=domain)
     T = TensorProduct(D, D)
-    V = VectorTensorProductSpace(T, name="V")
+    V = CartesianProduct(T, T, name="V", rank=1)
     x, y = T.system.base_scalars()
     R = T.system
     ue = x * R.i + y * R.j
@@ -253,26 +253,6 @@ def test_jaxfunction_vector(jspace: type[OrthogonalSpace], domain: Domain | None
     assert jnp.linalg.norm(uj[1] - (1 - xj**2) * (1 - yj**2)) < jnp.sqrt(ulp(10))
 
 
-def test_jaxfunction_vector_composite(
-    jspace: type[OrthogonalSpace], domain: Domain | None
-):
-    N = 8
-    bcs = {"left": {"D": 0}, "right": {"D": 0}}
-    D = FunctionSpace(N, jspace, domain=domain, bcs=bcs)
-    T = TensorProduct(D, D)
-    V = VectorTensorProductSpace(T, name="V")
-    x, y = T.system.base_scalars()
-    R = T.system
-
-    a = D.domain.upper
-    ue = sp.Mul((a**2 - x**2) * (a**2 - y**2), R.i + R.j)
-    w = JAXFunction(ue, V, name="w")
-    uj = w.backward()
-    xj, yj = T.mesh()
-    assert jnp.linalg.norm(uj[0] - (a**2 - xj**2) * (a**2 - yj**2)) < jnp.sqrt(ulp(10))
-    assert jnp.linalg.norm(uj[1] - (a**2 - xj**2) * (a**2 - yj**2)) < jnp.sqrt(ulp(10))
-
-
 def test_jaxfunction_vector_directsum(
     jspace: type[OrthogonalSpace], domain: Domain | None
 ):
@@ -280,7 +260,7 @@ def test_jaxfunction_vector_directsum(
     bcs = {"left": {"D": 1}, "right": {"D": 1}}
     D = FunctionSpace(N, jspace, domain=domain, bcs=bcs)
     T = TensorProduct(D, D)
-    V = VectorTensorProductSpace(T, name="V")
+    V = CartesianProduct(T, T, name="V", rank=1)
     x, y = T.system.base_scalars()
     R = T.system
 

@@ -6,6 +6,7 @@ import pytest
 import sympy as sp
 
 from jaxfun.galerkin import (
+    CartesianProduct,
     Chebyshev,
     ChebyshevU,
     DirectSum,
@@ -16,7 +17,6 @@ from jaxfun.galerkin import (
     TestFunction,
     TrialFunction,
     Ultraspherical,
-    VectorTensorProductSpace,
 )
 from jaxfun.galerkin.inner import inner, inner_items, project
 from jaxfun.galerkin.tensorproductspace import DirectSumTPS
@@ -212,18 +212,18 @@ def test_vectortensorproductspace_to_orthogonal():
     F1 = FunctionSpace(N1, Legendre.Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}})
     F2 = FunctionSpace(N2, Legendre.Legendre, bcs={"left": {"N": 0}, "right": {"N": 0}})
     T = TensorProduct(F1, F2)
-    V = VectorTensorProductSpace(T, name="V")
+    V = CartesianProduct(T, T, name="V", rank=1)
     O = V.get_orthogonal()
     c = tuple(
         jax.random.normal(jax.random.PRNGKey(i), shape=Vi.num_dofs)
-        for i, Vi in enumerate(V.tensorspaces)
+        for i, Vi in enumerate(V.flatten())
     )
     c0 = V.to_orthogonal(c)
     y0 = V.backward(c)
     y1 = O.backward(c0)
     assert all(
         jnp.linalg.norm(y0[i] - y1[i]) < jnp.sqrt(ulp(100))
-        for i in range(len(V.tensorspaces))
+        for i in range(len(V.flatten()))
     )
 
 

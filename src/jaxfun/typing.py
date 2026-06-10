@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Literal, NotRequired, Protocol, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    NotRequired,
+    Protocol,
+    cast,
+    overload,
+)
 
 import sympy as sp
 from jax import Array as Array
@@ -20,7 +28,7 @@ from sympy.vector import (
 )
 from typing_extensions import TypedDict
 
-from jaxfun.la import BaseMatrix
+from jaxfun.la import BaseMatrix, BlockArray, IndexedArray
 from jaxfun.la.matrixprotocol import (
     DiaMatrixSolveMethod as DiaMatrixSolveMethod,
     SolverNotApplicable as SolverNotApplicable,
@@ -144,10 +152,10 @@ type DomainType = Literal["inside", "boundary", "intersection", "all"]
 type InnerBilinearResult = Array | BaseMatrix
 type InnerBilinearResults = list[Array | BaseMatrix]
 type InnerLinearResults = list[Array]
-type InnerItems = tuple[list[BaseMatrix], list[Array]]
+type InnerItems = tuple[list[BaseMatrix], list[IndexedArray]]
 type GalerkinOperator = BaseMatrix
 type GalerkinAssembledForm = (
-    GalerkinOperator | Array | tuple[GalerkinOperator | Array, Array | None] | None
+    GalerkinOperator | Array | BlockArray | tuple[GalerkinOperator, Array | BlockArray]
 )
 
 

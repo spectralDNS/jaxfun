@@ -158,7 +158,7 @@ class TPMatrix(BaseMatrix):  # noqa: B903
     def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply matrix to rank-2 coefficient array u."""
         w = self._as_array(u)
-        return self._matmul_array(w)
+        return self._matmul_array(cast(Array, w))
 
     def __matmul__(self, u: Array | JAXFunction) -> Array:
         """Alias to __call__ for @ operator."""
@@ -172,7 +172,7 @@ class TPMatrix(BaseMatrix):  # noqa: B903
 
     def __rmatmul__(self, u: Array | JAXFunction) -> Array:
         """Right matmul (u @ A) treating u as left factor."""
-        w = self._as_array(u)
+        w = cast(Array, self._as_array(u))
         return self._rmatmul_array(w)
 
     def solve(self, rhs: Array) -> Array:
@@ -316,7 +316,7 @@ class TPMatrices(BaseMatrix):
 
     def __rmatmul__(self, u: Array | JAXFunction) -> Array:
         """Right matmul (u @ A) treating u as left factor."""
-        w = self._as_array(u)
+        w = cast(Array, self._as_array(u))
         return jnp.sum(
             jnp.array([mat._rmatmul_array(w) for mat in self.tpmats]), axis=0
         )

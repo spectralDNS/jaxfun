@@ -9,7 +9,7 @@ from jax import Array
 
 from jaxfun.la.diamatrix import DiaMatrix
 from jaxfun.la.matrix import Matrix
-from jaxfun.la.matrixprotocol import BaseMatrix, _CacheBox
+from jaxfun.la.matrixprotocol import BaseMatrix, IndexedArray, _CacheBox
 from jaxfun.la.tpmatrix import TPMatrices, TPMatrix, tpmats_to_kron
 
 if TYPE_CHECKING:
@@ -76,7 +76,7 @@ class BlockTPMatrix(BaseMatrix):
         )
 
     @jax.jit
-    def _matmul_array(self, w: tuple[Array]) -> tuple[Array]:
+    def _matmul_array(self, w: tuple[Array, ...]) -> tuple[Array, ...]:
         out = []
         flat_spaces = self.test_space.flatten()
         for s, block_mat in self._combined_blocks.items():
@@ -174,7 +174,7 @@ class BlockTPMatrix(BaseMatrix):
         object.__setattr__(self, "_sparse_cache", _CacheBox(result))
         return result
 
-    def __call__(self, u: Array | JAXFunction) -> Array:
+    def __call__(self, u: BlockArray | JAXFunction) -> BlockArray:  # ty:ignore[invalid-method-override]
         """Apply block matrix to coefficient array u.
 
         Uses the RCM-permuted :class:`~jaxfun.la.DiaMatrix` for a single
@@ -182,17 +182,24 @@ class BlockTPMatrix(BaseMatrix):
         :meth:`solve` or an explicit :meth:`tosparse` call); otherwise falls
         back to the per-block path.
         """
-        w = self._as_array(u)
+        if not isinstance(u, BlockArray):
+            w = BlockArray(self.test_space, tuple_array=u.get_array())
+        else:
+            w = u
+
         sparse_box: _SparseMatrixCache | None = getattr(self, "_sparse_cache", None)
         if sparse_box is not None:
+            wf = w.flatten()
             sparse = sparse_box.value
             if getattr(sparse, "_rcm_cache", None) is not None:
                 A_perm, perm, inv_perm = sparse.rcm()
-                return A_perm.matvec(w.ravel()[perm])[inv_perm].reshape(w.shape)
-            return sparse.matvec(w.ravel()).reshape(w.shape)
-        return self._matmul_array(w)
+                z = A_perm.matvec(wf[perm])[inv_perm]
+            z = sparse.matvec(wf)
+            return BlockArray(self.test_space, flat_array=z)
 
-    def __matmul__(self, u: Array | JAXFunction) -> Array:
+        return BlockArray(self.test_space, tuple_array=self._matmul_array(w.array))
+
+    def __matmul__(self, u: BlockArray | JAXFunction) -> BlockArray:
         """Alias to __call__ for @ operator."""
         return self.__call__(u)
 
@@ -222,12 +229,6 @@ class BlockTPMatrix(BaseMatrix):
         return BlockArray(b.cartspace, flat_array=M.solve(x))
 
 
-class IndexedArray(nnx.Pytree):
-    def __init__(self, i: int, data: Array):
-        self.data = data
-        self.i = i
-
-
 class BlockArray(nnx.Pytree):
     """Block of Array objects.
 
@@ -248,17 +249,20 @@ class BlockArray(nnx.Pytree):
         cartspace: CartesianProductSpace,
         indexed_arrays: list[IndexedArray] | None = None,
         flat_array: Array | None = None,
+        tuple_array: tuple[Array, ...] | None = None,
     ) -> None:
         self.data: nnx.List[Array] = nnx.List([])
-        self.cartspace = cartspace
-        self.block_sizes: tuple[int, ...] = self.cartspace.block_sizes
-        self.num_dofs: tuple[tuple[int, ...], ...] = self.cartspace.num_dofs
+        self.cartspace = nnx.static(cartspace)
+        self.block_sizes: tuple[int, ...] = nnx.static(self.cartspace.block_sizes)
+        self.num_dofs: tuple[tuple[int, ...], ...] = nnx.static(self.cartspace.num_dofs)
         for _ in range(cartspace.num_components):
             self.data.append(jnp.zeros(()))
         if indexed_arrays is not None:
-            self += indexed_arrays
+            self.accumulate(indexed_arrays)
         if flat_array is not None:
-            self += self.from_flat_array(flat_array)
+            self.accumulate(self.from_flat_array(flat_array))
+        if tuple_array is not None:
+            self.accumulate(self.from_tuple_array(tuple_array))
 
     def _broadcast_data(self) -> tuple[Array, ...]:
         return tuple(
@@ -266,8 +270,13 @@ class BlockArray(nnx.Pytree):
             for i, d in enumerate(self.data)
         )
 
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return (self.cartspace.dim,)
+
+    @property
     def array(self) -> tuple[Array, ...]:
-        return tuple(self._broadcast_data())
+        return self._broadcast_data()
 
     def flatten(self) -> Array:
         a = [d.ravel() for d in self._broadcast_data()]
@@ -281,14 +290,41 @@ class BlockArray(nnx.Pytree):
             s0 = s1
         return d
 
-    def __add__(self, b: IndexedArray | list[IndexedArray]):
-        b: list[IndexedArray] = [b] if isinstance(b, IndexedArray) else b
-        for bi in b:
-            self.data[bi.i] += bi.data
-        return self
+    def from_tuple_array(self, x: tuple[Array, ...]) -> list[IndexedArray]:
+        d: list[IndexedArray] = []
+        for i, xi in enumerate(x):
+            d.append(IndexedArray(i, xi))
+        return d
 
-    def __sub__(self, b: IndexedArray | list[IndexedArray]):
-        b: list[IndexedArray] = [b] if isinstance(b, IndexedArray) else b
-        for bi in b:
-            self.data[bi.i] -= bi.data
-        return self
+    def accumulate(self, b: IndexedArray | list[IndexedArray]) -> None:
+        b_list: list[IndexedArray] = [b] if isinstance(b, IndexedArray) else b
+        for bi in b_list:
+            self.data[bi.i] += bi.data
+
+    def __len__(self) -> int:
+        return self.cartspace.num_components
+
+    def __add__(self, b: BlockArray) -> BlockArray:
+        return BlockArray(
+            self.cartspace, tuple_array=tuple(x + y for x, y in zip(self, b))
+        )
+
+    def __sub__(self, b: BlockArray) -> BlockArray:
+        return BlockArray(
+            self.cartspace, tuple_array=tuple(x - y for x, y in zip(self, b))
+        )
+
+    def __neg__(self) -> BlockArray:
+        return BlockArray(self.cartspace, tuple_array=tuple(-x for x in self))
+
+    def __mul__(self, scalar: float | complex | Array) -> BlockArray:
+        return BlockArray(self.cartspace, tuple_array=tuple(scalar * x for x in self))
+
+    def __rmul__(self, scalar: float | complex | Array) -> BlockArray:
+        return BlockArray(self.cartspace, tuple_array=tuple(scalar * x for x in self))
+
+    def __iter__(self):
+        return iter(self._broadcast_data())
+
+    def __getitem__(self, i: int) -> Array:
+        return self._broadcast_data()[i]

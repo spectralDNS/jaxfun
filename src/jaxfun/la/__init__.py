@@ -1,4 +1,4 @@
-from .blocktpmatrix import BlockTPMatrix as BlockTPMatrix
+from .blocktpmatrix import BlockArray as BlockArray, BlockTPMatrix as BlockTPMatrix
 from .diamatrix import (
     DiagonalMatrix as DiagonalMatrix,
     DiaMatrix as DiaMatrix,
@@ -6,7 +6,7 @@ from .diamatrix import (
     diakron as diakron,
 )
 from .matrix import Matrix as Matrix
-from .matrixprotocol import BaseMatrix as BaseMatrix
+from .matrixprotocol import BaseMatrix as BaseMatrix, IndexedArray as IndexedArray
 from .operators import (
     IdentityMatrix as IdentityMatrix,
     SpecialMatrix as SpecialMatrix,

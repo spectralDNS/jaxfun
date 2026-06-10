@@ -46,12 +46,12 @@ from .composite import DirectSum
 from .orthogonal import OrthogonalSpace
 from .tensorproductspace import DirectSumTPS, TensorProductSpace
 
-_CompositeSpaceT = TypeVar("_CompositeSpaceT", bound=CartesianProductSpace)
-_ScalarSpaceT = TypeVar("_ScalarSpaceT", bound=ScalarSpaceType)
-
 t, x, y, z = sp.symbols("t,x,y,z", real=True)
 
 indices = "ijklmn"
+
+_CompositeSpaceT = TypeVar("_CompositeSpaceT", bound=CartesianProductSpace)
+_ScalarSpaceT = TypeVar("_ScalarSpaceT", bound=ScalarSpaceType)
 
 
 @unique
@@ -689,6 +689,13 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         return obj
 
     @overload
+    def get_array(self: JAXFunction[_CompositeSpaceT]) -> tuple[Array, ...]: ...
+    @overload
+    def get_array(self: JAXFunction[_ScalarSpaceT]) -> Array: ...
+    def get_array(self) -> Array | tuple[Array, ...]:
+        return self.array
+
+    @overload
     def backward(
         self: JAXFunction[_CompositeSpaceT], N: Padding = None
     ) -> tuple[Array, ...]: ...
@@ -808,10 +815,14 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
             x: Coordinates (N, d). Created by calling self.functionspace.flatmesh().
         """
         V = cast(FunctionSpaceType, self.functionspace)
-        if isinstance(V, OrthogonalSpace | DirectSum | TensorProductSpace):
+        if isinstance(V, OrthogonalSpace | DirectSum):
             return V.evaluate(x, cast(Array, self.array))
 
-        z = V.evaluate(x, cast(tuple[Array, ...], self.array))
+        if isinstance(V, TensorProductSpace):
+            z = V.evaluate(x, cast(Array, self.array))
+        else:
+            z = V.evaluate(x, cast(tuple[Array, ...], self.array))
+
         if V.rank == 0:
             return jnp.expand_dims(z, -1)
         return z

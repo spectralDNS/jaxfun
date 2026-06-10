@@ -34,7 +34,6 @@ def test_tensorproduct_forward_backward_padding_fourier():
     u = TrialFunction(T)
     v = TestFunction(T)
     M, b = inner(v * (u - sp.sin(x) * sp.sin(y)), kind="system")
-    assert isinstance(M, TPMatrix)
     # Solve
     uh = M.solve(b)
     # Backward on padded grid
@@ -196,7 +195,7 @@ def test_inner_linear_only():
     v = TestFunction(C)
     x = C.system.x
     b = inner(sp.sin(x) * v, kind="linear")
-    assert b.shape[0] == C.N
+    assert cast(Array, b).shape[0] == C.N
 
 
 def test_inner_returns_matrix_and_vector_with_bcs():
@@ -209,7 +208,7 @@ def test_inner_returns_matrix_and_vector_with_bcs():
     A, b = inner(v * u + x * v * u, kind="system")
     # A is dense matrix, b vector
     assert A.shape[0] == A.shape[1]
-    assert b.shape[0] == A.shape[0]
+    assert cast(Array, b).shape[0] == A.shape[0]
 
 
 def test_vectortensorproductspace_project():

@@ -57,9 +57,7 @@ class CartesianProductSpace:
     ) -> None:
         from jaxfun.galerkin import DirectSumTPS
 
-        self.basespaces: list[TensorProductSpace | CartesianProductSpace] = [
-            copy.deepcopy(space) for space in basespaces
-        ]
+        self.basespaces = list(basespaces)
         self.system: CoordSys = self.basespaces[0].system
         self.name = name
         self.tensorname = multiplication_sign.join([b.name for b in self.basespaces])

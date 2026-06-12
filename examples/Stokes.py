@@ -29,7 +29,9 @@ bcsy = {"left": {"D": 0}, "right": {"D": f}}
 nu = Constant("nu", 0.01)
 D0 = FunctionSpace(N, Legendre.Legendre, bcs=bcsx, name="D0")
 D1 = FunctionSpace(N, Legendre.Legendre, bcs=bcsy, name="D1")
-P0 = FunctionSpace(N - 2, Legendre.Legendre, name="P0")
+P0 = FunctionSpace(
+    N - 2, Legendre.Legendre, name="P0"
+)  # Need to use N - 2 to escape several nullspaces and excessive pinning  # noqa: E501
 T0 = TensorProduct(D0, D1, name="T0")
 T1 = TensorProduct(D0, D0, name="T1")
 Q = TensorProduct(P0, P0, name="Q")
@@ -48,6 +50,7 @@ D = inner(p * Div(v), sparse=True, num_quad_points=(N, N))
 C = A + B + D
 c = a + b  # ty:ignore[unsupported-operator]
 
+# pin pressure dof 0 - not yet implemented on BlockTPMatrix
 CC = C.todense()
 blocks = jnp.array(C.test_block_sizes)
 r0 = jnp.sum(blocks[:2])
@@ -56,14 +59,15 @@ CC = CC.at[r0, r0].set(1.0)
 
 d = jnp.linalg.solve(CC, c.flatten())
 
-plt.spy(CC)
-
 D = BlockArray(W, flat_array=d)
 up_ = W.backward(D.array, N=(None, None, (N, N)))
 xj = W.mesh()
 shape = up_[0].shape
 x0, y0 = jnp.broadcast_to(xj[0], shape), jnp.broadcast_to(xj[1], shape)
 plt.figure()
+plt.spy(CC)
+plt.figure()
 plt.contourf(x0, y0, jnp.sqrt(up_[0] ** 2 + up_[1] ** 2))
 plt.quiver(x0, y0, up_[0], up_[1])
+
 plt.show()

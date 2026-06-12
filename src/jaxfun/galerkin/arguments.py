@@ -279,7 +279,15 @@ class ExpansionFunction(BaseFunction):
 
     def __getitem__(self, i: int) -> sp.Expr:
         assert isinstance(self.functionspace, CartesianProductSpace)
-        return self.__class__(self.functionspace[i], name=self.name[i])
+        result = self.__class__(self.functionspace[i], name=self.name[i])
+        parent = self.functionspace
+        if isinstance(result.functionspace, CartesianProductSpace):
+            result.functionspace.leaf = parent
+            for space in result.functionspace.flatten():
+                space.leaf = parent
+        elif isinstance(result.functionspace, TensorProductSpace):
+            result.functionspace.leaf = parent
+        return result
 
 
 # NOTE

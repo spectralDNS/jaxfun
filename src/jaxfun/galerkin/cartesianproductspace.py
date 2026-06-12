@@ -16,12 +16,15 @@ from jaxfun.typing import MeshKind
 
 def CartesianProduct(
     *basespaces: TensorProductSpace | CartesianProductSpace,
-    name: str = "T",
+    name: str = "CP",
     rank: int = -1,
 ) -> CartesianProductSpace:
     """Factory returning CartesianProductSpace.
 
     Args:
+        *basespaces: TensorProductSpace or CartesianProductSpace objects.
+        name: Label for the Cartesian product space.
+        rank: Rank of the Cartesian product space.
 
     Returns:
         Instance of CartesianProductSpace
@@ -30,7 +33,7 @@ def CartesianProduct(
         copy.deepcopy(space) for space in basespaces
     ]
     if rank == 1:
-        return VectorTensorProductSpace(*basespaces_list, name=name)
+        return VectorTensorProductSpace(*basespaces_list, name=name, rank=1)
     return CartesianProductSpace(*basespaces_list, name=name, rank=rank)
 
 
@@ -63,6 +66,7 @@ class CartesianProductSpace:
         self.tensorname = multiplication_sign.join([b.name for b in self.basespaces])
         self._spectral_sharding = spectral_sharding if len(jax.devices()) > 1 else None
         self._physical_sharding = physical_sharding if len(jax.devices()) > 1 else None
+        self._rank = rank
         self.leaf: CartesianProductSpace = self
 
         for space in self.basespaces:
@@ -110,7 +114,7 @@ class CartesianProductSpace:
     def rank(self) -> int:
         """Return tensor rank (1 for vector fields, 0 for scalars and -1
         for composite)."""
-        return -1
+        return self._rank
 
     @property
     def dims(self) -> int:
@@ -212,7 +216,7 @@ class CartesianProductSpace:
     def backward(
         self,
         u: tuple[Array, ...],
-        N: tuple[tuple[int | None, ...], ...] | None = None,
+        N: tuple[tuple[int | None, ...] | None, ...] | None = None,
     ) -> tuple[Array, ...]:
         """Backward transform with optional padding.
 
@@ -301,11 +305,6 @@ class CartesianProductSpace:
 
 
 class VectorTensorProductSpace(CartesianProductSpace):
-    @property
-    def rank(self) -> int:
-        """Return tensor rank (1 for vector fields)."""
-        return 1
-
     def __iter__(self) -> Iterator[TensorProductSpace]:
         """Iterate over component spaces."""
         return iter(cast(list[TensorProductSpace], self.basespaces))

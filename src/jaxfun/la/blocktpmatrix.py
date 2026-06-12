@@ -75,6 +75,20 @@ class BlockTPMatrix(BaseMatrix):
             self.trial_space,
         )
 
+    def __add__(self, other: BlockTPMatrix) -> BlockTPMatrix:
+        return BlockTPMatrix(
+            list(self.tpmats) + list(other.tpmats),
+            self.test_space,
+            self.trial_space,
+        )
+
+    def __sub__(self, other: BlockTPMatrix) -> BlockTPMatrix:
+        return BlockTPMatrix(
+            list(self.tpmats) + [mat.scale(-1) for mat in other.tpmats],
+            self.test_space,
+            self.trial_space,
+        )
+
     @jax.jit
     def _matmul_array(self, w: tuple[Array, ...]) -> tuple[Array, ...]:
         out = []
@@ -260,9 +274,9 @@ class BlockArray(nnx.Pytree):
         if indexed_arrays is not None:
             self.accumulate(indexed_arrays)
         if flat_array is not None:
-            self.accumulate(self.from_flat_array(flat_array))
+            self.accumulate(self._list_from_flat_array(flat_array))
         if tuple_array is not None:
-            self.accumulate(self.from_tuple_array(tuple_array))
+            self.accumulate(self._list_from_tuple_array(tuple_array))
 
     def _broadcast_data(self) -> tuple[Array, ...]:
         return tuple(
@@ -282,7 +296,7 @@ class BlockArray(nnx.Pytree):
         a = [d.ravel() for d in self._broadcast_data()]
         return jnp.concatenate(tuple(a))
 
-    def from_flat_array(self, x: Array) -> list[IndexedArray]:
+    def _list_from_flat_array(self, x: Array) -> list[IndexedArray]:
         s0: int = 0
         d: list[IndexedArray] = []
         for i, s1 in enumerate(self.block_sizes):
@@ -290,11 +304,8 @@ class BlockArray(nnx.Pytree):
             s0 = s1
         return d
 
-    def from_tuple_array(self, x: tuple[Array, ...]) -> list[IndexedArray]:
-        d: list[IndexedArray] = []
-        for i, xi in enumerate(x):
-            d.append(IndexedArray(i, xi))
-        return d
+    def _list_from_tuple_array(self, x: tuple[Array, ...]) -> list[IndexedArray]:
+        return [IndexedArray(i, xi) for i, xi in enumerate(x)]
 
     def accumulate(self, b: IndexedArray | list[IndexedArray]) -> None:
         b_list: list[IndexedArray] = [b] if isinstance(b, IndexedArray) else b

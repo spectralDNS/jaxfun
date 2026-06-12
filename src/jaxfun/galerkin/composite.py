@@ -557,8 +557,8 @@ class DirectSum:
 
     @property
     def dim(self) -> int:
-        """Return total dimension (homogeneous + boundary)."""
-        return self[0].dim + self[1].dim
+        """Return dimension of unknown (homogeneous) part only."""
+        return self[0].dim
 
     @property
     def num_dofs(self) -> int:

@@ -683,9 +683,11 @@ def _finalize_inner_result(
     """
     assert test_space is not None
     dims: int = test_space.dims
-    rank: int = test_space.rank
+    test_leaf = getattr(test_space, "leaf", None)
+    rank: int = 0 if test_leaf is None else test_leaf.rank
 
     bresult: Array | BlockArray | None = None
+
     if len(bresults) > 0:
         if rank == 0:
             bresult = jnp.sum(jnp.array([d.data for d in bresults]), axis=0)
@@ -729,7 +731,7 @@ def _finalize_inner_result(
 
             if rank == 0:
                 aresult = tpresults[0] if len(tpresults) == 1 else TPMatrices(tpresults)
-            elif rank == 1:
+            else:
                 aresult = BlockTPMatrix(
                     tpresults,
                     cast(CartesianProductSpace, test_space.leaf),

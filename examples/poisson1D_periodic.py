@@ -6,6 +6,7 @@ from typing import cast
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
+from jax import Array
 
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Fourier import Fourier
@@ -26,7 +27,7 @@ ue = sp.cos(2 * x) + sp.I * sp.sin(1 * x)
 
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
 A_pin = cast(DiaMatrix, A).pin({0: 0.0})
-uh = A_pin.solve(b)
+uh = A_pin.solve(cast(Array, b))
 
 uj = D.backward(uh)
 xj = D.mesh()

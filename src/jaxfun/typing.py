@@ -153,9 +153,8 @@ type InnerBilinearResult = Array | BaseMatrix
 type InnerBilinearResults = list[Array | BaseMatrix]
 type InnerLinearResults = list[Array]
 type InnerItems = tuple[list[BaseMatrix], list[IndexedArray]]
-type GalerkinOperator = BaseMatrix
 type GalerkinAssembledForm = (
-    GalerkinOperator | Array | BlockArray | tuple[GalerkinOperator, Array | BlockArray]
+    BaseMatrix | Array | BlockArray | tuple[BaseMatrix, Array | BlockArray]
 )
 
 

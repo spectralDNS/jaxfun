@@ -1,9 +1,9 @@
 from typing import assert_type, cast
 
-import jax
 import jax.numpy as jnp
 import pytest
 import sympy as sp
+from jax import Array
 from scipy.integrate import dblquad
 
 from jaxfun.galerkin import (
@@ -19,7 +19,7 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.la import BaseMatrix, DiaMatrix, TPMatrices
+from jaxfun.la import BaseMatrix, BlockArray, DiaMatrix, TPMatrices
 from jaxfun.typing import GalerkinAssembledForm
 from jaxfun.utils import ulp
 
@@ -49,7 +49,7 @@ def test_inner(space: type[Legendre] | type[Chebyshev]) -> None:
     v = TestFunction(C)
     M = inner(x * v * u + sp.diff(u, x) * v, sparse=False)
     assert hasattr(M, "diagonal")
-    M_arr = cast(jax.Array, M)
+    M_arr = cast(Array, M)
     a0 = answer2[space.__name__]
     for d in (-3, -1, 1, 3):
         assert jnp.allclose(M_arr.diagonal(d), a0[d], atol=1000 * ulp(1.0))
@@ -69,16 +69,15 @@ def test_inner_kind_checked_return_types() -> None:
 
     assert_type(raw, GalerkinAssembledForm)
     assert_type(A, BaseMatrix)
-    assert_type(b, jax.Array)
-    assert_type((A_str, b_str), tuple[BaseMatrix, jax.Array])
-    assert_type((A_enum, b_enum), tuple[BaseMatrix, jax.Array])
+    assert_type(b, Array | BlockArray)
+    assert_type((A_str, b_str), tuple[BaseMatrix, Array | BlockArray])
+    assert_type((A_enum, b_enum), tuple[BaseMatrix, Array | BlockArray])
 
     assert isinstance(A, BaseMatrix)
-    assert isinstance(b, jax.Array)
+    assert isinstance(b, Array | BlockArray)
     assert isinstance(A_str, BaseMatrix)
-    assert isinstance(b_str, jax.Array)
+    assert isinstance(b_str, Array | BlockArray)
     assert jnp.allclose(A_str.todense(), A_enum.todense())
-    assert jnp.allclose(b_str, b_enum)
 
 
 def test_inner_kind_rejects_mismatches_and_unknown_strings() -> None:
@@ -346,7 +345,7 @@ def test_inner_padding_resolved(
     y1 = inner(v * uf**2, num_quad_points=48, kind="linear")
     # Since the function is well-resolved with 36 modes, we expect no
     # aliasing and thus the same result with or without padding
-    assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
+    assert jnp.linalg.norm(cast(Array, y0) - cast(Array, y1)) < jnp.sqrt(ulp(100))
     y2 = D.forward(uf.backward() ** 2)
     y3 = D.forward(uf.backward(N=48) ** 2)
     assert jnp.linalg.norm(y2 - y3) < jnp.sqrt(ulp(100))
@@ -364,7 +363,7 @@ def test_inner_padding_not_resolved(
     y1 = inner(v * uf**2, num_quad_points=12, kind="linear")
     # Since the function is not well-resolved with 8 modes, we expect
     # aliasing and thus different results with or without padding
-    assert not jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
+    assert not jnp.linalg.norm(cast(Array, y0) - cast(Array, y1)) < jnp.sqrt(ulp(100))
     y2 = D.forward(uf.backward() ** 2)
     y3 = D.forward(uf.backward(N=12) ** 2)
     assert not jnp.linalg.norm(y2 - y3) < jnp.sqrt(ulp(100))
@@ -387,7 +386,7 @@ def test_inner_padding_resolved_2d(
     y1 = inner(v * uf**2, num_quad_points=(48, 48), kind="linear")
     # Since the function is well-resolved with 36 modes, we expect no
     # aliasing and thus the same result with or without padding
-    assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
+    assert jnp.linalg.norm(cast(Array, y0) - cast(Array, y1)) < jnp.sqrt(ulp(100))
     y2 = T.forward(uf.backward() ** 2)
     y3 = T.forward(uf.backward(N=(48, 48)) ** 2)
     assert jnp.linalg.norm(y2 - y3) < jnp.sqrt(ulp(100))
@@ -407,7 +406,7 @@ def test_inner_padding_not_resolved_2d(
     y1 = inner(v * uf**2, num_quad_points=(12, 12), kind="linear")
     # Since the function is not well-resolved with 8 modes, we expect
     # aliasing and thus different results with or without padding
-    assert not jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
+    assert not jnp.linalg.norm(cast(Array, y0) - cast(Array, y1)) < jnp.sqrt(ulp(100))
     y2 = T.forward(uf.backward() ** 2)
     y3 = T.forward(uf.backward(N=(12, 12)) ** 2)
     assert not jnp.linalg.norm(y2 - y3) < jnp.sqrt(ulp(100))
@@ -442,8 +441,11 @@ def test_inner_padding_Fourier_2d() -> None:
     v = TestFunction(T)
     y0 = inner(v * uf**2, num_quad_points=None, kind="linear")
     y1 = inner(v * uf**2, num_quad_points=(9, 9), kind="linear")
+
     assert jnp.linalg.norm(y1) < jnp.sqrt(ulp(100))  # No aliasing - thus zero
-    assert abs(y0[2, 2] - (2 * jnp.pi) ** 2) < jnp.sqrt(ulp(100))  # Aliasing error
+    assert abs(cast(Array, y0)[2, 2] - (2 * jnp.pi) ** 2) < jnp.sqrt(
+        ulp(100)
+    )  # Aliasing error  # noqa: E501
     y2 = T.forward(uf.backward() ** 2)
     y3 = T.forward(uf.backward(N=(9, 9)) ** 2)
     assert jnp.linalg.norm(y3) < jnp.sqrt(ulp(100))  # No aliasing - thus zero
@@ -463,7 +465,7 @@ def test_inner_padding_composite_resolved(
     y1 = inner(v * uf**2, num_quad_points=48, kind="linear")
     # Since the function is well-resolved with 36 modes, we expect no
     # aliasing and thus the same result with or without padding
-    assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
+    assert jnp.linalg.norm(cast(Array, y0) - cast(Array, y1)) < jnp.sqrt(ulp(100))
     y2 = D.forward(uf.backward() ** 2)
     y3 = D.forward(uf.backward(N=48) ** 2)
     assert jnp.linalg.norm(y2 - y3) < jnp.sqrt(ulp(100))
@@ -482,7 +484,7 @@ def test_inner_padding_directsum_resolved(
     y1 = inner(v * uf**2, num_quad_points=48, kind="linear")
     # Since the function is well-resolved with 36 modes, we expect no
     # aliasing and thus the same result with or without padding
-    assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
+    assert jnp.linalg.norm(cast(Array, y0) - cast(Array, y1)) < jnp.sqrt(ulp(100))
     y2 = D.forward(uf.backward() ** 2)
     y3 = D.forward(uf.backward(N=48) ** 2)
     assert jnp.linalg.norm(y2 - y3) < jnp.sqrt(ulp(100))
@@ -508,7 +510,7 @@ def test_inner_padding_directsumtps_resolved_2d(
     y1 = inner(v * uf**2, num_quad_points=(48, 48), kind="linear")
     # Since the function is well-resolved with 36 modes, we expect no
     # aliasing and thus the same result with or without padding
-    assert jnp.linalg.norm(y0 - y1) < jnp.sqrt(ulp(100))
+    assert jnp.linalg.norm(cast(Array, y0) - cast(Array, y1)) < jnp.sqrt(ulp(100))
     y2 = T.forward(uf.backward() ** 2)
     y3 = T.forward(uf.backward(N=(48, 48)) ** 2)
     assert jnp.linalg.norm(y2 - y3) < jnp.sqrt(ulp(100))

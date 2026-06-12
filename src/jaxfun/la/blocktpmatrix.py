@@ -188,7 +188,7 @@ class BlockTPMatrix(BaseMatrix):
         object.__setattr__(self, "_sparse_cache", _CacheBox(result))
         return result
 
-    def __call__(self, u: BlockArray | JAXFunction) -> BlockArray:  # ty:ignore[invalid-method-override]
+    def __call__(self, u: BlockArray | JAXFunction) -> BlockArray:
         """Apply block matrix to coefficient array u.
 
         Uses the RCM-permuted :class:`~jaxfun.la.DiaMatrix` for a single

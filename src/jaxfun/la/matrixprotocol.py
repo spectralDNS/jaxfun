@@ -17,7 +17,6 @@ from flax import nnx
 Array = jax.Array
 
 if TYPE_CHECKING:
-    from jaxfun.galerkin import JAXFunction
     from jaxfun.la import DiaMatrix, Matrix
 
 
@@ -193,14 +192,12 @@ class BaseMatrix(ABC, nnx.Pytree):
         """Return total number of nonzero elements"""
         raise NotImplementedError
 
-    def _as_array(
-        self, u: Array | tuple[Array, ...] | JAXFunction
-    ) -> Array | tuple[Array, ...]:
+    def _as_array(self, u: Any) -> Any:
         from jaxfun.galerkin import JAXFunction
 
         return u.get_array() if isinstance(u, JAXFunction) else u
 
-    def __call__(self, u: Array | JAXFunction) -> Array:
+    def __call__(self, u: Any) -> Any:
         raise NotImplementedError
 
     def __getitem__(self, key: tuple[int, int], /) -> Array:

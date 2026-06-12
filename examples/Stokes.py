@@ -1,8 +1,12 @@
 # ruff: noqa: E402
+import os
+
 import jax
 import matplotlib.pyplot as plt
 
-jax.config.update("jax_enable_x64", True)
+if "PYTEST" not in os.environ:
+    jax.config.update("jax_enable_x64", True)
+
 import jax.numpy as jnp
 
 from jaxfun.coordinates import x

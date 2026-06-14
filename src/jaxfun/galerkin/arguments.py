@@ -197,7 +197,9 @@ def _get_computational_function(
             for a, v in zip(base_scalars, V.basespaces, strict=False)
         )
 
-    assert isinstance(V, VectorTensorProductSpace)
+    assert isinstance(V, VectorTensorProductSpace), (
+        f"expected VectorTensorProductSpace, got {type(V).__name__}"
+    )
     b = V.system.base_vectors()
     return VectorAdd.fromiter(
         sp.Mul.fromiter(
@@ -820,7 +822,8 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         """Evaluate the JAXFunction at given points x in the physical domain.
 
         Args:
-            x: Coordinates (N, d). Created by calling self.functionspace.flatmesh().
+            x: Coordinates (N, d). Created, e.g., by calling
+                self.functionspace.flatmesh().
         """
         V = cast(FunctionSpaceType, self.functionspace)
         if isinstance(V, OrthogonalSpace | DirectSum):

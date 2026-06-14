@@ -116,7 +116,7 @@ class TensorProductSpace:
         return all(space.is_orthogonal for space in self.basespaces)
 
     def shape(self) -> tuple[int, ...]:
-        """Return ."""
+        """Return raw modal shape (N0, N1, ...)."""
         return tuple([space.N for space in self.basespaces])
 
     @property

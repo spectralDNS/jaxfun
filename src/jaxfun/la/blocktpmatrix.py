@@ -208,7 +208,8 @@ class BlockTPMatrix(BaseMatrix):
             if getattr(sparse, "_rcm_cache", None) is not None:
                 A_perm, perm, inv_perm = sparse.rcm()
                 z = A_perm.matvec(wf[perm])[inv_perm]
-            z = sparse.matvec(wf)
+            else:
+                z = sparse.matvec(wf)
             return BlockArray(self.test_space, flat_array=z)
 
         return BlockArray(self.test_space, tuple_array=self._matmul_array(w.array))
@@ -301,7 +302,7 @@ class BlockArray(nnx.Pytree):
         d: list[IndexedArray] = []
         for i, s1 in enumerate(self.block_sizes):
             d.append(IndexedArray(i, x[slice(s0, s0 + s1)].reshape(self.num_dofs[i])))
-            s0 = s1
+            s0 += s1
         return d
 
     def _list_from_tuple_array(self, x: tuple[Array, ...]) -> list[IndexedArray]:

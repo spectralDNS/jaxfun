@@ -46,17 +46,17 @@ A, a = inner(
     Dot(nu * Div(Grad(u)), v), sparse=True, kind="system", num_quad_points=(N, N)
 )
 B, b = inner(q * Div(u), sparse=True, kind="system", num_quad_points=(N, N))
-D = inner(p * Div(v), sparse=True, kind="bilinear", num_quad_points=(N, N))
+Dp = inner(p * Div(v), sparse=True, kind="bilinear", num_quad_points=(N, N))
 
-C = A + B + D
+C = A + B + Dp
 c = a + b  # ty:ignore[unsupported-operator]
 
 # pin pressure dof 0
 C_pin = C.tosparse().pin({2 * (N - 2) ** 2: 0})
 d = C_pin.lu_solve(c.flatten(), method="rcm", pivot=True)
 
-D = BlockArray(W, flat_array=d)
-up_ = W.backward(D.array, N=(None, None, (N, N)))
+sol = BlockArray(W, flat_array=d)
+up_ = W.backward(sol.array, N=(None, None, (N, N)))
 
 if "PYTEST" in os.environ:
     for i in range(3):

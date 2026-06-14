@@ -253,6 +253,26 @@ def test_jaxfunction_vector(jspace: type[OrthogonalSpace], domain: Domain | None
     assert jnp.linalg.norm(uj[1] - (1 - xj**2) * (1 - yj**2)) < jnp.sqrt(ulp(10))
 
 
+def test_jaxfunction_vector_composite(
+    jspace: type[OrthogonalSpace], domain: Domain | None
+):
+    N = 8
+    bcs = {"left": {"D": 0}, "right": {"D": 0}}
+    D = FunctionSpace(N, jspace, domain=domain, bcs=bcs)
+    T = TensorProduct(D, D)
+    V = CartesianProduct(T, T, name="V", rank=1)
+    x, y = T.system.base_scalars()
+    R = T.system
+
+    a = D.domain.upper
+    ue = sp.Mul((a**2 - x**2) * (a**2 - y**2), R.i + R.j)
+    w = JAXFunction(ue, V, name="w")
+    uj = w.backward()
+    xj, yj = T.mesh()
+    assert jnp.linalg.norm(uj[0] - (a**2 - xj**2) * (a**2 - yj**2)) < jnp.sqrt(ulp(10))
+    assert jnp.linalg.norm(uj[1] - (a**2 - xj**2) * (a**2 - yj**2)) < jnp.sqrt(ulp(10))
+
+
 def test_jaxfunction_vector_directsum(
     jspace: type[OrthogonalSpace], domain: Domain | None
 ):

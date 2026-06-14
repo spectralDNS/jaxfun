@@ -146,21 +146,21 @@ class CartesianProductSpace:
         return tuple(space.shape() for space in self.basespaces)
 
     def evaluate(self, x: Array, c: tuple[Array, ...]) -> Array:
-        """Evaluate vector expansion at scattered points.
+        """Evaluate each component at scattered points and stack into one Array.
+
+        All components are evaluated at the same points so outputs have equal
+        leading shape and can be stacked.
 
         Args:
             x: Array of per-axis coordinates stacked (N, d).
             c: Sequence of Coefficient arrays.
 
         Returns:
-            Evaluated values with shape determined by leading dims of x.
+            Stacked array of shape (n_components, N).
         """
-        vals = []
-        for i, space in enumerate(self.flatten()):
-            ci = c[i]
-            vi = space.evaluate(x, ci)
-            vals.append(vi)
-        return jnp.sum(jnp.stack(vals), axis=0)
+        return jnp.array(
+            [space.evaluate(x, c[i]) for i, space in enumerate(self.flatten())]
+        )
 
     def evaluate_mesh(
         self,
@@ -168,7 +168,7 @@ class CartesianProductSpace:
         kind: MeshKind | str = MeshKind.QUADRATURE,
         N: tuple[tuple[int | None, ...], ...] | None = None,
     ) -> Array:
-        """Evaluate vector expansion on a mesh with optional padding.
+        """Evaluate each component on a mesh and stack into one Array.
 
         Args:
             u: Sequence of input arrays.
@@ -176,13 +176,14 @@ class CartesianProductSpace:
             N: Optional per-axis counts (defaults each to space.num_quad_points).
 
         Returns:
-            Array of evaluated values on the mesh.
+            Stacked array of shape (n_components, ...).
         """
-        coeffs = []
-        for i, space in enumerate(self.flatten()):
-            ci = space.evaluate_mesh(u[i], kind=kind, N=N[i] if N is not None else None)
-            coeffs.append(ci)
-        return jnp.sum(jnp.stack(coeffs), axis=0)
+        return jnp.stack(
+            [
+                space.evaluate_mesh(u[i], kind=kind, N=N[i] if N is not None else None)
+                for i, space in enumerate(self.flatten())
+            ]
+        )
 
     def forward(self, u: tuple[Array, ...]) -> tuple[Array, ...]:
         """Forward transform with optional truncation.

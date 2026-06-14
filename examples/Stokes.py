@@ -46,7 +46,7 @@ A, a = inner(
     Dot(nu * Div(Grad(u)), v), sparse=True, kind="system", num_quad_points=(N, N)
 )
 B, b = inner(q * Div(u), sparse=True, kind="system", num_quad_points=(N, N))
-D = inner(p * Div(v), sparse=True, num_quad_points=(N, N))
+D = inner(p * Div(v), sparse=True, kind="bilinear", num_quad_points=(N, N))
 
 C = A + B + D
 c = a + b  # ty:ignore[unsupported-operator]

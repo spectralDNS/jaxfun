@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from jaxfun.la.matrixprotocol import BaseMatrix
+from jaxfun.la.matrixprotocol import BaseMatrix, DiaMatrixSolveMethod
 
 if TYPE_CHECKING:
     import jax
@@ -108,24 +108,6 @@ class PinnedSystem(BaseMatrix):
             b_moved = b_moved.at[idx].set(val)
         return jnp.moveaxis(b_moved, 0, axis)
 
-    def solve(self, b: Array, axis: int = 0) -> Array:
-        """Modify the RHS and solve the pinned system.
-
-        Applies :meth:`fix_rhs` to ``b`` then solves using the cached LU
-        factorisation of the modified matrix.
-
-        Args:
-            b:    Right-hand side array.  ``b.shape[axis]`` must equal ``n``.
-            axis: Axis of ``b`` along which the system is solved.  All other
-                  axes are treated as independent batch dimensions.  The
-                  output has the same shape as ``b``.
-
-        Returns:
-            Solution array with the same shape as ``b``.
-        """
-        b_mod = self.fix_rhs(b, axis=axis)
-        return self.matrix.solve(b_mod, axis=axis)
-
     def scale(self, alpha: complex | Array) -> PinnedSystem:
         """Pinned systems cannot be scaled without changing constraint rows."""
         raise TypeError("PinnedSystem does not support scaling")
@@ -156,13 +138,6 @@ class PinnedSystem(BaseMatrix):
     def matvec(self, x: Array, axis: int = 0) -> Array:
         """Apply the *modified* (row-substituted) matrix along ``axis`` of ``x``."""
         return self.matrix.matvec(x, axis=axis)
-
-    def lu_solve(self, b: Array, axis: int = 0) -> Array:
-        """Solve using the cached LU factors (does **not** call :meth:`fix_rhs`).
-
-        Use :meth:`solve` for the full pinned solve that also fixes the RHS.
-        """
-        return self.matrix.lu_solve(b, axis=axis)
 
     def diagonal(self, k: int = 0) -> Array:
         """Return the ``k``-th diagonal of the modified matrix."""
@@ -199,3 +174,84 @@ class PinnedSystem(BaseMatrix):
     def __repr__(self) -> str:
         pins = ", ".join(f"{k}: {v}" for k, v in self.constraints)
         return f"PinnedSystem(shape={self.shape}, constraints={{{pins}}})"
+
+
+class PinnedDiaMatrix(PinnedSystem):
+    matrix: DiaMatrix
+
+    def __init__(
+        self,
+        matrix: DiaMatrix,
+        constraints: tuple[tuple[int, float], ...],
+    ) -> None:
+        PinnedSystem.__init__(self, matrix, constraints)
+
+    def lu_solve(
+        self,
+        b: Array,
+        axis: int = 0,
+        *,
+        pivot: bool = False,
+        method: DiaMatrixSolveMethod | str = DiaMatrixSolveMethod.AUTO,
+        auto_threshold: int = 100,
+    ) -> Array:
+        """Solve using the cached LU factors.
+
+        Args:
+            b:    Right-hand side array.  ``b.shape[axis]`` must equal ``n``.
+            axis: Axis of ``b`` along which the system is solved.  All other
+                  axes are treated as independent batch dimensions.  The
+                  output has the same shape as ``b``.
+            pivot: Passed to :meth:`lu_factor` (banded and RCM paths only).
+            method: One of ``"auto"``, ``"banded"``, ``"rcm"``, or
+                ``"dense"``.  Default ``"auto"``.
+            auto_threshold: Threshold for the ``"auto"`` method, trading off
+                banded/RCM solvers against dense.  The banded solver is usually
+                faster for small bandwidth, but compile time grows with bandwidth.
+                RCM can reduce bandwidth and enable the banded solver, but adds
+                overhead and is not guaranteed to help.  Default is 100.
+
+        """
+        b_mod = self.fix_rhs(b, axis=axis)
+        return self.matrix.lu_solve(
+            b_mod,
+            axis=axis,
+            pivot=pivot,
+            method=method,
+            auto_threshold=auto_threshold,
+        )
+
+    solve = lu_solve
+
+    def __repr__(self) -> str:
+        pins = ", ".join(f"{k}: {v}" for k, v in self.constraints)
+        return f"PinnedDiaMatrix(shape={self.shape}, constraints={{{pins}}})"
+
+
+class PinnedMatrix(PinnedSystem):
+    matrix: Matrix
+
+    def __init__(
+        self,
+        matrix: Matrix | DiaMatrix,
+        constraints: tuple[tuple[int, float], ...],
+    ) -> None:
+        PinnedSystem.__init__(self, matrix, constraints)
+
+    def lu_solve(self, b: Array, axis: int = 0) -> Array:
+        """Solve using the cached LU factors.
+
+        Args:
+            b:    Right-hand side array.  ``b.shape[axis]`` must equal ``n``.
+            axis: Axis of ``b`` along which the system is solved.  All other
+                  axes are treated as independent batch dimensions.  The
+                  output has the same shape as ``b``.
+        """
+        b_mod = self.fix_rhs(b, axis=axis)
+        return self.matrix.lu_solve(b_mod, axis=axis)
+
+    solve = lu_solve
+
+    def __repr__(self) -> str:
+        pins = ", ".join(f"{k}: {v}" for k, v in self.constraints)
+        return f"PinnedMatrix(shape={self.shape}, constraints={{{pins}}})"

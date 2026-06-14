@@ -12,7 +12,7 @@ from .operators import (
     SpecialMatrix as SpecialMatrix,
     ZeroMatrix as ZeroMatrix,
 )
-from .pinned import PinnedSystem as PinnedSystem
+from .pinned import PinnedDiaMatrix as PinnedDiaMatrix, PinnedMatrix as PinnedMatrix
 from .tensormatrix import TensorMatrix as TensorMatrix
 from .tpmatrix import (
     TPMatrices as TPMatrices,

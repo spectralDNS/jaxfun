@@ -42,7 +42,7 @@ ue = (tau * (1 - tau)) ** 2 * (1 - sigma**2) ** 1 * sp.sin(4 * sp.pi * sigma)
 # Assemble linear system of equations
 A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue))) * C.sg, sparse=True, kind="system")
 
-un = A.solve(b)
+un = A.solve(b, kron_method="rcm")
 
 N = 100
 rj, tj = T.mesh(kind="uniform", N=(N, N))

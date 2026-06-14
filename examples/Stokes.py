@@ -1,5 +1,6 @@
 # ruff: noqa: E402
 import os
+import sys
 
 import jax
 import matplotlib.pyplot as plt
@@ -50,24 +51,24 @@ D = inner(p * Div(v), sparse=True, num_quad_points=(N, N))
 C = A + B + D
 c = a + b  # ty:ignore[unsupported-operator]
 
-# pin pressure dof 0 - not yet implemented on BlockTPMatrix
-CC = C.todense()
-blocks = jnp.array(C.test_block_sizes)
-r0 = jnp.sum(blocks[:2])
-CC = CC.at[r0].set(jnp.zeros(C.shape[0]))
-CC = CC.at[r0, r0].set(1.0)
-
-d = jnp.linalg.solve(CC, c.flatten())
+# pin pressure dof 0
+C_pin = C.tosparse().pin({2 * (N - 2) ** 2: 0})
+d = C_pin.lu_solve(c.flatten(), method="rcm", pivot=True)
 
 D = BlockArray(W, flat_array=d)
 up_ = W.backward(D.array, N=(None, None, (N, N)))
+
+if "PYTEST" in os.environ:
+    for i in range(3):
+        assert jnp.all(jnp.isfinite(up_[i]))
+    sys.exit(0)
+
 xj = W.mesh()
 shape = up_[0].shape
 x0, y0 = jnp.broadcast_to(xj[0], shape), jnp.broadcast_to(xj[1], shape)
 plt.figure()
-plt.spy(CC)
+plt.spy(C_pin.todense())
 plt.figure()
 plt.contourf(x0, y0, jnp.sqrt(up_[0] ** 2 + up_[1] ** 2))
 plt.quiver(x0, y0, up_[0], up_[1])
-
 plt.show()

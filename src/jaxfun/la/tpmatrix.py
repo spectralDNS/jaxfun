@@ -432,6 +432,7 @@ class TPMatrices(BaseMatrix):
         *,
         method: TPSolveMethod | str = TPSolveMethod.AUTO,
         kron_method: DiaMatrixSolveMethod | str = DiaMatrixSolveMethod.AUTO,
+        auto_threshold: int = 100,
     ) -> Array:
         """Solve the summed tensor-product system.
 
@@ -456,6 +457,11 @@ class TPMatrices(BaseMatrix):
                 sparse).  One of ``"auto"``, ``"banded"``, ``"rcm"``,
                 ``"dense"``.  Ignored when the assembled matrix is a dense
                 :class:`~jaxfun.la.Matrix`.
+                auto_threshold: Threshold for the ``"auto"`` method, trading off
+                    banded/RCM solvers against dense.  The banded solver is usually
+                    faster for small bandwidth, but compile time grows with bandwidth.
+                    RCM can reduce bandwidth and enable the banded solver, but adds
+                    overhead and is not guaranteed to help.  Default is 100.
 
         Returns:
             Solution array with the same shape as *rhs*.
@@ -475,9 +481,9 @@ class TPMatrices(BaseMatrix):
             # DiaMatrix path: shared cache with tosparse()
             sparse_box: _SparseMatrixCache | None = getattr(self, "_sparse_cache", None)
             if sparse_box is not None:
-                return sparse_box.value.lu_solve(flat, method=kron_method).reshape(
-                    r.shape
-                )
+                return sparse_box.value.lu_solve(
+                    flat, method=kron_method, auto_threshold=auto_threshold
+                ).reshape(r.shape)
             # Dense Matrix path
             dense_box: _DenseMatrixCache | None = getattr(self, "_dense_cache", None)
             if dense_box is not None:
@@ -486,7 +492,9 @@ class TPMatrices(BaseMatrix):
             kron = tpmats_to_kron(list(self.tpmats))
             if isinstance(kron, DiaMatrix):
                 object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
-                return kron.lu_solve(flat, method=kron_method).reshape(r.shape)
+                return kron.lu_solve(
+                    flat, method=kron_method, auto_threshold=auto_threshold
+                ).reshape(r.shape)
             object.__setattr__(self, "_dense_cache", _CacheBox(kron))
             return kron.solve(flat).reshape(r.shape)
 

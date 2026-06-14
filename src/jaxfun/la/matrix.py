@@ -11,7 +11,7 @@ from jaxfun.la.matrixprotocol import BaseMatrix, _CacheBox
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
     from jaxfun.la import DiaMatrix
-    from jaxfun.la.pinned import PinnedSystem
+    from jaxfun.la.pinned import PinnedMatrix
 
 Array = jax.Array
 
@@ -233,6 +233,8 @@ class Matrix(BaseMatrix):
 
     def diagonal_or_none(self) -> Array | None:
         """Return the main diagonal only when this matrix is purely diagonal."""
+        from jaxfun.utils import ulp
+
         cached: _DiagonalCache | None = getattr(self, "_diagonal_cache", None)
         if cached is not None:
             return cached.value
@@ -240,7 +242,7 @@ class Matrix(BaseMatrix):
         if n != m:
             return None
         diag = jnp.diag(self.data)
-        if bool(jnp.allclose(self.data, jnp.diag(diag), atol=1e-12)):
+        if bool(jnp.allclose(self.data, jnp.diag(diag), atol=ulp(1000))):
             object.__setattr__(self, "_diagonal_cache", _CacheBox(diag))
             return diag
         return None
@@ -420,14 +422,14 @@ class Matrix(BaseMatrix):
 
     def pin(
         self, constraints: dict[int, float] | tuple[tuple[int, float], ...]
-    ) -> PinnedSystem:
+    ) -> PinnedMatrix:
         """Return a :class:`PinnedSystem` with the given DOFs fixed."""
-        from jaxfun.la.pinned import PinnedSystem
+        from jaxfun.la.pinned import PinnedMatrix
 
         if isinstance(constraints, dict):
             constraints = tuple(sorted(constraints.items()))
         norm_constraints, data = self._pin(constraints)
-        return PinnedSystem(
+        return PinnedMatrix(
             Matrix(data), tuple((int(i), float(j)) for i, j in norm_constraints)
         )
 

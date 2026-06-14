@@ -372,7 +372,7 @@ class TestManualKronSolve:
         B = _diag5(5)
         K = diakron(A, B)
         b = jax.random.normal(jax.random.PRNGKey(2), shape=(30,))
-        x = K.solve(b, method="banded")
+        x = K.solve(b, method="banded", auto_threshold=200)
         assert float(jnp.linalg.norm(K.todense() @ x - b)) < ulp(1000)
 
     def test_lu_vs_dense_on_kron(self):

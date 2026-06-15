@@ -186,7 +186,10 @@ def _(mo):
 
 @app.cell
 def _(CartesianProduct, P):
-    V = CartesianProduct(P, P, name="V", rank=1)
+    if P.dims == 3:
+        V = CartesianProduct(P, P, P, name="V", rank=1)
+    else:
+        V = CartesianProduct(P, P, name="V", rank=1)
     V.tensorname
     return (V,)
 

@@ -281,7 +281,21 @@ class ExpansionFunction(BaseFunction):
 
     def __getitem__(self, i: int) -> Self:
         assert isinstance(self.functionspace, CartesianProductSpace)
-        result = self.__class__(self.functionspace[i], name=self.name[i])
+        name = self.name
+        if (
+            isinstance(self.functionspace, VectorTensorProductSpace)
+            and len(self.name) == 1
+        ):
+            # use indices
+            name = self.name + "_" + str(i)
+        elif len(name) == len(self.functionspace):
+            name = name[i]
+        else:
+            raise ValueError(
+                f"Lenght of self.name {self.name} != "
+                f"len(self.functionspace) = {len(self.functionspace)}"
+            )
+        result = self.__class__(self.functionspace[i], name=name)
         parent = self.functionspace
         if isinstance(result.functionspace, CartesianProductSpace):
             result.functionspace.leaf = parent
@@ -323,6 +337,15 @@ class TestFunction(ExpansionFunction):
         else:
             raise ValueError("Unknown test space")
 
+        if isinstance(V, CartesianProductSpace):
+            if name is None:
+                name = "abcdefg"[len(V)]
+            elif len(name) != len(V) and not (len(name) == 1 and V.rank == 1):
+                raise ValueError(
+                    f"Lenght of name str must equal the length of basespaces in "
+                    f"CartesianProductSpace. Got {len(V)} basespaces and "
+                    f"len({name}) == {len(name)}"
+                )
         obj.name = name if name is not None else "TestFunction"
         obj.own_name = "TestFunction"
         return obj
@@ -360,6 +383,15 @@ class TrialFunction(ExpansionFunction):
             cls, *(list(coors._cartesian_xyz) + time_arg + [sp.Dummy()])
         )
         obj.functionspace = V
+        if isinstance(V, CartesianProductSpace):
+            if name is None:
+                name = "abcdefg"[len(V)]
+            elif len(name) != len(V) and not (len(name) == 1 and V.rank == 1):
+                raise ValueError(
+                    f"Lenght of name str must equal the length of basespaces in "
+                    f"CartesianProductSpace. Got {len(V)} basespaces and "
+                    f"len({name}) == {len(name)}"
+                )
         obj.name = name if name is not None else "TrialFunction"
         obj.own_name = "TrialFunction"
         obj.argument = ArgumentTag.TRIAL

@@ -251,6 +251,9 @@ class BlockArray(nnx.Pytree):
         cartspace: descriptor for the (leaf) space.
         indexed_arrays: List of IndexedArray objects.
         flat_array: 1D Array of length cartspace.dim.
+        tuple_array: tuple of Arrays for flattened space, one item
+            for each TensorProductSpace in the flattened space. This
+            is, e.g., the output from forward/scalar_product.
 
     Attributes:
         data: nnx.List of Arrays representing each block.

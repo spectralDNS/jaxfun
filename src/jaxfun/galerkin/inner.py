@@ -1061,7 +1061,7 @@ def project(ue: sp.Expr | sp.Tuple, V: FunctionSpaceType) -> Array | tuple[Array
                 assert isinstance(V, CartesianProductSpace)
                 assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
                 uj = (lambdify(s, (uei).doit())(*V.mesh()) for uei in ue)
-            uj = tuple([jnp.broadcast_to(ui, V.num_quad_points) for ui in uj])
+            uj = jnp.stack([jnp.broadcast_to(ui, V.num_quad_points) for ui in uj])
         return V.forward(jax.device_put(uj, V._physical_sharding))
 
     u = TrialFunction(V)

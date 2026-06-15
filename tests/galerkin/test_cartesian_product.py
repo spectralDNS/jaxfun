@@ -6,9 +6,6 @@ problems.
 
 API notes
 ---------
-* inner() must be called once per (test_block, trial_block) coupling and
-  the results combined with +.  Passing v*u + q*p as a single expression
-  raises AssertionError because two distinct test functions are found.
 * When component spaces use different polynomial degrees (e.g. Stokes
   velocity N vs. pressure N-2), explicit num_quad_points must be passed to
   inner(), evaluate_mesh, and backward so all components use the same mesh.
@@ -342,13 +339,16 @@ def test_evaluate_mesh_stacks_components():
 
 def test_forward_backward_roundtrip():
     """forward followed by backward recovers the original physical arrays."""
-    W, T0, T1 = _two_component_space(N)
+    W, T0, T1 = _same_n_two_component_space(N)
     rng = np.random.default_rng(13)
     u0 = jnp.array(rng.standard_normal(T0.num_quad_points))
     u1 = jnp.array(rng.standard_normal(T1.num_quad_points))
 
-    coeffs = W.forward((u0, u1))
+    u_stacked = jnp.stack([u0, u1])
+    coeffs = W.forward(u_stacked)
     assert len(coeffs) == 2
     ua = W.backward(coeffs)
+    assert isinstance(ua, jnp.ndarray)
+    assert ua.shape == u_stacked.shape
     assert jnp.linalg.norm(ua[0] - u0) < jnp.sqrt(ulp(100))
     assert jnp.linalg.norm(ua[1] - u1) < jnp.sqrt(ulp(100))

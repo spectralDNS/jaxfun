@@ -185,14 +185,14 @@ class CartesianProductSpace:
             ]
         )
 
-    def forward(self, u: tuple[Array, ...]) -> tuple[Array, ...]:
-        """Forward transform with optional truncation.
+    def forward(self, u: Array) -> tuple[Array, ...]:
+        """Forward transform each physical component into spectral space.
 
         Args:
-            u: Input array.
+            u: Stacked physical array of shape (n_components, *mesh_shape).
 
         Returns:
-            Array of forward transform values.
+            Per-component spectral coefficient arrays (shapes may differ).
         """
         coeffs = []
         for i, space in enumerate(self.flatten()):
@@ -200,13 +200,14 @@ class CartesianProductSpace:
             coeffs.append(ci)
         return tuple(coeffs)
 
-    def scalar_product(self, u: tuple[Array, ...]) -> tuple[Array, ...]:
-        """Return tensor of inner products along each axis (separable).
+    def scalar_product(self, u: Array) -> tuple[Array, ...]:
+        """Return scalar products along each axis for all components.
+
         Args:
-            u: Sequence of input arrays.
+            u: Stacked physical array of shape (n_components, *mesh_shape).
 
         Returns:
-            Sequence of array of inner products for all components.
+            Per-component scalar product arrays (shapes may differ).
         """
         coeffs = []
         for i, space in enumerate(self.flatten()):
@@ -218,43 +219,46 @@ class CartesianProductSpace:
         self,
         u: tuple[Array, ...],
         N: tuple[tuple[int | None, ...] | None, ...] | None = None,
-    ) -> tuple[Array, ...]:
-        """Backward transform with optional padding.
+    ) -> Array:
+        """Backward transform per-component spectral coefficients to physical space.
+
+        All components are evaluated on the same mesh, so the outputs have equal
+        shape and are returned as a single stacked array.
 
         Args:
-            u: Input array.
+            u: Per-component spectral coefficient arrays.
             N: Optional per-axis counts (defaults each to space.num_quad_points).
 
         Returns:
-            Array of backward transform values.
+            Stacked physical array of shape (n_components, *mesh_shape).
         """
         coeffs = []
         for i, space in enumerate(self.flatten()):
             ci = space.backward(u[i], N=N[i] if N is not None else None)
             coeffs.append(ci)
-        return tuple(coeffs)
+        return jnp.stack(coeffs)
 
     def backward_primitive(
         self,
         u: tuple[Array, ...],
         k: tuple[int, ...],
         N: tuple[tuple[int | None, ...], ...] | None = None,
-    ) -> tuple[Array, ...]:
-        """Backward primitive transform with optional padding.
+    ) -> Array:
+        """Backward primitive transform for all components.
 
         Args:
-            u: Sequence of input arrays.
+            u: Per-component spectral coefficient arrays.
             k: Tuple of derivative orders.
             N: Optional per-axis counts (defaults each to space.num_quad_points).
 
         Returns:
-            Array of backward primitive transform values.
+            Stacked physical array of shape (n_components, *mesh_shape).
         """
         coeffs = []
         for i, space in enumerate(self.flatten()):
             ci = space.backward_primitive(u[i], k=k, N=N[i] if N is not None else None)
             coeffs.append(ci)
-        return tuple(coeffs)
+        return jnp.stack(coeffs)
 
     def to_orthogonal(self, c: tuple[Array, ...]) -> tuple[Array, ...]:
         """Convert coefficients to orthogonal basis.

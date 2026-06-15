@@ -706,9 +706,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         return self.array
 
     @overload
-    def backward(
-        self: JAXFunction[_CompositeSpaceT], N: Padding = None
-    ) -> tuple[Array, ...]: ...
+    def backward(self: JAXFunction[_CompositeSpaceT], N: Padding = None) -> Array: ...
     @overload
     def backward(self: JAXFunction[_ScalarSpaceT], N: Padding = None) -> Array: ...
     def backward(self, N: Padding = None) -> Array | tuple[Array, ...]:

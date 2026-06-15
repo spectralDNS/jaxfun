@@ -300,12 +300,12 @@ class CartesianProductSpace:
                 if isinstance(space, DirectSumTPS | CartesianProductSpace)
                 else space
             )
-        return CartesianProduct(*f, name=self.name + "o", rank=self.rank)
+        return CartesianProduct(*f, name=self.name + "H", rank=self.rank)
 
     def get_orthogonal(self) -> CartesianProductSpace:
         orthogonal_spaces = [space.get_orthogonal() for space in self.basespaces]
         return CartesianProduct(
-            *orthogonal_spaces, name=self.name + "o", rank=self.rank
+            *orthogonal_spaces, name=self.name + "O", rank=self.rank
         )
 
 

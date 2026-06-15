@@ -21,6 +21,7 @@ def _():
 
     from jaxfun.coordinates import get_CoordSys
     from jaxfun.galerkin import (
+        CartesianProduct,
         FunctionSpace,
         Legendre,
         TensorProduct,
@@ -79,7 +80,19 @@ def _():
             20, Legendre.Legendre, domain=Domain(0, 1), name="Z", fun_str="L"
         )
         P = TensorProduct(R, T, Z, system=C, name="P")
-    return C, Cross, Curl, Div, Dot, Grad, P, TestFunction, TrialFunction, sp
+    return (
+        C,
+        CartesianProduct,
+        Cross,
+        Curl,
+        Div,
+        Dot,
+        Grad,
+        P,
+        TestFunction,
+        TrialFunction,
+        sp,
+    )
 
 
 @app.cell
@@ -172,10 +185,8 @@ def _(mo):
 
 
 @app.cell
-def _(P):
-    from jaxfun.galerkin import VectorTensorProductSpace
-
-    V = VectorTensorProductSpace(P, name="V")
+def _(CartesianProduct, P):
+    V = CartesianProduct(P, P, name="V", rank=1)
     V.tensorname
     return (V,)
 

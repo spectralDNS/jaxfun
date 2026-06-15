@@ -279,7 +279,7 @@ class ExpansionFunction(BaseFunction):
                 name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return f"{name}({self.c_names}; {self.functionspace.name})"
 
-    def __getitem__(self, i: int) -> sp.Expr:
+    def __getitem__(self, i: int) -> Self:
         assert isinstance(self.functionspace, CartesianProductSpace)
         result = self.__class__(self.functionspace[i], name=self.name[i])
         parent = self.functionspace

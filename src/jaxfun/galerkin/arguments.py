@@ -30,6 +30,7 @@ from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseScalar, CoordSys, Vector, latex_symbols
 from jaxfun.galerkin.cartesianproductspace import (
     CartesianProductSpace,
+    CartesianTensorProductSpace,
     VectorTensorProductSpace,
 )
 from jaxfun.typing import (
@@ -50,7 +51,9 @@ t, x, y, z = sp.symbols("t,x,y,z", real=True)
 
 indices = "ijklmn"
 
-_CompositeSpaceT = TypeVar("_CompositeSpaceT", bound=CartesianProductSpace)
+_CompositeSpaceT = TypeVar(
+    "_CompositeSpaceT", bound=CartesianTensorProductSpace | CartesianProductSpace
+)
 _ScalarSpaceT = TypeVar("_ScalarSpaceT", bound=ScalarSpaceType)
 
 
@@ -280,7 +283,9 @@ class ExpansionFunction(BaseFunction):
         return f"{name}({self.c_names}; {self.functionspace.name})"
 
     def __getitem__(self, i: int) -> Self:
-        assert isinstance(self.functionspace, CartesianProductSpace)
+        assert isinstance(
+            self.functionspace, CartesianTensorProductSpace | CartesianProductSpace
+        )
         name = self.name
         if (
             isinstance(self.functionspace, VectorTensorProductSpace)
@@ -297,12 +302,18 @@ class ExpansionFunction(BaseFunction):
             )
         result = self.__class__(self.functionspace[i], name=name)
         parent = self.functionspace
-        if isinstance(result.functionspace, CartesianProductSpace):
-            result.functionspace.leaf = parent
+        if isinstance(result.functionspace, CartesianTensorProductSpace):
+            result.functionspace.leaf = cast(CartesianTensorProductSpace, parent)
             for space in result.functionspace.flatten():
-                space.leaf = parent
+                space.leaf = cast(CartesianTensorProductSpace, parent)
+        elif isinstance(result.functionspace, CartesianProductSpace):
+            result.functionspace.leaf = cast(CartesianProductSpace, parent)
+            for space in result.functionspace.flatten():
+                space.leaf = cast(CartesianProductSpace, parent)
         elif isinstance(result.functionspace, TensorProductSpace):
-            result.functionspace.leaf = parent
+            result.functionspace.leaf = cast(CartesianTensorProductSpace, parent)
+        elif isinstance(result.functionspace, OrthogonalSpace | DirectSum):
+            result.functionspace.leaf = cast(CartesianProductSpace, parent)
         return result
 
 
@@ -330,14 +341,20 @@ class TestFunction(ExpansionFunction):
         obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
         obj.argument = ArgumentTag.TEST
 
-        if isinstance(V, DirectSum | DirectSumTPS | CartesianProductSpace):
+        _composite = (
+            DirectSum
+            | DirectSumTPS
+            | CartesianProductSpace
+            | CartesianTensorProductSpace
+        )
+        if isinstance(V, _composite):
             obj.functionspace = V.get_homogeneous()
         elif isinstance(V, OrthogonalSpace | TensorProductSpace):
             obj.functionspace = V
         else:
             raise ValueError("Unknown test space")
 
-        if isinstance(V, CartesianProductSpace):
+        if isinstance(V, CartesianProductSpace | CartesianTensorProductSpace):
             if name is None:
                 name = "abcdefg"[len(V)]
             elif len(name) != len(V) and not (len(name) == 1 and V.rank == 1):
@@ -383,7 +400,7 @@ class TrialFunction(ExpansionFunction):
             cls, *(list(coors._cartesian_xyz) + time_arg + [sp.Dummy()])
         )
         obj.functionspace = V
-        if isinstance(V, CartesianProductSpace):
+        if isinstance(V, CartesianProductSpace | CartesianTensorProductSpace):
             if name is None:
                 name = "abcdefg"[len(V)]
             elif len(name) != len(V) and not (len(name) == 1 and V.rank == 1):
@@ -721,7 +738,9 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
             array = project(array, cast(ScalarSpaceType, V))
 
         elif isinstance(array, sp.Tuple):
-            array = project(array, cast(CartesianProductSpace, V))
+            array = project(
+                array, cast(CartesianTensorProductSpace | CartesianProductSpace, V)
+            )
 
         obj.array = array
         obj.functionspace = V

@@ -17,6 +17,7 @@ from .arguments import (
 from .cartesianproductspace import (
     CartesianProduct as CartesianProduct,
     CartesianProductSpace as CartesianProductSpace,
+    CartesianTensorProductSpace as CartesianTensorProductSpace,
     VectorTensorProductSpace as VectorTensorProductSpace,
 )
 from .composite import Composite as Composite, DirectSum as DirectSum

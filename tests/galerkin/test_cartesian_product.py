@@ -29,9 +29,13 @@ from jaxfun.galerkin import (
 from jaxfun.galerkin.cartesianproductspace import (
     CartesianProduct,
     CartesianProductSpace,
+    CartesianTensorProductSpace,
     VectorTensorProductSpace,
 )
-from jaxfun.la import BlockArray, BlockTPMatrix, IndexedArray
+from jaxfun.galerkin.composite import DirectSum
+from jaxfun.galerkin.functionspace import FunctionSpace
+from jaxfun.galerkin.orthogonal import OrthogonalSpace
+from jaxfun.la import BlockArray, BlockMatrix, BlockTPMatrix, IndexedArray
 from jaxfun.utils.common import ulp
 
 pytestmark = pytest.mark.integration
@@ -78,7 +82,7 @@ def _stokes_like_space(N: int):
 
 def test_heterogeneous_space_properties():
     W, T0, T1 = _two_component_space(N)
-    assert isinstance(W, CartesianProductSpace)
+    assert isinstance(W, CartesianTensorProductSpace)
     assert not isinstance(W, VectorTensorProductSpace)
     assert W.rank == -1
     assert W.dims == 2
@@ -352,3 +356,268 @@ def test_forward_backward_roundtrip():
     assert ua.shape == u_stacked.shape
     assert jnp.linalg.norm(ua[0] - u0) < jnp.sqrt(ulp(100))
     assert jnp.linalg.norm(ua[1] - u1) < jnp.sqrt(ulp(100))
+
+
+# ===========================================================================
+# 1D CartesianProductSpace and BlockMatrix
+# ===========================================================================
+#
+# These tests cover CartesianProduct of OrthogonalSpace (or DirectSum)
+# components, which produces a CartesianProductSpace (dims=1), and the
+# corresponding BlockMatrix assembled by inner().
+#
+# API note: like the ND case, each inner() call handles one
+# (test_block, trial_block) coupling; combine results with +.
+# ===========================================================================
+
+
+def _1d_two_component_space(N: int):
+    """C = CartesianProduct(L0, L1) — two Legendre spaces of different sizes."""
+    L0 = Legendre.Legendre(N)
+    L1 = Legendre.Legendre(N - 2)
+    return CartesianProduct(L0, L1, name="C"), L0, L1
+
+
+def _1d_two_component_space_with_bcs(N: int):
+    """C = CartesianProduct(D, S) — Legendre with and without Dirichlet BCs."""
+    D = FunctionSpace(N, Legendre.Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    S = FunctionSpace(N, Legendre.Legendre)
+    return CartesianProduct(D, S, name="C"), D, S
+
+
+# ---------------------------------------------------------------------------
+# 7. 1D Space structure
+# ---------------------------------------------------------------------------
+
+
+def test_1d_cartesian_product_space_properties():
+    C, L0, L1 = _1d_two_component_space(N)
+    assert isinstance(C, CartesianProductSpace)
+    assert not isinstance(C, CartesianTensorProductSpace)
+    assert C.dims == 1
+    assert C.rank == -1
+    assert C.num_components == 2
+    assert C.dim == L0.dim + L1.dim
+    assert C.block_sizes == (L0.dim, L1.dim)
+
+
+def test_1d_cartesian_product_flatten_and_global_index():
+    C, _, _ = _1d_two_component_space(N)
+    flat = C.flatten()
+    assert len(flat) == 2
+    assert all(isinstance(s, OrthogonalSpace) for s in flat)
+    s0, s1 = flat
+    assert isinstance(s0, OrthogonalSpace) and isinstance(s1, OrthogonalSpace)
+    assert s0.global_index == 0
+    assert s1.global_index == 1
+    assert s0.leaf is C
+    assert s1.leaf is C
+
+
+def test_1d_cartesian_product_num_dofs_normalized():
+    """num_dofs wraps bare int from OrthogonalSpace into a 1-tuple."""
+    C, L0, L1 = _1d_two_component_space(N)
+    nd = C.num_dofs
+    assert nd == ((L0.num_dofs,), (L1.num_dofs,))
+
+
+# ---------------------------------------------------------------------------
+# 8. 1D BlockArray
+# ---------------------------------------------------------------------------
+
+
+def test_1d_block_array_from_flat_roundtrip():
+    C, L0, L1 = _1d_two_component_space(N)
+    x0 = jnp.arange(L0.dim, dtype=float)
+    x1 = jnp.arange(L1.dim, dtype=float) + L0.dim
+    flat = BlockArray(C, tuple_array=(x0, x1)).flatten()
+    ba = BlockArray(C, flat_array=flat)
+    assert jnp.allclose(ba[0], x0)
+    assert jnp.allclose(ba[1], x1)
+
+
+def test_1d_block_array_arithmetic():
+    C, L0, L1 = _1d_two_component_space(N)
+    a = BlockArray(C, tuple_array=(jnp.ones(L0.dim), jnp.ones(L1.dim) * 2.0))
+    b = BlockArray(C, tuple_array=(jnp.ones(L0.dim) * 3.0, jnp.ones(L1.dim) * 4.0))
+    assert jnp.allclose((a + b)[0], 4.0) and jnp.allclose((a + b)[1], 6.0)
+    assert jnp.allclose((a - b)[0], -2.0) and jnp.allclose((a - b)[1], -2.0)
+    assert jnp.allclose((2.0 * a)[0], 2.0) and jnp.allclose((a * 2.0)[1], 4.0)
+    assert jnp.allclose((-a)[0], -1.0)
+
+
+# ---------------------------------------------------------------------------
+# 9. 1D TrialFunction / TestFunction unpacking
+# ---------------------------------------------------------------------------
+
+
+def test_1d_trial_test_function_unpack():
+    C, L0, L1 = _1d_two_component_space(N)
+    u, p = TrialFunction(C, name="up")
+    v, q = TestFunction(C, name="vq")
+    assert u.functionspace.dim == L0.dim
+    assert p.functionspace.dim == L1.dim
+    assert v.functionspace.dim == L0.dim
+    assert q.functionspace.dim == L1.dim
+
+
+def test_1d_component_global_index_after_unpack():
+    """After unpacking, each component's global_index matches its block position."""
+    C, _, _ = _1d_two_component_space(N)
+    u, p = TrialFunction(C, name="up")
+    fs_u = u.functionspace
+    fs_p = p.functionspace
+    assert isinstance(fs_u, OrthogonalSpace | DirectSum)
+    assert isinstance(fs_p, OrthogonalSpace | DirectSum)
+    assert fs_u.global_index == 0
+    assert fs_p.global_index == 1
+
+
+# ---------------------------------------------------------------------------
+# 10. inner() over 1D CartesianProductSpace → BlockMatrix
+# ---------------------------------------------------------------------------
+
+
+def test_1d_inner_bilinear_returns_block_matrix():
+    C, _, _ = _1d_two_component_space(N)
+    u, p = TrialFunction(C, name="up")
+    v, q = TestFunction(C, name="vq")
+    A0 = inner(v * u, kind="bilinear")
+    A1 = inner(q * p, kind="bilinear")
+    assert isinstance(A0, BlockMatrix)
+    assert isinstance(A1, BlockMatrix)
+    assert A0.shape == (C.dim, C.dim)
+    assert A1.shape == (C.dim, C.dim)
+
+
+def test_1d_inner_block_sum_is_block_diagonal():
+    """Block-diagonal L2 mass matrix has zero off-diagonal coupling blocks."""
+    C, L0, _ = _1d_two_component_space(N)
+    u, p = TrialFunction(C, name="up")
+    v, q = TestFunction(C, name="vq")
+    A = inner(v * u, kind="bilinear") + inner(q * p, kind="bilinear")
+    assert isinstance(A, BlockMatrix)
+    dense = A.todense()
+    assert dense.shape == (C.dim, C.dim)
+    s0 = L0.dim
+    assert jnp.allclose(dense[:s0, s0:], 0.0, atol=1e-12)
+    assert jnp.allclose(dense[s0:, :s0], 0.0, atol=1e-12)
+
+
+def test_1d_inner_linear_block_routing():
+    """inner(x*q) places the result in block 1 (q is the block-1 test function)."""
+    C, _, _ = _1d_two_component_space(N)
+    _, q = TestFunction(C, name="vq")
+    x = C.system.x
+    b = cast(BlockArray, inner(x * q, kind="linear"))
+    assert jnp.linalg.norm(b[0]) < ulp(100), "block 0 should be zero"
+    assert jnp.linalg.norm(b[1]) > ulp(100), "block 1 should be nonzero"
+
+
+def test_1d_inner_linear_block_routing_first_block():
+    """inner(x*v) places the result in block 0 (v is the block-0 test function)."""
+    C, _, _ = _1d_two_component_space(N)
+    v, _ = TestFunction(C, name="vq")
+    x = C.system.x
+    b = cast(BlockArray, inner(x * v, kind="linear"))
+    assert jnp.linalg.norm(b[0]) > ulp(100), "block 0 should be nonzero"
+    assert jnp.linalg.norm(b[1]) < ulp(100), "block 1 should be zero"
+
+
+# ---------------------------------------------------------------------------
+# 11. BlockMatrix linear algebra
+# ---------------------------------------------------------------------------
+
+
+def test_1d_block_matrix_matvec():
+    C, L0, L1 = _1d_two_component_space(N)
+    u, p = TrialFunction(C, name="up")
+    v, q = TestFunction(C, name="vq")
+    A = inner(v * u, kind="bilinear") + inner(q * p, kind="bilinear")
+    ones = BlockArray(C, flat_array=jnp.ones(C.dim))
+    result = A @ ones
+    assert isinstance(result, BlockArray)
+    assert result[0].shape == (L0.dim,)
+    assert result[1].shape == (L1.dim,)
+
+
+def test_1d_block_matrix_scale():
+    C, _, _ = _1d_two_component_space(N)
+    u, p = TrialFunction(C, name="up")
+    v, q = TestFunction(C, name="vq")
+    A = inner(v * u, kind="bilinear") + inner(q * p, kind="bilinear")
+    assert isinstance(A, BlockMatrix)
+    A2 = A.scale(2.0)
+    assert isinstance(A2, BlockMatrix)
+    assert jnp.allclose(A2.todense(), 2.0 * A.todense(), atol=ulp(100))
+
+
+def test_1d_block_matrix_add_sub():
+    C, _, _ = _1d_two_component_space(N)
+    u, p = TrialFunction(C, name="up")
+    v, q = TestFunction(C, name="vq")
+    A = inner(v * u, kind="bilinear") + inner(q * p, kind="bilinear")
+    assert isinstance(A, BlockMatrix)
+    A2 = A + A
+    assert jnp.allclose(A2.todense(), 2.0 * A.todense(), atol=ulp(100))
+    A0 = A2 - A
+    assert jnp.allclose(A0.todense(), A.todense(), atol=ulp(100))
+
+
+def test_1d_block_matrix_solve_residual():
+    """Solve A x = b and verify ‖A x - b‖ < tol."""
+    C, _, _ = _1d_two_component_space(N)
+    u, p = TrialFunction(C, name="up")
+    v, q = TestFunction(C, name="vq")
+    x = C.system.x
+    A = inner(v * u, kind="bilinear") + inner(q * p, kind="bilinear")
+    assert isinstance(A, BlockMatrix)
+    b0 = cast(BlockArray, inner(x * v, kind="linear"))
+    b1 = cast(BlockArray, inner(x * q, kind="linear"))
+    b = b0 + b1
+    uh = A.solve(b)
+    assert isinstance(uh, BlockArray)
+    res = A @ uh
+    assert jnp.linalg.norm(res.flatten() - b.flatten()) < ulp(100)
+
+
+# ---------------------------------------------------------------------------
+# 12. Coupled 1D system — mixed formulation
+#
+# Poisson in first-order form:  s = u',  -s' = f
+#   Test with v:  (s, v) = (u', v)  →  inner(s*v) = inner(u.diff(x)*v)
+#   Test with q: -(s', q) = (f, q)  →  inner(s.diff(x)*q) = -inner(f*q)
+# Manufactured solution: u_e(x) = sin(πx), domain [-1,1].
+# ---------------------------------------------------------------------------
+
+
+def test_1d_coupled_system_solve():
+    """Mixed Poisson assembled over a 1D CartesianProductSpace.
+
+    System (first-order form): s' = u'',  u' = s.
+    Manufactured solution: u_e = sin(πx), BCs homogeneous Dirichlet.
+    Mirrors the coupled1D.py example.
+    """
+    C, D, _ = _1d_two_component_space_with_bcs(N)
+    u, s = TrialFunction(C, name="us")
+    v, q = TestFunction(C, name="vq")
+    x = C.system.x
+    ue = sp.sin(sp.pi * x)
+
+    A, a = inner(s.diff(x) * v - ue.diff(x, 2) * v, kind="system", sparse=True)
+    B = inner(u.diff(x) * q - s * q, kind="bilinear", sparse=True)
+
+    H = A + B
+    h = cast(BlockArray, a)
+
+    uh = H.solve(h, method="banded", pivot=True)
+    assert isinstance(uh, BlockArray)
+
+    # Residual check
+    assert jnp.linalg.norm((H @ uh).flatten() - h.flatten()) < ulp(100)
+
+    # Solution accuracy: evaluate u (block 0) on quadrature mesh
+    xj = D.mesh()
+    u_phys = C.backward(uh)[0]
+    ue_phys = jnp.sin(jnp.pi * xj)
+    assert jnp.linalg.norm(u_phys - ue_phys) < jnp.sqrt(ulp(100))

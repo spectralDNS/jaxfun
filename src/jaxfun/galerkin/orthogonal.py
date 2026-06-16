@@ -30,6 +30,7 @@ from jaxfun.typing import Array, MeshKind
 from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
 
 if TYPE_CHECKING:
+    from jaxfun.galerkin.cartesianproductspace import CartesianProductSpace
     from jaxfun.galerkin.composite import BoundaryConditions
 
 
@@ -75,6 +76,8 @@ class OrthogonalSpace(BaseSpace):
         self.stencil = {0: 1}
         self.S: DiaMatrix = diags([jnp.ones(N)], offsets=(0,), shape=(N, N))
         self.P: DiaMatrix = self.S
+        self.leaf: CartesianProductSpace | None = None
+        self.global_index: int = 0
         super().__init__(system, name, fun_str)
 
     @abstractmethod
@@ -450,6 +453,18 @@ class OrthogonalSpace(BaseSpace):
     def get_orthogonal(self) -> Self:
         """Return self (orthogonal space is self; overridden in Composite)."""
         return self
+
+    def shape(self) -> tuple[int, ...]:
+        """Return modal shape as a tuple."""
+        return (self.N,)
+
+    def to_orthogonal(self, c: Array) -> Array:
+        """Return coefficients unchanged (already in the orthogonal basis)."""
+        return c
+
+    def from_orthogonal(self, c: Array) -> Array:
+        """Return coefficients unchanged (already in the orthogonal basis)."""
+        return c
 
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0

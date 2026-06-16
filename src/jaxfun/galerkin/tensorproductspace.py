@@ -29,7 +29,7 @@ tensor_product_symbol = "\u2297"
 multiplication_sign = "\u00d7"
 
 if TYPE_CHECKING:
-    from jaxfun.galerkin import CartesianProductSpace
+    from jaxfun.galerkin import CartesianTensorProductSpace
 
 
 IndivisibleError = ValueError
@@ -68,7 +68,7 @@ class TensorProductSpace:
         basespaces: Sequence[OrthogonalSpace],
         system: CoordSys | None = None,
         name: str = "TPS",
-        leaf: CartesianProductSpace | None = None,
+        leaf: CartesianTensorProductSpace | None = None,
         global_index: int = 0,
     ) -> None:
         from jaxfun.coordinates import CartCoordSys, x, y, z
@@ -580,7 +580,7 @@ class DirectSumTPS(TensorProductSpace):
         system: CoordSys,
         name: str = "DSTPS",
         global_index: int = 0,
-        leaf: CartesianProductSpace | None = None,
+        leaf: CartesianTensorProductSpace | None = None,
     ) -> None:
         from jaxfun.galerkin.inner import project, project1D
 

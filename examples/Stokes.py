@@ -56,7 +56,9 @@ C_pin = C.tosparse().pin({2 * (N - 2) ** 2: 0})
 d = C_pin.lu_solve(c.flatten(), method="rcm", pivot=True)
 
 sol = BlockArray(W, flat_array=d)
-up_ = W.backward(sol.array, N=(None, None, (N, N)))
+up_ = W.backward(
+    sol.array, N=(N, N)
+)  # Need to provide N since spaces have different shape  # noqa: E501
 
 if "PYTEST" in os.environ:
     for i in range(3):

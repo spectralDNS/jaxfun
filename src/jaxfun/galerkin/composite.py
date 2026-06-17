@@ -196,6 +196,12 @@ class Composite(OrthogonalSpace):
         """Evaluate constrained expansion at X with composite coeffs c."""
         return self.orthogonal._evaluate(X, self.to_orthogonal(c))
 
+    @jax.jit(static_argnums=(0, 2, 3))
+    def evaluate_mesh(
+        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
+    ) -> Array:
+        return self.orthogonal.evaluate_mesh(self.to_orthogonal(c), kind=kind, N=N)
+
     @jax.jit(static_argnums=(0, 2))
     def backward(self, c: Array, N: int | None = None) -> Array:
         """Inverse transform (physical -> coefficients) via underlying basis."""
@@ -595,6 +601,12 @@ class DirectSum:
     def evaluate(self, x: Array, c: Array) -> Array:
         """Evaluate direct-sum expansion at points x."""
         return self.orthogonal.evaluate(x, self.to_orthogonal(c))
+
+    @jax.jit(static_argnums=(0, 2, 3))
+    def evaluate_mesh(
+        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
+    ) -> Array:
+        return self.orthogonal.evaluate_mesh(self.to_orthogonal(c), kind=kind, N=N)
 
     @jax.jit(static_argnums=(0, 2))
     def backward(self, c: Array, N: int | None = None) -> Array:

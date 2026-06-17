@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterator
-from typing import Any, cast, overload
+from abc import ABC, abstractmethod
+from collections.abc import Iterator, Sequence
+from typing import Any, Self, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -64,7 +65,176 @@ def CartesianProduct(
     )
 
 
-class CartesianTensorProductSpace:
+class CartesianBaseSpace(ABC):
+    """Abstract space for all Cartesian classes."""
+
+    is_transient = False
+    basespaces: Sequence[OneDimensionalSpace | MultiDimensionalSpace]
+    _rank: int
+
+    @abstractmethod
+    def __iter__(self) -> Iterator[Any]:
+        """return iterator over basespaces"""
+
+    @abstractmethod
+    def __getitem__(self, i: int) -> Any:
+        """Return component space i."""
+
+    @abstractmethod
+    def flatten(self) -> list[Any]:
+        """Return flattened list of all component TensorProductSpace objects."""
+
+    @abstractmethod
+    def get_homogeneous(self) -> Self:
+        """Return self as homogeneous space"""
+
+    @abstractmethod
+    def get_orthogonal(self) -> Self:
+        """Return orthogonal version of self"""
+
+    def __len__(self) -> int:
+        """Return number of subspaces."""
+        return len(self.basespaces)
+
+    @property
+    def num_components(self) -> int:
+        """Return total number of scalar components."""
+        return len(self.flatten())
+
+    @property
+    def rank(self) -> int:
+        """Return tensor rank (1 for vector fields, -1 for composite)."""
+        return self._rank
+
+    @property
+    def dims(self) -> int:
+        """Return spatial dimension."""
+        return self.basespaces[0].dims
+
+    @property
+    def dim(self) -> int:
+        """Return total number of modes."""
+        return sum(self.block_sizes)
+
+    @property
+    def block_sizes(self) -> tuple[int, ...]:
+        """Return tuple of component space dimensions."""
+        return tuple(space.dim for space in self.flatten())
+
+    @property
+    def num_dofs(self) -> tuple[tuple[int, ...], ...]:
+        """Return tuple of active degrees of freedom per axis."""
+        result = []
+        for space in self.flatten():
+            nd = space.num_dofs
+            result.append((nd,) if isinstance(nd, int) else nd)
+        return tuple(result)
+
+    @property
+    def is_orthogonal(self) -> bool:
+        """Return True if underlying bases are all orthogonal."""
+        return all(space.is_orthogonal for space in self.basespaces)
+
+    @property
+    def shape(self) -> Any:
+        """Return modal shape for each subspace."""
+        return tuple(space.shape for space in self.basespaces)
+
+    def evaluate(self, x: Array, c: tuple[Array, ...]) -> Array:
+        """Evaluate each component at scattered points and stack into one Array."""
+        return jnp.array(
+            [space.evaluate(x, c[i]) for i, space in enumerate(self.flatten())]
+        )
+
+    def evaluate_mesh(
+        self,
+        u: tuple[Array, ...],
+        kind: MeshKind | str = MeshKind.QUADRATURE,
+        N: tuple[int | None, ...] | None = None,
+    ) -> Array:
+        """Evaluate each component on a mesh and stack into one Array.
+
+        Args:
+            u: input coefficients.
+            kind: Mesh type for backward evaluation (MeshKind.QUADRATURE or
+                MeshKind.UNIFORM).
+            N: Number of physical points along each axis.
+
+        Note:
+            All basespaces must use the same number of points in physical space.
+
+        """
+        results = []
+        for i, space in enumerate(self.flatten()):
+            results.append(space.evaluate_mesh(u[i], kind=kind, N=N))
+        return jnp.stack(results)
+
+    def forward(self, u: Array) -> tuple[Array, ...]:
+        """Forward transform each physical component into spectral space."""
+        return tuple(space.forward(u[i]) for i, space in enumerate(self.flatten()))
+
+    def scalar_product(self, u: Array) -> tuple[Array, ...]:
+        """Return scalar products along each axis for all components."""
+        return tuple(
+            space.scalar_product(u[i]) for i, space in enumerate(self.flatten())
+        )
+
+    def backward(
+        self,
+        u: tuple[Array, ...],
+        N: tuple[int | None, ...] | None = None,
+    ) -> Array:
+        """Backward transform per-component spectral coefficients to physical
+        space.
+
+        Args:
+            u: input coefficients
+            N: Number of physical points along each axis.
+
+        Note:
+            All basespaces must use the same number of points in physical space.
+
+        """
+        coeffs = [space.backward(u[i], N=N) for i, space in enumerate(self.flatten())]
+        return jnp.stack(coeffs)
+
+    def backward_primitive(
+        self,
+        u: tuple[Array, ...],
+        k: tuple[tuple[int, ...], ...],
+        N: tuple[int | None, ...] | None = None,
+    ) -> Array:
+        """Backward primitive transform for all components.
+
+        Args:
+            u: input coefficients
+            k: tuple of the number of derivatives for each direction. One
+                tuple item for each basespace.
+            N: Number of physical points along each axis.
+
+        Note:
+            All basespaces must use the same number of points in physical space.
+        """
+        coeffs = [
+            space.backward_primitive(u[i], k=k[i], N=N)
+            for i, space in enumerate(self.flatten())
+        ]
+        return jnp.stack(coeffs)
+
+    def to_orthogonal(self, c: tuple[Array, ...]) -> tuple[Array, ...]:
+        """Convert coefficients to orthogonal basis."""
+        return tuple(
+            space.to_orthogonal(c[i]) for i, space in enumerate(self.flatten())
+        )
+
+    def from_orthogonal(self, c: tuple[Array, ...]) -> tuple[Array, ...]:
+        """Convert coefficients from orthogonal basis."""
+        return tuple(
+            space.from_orthogonal(c[i]) for i, space in enumerate(self.flatten())
+        )
+
+
+class CartesianTensorProductSpace(CartesianBaseSpace):
     """Composite tensor product space for ND (dims > 1) problems.
 
     Holds a tuple of TensorProductSpace (or DirectSumTPS) components, such as
@@ -76,9 +246,11 @@ class CartesianTensorProductSpace:
         system: Shared coordinate system.
         name: Label.
         tensorname: Joined printable representation.
+        leaf: CartesianTensorProductSpace this space is part of or self.
     """
 
     is_transient = False
+    basespaces: Sequence[MultiDimensionalSpace]
 
     def __init__(
         self,
@@ -111,10 +283,6 @@ class CartesianTensorProductSpace:
         self.mesh = self.basespaces[0].mesh
         self.num_quad_points = self.basespaces[0].num_quad_points
 
-    def __len__(self) -> int:
-        """Return number of subspaces."""
-        return len(self.basespaces)
-
     def __iter__(self) -> Iterator[MultiDimensionalSpace]:
         """Iterate over component spaces."""
         return iter(self.basespaces)
@@ -132,112 +300,6 @@ class CartesianTensorProductSpace:
             else:
                 spaces.append(space)
         return spaces
-
-    @property
-    def num_components(self) -> int:
-        """Return total number of scalar components."""
-        return len(self.flatten())
-
-    @property
-    def rank(self) -> int:
-        """Return tensor rank (1 for vector fields, -1 for composite)."""
-        return self._rank
-
-    @property
-    def dims(self) -> int:
-        """Return spatial dimension."""
-        return self.basespaces[0].dims
-
-    @property
-    def dim(self) -> int:
-        """Return total number of modes."""
-        return sum(self.block_sizes)
-
-    @property
-    def block_sizes(self) -> tuple[int, ...]:
-        """Return tuple of component space dimensions."""
-        return tuple(space.dim for space in self.flatten())
-
-    @property
-    def num_dofs(self) -> tuple[tuple[int, ...], ...]:
-        """Return tuple of active degrees of freedom per axis."""
-        return tuple(space.num_dofs for space in self.flatten())
-
-    @property
-    def is_orthogonal(self) -> bool:
-        """Return True if underlying bases are all orthogonal."""
-        return all(space.is_orthogonal for space in self.basespaces)
-
-    @property
-    def shape(self) -> Any:
-        """Return modal shape for each subspace."""
-        return tuple(space.shape for space in self.basespaces)
-
-    def evaluate(self, x: Array, c: tuple[Array, ...]) -> Array:
-        """Evaluate each component at scattered points and stack into one Array."""
-        return jnp.array(
-            [space.evaluate(x, c[i]) for i, space in enumerate(self.flatten())]
-        )
-
-    def evaluate_mesh(
-        self,
-        u: tuple[Array, ...],
-        kind: MeshKind | str = MeshKind.QUADRATURE,
-        N: tuple[tuple[int | None, ...], ...] | None = None,
-    ) -> Array:
-        """Evaluate each component on a mesh and stack into one Array."""
-        results = []
-        for i, space in enumerate(self.flatten()):
-            ni = N[i] if N is not None else None
-            results.append(space.evaluate_mesh(u[i], kind=kind, N=ni))
-        return jnp.stack(results)
-
-    def forward(self, u: Array) -> tuple[Array, ...]:
-        """Forward transform each physical component into spectral space."""
-        return tuple(space.forward(u[i]) for i, space in enumerate(self.flatten()))
-
-    def scalar_product(self, u: Array) -> tuple[Array, ...]:
-        """Return scalar products along each axis for all components."""
-        return tuple(
-            space.scalar_product(u[i]) for i, space in enumerate(self.flatten())
-        )
-
-    def backward(
-        self,
-        u: tuple[Array, ...],
-        N: tuple[tuple[int | None, ...] | None, ...] | None = None,
-    ) -> Array:
-        """Backward transform per-component spectral coefficients to physical space."""
-        coeffs = [
-            space.backward(u[i], N=N[i] if N is not None else None)
-            for i, space in enumerate(self.flatten())
-        ]
-        return jnp.stack(coeffs)
-
-    def backward_primitive(
-        self,
-        u: tuple[Array, ...],
-        k: tuple[int, ...],
-        N: tuple[tuple[int | None, ...], ...] | None = None,
-    ) -> Array:
-        """Backward primitive transform for all components."""
-        coeffs = [
-            space.backward_primitive(u[i], k=k, N=N[i] if N is not None else None)
-            for i, space in enumerate(self.flatten())
-        ]
-        return jnp.stack(coeffs)
-
-    def to_orthogonal(self, c: tuple[Array, ...]) -> tuple[Array, ...]:
-        """Convert coefficients to orthogonal basis."""
-        return tuple(
-            space.to_orthogonal(c[i]) for i, space in enumerate(self.flatten())
-        )
-
-    def from_orthogonal(self, c: tuple[Array, ...]) -> tuple[Array, ...]:
-        """Convert coefficients from orthogonal basis."""
-        return tuple(
-            space.from_orthogonal(c[i]) for i, space in enumerate(self.flatten())
-        )
 
     def get_homogeneous(self) -> CartesianTensorProductSpace:
         from .tensorproductspace import DirectSumTPS
@@ -258,7 +320,7 @@ class CartesianTensorProductSpace:
         )
 
 
-class CartesianProductSpace:
+class CartesianProductSpace(CartesianBaseSpace):
     """Composite 1D function space (Cartesian product of OrthogonalSpace objects).
 
     Represents a tuple of 1D spaces for mixed-variable formulations on 1D
@@ -269,9 +331,12 @@ class CartesianProductSpace:
         system: Shared coordinate system.
         name: Label.
         tensorname: Joined printable representation.
+        leaf: CartesianProductSpace this space is part of or self.
     """
 
     is_transient = False
+    basespaces: Sequence[OneDimensionalSpace]
+    _rank: int
 
     def __init__(
         self,
@@ -297,9 +362,8 @@ class CartesianProductSpace:
                     subspace.global_index = i
                     subspace.leaf = self
 
-    def __len__(self) -> int:
-        """Return number of subspaces."""
-        return len(self.basespaces)
+        self.mesh = self.basespaces[0].mesh
+        self.num_quad_points = self.basespaces[0].num_quad_points
 
     def __iter__(self) -> Iterator[OneDimensionalSpace]:
         """Iterate over component spaces."""
@@ -320,126 +384,9 @@ class CartesianProductSpace:
         return spaces
 
     @property
-    def num_components(self) -> int:
-        """Return total number of scalar components."""
-        return len(self.flatten())
-
-    @property
-    def rank(self) -> int:
-        """Return tensor rank (-1 for composite mixed spaces)."""
-        return self._rank
-
-    @property
     def dims(self) -> int:
         """Return spatial dimension (always 1)."""
         return 1
-
-    @property
-    def dim(self) -> int:
-        """Return total number of modes."""
-        return sum(self.block_sizes)
-
-    @property
-    def block_sizes(self) -> tuple[int, ...]:
-        """Return tuple of component space dimensions."""
-        return tuple(space.dim for space in self.flatten())
-
-    @property
-    def num_dofs(self) -> tuple[tuple[int, ...], ...]:
-        """Return tuple of active degrees of freedom per axis.
-
-        OrthogonalSpace.num_dofs returns an int; wrap in a 1-tuple so
-        BlockArray always receives a uniform tuple[tuple[int, ...], ...].
-        """
-        result = []
-        for space in self.flatten():
-            nd = space.num_dofs
-            result.append((nd,) if isinstance(nd, int) else nd)
-        return tuple(result)
-
-    @property
-    def is_orthogonal(self) -> bool:
-        """Return True if underlying bases are all orthogonal."""
-        return all(space.is_orthogonal for space in self.basespaces)
-
-    @property
-    def shape(self) -> Any:
-        """Return modal shape for each subspace."""
-        result = []
-        for space in self.basespaces:
-            result.append(space.shape)
-        return tuple(result)
-
-    def evaluate(self, x: Array, c: tuple[Array, ...]) -> Array:
-        """Evaluate each component at scattered points and stack into one Array."""
-        return jnp.array(
-            [space.evaluate(x, c[i]) for i, space in enumerate(self.flatten())]
-        )
-
-    def evaluate_mesh(
-        self,
-        u: tuple[Array, ...],
-        kind: MeshKind | str = MeshKind.QUADRATURE,
-        N: tuple[tuple[int | None, ...], ...] | None = None,
-    ) -> Array:
-        """Evaluate each component on a mesh and stack into one Array."""
-        results = []
-        for i, space in enumerate(self.flatten()):
-            ni = N[i] if N is not None else None
-            if isinstance(space, DirectSum):
-                results.append(
-                    space[0].evaluate_mesh(space.to_orthogonal(u[i]), kind=kind, N=ni)
-                )
-            else:
-                results.append(space.evaluate_mesh(u[i], kind=kind, N=ni))
-        return jnp.stack(results)
-
-    def forward(self, u: Array) -> tuple[Array, ...]:
-        """Forward transform each physical component into spectral space."""
-        return tuple(space.forward(u[i]) for i, space in enumerate(self.flatten()))
-
-    def scalar_product(self, u: Array) -> tuple[Array, ...]:
-        """Return scalar products for all components."""
-        return tuple(
-            space.scalar_product(u[i]) for i, space in enumerate(self.flatten())
-        )
-
-    def backward(
-        self,
-        u: tuple[Array, ...],
-        N: tuple[tuple[int | None, ...] | None, ...] | None = None,
-    ) -> Array:
-        """Backward transform per-component spectral coefficients to physical space."""
-        coeffs = [
-            space.backward(u[i], N=N[i] if N is not None else None)
-            for i, space in enumerate(self.flatten())
-        ]
-        return jnp.stack(coeffs)
-
-    def backward_primitive(
-        self,
-        u: tuple[Array, ...],
-        k: tuple[int, ...],
-        N: tuple[tuple[int | None, ...], ...] | None = None,
-    ) -> Array:
-        """Backward primitive transform for all components."""
-        coeffs = [
-            space.backward_primitive(u[i], k=k, N=N[i] if N is not None else None)
-            for i, space in enumerate(self.flatten())
-        ]
-        return jnp.stack(coeffs)
-
-    def to_orthogonal(self, c: tuple[Array, ...]) -> tuple[Array, ...]:
-        """Convert coefficients to orthogonal basis."""
-        return tuple(
-            space.to_orthogonal(c[i]) for i, space in enumerate(self.flatten())
-        )
-
-    def from_orthogonal(self, c: tuple[Array, ...]) -> tuple[Array, ...]:
-        """Convert coefficients from orthogonal basis."""
-        return tuple(
-            space.from_orthogonal(c[i]) for i, space in enumerate(self.flatten())
-        )
 
     def get_homogeneous(self) -> CartesianProductSpace:
         f = []
@@ -468,12 +415,3 @@ class VectorTensorProductSpace(CartesianTensorProductSpace):
     def __getitem__(self, i: int) -> TensorProductSpace:
         """Return component space i."""
         return cast(list[TensorProductSpace], self.basespaces)[i]
-
-    def mesh(
-        self,
-        kind: MeshKind | str = MeshKind.QUADRATURE,
-        N: tuple[int | None, ...] | None = None,
-        broadcast: bool = True,
-    ) -> tuple[Array, ...]:
-        """Delegate to first component TensorProductSpace mesh."""
-        return self[0].mesh(kind=kind, N=N, broadcast=broadcast)

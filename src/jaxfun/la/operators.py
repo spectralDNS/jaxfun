@@ -4,10 +4,10 @@ from math import prod
 from typing import TYPE_CHECKING, Self, overload
 
 import jax.numpy as jnp
+from flax import nnx
 from jax import Array
 
-from jaxfun.la import DiagonalMatrix
-from jaxfun.la.diamatrix import DiaMatrix, diags
+from jaxfun.la.diamatrix import DiagonalMatrix, DiaMatrix, diags
 from jaxfun.la.matrix import Matrix
 from jaxfun.la.matrixprotocol import BaseMatrix
 
@@ -21,6 +21,12 @@ def _as_state_shape(shape: int | tuple[int, ...]) -> tuple[int, ...]:
 
 def _dtype_or_default(dtype) -> jnp.dtype:
     return jnp.dtype(jnp.float32 if dtype is None else dtype)
+
+
+class GlobalArray(nnx.Pytree):
+    def __init__(self, i: int, data: Array):
+        self.data = data
+        self.i = i
 
 
 class SpecialMatrix(BaseMatrix):
@@ -244,3 +250,23 @@ class ZeroMatrix(SpecialMatrix):
 
     def __getitem__(self, key: tuple[int, int], /) -> Array:
         return jnp.zeros((), dtype=self.dtype)
+
+
+class GlobalMatrix(BaseMatrix):
+    data: DiaMatrix | Matrix
+
+    def __init__(self, global_indices: tuple[int, int], matrix: DiaMatrix | Matrix):
+        self.data = matrix
+        self.global_indices = global_indices
+
+    def scale(self, alpha: complex | Array) -> GlobalMatrix:
+        return GlobalMatrix(self.global_indices, self.data.scale(alpha))
+
+    def dtype(self) -> jnp.dtype:
+        return self.data.dtype
+
+    def solve(self, b: Array, axis: int = 0) -> Array:
+        return self.data.solve(b, axis=axis)
+
+    def todense(self) -> Array:
+        return self.data.todense()

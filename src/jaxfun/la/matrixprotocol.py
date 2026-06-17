@@ -65,24 +65,6 @@ class _CacheBox[T]:
         return f"_CacheBox({self.value!r})"
 
 
-class IndexedArray(nnx.Pytree):
-    def __init__(self, i: int, data: Array):
-        self.data = data
-        self.i = i
-
-
-class IndexedMatrix(nnx.Pytree):
-    """A Matrix or DiaMatrix tagged with its (test_block, trial_block) indices.
-
-    Used in 1D CartesianProductSpace bilinear form assembly to carry block
-    index information through the assembly pipeline into BlockMatrix.
-    """
-
-    def __init__(self, i: tuple[int, int], data: Matrix | DiaMatrix):
-        self.data = data
-        self.i = i
-
-
 class BaseMatrix(ABC, nnx.Pytree):
     """Nominal base class for matrix-like operators in ``jaxfun.la``.
 

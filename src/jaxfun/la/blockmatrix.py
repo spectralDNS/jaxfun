@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self, cast
 
 import jax.numpy as jnp
 from flax import nnx
@@ -11,10 +11,9 @@ from jaxfun.la.matrix import Matrix
 from jaxfun.la.matrixprotocol import (
     BaseMatrix,
     DiaMatrixSolveMethod,
-    IndexedArray,
-    IndexedMatrix,
     _CacheBox,
 )
+from jaxfun.la.operators import GlobalArray, GlobalMatrix
 from jaxfun.la.tpmatrix import TPMatrices, TPMatrix, tpmats_to_kron
 
 if TYPE_CHECKING:
@@ -27,16 +26,15 @@ if TYPE_CHECKING:
 type _SparseMatrixCache = _CacheBox[DiaMatrix]
 
 
-class _BaseBlockMatrix[SpaceT: CartesianTensorProductSpace | CartesianProductSpace](
-    BaseMatrix
-):
-    """Shared implementation for block matrices over a CartesianProductSpace.
+class BlockMatrix[
+    MatrixT: TPMatrix | GlobalMatrix,
+    SpaceT: CartesianTensorProductSpace | CartesianProductSpace,
+](BaseMatrix):
+    """Shared implementation for block matrices over a Cartesian-product space.
 
-    Subclasses supply ``_combined_blocks`` (an ``nnx.Dict`` mapping
-    ``"bi,bj"`` string keys to ``DiaMatrix | Matrix``), ``test_space``,
-    ``trial_space``, ``shape``, ``test_block_sizes`` and
-    ``trial_block_sizes``.  All heavy-lifting methods live here; only
-    construction, ``scale``, ``__add__`` and ``__sub__`` differ per subclass.
+    Works for both multidimensional CartesianTensorProductSpace and the single-
+    dimensional CartesianProductSpace.
+
     """
 
     _combined_blocks: nnx.Dict
@@ -45,6 +43,40 @@ class _BaseBlockMatrix[SpaceT: CartesianTensorProductSpace | CartesianProductSpa
     test_block_sizes: tuple[int, ...]
     trial_block_sizes: tuple[int, ...]
     shape: tuple[int, int]
+
+    def __init__(
+        self,
+        mats: list[MatrixT],
+        test_space: SpaceT,
+        trial_space: SpaceT,
+    ) -> None:
+        self.mats = nnx.List(mats)
+        self.test_space = test_space
+        self.trial_space = trial_space
+        self.shape = (self.test_space.dim, self.trial_space.dim)
+        self.test_block_sizes: tuple[int, ...] = self.test_space.block_sizes
+        self.trial_block_sizes: tuple[int, ...] = self.trial_space.block_sizes
+
+        if isinstance(mats[0], TPMatrix):
+            _grouped: dict[str, TPMatrices] = {}
+            for mat in mats:
+                idx = f"{mat.global_indices[0]},{mat.global_indices[1]}"
+                if idx not in _grouped:
+                    _grouped[idx] = TPMatrices([cast(TPMatrix, mat)])
+                else:
+                    _grouped[idx].tpmats.append(cast(TPMatrix, mat))
+            self._combined_blocks = nnx.Dict(
+                {idx: tpmats_to_kron(list(tpm.tpmats)) for idx, tpm in _grouped.items()}
+            )
+        else:
+            _grouped: dict[str, Matrix | DiaMatrix] = {}
+            for mi in mats:
+                key = f"{mi.global_indices[0]},{mi.global_indices[1]}"
+                if key not in _grouped:
+                    _grouped[key] = cast(DiaMatrix | Matrix, mi.data)
+                else:
+                    _grouped[key] = _grouped[key] + mi.data
+            self._combined_blocks = nnx.Dict(_grouped)
 
     def _matmul_array(self, w: tuple[Array, ...]) -> tuple[Array, ...]:
         shapes = self.test_space.num_dofs
@@ -206,113 +238,25 @@ class _BaseBlockMatrix[SpaceT: CartesianTensorProductSpace | CartesianProductSpa
         M = self.to_matrix()
         return BlockArray(b.cartspace, flat_array=M.solve(x))
 
+    def scale(self, alpha: complex | Array) -> Self:
+        scaled = cast(
+            list[MatrixT],
+            [cast(GlobalMatrix | TPMatrix, m).scale(alpha) for m in self.mats],
+        )
+        return self.__class__(scaled, self.test_space, self.trial_space)
 
-class BlockTPMatrix(_BaseBlockMatrix):
-    """Block matrix of TPMatrix objects for ND CartesianTensorProductSpace.
-
-    Args:
-        tpmats: List of TPMatrix objects.
-        test_space: Leaf CartesianTensorProductSpace for rows.
-        trial_space: Leaf CartesianTensorProductSpace for columns.
-    """
-
-    def __init__(
-        self,
-        tpmats: list[TPMatrix],
-        test_space: CartesianTensorProductSpace,
-        trial_space: CartesianTensorProductSpace,
-    ) -> None:
-        self.tpmats = nnx.List(tpmats)
-        self.test_space = test_space
-        self.trial_space = trial_space
-        self.shape = (self.test_space.dim, self.trial_space.dim)
-        self.test_block_sizes: tuple[int, ...] = self.test_space.block_sizes
-        self.trial_block_sizes: tuple[int, ...] = self.trial_space.block_sizes
-
-        _grouped: dict[str, TPMatrices] = {}
-        for mat in tpmats:
-            idx = f"{mat.global_indices[0]},{mat.global_indices[1]}"
-            if idx not in _grouped:
-                _grouped[idx] = TPMatrices([mat])
-            else:
-                _grouped[idx].tpmats.append(mat)
-        self._combined_blocks = nnx.Dict(
-            {idx: tpmats_to_kron(list(tpm.tpmats)) for idx, tpm in _grouped.items()}
+    def __add__(self, other: Self) -> Self:
+        return self.__class__(
+            list(self.mats) + list(other.mats), self.test_space, self.trial_space
         )
 
-    def scale(self, alpha: complex | Array) -> BlockTPMatrix:
-        return BlockTPMatrix(
-            [mat.scale(alpha) for mat in self.tpmats], self.test_space, self.trial_space
+    def __sub__(self, other: Self) -> Self:
+        scaled = cast(
+            list[MatrixT],
+            [cast(GlobalMatrix | TPMatrix, m).scale(-1) for m in other.mats],
         )
-
-    def __add__(self, other: BlockTPMatrix) -> BlockTPMatrix:
-        return BlockTPMatrix(
-            list(self.tpmats) + list(other.tpmats), self.test_space, self.trial_space
-        )
-
-    def __sub__(self, other: BlockTPMatrix) -> BlockTPMatrix:
-        return BlockTPMatrix(
-            list(self.tpmats) + [mat.scale(-1) for mat in other.tpmats],
-            self.test_space,
-            self.trial_space,
-        )
-
-
-class BlockMatrix(_BaseBlockMatrix):
-    """Block matrix for 1D CartesianProductSpace.
-
-    Each entry is a single Matrix or DiaMatrix together with its
-    (test_block, trial_block) indices.  Multiple entries that map the same
-    block pair are summed on construction.
-
-    Args:
-        mats: List of IndexedMatrix objects.
-        test_space: Leaf CartesianProductSpace for rows.
-        trial_space: Leaf CartesianProductSpace for columns.
-    """
-
-    def __init__(
-        self,
-        mats: list[IndexedMatrix],
-        test_space: CartesianProductSpace,
-        trial_space: CartesianProductSpace,
-    ) -> None:
-        self.mats = nnx.List(mats)
-        self.test_space = test_space
-        self.trial_space = trial_space
-        self.shape = (self.test_space.dim, self.trial_space.dim)
-        self.test_block_sizes: tuple[int, ...] = self.test_space.block_sizes
-        self.trial_block_sizes: tuple[int, ...] = self.trial_space.block_sizes
-
-        _grouped: dict[str, Matrix | DiaMatrix] = {}
-        for im in mats:
-            key = f"{im.i[0]},{im.i[1]}"
-            if key not in _grouped:
-                _grouped[key] = im.data
-            else:
-                _grouped[key] = _grouped[key] + im.data
-        self._combined_blocks = nnx.Dict(_grouped)
-
-    def scale(self, alpha: complex | Array) -> BlockMatrix:
-        return BlockMatrix(
-            [IndexedMatrix(im.i, im.data.scale(alpha)) for im in self.mats],
-            self.test_space,
-            self.trial_space,
-        )
-
-    def __add__(self, other: BlockMatrix) -> BlockMatrix:
-        return BlockMatrix(
-            list(self.mats) + list(other.mats),
-            self.test_space,
-            self.trial_space,
-        )
-
-    def __sub__(self, other: BlockMatrix) -> BlockMatrix:
-        return BlockMatrix(
-            list(self.mats)
-            + [IndexedMatrix(im.i, im.data.scale(-1)) for im in other.mats],
-            self.test_space,
-            self.trial_space,
+        return self.__class__(
+            list(self.mats) + scaled, self.test_space, self.trial_space
         )
 
 
@@ -321,7 +265,7 @@ class BlockArray(nnx.Pytree):
 
     Args:
         cartspace: descriptor for the (leaf) space.
-        indexed_arrays: List of IndexedArray objects.
+        indexed_arrays: List of GlobalArray objects.
         flat_array: 1D Array of length cartspace.dim.
         tuple_array: tuple of Arrays for flattened space, one item
             for each space in the flattened space. This
@@ -337,7 +281,7 @@ class BlockArray(nnx.Pytree):
     def __init__(
         self,
         cartspace: CartesianTensorProductSpace | CartesianProductSpace,
-        indexed_arrays: list[IndexedArray] | None = None,
+        indexed_arrays: list[GlobalArray] | None = None,
         flat_array: Array | None = None,
         tuple_array: tuple[Array, ...] | None = None,
     ) -> None:
@@ -372,19 +316,19 @@ class BlockArray(nnx.Pytree):
         a = [d.ravel() for d in self._broadcast_data()]
         return jnp.concatenate(tuple(a))
 
-    def _list_from_flat_array(self, x: Array) -> list[IndexedArray]:
+    def _list_from_flat_array(self, x: Array) -> list[GlobalArray]:
         s0: int = 0
-        d: list[IndexedArray] = []
+        d: list[GlobalArray] = []
         for i, s1 in enumerate(self.block_sizes):
-            d.append(IndexedArray(i, x[slice(s0, s0 + s1)].reshape(self.num_dofs[i])))
+            d.append(GlobalArray(i, x[slice(s0, s0 + s1)].reshape(self.num_dofs[i])))
             s0 += s1
         return d
 
-    def _list_from_tuple_array(self, x: tuple[Array, ...]) -> list[IndexedArray]:
-        return [IndexedArray(i, xi) for i, xi in enumerate(x)]
+    def _list_from_tuple_array(self, x: tuple[Array, ...]) -> list[GlobalArray]:
+        return [GlobalArray(i, xi) for i, xi in enumerate(x)]
 
-    def accumulate(self, b: IndexedArray | list[IndexedArray]) -> None:
-        b_list: list[IndexedArray] = [b] if isinstance(b, IndexedArray) else b
+    def accumulate(self, b: GlobalArray | list[GlobalArray]) -> None:
+        b_list: list[GlobalArray] = [b] if isinstance(b, GlobalArray) else b
         for bi in b_list:
             self.data[bi.i] += bi.data
 

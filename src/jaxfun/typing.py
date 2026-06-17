@@ -28,7 +28,7 @@ from sympy.vector import (
 )
 from typing_extensions import TypedDict
 
-from jaxfun.la import BaseMatrix, BlockArray, IndexedArray, IndexedMatrix
+from jaxfun.la import BaseMatrix, BlockArray, GlobalArray, GlobalMatrix
 from jaxfun.la.matrixprotocol import (
     DiaMatrixSolveMethod as DiaMatrixSolveMethod,
     SolverNotApplicable as SolverNotApplicable,
@@ -155,7 +155,7 @@ type DomainType = Literal["inside", "boundary", "intersection", "all"]
 type InnerBilinearResult = Array | BaseMatrix
 type InnerBilinearResults = list[Array | BaseMatrix]
 type InnerLinearResults = list[Array]
-type InnerItems = tuple[list[BaseMatrix | IndexedMatrix], list[IndexedArray]]
+type InnerItems = tuple[list[BaseMatrix | GlobalMatrix], list[GlobalArray]]
 type GalerkinAssembledForm = (
     BaseMatrix | Array | BlockArray | tuple[BaseMatrix, Array | BlockArray]
 )

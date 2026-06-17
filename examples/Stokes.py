@@ -20,7 +20,7 @@ from jaxfun.galerkin import (
     TrialFunction,
     inner,
 )
-from jaxfun.la.blocktpmatrix import BlockArray
+from jaxfun.la.blockmatrix import BlockArray
 from jaxfun.operators import Constant, Div, Dot, Grad
 
 f = (1 - x) ** 2 * (1 + x) ** 2

@@ -35,7 +35,7 @@ from jaxfun.galerkin.cartesianproductspace import (
 from jaxfun.galerkin.composite import DirectSum
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
-from jaxfun.la import BlockArray, BlockMatrix, BlockTPMatrix, IndexedArray
+from jaxfun.la import BlockArray, BlockMatrix, GlobalArray
 from jaxfun.utils.common import ulp
 
 pytestmark = pytest.mark.integration
@@ -182,9 +182,9 @@ def test_block_array_arithmetic():
 def test_block_array_accumulate():
     W, T0, T1 = _two_component_space(N)
     ba = BlockArray(W)
-    ba.accumulate(IndexedArray(0, jnp.ones(T0.num_dofs)))
-    ba.accumulate(IndexedArray(0, jnp.ones(T0.num_dofs)))
-    ba.accumulate(IndexedArray(1, jnp.ones(T1.num_dofs) * 5.0))
+    ba.accumulate(GlobalArray(0, jnp.ones(T0.num_dofs)))
+    ba.accumulate(GlobalArray(0, jnp.ones(T0.num_dofs)))
+    ba.accumulate(GlobalArray(1, jnp.ones(T1.num_dofs) * 5.0))
     assert jnp.allclose(ba[0], 2.0)
     assert jnp.allclose(ba[1], 5.0)
 
@@ -216,12 +216,12 @@ def test_trialfunction_testfunction_unpack_nested():
 # 4. inner() over heterogeneous CartesianProductSpace
 #
 # Each inner() call handles one (test_block, trial_block) coupling.
-# Combine the resulting BlockTPMatrix objects with +.
+# Combine the resulting BlockMatrix objects with +.
 # ---------------------------------------------------------------------------
 
 
-def test_inner_per_block_returns_blocktpmatrix():
-    """Each individual inner() call over a component of W returns a BlockTPMatrix."""
+def test_inner_per_block_returns_blockmatrix():
+    """Each individual inner() call over a component of W returns a BlockMatrix."""
     W, T0, T1 = _two_component_space(N)
     u, p = TrialFunction(W, name="up")
     v, q = TestFunction(W, name="vq")
@@ -229,14 +229,14 @@ def test_inner_per_block_returns_blocktpmatrix():
     A0 = inner(v * u, sparse=True, kind="bilinear", num_quad_points=(N, N))
     A1 = inner(q * p, sparse=True, kind="bilinear", num_quad_points=(N, N))
 
-    assert isinstance(A0, BlockTPMatrix)
-    assert isinstance(A1, BlockTPMatrix)
+    assert isinstance(A0, BlockMatrix)
+    assert isinstance(A1, BlockMatrix)
     assert A0.shape == (W.dim, W.dim)
     assert A1.shape == (W.dim, W.dim)
 
 
 def test_inner_block_sum_is_block_diagonal():
-    """Adding per-block matrices gives a block-diagonal BlockTPMatrix."""
+    """Adding per-block matrices gives a block-diagonal BlockMatrix."""
     W, T0, T1 = _two_component_space(N)
     u, p = TrialFunction(W, name="up")
     v, q = TestFunction(W, name="vq")
@@ -244,7 +244,7 @@ def test_inner_block_sum_is_block_diagonal():
     A = inner(v * u, sparse=True, kind="bilinear", num_quad_points=(N, N)) + inner(
         q * p, sparse=True, kind="bilinear", num_quad_points=(N, N)
     )
-    assert isinstance(A, BlockTPMatrix)
+    assert isinstance(A, BlockMatrix)
     dense = A.todense()
     assert dense.shape == (W.dim, W.dim)
     s0 = T0.dim
@@ -272,7 +272,7 @@ def test_inner_system_heterogeneous_solve():
     A = A0 + A1
     b = cast(BlockArray, b0) + cast(BlockArray, b1)
 
-    assert isinstance(A, BlockTPMatrix)
+    assert isinstance(A, BlockMatrix)
     assert isinstance(b, BlockArray)
 
     x_joint = A.solve(b)

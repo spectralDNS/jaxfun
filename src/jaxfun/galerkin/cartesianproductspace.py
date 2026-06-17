@@ -130,7 +130,7 @@ class CartesianTensorProductSpace:
             if isinstance(space, CartesianTensorProductSpace):
                 spaces.extend(space.flatten())
             else:
-                spaces.append(cast(TensorProductSpace, space))
+                spaces.append(space)
         return spaces
 
     @property
@@ -151,7 +151,7 @@ class CartesianTensorProductSpace:
     @property
     def dim(self) -> int:
         """Return total number of modes."""
-        return sum(space.dim for space in self.basespaces)
+        return sum(self.block_sizes)
 
     @property
     def block_sizes(self) -> tuple[int, ...]:
@@ -168,9 +168,10 @@ class CartesianTensorProductSpace:
         """Return True if underlying bases are all orthogonal."""
         return all(space.is_orthogonal for space in self.basespaces)
 
+    @property
     def shape(self) -> Any:
         """Return modal shape for each subspace."""
-        return tuple(space.shape() for space in self.basespaces)
+        return tuple(space.shape for space in self.basespaces)
 
     def evaluate(self, x: Array, c: tuple[Array, ...]) -> Array:
         """Evaluate each component at scattered points and stack into one Array."""
@@ -336,7 +337,7 @@ class CartesianProductSpace:
     @property
     def dim(self) -> int:
         """Return total number of modes."""
-        return sum(space.dim for space in self.basespaces)
+        return sum(self.block_sizes)
 
     @property
     def block_sizes(self) -> tuple[int, ...]:
@@ -361,14 +362,12 @@ class CartesianProductSpace:
         """Return True if underlying bases are all orthogonal."""
         return all(space.is_orthogonal for space in self.basespaces)
 
+    @property
     def shape(self) -> Any:
         """Return modal shape for each subspace."""
         result = []
         for space in self.basespaces:
-            if isinstance(space, DirectSum):
-                result.append((space.dim,))
-            else:
-                result.append(space.shape())
+            result.append(space.shape)
         return tuple(result)
 
     def evaluate(self, x: Array, c: tuple[Array, ...]) -> Array:

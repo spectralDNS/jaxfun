@@ -561,6 +561,11 @@ class DirectSum:
         return self[1].bnd_vals()
 
     @property
+    def shape(self) -> tuple[int, ...]:
+        """Return modal shape (not including inhomogen dofs) as a tuple."""
+        return (self.dim,)
+
+    @property
     def dim(self) -> int:
         """Return dimension of unknown (homogeneous) part only."""
         return self[0].dim

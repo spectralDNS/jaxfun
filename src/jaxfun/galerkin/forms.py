@@ -145,8 +145,7 @@ def check_if_nonlinear_in_jaxfunction(a: sp.Basic) -> bool:
         True if expression is nonlinear in any JAXFunction, False otherwise.
     """
     jaxfunctions = get_jaxfunctions(a)
-    have_jaxfunctions = len(jaxfunctions)
-    if not have_jaxfunctions:
+    if not len(jaxfunctions):
         return False
 
     def _is_nonlinear_in_jaxfunction(a: sp.Basic) -> bool:
@@ -229,6 +228,16 @@ def split_coeff(c0: sp.Expr | float) -> CoeffDict:
     return coeffs
 
 
+def unwrap_single_testfunction(
+    v: set[TestFunction | AppliedUndef] | TestFunction | AppliedUndef,
+) -> TestFunction | AppliedUndef:
+    if isinstance(v, set):
+        if len(v) > 1:
+            raise NotImplementedError("Multiple test functions not supported")
+        v = v.pop()
+    return v
+
+
 def split(forms: sp.Expr) -> ResultDict:
     """Split a full weak form expression into linear and bilinear parts.
 
@@ -255,9 +264,7 @@ def split(forms: sp.Expr) -> ResultDict:
     """
     v, _ = get_basisfunctions(forms)
     assert v is not None, "A test function is required"
-    if isinstance(v, set):
-        assert len(v) == 1, "Multiple test functions not supported"
-        v = v.pop()
+    v = unwrap_single_testfunction(v)
     assert _has_functionspace(v)
     V = v.functionspace
 

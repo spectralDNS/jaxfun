@@ -56,6 +56,7 @@ from .forms import (
     get_jaxfunctions,
     split,
     split_coeff,
+    unwrap_single_testfunction,
 )
 from .orthogonal import OrthogonalSpace
 from .tensorproductspace import (
@@ -247,9 +248,7 @@ def _prepare_inner_context(
 ) -> _InnerContext:
     V, U = get_basisfunctions(expr)
     assert V is not None, "No TestFunction found in expression"
-    if isinstance(V, set):
-        assert len(V) == 1, "More than one testfunction found in expression"
-        V = V.pop()
+    V = unwrap_single_testfunction(V)
     assert _has_testspace(V), "TestFunction has no associated function space"
     test_space = cast(RankedTestSpaceType, V.functionspace)
     if isinstance(U, set):
@@ -392,7 +391,7 @@ def _assemble_bilinear_form(
             sign = _linear_sign(context.all_linear)
             bresult = IndexedArray(
                 global_indices[0],
-                sign * (z @ jnp.array(uf.bcs.orderedvals(), dtype=float)),
+                sign * (z @ jnp.array(uf.bcs.orderedvals(), dtype=z.dtype)),
             )
             continue
         if "linear" in coeffs and context.test_space.dims == 1:
@@ -867,8 +866,6 @@ def inner_bilinear(
         if len(jaxfunction) >= 1:
             scale *= evaluate_jaxfunction_expr_quad(aii, N=N)
             continue
-        elif len(jaxfunction) > 1:
-            raise ValueError("Multiple JAXFunctions found in single bilinear form")
 
         if len(aii.free_symbols) > 0:
             s = aii.free_symbols.pop()
@@ -1054,11 +1051,11 @@ def project1D(ue: sp.Expr, V: OrthogonalSpace | Composite | DirectSum) -> Array:
 
 
 @overload
-def project(ue: sp.Expr, V: VectorTensorProductSpace) -> tuple[Array, ...]: ...
-@overload
 def project(ue: sp.Tuple, V: CartesianProductSpace) -> tuple[Array, ...]: ...
 @overload
-def project(ue: sp.Tuple, V: CartesianTensorProductSpace) -> tuple[Array, ...]: ...
+def project(
+    ue: sp.Expr | sp.Tuple, V: CartesianTensorProductSpace
+) -> tuple[Array, ...]: ...
 @overload
 def project(ue: sp.Expr, V: ScalarSpaceType) -> Array: ...
 def project(ue: sp.Expr | sp.Tuple, V: FunctionSpaceType) -> Array | tuple[Array, ...]:
@@ -1098,7 +1095,7 @@ def project(ue: sp.Expr | sp.Tuple, V: FunctionSpaceType) -> Array | tuple[Array
                 assert isinstance(ue, sp.Expr)
                 uj = (lambdify(s, Dot(ue, n).doit())(*V.mesh()) for n in bv)
             else:
-                assert isinstance(V, CartesianProductSpace)
+                assert isinstance(V, CartesianTensorProductSpace)
                 assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
                 uj = (lambdify(s, (uei).doit())(*V.mesh()) for uei in ue)
             uj = jnp.stack([jnp.broadcast_to(ui, V.num_quad_points) for ui in uj])

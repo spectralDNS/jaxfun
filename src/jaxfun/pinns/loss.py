@@ -487,10 +487,12 @@ class ResidualVPINN(Residual):
     def _compute_test_function(self, x: Array) -> dict[str, Array]:
         # The test functions should be evaluated once per derivative count
         # FIXME: only implemented for 1D currently
-        assert not isinstance(
+        if isinstance(
             self.V,
             TensorProductSpace | CartesianProductSpace | CartesianTensorProductSpace,
-        ), "Only implemented for 1D spaces currently"
+        ):
+            raise NotImplementedError("For now only implemented for 1D spaces.")
+
         TD = {
             k: self.V.evaluate_basis_derivative(
                 self.V.map_reference_domain(x[:, 0]), int(k)

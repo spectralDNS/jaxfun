@@ -48,10 +48,14 @@ class OrthogonalSpace(BaseSpace):
         N: Number of modes.
         domain: Physical Domain (None -> reference).
         num_quad_points: Default quadrature resolution (== N).
+        bcs: dictionary describing boundary conditions.
         S: Stencil matrix (identity here; overridden in Composite).
         P: DiaMatrix representing S @ S.T.
         stencil: Dict describing diagonal shifts (0:1 for identity).
         orthogonal: Self alias (Composite replaces with underlying).
+        leaf: If not None the CartesianProductSpace this space
+            belongs to.
+        global_index: Global index into CartesianProductSpace.
     """
 
     is_orthogonal = True
@@ -301,8 +305,13 @@ class OrthogonalSpace(BaseSpace):
         return a
 
     @property
+    def shape(self) -> tuple[int, ...]:
+        """Return modal shape as a tuple."""
+        return (self.dim,)
+
+    @property
     def dim(self) -> int:
-        """Return total number of raw modes N."""
+        """Return total number of degrees of freedom."""
         return self.N
 
     @property
@@ -453,10 +462,6 @@ class OrthogonalSpace(BaseSpace):
     def get_orthogonal(self) -> Self:
         """Return self (orthogonal space is self; overridden in Composite)."""
         return self
-
-    def shape(self) -> tuple[int, ...]:
-        """Return modal shape as a tuple."""
-        return (self.N,)
 
     def to_orthogonal(self, c: Array) -> Array:
         """Return coefficients unchanged (already in the orthogonal basis)."""

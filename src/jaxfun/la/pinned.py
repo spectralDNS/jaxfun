@@ -233,7 +233,7 @@ class PinnedMatrix(PinnedSystem):
 
     def __init__(
         self,
-        matrix: Matrix | DiaMatrix,
+        matrix: Matrix,
         constraints: tuple[tuple[int, float], ...],
     ) -> None:
         PinnedSystem.__init__(self, matrix, constraints)

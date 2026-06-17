@@ -70,7 +70,7 @@ def test_forward_backward_2d_spmd(space0, space1) -> None:
 )
 def test_scalar_product_2d_spmd(space0, space1) -> None:
     T = TensorProduct(space0(8), space1(8))
-    u = jax.device_put(jnp.ones(T.shape()), physical_sharding)
+    u = jax.device_put(jnp.ones(T.shape), physical_sharding)
     uh = T.scalar_product(u)
     assert uh.sharding == spectral_sharding
 
@@ -109,7 +109,7 @@ def test_forward_backward_3d_spmd(space0, space1, space2) -> None:
 )
 def test_scalar_product_3d_spmd(space0, space1, space2) -> None:
     T = TensorProduct(space0(8), space1(8), space2(8))
-    u = jax.device_put(jnp.ones(T.shape()), physical_sharding)
+    u = jax.device_put(jnp.ones(T.shape), physical_sharding)
     uh = T.scalar_product(u)
     assert uh.sharding == spectral_sharding
 

@@ -115,9 +115,10 @@ class TensorProductSpace:
         """Return True if underlying bases are all orthogonal."""
         return all(space.is_orthogonal for space in self.basespaces)
 
+    @property
     def shape(self) -> tuple[int, ...]:
-        """Return raw modal shape (N0, N1, ...)."""
-        return tuple([space.N for space in self.basespaces])
+        """Return dofs along each axis."""
+        return tuple(space.dim for space in self.basespaces)
 
     @property
     def dim(self) -> int:

@@ -287,18 +287,13 @@ class ExpansionFunction(BaseFunction):
             self.functionspace, CartesianTensorProductSpace | CartesianProductSpace
         )
         name = self.name
-        if (
-            isinstance(self.functionspace, VectorTensorProductSpace)
-            and len(self.name) == 1
-        ):
-            # use indices
-            name = self.name + "_" + str(i)
+        if isinstance(self.functionspace, VectorTensorProductSpace) and len(name) == 1:
+            name = f"{name}_{i}"
         elif len(name) == len(self.functionspace):
             name = name[i]
         else:
             raise ValueError(
-                f"Lenght of self.name {self.name} != "
-                f"len(self.functionspace) = {len(self.functionspace)}"
+                f"Length of self.name ({name}) != {len(self.functionspace) = }"
             )
         result = self.__class__(self.functionspace[i], name=name)
         parent = self.functionspace
@@ -359,9 +354,9 @@ class TestFunction(ExpansionFunction):
                 name = "abcdefg"[len(V)]
             elif len(name) != len(V) and not (len(name) == 1 and V.rank == 1):
                 raise ValueError(
-                    f"Lenght of name str must equal the length of basespaces in "
+                    f"Length of name str must equal the length of basespaces in "
                     f"CartesianProductSpace. Got {len(V)} basespaces and "
-                    f"len({name}) == {len(name)}"
+                    f"{len({name}) = }"
                 )
         obj.name = name if name is not None else "TestFunction"
         obj.own_name = "TestFunction"
@@ -370,7 +365,8 @@ class TestFunction(ExpansionFunction):
     def doit(self, **hints: Any) -> Expr | AppliedUndef:
         if self.functionspace.rank < 0:
             raise ValueError(
-                "TestFunction expansion not possible for CartesianProductSpace"
+                "TestFunction expansion not possible for Cartesian products that are "
+                "not ranked tensors"
             )
         return _get_computational_function(
             "test", cast(ComputationalSpaceType, self.functionspace)
@@ -405,9 +401,9 @@ class TrialFunction(ExpansionFunction):
                 name = "abcdefg"[len(V)]
             elif len(name) != len(V) and not (len(name) == 1 and V.rank == 1):
                 raise ValueError(
-                    f"Lenght of name str must equal the length of basespaces in "
+                    f"Length of name str must equal the length of basespaces in "
                     f"CartesianProductSpace. Got {len(V)} basespaces and "
-                    f"len({name}) == {len(name)}"
+                    f"{len({name}) = }"
                 )
         obj.name = name if name is not None else "TrialFunction"
         obj.own_name = "TrialFunction"
@@ -734,13 +730,19 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
 
         coors: CoordSys = V.system
         obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
-        if isinstance(array, sp.Expr):
-            array = project(array, cast(ScalarSpaceType, V))
 
-        elif isinstance(array, sp.Tuple):
-            array = project(
-                array, cast(CartesianTensorProductSpace | CartesianProductSpace, V)
-            )
+        if isinstance(array, sp.Expr | sp.Tuple):
+            if V.rank == 1:
+                assert isinstance(array, sp.Expr)
+                array = project(array, cast(VectorTensorProductSpace, V))
+            else:
+                if isinstance(array, sp.Expr):
+                    array = project(array, cast(ScalarSpaceType, V))
+                else:
+                    array = project(
+                        array,
+                        cast(CartesianTensorProductSpace | CartesianProductSpace, V),
+                    )
 
         obj.array = array
         obj.functionspace = V
@@ -797,7 +799,8 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
 
             else:
                 raise ValueError(
-                    "Unranked Composite space not supported for linear expansion."
+                    "JAXFunction expansion not possible for Cartesian products that "
+                    "are not ranked tensors"
                 )
 
         # Nonlinear case, return a multivar function.

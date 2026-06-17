@@ -663,6 +663,13 @@ class CoordSys(Basic):
         # Return the instance
         return obj
 
+    def __deepcopy__(self, memo: dict) -> Self:
+        memo[id(self)] = self
+        return self
+
+    def __copy__(self) -> Self:
+        return self
+
     def sub_system(self, index: int = 0) -> SubCoordSys:
         return SubCoordSys(self, index)
 

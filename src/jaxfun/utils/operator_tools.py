@@ -6,15 +6,15 @@ import jax.numpy as jnp
 import sympy as sp
 
 from jaxfun.galerkin.inner import inner
-from jaxfun.la import Matrix
-from jaxfun.typing import Array, GalerkinAssembledForm, GalerkinOperator
+from jaxfun.la import BaseMatrix, Matrix
+from jaxfun.typing import Array, GalerkinAssembledForm
 
-type AssembledTerm = tuple[GalerkinOperator | None, Array | None]
+type AssembledTerm = tuple[BaseMatrix | None, Array | None]
 
 
 def _normalize_assembled_operator(
-    operator: GalerkinOperator | Array | None,
-) -> GalerkinOperator | None:
+    operator: BaseMatrix | Array | None,
+) -> BaseMatrix | None:
     """Return one concrete matrix-like operator for time integration."""
     if operator is None:
         return None
@@ -42,7 +42,7 @@ def split_operator_and_forcing(
     if form is None:
         return None, None
     if isinstance(form, tuple):
-        operator, forcing = cast(tuple[GalerkinOperator | Array, Array | None], form)
+        operator, forcing = cast(tuple[BaseMatrix | Array, Array | None], form)
         rhs = jnp.asarray(forcing) if forcing is not None else None
         return _normalize_assembled_operator(operator), rhs
 
@@ -51,7 +51,7 @@ def split_operator_and_forcing(
             return None, form
         return Matrix(form), None
 
-    return form, None
+    return cast(BaseMatrix, form), None
 
 
 def assemble_linear_term(

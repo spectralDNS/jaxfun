@@ -38,7 +38,7 @@ ue = (1 - r) * (sp.S.Half - r) * theta * (sp.pi / 2 - theta)
 # A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
 A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue))), sparse=True, kind="system")
 
-uh = A.solve(b)
+uh = A.solve(b, kron_method="rcm")
 
 rj, tj = T.mesh(kind="uniform", N=(100, 100))
 xc, yc = T.cartesian_mesh(kind="uniform", N=(100, 100))

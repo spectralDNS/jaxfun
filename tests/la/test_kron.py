@@ -18,6 +18,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax import Array
 
 from jaxfun.galerkin import (
     FunctionSpace,
@@ -66,7 +67,7 @@ def _diag5(n: int) -> DiaMatrix:
     )
 
 
-def _poisson_tpmats(N: int = 8) -> tuple[TPMatrices, jnp.ndarray]:
+def _poisson_tpmats(N: int = 8) -> tuple[TPMatrices, Array]:
     """Return (A, b) for a 2-D Poisson problem on a Legendre composite space."""
     bcs = {"left": {"D": 0}, "right": {"D": 0}}
     D = FunctionSpace(N, Legendre.Legendre, bcs=bcs)
@@ -75,10 +76,10 @@ def _poisson_tpmats(N: int = 8) -> tuple[TPMatrices, jnp.ndarray]:
     x, y = T.system.base_scalars()
     ue = (1 - x**2) * (1 - y**2)
     A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
-    return cast(TPMatrices, A), b
+    return cast(TPMatrices, A), cast(Array, b)
 
 
-def _biharmonic_tpmats(N: int = 8) -> tuple[TPMatrices, jnp.ndarray]:
+def _biharmonic_tpmats(N: int = 8) -> tuple[TPMatrices, Array]:
     """Return (A, b) for a 2-D biharmonic problem on a Chebyshev composite space."""
     from jaxfun.coordinates import x, y
     from jaxfun.galerkin import Chebyshev
@@ -97,7 +98,7 @@ def _biharmonic_tpmats(N: int = 8) -> tuple[TPMatrices, jnp.ndarray]:
         sparse=True,
         kind="system",
     )
-    return cast(TPMatrices, A), b
+    return cast(TPMatrices, A), cast(Array, b)
 
 
 class TestDiakron:
@@ -371,7 +372,7 @@ class TestManualKronSolve:
         B = _diag5(5)
         K = diakron(A, B)
         b = jax.random.normal(jax.random.PRNGKey(2), shape=(30,))
-        x = K.solve(b, method="banded")
+        x = K.solve(b, method="banded", auto_threshold=200)
         assert float(jnp.linalg.norm(K.todense() @ x - b)) < ulp(1000)
 
     def test_lu_vs_dense_on_kron(self):

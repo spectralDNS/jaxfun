@@ -145,25 +145,30 @@ def check_if_nonlinear_in_jaxfunction(a: sp.Basic) -> bool:
         True if expression is nonlinear in any JAXFunction, False otherwise.
     """
     jaxfunctions = get_jaxfunctions(a)
-    have_jaxfunctions = len(jaxfunctions) > 0 or len(a.atoms(Jaxc)) > 0
+    have_jaxfunctions = len(jaxfunctions)
     if not have_jaxfunctions:
         return False
-    assert len(jaxfunctions) <= 1, "Multiple JAXFunctions found"
-    ad = a.doit(linear=True)  # assume linear
-    if ad.is_Vector:
-        for comp in ad.components.values():
-            jf = comp.atoms(Jaxc)
-            if len(jf) > 1:
-                return True
-            jf = jf.pop()
-            if sp.diff(comp, jf, 2) != 0:
-                return True
-        return False
-    jf = ad.atoms(Jaxc)
-    if len(jf) > 1:
-        return True
-    jf = jf.pop()
-    return sp.diff(ad, jf, 2) != 0
+
+    def _is_nonlinear_in_jaxfunction(a: sp.Basic) -> bool:
+        ad = a.doit(linear=True)  # assume linear
+        if ad.is_Vector:
+            for comp in ad.components.values():
+                jf = get_jaxfunctions(comp)
+                if len(jf) > 1:
+                    return True
+                jf = jf.pop()
+                if sp.diff(comp, jf, 2) != 0:
+                    return True
+            return False
+        jf = get_jaxfunctions(ad)
+        if len(jf) > 1:
+            return True
+        jf = jf.pop()
+        return sp.diff(ad, jf, 2) != 0
+
+    if len(jaxfunctions) > 1:
+        return any(_is_nonlinear_in_jaxfunction(s) for s in a.args)
+    return _is_nonlinear_in_jaxfunction(a)
 
 
 def split_coeff(c0: sp.Expr | float) -> CoeffDict:
@@ -250,7 +255,9 @@ def split(forms: sp.Expr) -> ResultDict:
     """
     v, _ = get_basisfunctions(forms)
     assert v is not None, "A test function is required"
-    assert not isinstance(v, set), "Multiple test functions not supported"
+    if isinstance(v, set):
+        assert len(v) == 1, "Multiple test functions not supported"
+        v = v.pop()
     assert _has_functionspace(v)
     V = v.functionspace
 
@@ -332,14 +339,19 @@ def add_result(
     found_d: bool = False
     for g in res:
         if jnp.all(jnp.array([g[s] == d[s] for s in system.base_scalars()])):
-            if "multivar" not in d:
+            if "multivar" not in d and "jaxfunction" not in d:
                 g["coeff"] += d["coeff"]
-            elif "multivar" not in g:
+            elif "multivar" not in g and "jaxfunction" not in g:
                 g["multivar"] = d["coeff"] * d["multivar"]
                 g["coeff"] = 1
-            else:
+            elif "multivar" in g and "multivar" in d:
                 g["multivar"] = (
                     g["coeff"] * g["multivar"] + d["coeff"] * d["multivar"]
+                ).factor()
+                g["coeff"] = 1
+            elif "jaxfunction" in g and "jaxfunction" in d:
+                g["jaxfunction"] = (
+                    g["coeff"] * g["jaxfunction"] + d["coeff"] * d["jaxfunction"]
                 ).factor()
                 g["coeff"] = 1
             found_d = True

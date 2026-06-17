@@ -19,7 +19,7 @@ from jaxfun.la.diamatrix import (
     diags,
 )
 from jaxfun.la.matrix import Matrix
-from jaxfun.la.pinned import PinnedSystem
+from jaxfun.la.pinned import PinnedDiaMatrix, PinnedSystem
 from jaxfun.utils.common import ulp
 
 
@@ -1092,7 +1092,10 @@ class TestPin:
         _, A = _tridiag(4)
         sys = A.pin({0: 0.0})
         r = repr(sys)
-        assert "PinnedSystem" in r
+        if isinstance(sys, PinnedDiaMatrix):
+            assert "PinnedDiaMatrix" in r
+        else:
+            assert "PinnedMatrix" in r
         assert "0: 0.0" in r
 
     # ------------------------------------------------------------------

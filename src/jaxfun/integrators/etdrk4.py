@@ -10,7 +10,7 @@ from flax import nnx
 from jax.scipy.linalg import expm as _expm
 
 from jaxfun.la import DiagonalMatrix, Matrix
-from jaxfun.typing import Array, FunctionSpaceType, Padding
+from jaxfun.typing import Array, Padding, ScalarSpaceType
 
 from .base import BaseIntegrator
 
@@ -69,7 +69,7 @@ class ETDRK4(BaseIntegrator):
 
     def __init__(
         self,
-        V: FunctionSpaceType,
+        V: ScalarSpaceType,
         equation: sp.Expr,
         *,
         initial: sp.Expr | Array,

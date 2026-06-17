@@ -45,19 +45,19 @@ def _():
     import jax.numpy as jnp
 
     from jaxfun.galerkin import (
+        CartesianProduct,
         JAXFunction,
         Legendre,
         TensorProduct,
         TestFunction,
         TrialFunction,
-        VectorTensorProductSpace,
         inner,
     )
 
     N = 20
     V = Legendre.Legendre(N, name="V", fun_str="phi")
     T = TensorProduct(V, V, name="T")
-    W = VectorTensorProductSpace(T, name="W")
+    W = CartesianProduct(T, T, name="W", rank=1)  # Vector space
     v = TestFunction(V, name="v")
     f = TestFunction(T, name="f")
     w = TestFunction(W, name="w")

@@ -157,7 +157,7 @@ def test_backward_primitive_2d(space):
     f = sp.sin(x) * sp.cos(y)
     uf = JAXFunction(f, T)
     du = JAXFunction(sp.diff(f, x, y), T)
-    df = T.backward_primitive(uf.array, (1, 1))
+    df = T.backward_primitive(uf.get_array(), (1, 1))
     error = jnp.linalg.norm(df - du.backward())
     assert error < jnp.sqrt(ulp(100))
 
@@ -185,6 +185,6 @@ def test_backward_primitive_directsum_2d(jspace: type[Jacobi], domain: Domain):
     f = T.system.expr_psi_to_base_scalar(f)
     uf = JAXFunction(f, T)
     du = JAXFunction(sp.diff(f, x, y), T.get_orthogonal())
-    df = T.backward_primitive(uf.array, (1, 1))
+    df = T.backward_primitive(uf.get_array(), (1, 1))
     error = jnp.linalg.norm(df - du.backward())
     assert error < jnp.sqrt(ulp(1000)), error

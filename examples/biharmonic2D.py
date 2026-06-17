@@ -43,7 +43,7 @@ A, b = inner(
     sparse=True,
     kind="system",
 )
-uh = A.solve(b)
+uh = A.solve(b, kron_method="rcm")
 
 N = 100
 xj = T.mesh(kind="uniform", N=(N, N))

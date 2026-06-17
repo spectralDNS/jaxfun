@@ -1,9 +1,13 @@
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 import pytest
 import sympy as sp
+from jax import Array
 
 from jaxfun.galerkin import (
+    CartesianProduct,
     Chebyshev,
     Fourier,
     FunctionSpace,
@@ -12,12 +16,12 @@ from jaxfun.galerkin import (
     TensorProduct,
     TestFunction,
     TrialFunction,
-    VectorTensorProductSpace,
 )
 from jaxfun.galerkin.composite import DirectSum
 from jaxfun.galerkin.inner import inner
 from jaxfun.la import TensorMatrix, TPMatrices, TPMatrix
-from jaxfun.utils.common import ulp
+from jaxfun.operators import Dot
+from jaxfun.utils.common import lambdify, ulp
 
 pytestmark = pytest.mark.integration
 
@@ -30,7 +34,6 @@ def test_tensorproduct_forward_backward_padding_fourier():
     u = TrialFunction(T)
     v = TestFunction(T)
     M, b = inner(v * (u - sp.sin(x) * sp.sin(y)), kind="system")
-    assert isinstance(M, TPMatrix)
     # Solve
     uh = M.solve(b)
     # Backward on padded grid
@@ -85,13 +88,17 @@ def test_vectortensorproductspace_forward_backward_roundtrip():
     N = 8
     C = Chebyshev.Chebyshev(N)
     T = TensorProduct(C, C)
-    V = VectorTensorProductSpace(T, name="V")
-    key = jax.random.PRNGKey(0)
-    coeffs = jax.random.normal(key, shape=V.shape())
+    V = CartesianProduct(T, T, name="V", rank=1)
+    coeffs = tuple(
+        jax.random.normal(jax.random.PRNGKey(i), shape=Vi.num_dofs)
+        for i, Vi in enumerate(V.flatten())
+    )
     u = JAXFunction(coeffs, V)
-    ua = V.backward(u.array)
+    ua = V.backward(cast(tuple[Array, ...], u.array))
     coeffs_rt = V.forward(ua)
-    assert jnp.linalg.norm(u.array - coeffs_rt) < ulp(1000)
+    assert all(
+        jnp.linalg.norm(u.array[i] - coeffs_rt[i]) < ulp(1000) for i in range(len(V))
+    )
 
 
 def test_vectortensorproductspace_padded_backward_forward_truncation_roundtrip():
@@ -100,18 +107,73 @@ def test_vectortensorproductspace_padded_backward_forward_truncation_roundtrip()
 
     C = Chebyshev.Chebyshev(N)
     T = TensorProduct(C, C)
-    V = VectorTensorProductSpace(T, name="V")
+    V = CartesianProduct(T, T, name="V", rank=1)
 
-    key = jax.random.PRNGKey(1)
-    coeffs = jax.random.normal(key, shape=V.num_dofs)
+    coeffs = tuple(
+        jax.random.normal(jax.random.PRNGKey(i), shape=Vi.num_dofs)
+        for i, Vi in enumerate(V.flatten())
+    )
     u = JAXFunction(coeffs, V)
 
-    ua = V.backward(u.array, N=(pad, pad))
+    ua = V.backward(cast(tuple[Array, ...], u.array), N=(pad, pad))
     coeffs_rt = V.forward(ua)
 
-    assert ua.shape == (2,) + pad
-    assert coeffs_rt.shape == V.num_dofs
-    assert jnp.linalg.norm(u.array - coeffs_rt) < ulp(1000)
+    assert ua[0].shape == pad and ua[1].shape == pad
+    assert all(
+        jnp.linalg.norm(u.array[i] - coeffs_rt[i]) < ulp(1000) for i in range(len(V))
+    )
+
+
+def test_vectortensorproductspace_project_different_tpspaces():
+    N = 20
+    bcsD = {"left": {"D": 0}, "right": {"D": 0}}
+    bcsB = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
+    C0 = FunctionSpace(N, Chebyshev.Chebyshev, bcs=bcsD)
+    C1 = FunctionSpace(N, Chebyshev.Chebyshev, bcs=bcsB)
+    T0 = TensorProduct(C0, C0)
+    T1 = TensorProduct(C1, C1)
+    V = CartesianProduct(T0, T1, name="V", rank=1)
+    x, y = V.system.base_scalars()
+    i, j = V.system.base_vectors()
+    coeffs = (
+        sp.sin(x * sp.pi) * sp.sin(y * sp.pi) * i + ((1 - x**2) * (1 - y**2)) ** 2 * j
+    )
+    u = JAXFunction(coeffs, V)
+    uej = (
+        lambdify((x, y), Dot(coeffs, i).doit())(*V.mesh()),
+        lambdify((x, y), Dot(coeffs, j).doit())(*V.mesh()),
+    )
+    ua = u.backward()
+    assert all(
+        jnp.linalg.norm(ua[i] - uej[i]) < jnp.sqrt(ulp(10)) for i in range(len(V))
+    )
+
+
+def test_compositetensorproductspace_project():
+    N = 20
+    bcsD = {"left": {"D": 0}, "right": {"D": 0}}
+    bcsB = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
+    C0 = FunctionSpace(N, Chebyshev.Chebyshev, bcs=bcsD)
+    C1 = FunctionSpace(N, Chebyshev.Chebyshev, bcs=bcsB)
+    T0 = TensorProduct(C0, C0)
+    T1 = TensorProduct(C1, C1)
+    V = CartesianProduct(T0, T1, name="V", rank=1)
+    W = CartesianProduct(V, T1, name="W")
+    x, y = W.system.base_scalars()
+    i, j = W.system.base_vectors()
+
+    coeffs = (
+        sp.sin(x * sp.pi) * sp.sin(y * sp.pi) * i + ((1 - x**2) * (1 - y**2)) ** 2 * j
+    )
+    u = JAXFunction(coeffs, V)
+    uej = (
+        lambdify((x, y), Dot(coeffs, i).doit())(*V.mesh()),
+        lambdify((x, y), Dot(coeffs, j).doit())(*V.mesh()),
+    )
+    ua = u.backward()
+    assert all(
+        jnp.linalg.norm(ua[i] - uej[i]) < jnp.sqrt(ulp(10)) for i in range(len(V))
+    )
 
 
 def test_inner_multivar_expression():
@@ -133,7 +195,7 @@ def test_inner_linear_only():
     v = TestFunction(C)
     x = C.system.x
     b = inner(sp.sin(x) * v, kind="linear")
-    assert b.shape[0] == C.N
+    assert cast(Array, b).shape[0] == C.N
 
 
 def test_inner_returns_matrix_and_vector_with_bcs():
@@ -146,7 +208,7 @@ def test_inner_returns_matrix_and_vector_with_bcs():
     A, b = inner(v * u + x * v * u, kind="system")
     # A is dense matrix, b vector
     assert A.shape[0] == A.shape[1]
-    assert b.shape[0] == A.shape[0]
+    assert cast(Array, b).shape[0] == A.shape[0]
 
 
 def test_vectortensorproductspace_project():
@@ -154,13 +216,13 @@ def test_vectortensorproductspace_project():
 
     C = Chebyshev.Chebyshev(N)
     T = TensorProduct(C, C)
-    V = VectorTensorProductSpace(T, name="V")
-    x, y = T.system.base_scalars()
-    i, j = T.system.base_vectors()
+    V = CartesianProduct(T, T, name="V", rank=1)
+    x, y = V.system.base_scalars()
+    i, j = V.system.base_vectors()
 
     u = JAXFunction(y * i + x * j, V)
 
-    ua = V.backward(u.array)
+    ua = V.backward(cast(tuple[Array, ...], u.array))
     xi, yj = T.mesh()
     assert jnp.linalg.norm(ua[0] - yj) < ulp(1000)
     assert jnp.linalg.norm(ua[1] - xi) < ulp(1000)

@@ -10,7 +10,7 @@ from sympy.core.function import AppliedUndef
 
 from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.arguments import ArgumentTag, JAXFunction, get_arg
-from jaxfun.typing import Array, FunctionSpaceType, Padding
+from jaxfun.typing import Array, Padding, ScalarSpaceType
 from jaxfun.utils import lambdify
 
 type NodeValueCache = dict[sp.Basic, Array]
@@ -22,7 +22,7 @@ class NonlinearCompileContext:
     """Static data required to compile nonlinear SymPy expressions."""
 
     spatial_symbols: tuple[sp.Symbol, ...]
-    functionspace: FunctionSpaceType
+    functionspace: ScalarSpaceType
     jaxfunction: AppliedUndef
 
 
@@ -106,14 +106,14 @@ class NonlinearCompiler:
     def compile_primitive(self, node: sp.Basic) -> NodeEvaluator:
         """Compile a primitive field or spatial derivative evaluation."""
         space = self.context.functionspace
-        jaxf = cast(JAXFunction, self.context.jaxfunction)
+        jaxf = cast(JAXFunction[ScalarSpaceType], self.context.jaxfunction)
         if _is_jaxfunction_leaf(node):
 
             def evaluate_leaf(
                 _cache: NodeValueCache,
                 N: Padding = None,
-                space: FunctionSpaceType = space,
-                jaxf: JAXFunction = jaxf,
+                space: ScalarSpaceType = space,
+                jaxf: JAXFunction[ScalarSpaceType] = jaxf,
             ) -> Array:
                 return space.backward(jaxf.array, N=N)  # ty: ignore[invalid-argument-type]
 
@@ -141,8 +141,8 @@ class NonlinearCompiler:
         def evaluate_derivative(
             _cache: NodeValueCache,
             N: Padding = None,
-            space: FunctionSpaceType = space,
-            jaxf: JAXFunction = jaxf,
+            space: ScalarSpaceType = space,
+            jaxf: JAXFunction[ScalarSpaceType] = jaxf,
             derivative_order: int | tuple[int, ...] = derivative_order,
         ) -> Array:
             return space.backward_primitive(jaxf.array, k=derivative_order, N=N)  # ty: ignore[invalid-argument-type]
@@ -310,7 +310,7 @@ def _is_jaxfunction_primitive(expr: sp.Basic) -> bool:
 
 def compile_nonlinear_evaluator(
     expr: sp.Expr,
-    functionspace: FunctionSpaceType,
+    functionspace: ScalarSpaceType,
     jaxfunction: AppliedUndef,
 ) -> Callable[[Array, Padding], Array]:
     """Compile a nonlinear physical-space evaluator for coefficient states."""
@@ -320,7 +320,9 @@ def compile_nonlinear_evaluator(
         jaxfunction=jaxfunction,
     )
     compiled = NonlinearCompiler(context).compile(expr)
-    jaxfunction: JAXFunction = cast(JAXFunction, jaxfunction)
+    jaxfunction: JAXFunction[ScalarSpaceType] = cast(
+        JAXFunction[ScalarSpaceType], jaxfunction
+    )
 
     def evaluate(uh: Array, N: Padding = None) -> Array:
         jaxfunction.array = uh

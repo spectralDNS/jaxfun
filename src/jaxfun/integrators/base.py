@@ -15,9 +15,9 @@ from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.arguments import JAXFunction
 from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import project
-from jaxfun.la import IdentityMatrix, ZeroMatrix
+from jaxfun.la import BaseMatrix, IdentityMatrix, ZeroMatrix
 from jaxfun.la.matrixprotocol import SolverNotApplicable
-from jaxfun.typing import Array, FunctionSpaceType, GalerkinOperator, Padding
+from jaxfun.typing import Array, Padding, ScalarSpaceType
 from jaxfun.utils import split_linear_nonlinear_terms, split_time_derivative_terms
 from jaxfun.utils.operator_tools import assemble_linear_term
 from jaxfun.utils.sympy_factoring import time_derivative_as_operator
@@ -29,7 +29,7 @@ from .nonlinear import (
 )
 
 
-def _warm_operator_solve_cache(op: GalerkinOperator) -> None:
+def _warm_operator_solve_cache(op: BaseMatrix) -> None:
     """Warm native solver caches for operators that support factorization."""
     lu_factor = getattr(op, "lu_factor", None)
     if lu_factor is None:
@@ -51,7 +51,7 @@ class BaseIntegrator(ABC, nnx.Module):
 
     def __init__(
         self,
-        V: FunctionSpaceType,
+        V: ScalarSpaceType,
         equation: sp.Expr,
         *,
         initial: sp.Expr | Array,
@@ -96,7 +96,7 @@ class BaseIntegrator(ABC, nnx.Module):
             raise ValueError("Time-derivative operator assembly produced forcing")
         if mass_operator is None:
             mass_operator = IdentityMatrix(self._state_shape)
-        self.mass_operator: GalerkinOperator = nnx.data(mass_operator)
+        self.mass_operator: BaseMatrix = nnx.data(mass_operator)
         self.mass_diag: Array | None = nnx.data(self.mass_operator.diagonal_or_none())
         if self.mass_diag is None:
             _warm_operator_solve_cache(self.mass_operator)
@@ -106,7 +106,7 @@ class BaseIntegrator(ABC, nnx.Module):
         )
         if linear_operator is None:
             linear_operator = ZeroMatrix(self._state_shape)
-        self.linear_operator: GalerkinOperator = nnx.data(linear_operator)
+        self.linear_operator: BaseMatrix = nnx.data(linear_operator)
         self.linear_forcing: Array | None = nnx.data(linear_forcing)
         self.linear_diag: Array | None = nnx.data(
             self.linear_operator.diagonal_or_none()
@@ -118,7 +118,7 @@ class BaseIntegrator(ABC, nnx.Module):
             self._setup_nonlinear_evaluator(trial)
 
     @staticmethod
-    def _coefficient_shape(V: FunctionSpaceType) -> tuple[int, ...]:
+    def _coefficient_shape(V: ScalarSpaceType) -> tuple[int, ...]:
         """Return the coefficient-array shape for the given space."""
         num_dofs = V.num_dofs
         return num_dofs if isinstance(num_dofs, tuple) else (num_dofs,)
@@ -173,7 +173,7 @@ class BaseIntegrator(ABC, nnx.Module):
             nonlinear_expr, self.functionspace, jaxfunction
         )
 
-    def _dense_matrix(self, operator: GalerkinOperator) -> Array:
+    def _dense_matrix(self, operator: BaseMatrix) -> Array:
         """Return a dense matrix representation of a linear operator."""
         return operator.todense()
 

@@ -6,20 +6,18 @@ import sympy as sp
 
 from jaxfun.galerkin import (
     Chebyshev,
+    DirectSumTPS,
     Fourier,
     FunctionSpace,
     Legendre,
     TensorProduct,
     TestFunction,
     TrialFunction,
+    VectorTensorProductSpace,
 )
 from jaxfun.galerkin.arguments import JAXFunction, ScalarFunction, VectorFunction
 from jaxfun.galerkin.forms import split_coeff
 from jaxfun.galerkin.inner import inner, inner_items, project
-from jaxfun.galerkin.tensorproductspace import (
-    DirectSumTPS,
-    VectorTensorProductSpace,
-)
 from jaxfun.la import DiaMatrix, TPMatrix
 from jaxfun.utils.common import Domain, ulp
 
@@ -28,7 +26,7 @@ def test_vector_tensor_product_space_and_jaxfunction_latex_and_matmul():
     C = Chebyshev.Chebyshev(4)
     # Need at least 2D tensorspace for sub_system logic
     TP = TensorProduct(C, C)
-    _VT = VectorTensorProductSpace(TP)  # rank 1 space
+    VT = VectorTensorProductSpace(TP)  # rank 1 space
     coeffs = jax.random.normal(jax.random.PRNGKey(0), shape=(C.N, C.N))
     jf = JAXFunction(coeffs, TP, name="U")
     # Latex function (no bold since rank==0 for scalar TensorProductSpace)
@@ -39,6 +37,19 @@ def test_vector_tensor_product_space_and_jaxfunction_latex_and_matmul():
     right = a @ jf
     assert left.shape == (C.N, C.N)
     assert right.shape == (C.N, C.N)
+
+    coeffs = tuple(
+        jax.random.normal(jax.random.PRNGKey(i), shape=(C.N, C.N)) for i in range(2)
+    )
+    jf = JAXFunction(coeffs, VT, name="U")
+    # Latex function (no bold since rank==0 for scalar TensorProductSpace)
+    _ = jf._latex()
+    # __matmul__ / __rmatmul__
+    a = (jnp.ones((C.N, C.N)), jnp.ones((C.N, C.N)))
+    left = jf @ a
+    right = a @ jf
+    assert left[0].shape == (C.N, C.N) and left[1].shape == (C.N, C.N)
+    assert right[0].shape == (C.N, C.N) and right[1].shape == (C.N, C.N)
 
 
 def test_inner_items_and_sparse_paths():

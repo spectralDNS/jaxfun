@@ -14,6 +14,11 @@ from .arguments import (
     TestFunction as TestFunction,
     TrialFunction as TrialFunction,
 )
+from .cartesianproductspace import (
+    CartesianProduct as CartesianProduct,
+    CartesianProductSpace as CartesianProductSpace,
+    VectorTensorProductSpace as VectorTensorProductSpace,
+)
 from .composite import Composite as Composite, DirectSum as DirectSum
 from .functionspace import FunctionSpace as FunctionSpace
 from .inner import inner as inner, inner_items as inner_items
@@ -21,5 +26,4 @@ from .tensorproductspace import (
     DirectSumTPS as DirectSumTPS,
     TensorProduct as TensorProduct,
     TensorProductSpace as TensorProductSpace,
-    VectorTensorProductSpace as VectorTensorProductSpace,
 )

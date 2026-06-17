@@ -42,7 +42,7 @@ A, L = inner(
     v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True, kind="system"
 )
 
-un = A.solve(L, method="kron", kron_method="banded")
+un = A.solve(L, method="kron", kron_method="banded", auto_threshold=10000)
 
 N = 100
 uj = T.evaluate_mesh(un, kind="uniform", N=(N, N))

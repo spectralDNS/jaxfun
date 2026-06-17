@@ -4,13 +4,13 @@ import copy
 import itertools
 from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
-from typing import NoReturn, cast
+from typing import TYPE_CHECKING, NoReturn, cast
 
 import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array, shard_map
-from jax.sharding import NamedSharding, PartitionSpec as P
+from jax.sharding import PartitionSpec as P
 
 from jaxfun.coordinates import CartCoordSys, CoordSys
 from jaxfun.sharding import (
@@ -18,7 +18,6 @@ from jaxfun.sharding import (
     _build_local_apply_fn,
     physical_sharding,
     spectral_sharding,
-    spmd_mesh,
 )
 from jaxfun.typing import MeshKind
 from jaxfun.utils.common import jit_vmap, lambdify
@@ -28,6 +27,10 @@ from .orthogonal import OrthogonalSpace
 
 tensor_product_symbol = "\u2297"
 multiplication_sign = "\u00d7"
+
+if TYPE_CHECKING:
+    from jaxfun.galerkin import CartesianProductSpace
+
 
 IndivisibleError = ValueError
 
@@ -65,6 +68,8 @@ class TensorProductSpace:
         basespaces: Sequence[OrthogonalSpace],
         system: CoordSys | None = None,
         name: str = "TPS",
+        leaf: CartesianProductSpace | None = None,
+        global_index: int = 0,
     ) -> None:
         from jaxfun.coordinates import CartCoordSys, x, y, z
 
@@ -80,6 +85,8 @@ class TensorProductSpace:
         self._spectral_sharding = spectral_sharding if len(jax.devices()) > 1 else None
         self._physical_sharding = physical_sharding if len(jax.devices()) > 1 else None
         self._spmd_local_fn_cache: dict = {}
+        self.global_index = global_index
+        self.leaf = leaf
 
     def __len__(self) -> int:
         """Return number of spatial dimensions."""
@@ -496,235 +503,6 @@ class TensorProductSpace:
         return z
 
 
-class VectorTensorProductSpace:
-    """Vector-valued tensor product space.
-
-    Represents a tuple of identical (or differing in boundary conditions)
-    TensorProductSpace objects corresponding to vector components.
-
-    Attributes:
-        tensorspaces: Tuple of component tensor spaces.
-        system: Shared coordinate system.
-        name: Label.
-        tensorname: Joined printable representation.
-    """
-
-    is_transient = False
-
-    def __init__(
-        self,
-        tensorspace: TensorProductSpace | tuple[TensorProductSpace, ...],
-        name: str = "VTPS",
-    ) -> None:
-        if isinstance(tensorspace, TensorProductSpace):
-            n = len(tensorspace)
-            tensorspaces: tuple[TensorProductSpace, ...] = (tensorspace,) * n
-        else:
-            tensorspaces = tensorspace
-        self.tensorspaces = tensorspaces
-        self.system: CoordSys = self.tensorspaces[0].system
-        self.name = name
-        self.tensorname = multiplication_sign.join([b.name for b in self.tensorspaces])
-        self.mesh = self.tensorspaces[0].mesh
-        self.num_quad_points = self.tensorspaces[0].num_quad_points
-        # Slab decomposition for vector spaces
-        # First index is vector component, which is not sharded.
-        self._spectral_sharding: NamedSharding | None = (
-            None if len(jax.devices()) == 1 else NamedSharding(spmd_mesh, P(None, "k"))
-        )
-        # Sharding of arrays in physical space.
-        self._physical_sharding: NamedSharding | None = (
-            None
-            if len(jax.devices()) == 1
-            else NamedSharding(spmd_mesh, P(None, None, "k"))
-        )
-
-    def __len__(self) -> int:
-        """Return number of vector components."""
-        return len(self.tensorspaces)
-
-    def __iter__(self) -> Iterator[TensorProductSpace]:
-        """Iterate over component tensor spaces."""
-        return iter(self.tensorspaces)
-
-    def __getitem__(self, i: int) -> TensorProductSpace:
-        """Return component tensor space i."""
-        return self.tensorspaces[i]
-
-    @property
-    def rank(self) -> int:
-        """Return tensor rank (1 for vector fields)."""
-        return 1
-
-    @property
-    def dims(self) -> int:
-        """Return spatial dimension of each component space."""
-        return len(self.tensorspaces[0])
-
-    @property
-    def dim(self) -> int:
-        """Return total number of modes."""
-        return sum([space.dim for space in self.tensorspaces])
-
-    @property
-    def num_dofs(self) -> tuple[int, ...]:
-        """Return tuple of active degrees of freedom per axis."""
-        return (self.dims,) + self.tensorspaces[0].num_dofs
-
-    @property
-    def is_orthogonal(self) -> bool:
-        """Return True if underlying bases are all orthogonal."""
-        return all(space.is_orthogonal for space in self.tensorspaces)
-
-    def shape(self) -> tuple[int, ...]:
-        """Return raw modal shape (N0, N1, ...)."""
-        return (self.dims,) + self.tensorspaces[0].shape()
-
-    def evaluate(self, x: Array, c: Array) -> Array:
-        """Evaluate vector expansion at scattered points.
-
-        Args:
-            x: Array of per-axis coordinates stacked (N, d).
-            c: Coefficient array shaped (dims, N0, N1, ...).
-
-        Returns:
-            Evaluated values with shape determined by leading dims of x.
-        """
-        vals = []
-        for i, space in enumerate(self.tensorspaces):
-            ci = c[i]
-            vi = space.evaluate(x, ci)
-            vals.append(vi)
-        return jnp.array(vals)
-
-    def evaluate_mesh(
-        self,
-        u: Array,
-        kind: MeshKind | str = MeshKind.QUADRATURE,
-        N: tuple[tuple[int | None, ...], ...] | None = None,
-    ) -> Array:
-        """Evaluate vector expansion on a mesh with optional padding.
-
-        Args:
-            u: Input array.
-            kind: Type of mesh to evaluate on.
-            N: Optional per-axis counts (defaults each to space.num_quad_points).
-
-        Returns:
-            Array of evaluated values on the mesh.
-        """
-        coeffs = []
-        for i, space in enumerate(self.tensorspaces):
-            ci = space.evaluate_mesh(u[i], kind=kind, N=N[i] if N is not None else None)
-            coeffs.append(ci)
-        return jnp.stack(coeffs)
-
-    def forward(self, u: Array) -> Array:
-        """Forward transform with optional truncation.
-
-        Args:
-            u: Input array.
-
-        Returns:
-            Array of forward transform values.
-        """
-        coeffs = []
-        for i, space in enumerate(self.tensorspaces):
-            ci = space.forward(u[i])
-            coeffs.append(ci)
-        return jnp.stack(coeffs)
-
-    def scalar_product(self, u: Array) -> Array:
-        """Return tensor of inner products along each axis (separable).
-        Args:
-            u: Input array.
-
-        Returns:
-            Array of inner products along each axis.
-        """
-        coeffs = []
-        for i, space in enumerate(self.tensorspaces):
-            ci = space.scalar_product(u[i])
-            coeffs.append(ci)
-        return jnp.stack(coeffs)
-
-    def backward(
-        self,
-        u: Array,
-        N: tuple[tuple[int | None, ...], ...] | None = None,
-    ) -> Array:
-        """Backward transform with optional padding.
-
-        Args:
-            u: Input array.
-            N: Optional per-axis counts (defaults each to space.num_quad_points).
-
-        Returns:
-            Array of backward transform values.
-        """
-        coeffs = []
-        for i, space in enumerate(self.tensorspaces):
-            ci = space.backward(u[i], N=N[i] if N is not None else None)
-            coeffs.append(ci)
-        return jnp.stack(coeffs)
-
-    def backward_primitive(
-        self,
-        u: Array,
-        k: tuple[int, ...],
-        N: tuple[tuple[int | None, ...], ...] | None = None,
-    ) -> Array:
-        """Backward primitive transform with optional padding.
-
-        Args:
-            u: Input array.
-            k: Tuple of derivative orders.
-            N: Optional per-axis counts (defaults each to space.num_quad_points).
-
-        Returns:
-            Array of backward primitive transform values.
-        """
-        coeffs = []
-        for i, space in enumerate(self.tensorspaces):
-            ci = space.backward_primitive(u[i], k=k, N=N[i] if N is not None else None)
-            coeffs.append(ci)
-        return jnp.stack(coeffs)
-
-    def to_orthogonal(self, c: Array) -> Array:
-        """Convert coefficients to orthogonal basis.
-
-        Args:
-            c: Input array of coefficients.
-
-        Returns:
-            Array of coefficients in orthogonal basis.
-        """
-        coeffs = []
-        for i, space in enumerate(self.tensorspaces):
-            ci = space.to_orthogonal(c[i])
-            coeffs.append(ci)
-        return jnp.stack(coeffs)
-
-    def from_orthogonal(self, c: Array) -> Array:
-        """Convert coefficients from orthogonal basis.
-
-        Args:
-            c: Input array of coefficients.
-
-        Returns:
-            Array of coefficients in the original basis.
-        """
-        coeffs = []
-        for i, space in enumerate(self.tensorspaces):
-            ci = space.from_orthogonal(c[i])
-            coeffs.append(ci)
-        return jnp.stack(coeffs)
-
-    def get_orthogonal(self) -> VectorTensorProductSpace:
-        orthogonal_spaces = [space.get_orthogonal() for space in self.tensorspaces]
-        return VectorTensorProductSpace(tuple(orthogonal_spaces), name=self.name + "o")
-
-
 def TensorProduct(
     *basespaces: OrthogonalSpace | DirectSum,
     system: CoordSys | None = None,
@@ -801,6 +579,8 @@ class DirectSumTPS(TensorProductSpace):
         basespaces: list[OrthogonalSpace | DirectSum],
         system: CoordSys,
         name: str = "DSTPS",
+        global_index: int = 0,
+        leaf: CartesianProductSpace | None = None,
     ) -> None:
         from jaxfun.galerkin.inner import project, project1D
 
@@ -811,6 +591,8 @@ class DirectSumTPS(TensorProductSpace):
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
         self._spectral_sharding = spectral_sharding if len(jax.devices()) > 1 else None
         self._physical_sharding = physical_sharding if len(jax.devices()) > 1 else None
+        self.global_index = global_index
+        self.leaf = leaf
 
         # Normalize symbolic BC expressions to base scalar form
         for space in basespaces:
@@ -977,7 +759,13 @@ class DirectSumTPS(TensorProductSpace):
                 f.append([space])
         tensorspaces = itertools.product(*f)
         return {
-            s: TensorProductSpace(s, self.system, f"{self.name}{i}")
+            s: TensorProductSpace(
+                s,
+                self.system,
+                f"{self.name}{i}",
+                leaf=self.leaf,
+                global_index=self.global_index,
+            )
             for i, s in enumerate(tensorspaces)
         }
 

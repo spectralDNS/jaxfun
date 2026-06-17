@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Protocol,
+    Self,
+    runtime_checkable,
+)
 
 import jax
 import jax.numpy as jnp
@@ -11,7 +17,6 @@ from flax import nnx
 Array = jax.Array
 
 if TYPE_CHECKING:
-    from jaxfun.galerkin import JAXFunction
     from jaxfun.la import DiaMatrix, Matrix
 
 
@@ -58,6 +63,12 @@ class _CacheBox[T]:
 
     def __repr__(self) -> str:
         return f"_CacheBox({self.value!r})"
+
+
+class IndexedArray(nnx.Pytree):
+    def __init__(self, i: int, data: Array):
+        self.data = data
+        self.i = i
 
 
 class BaseMatrix(ABC, nnx.Pytree):
@@ -181,12 +192,12 @@ class BaseMatrix(ABC, nnx.Pytree):
         """Return total number of nonzero elements"""
         raise NotImplementedError
 
-    def _as_array(self, u: Array | JAXFunction) -> Array:
+    def _as_array(self, u: Any) -> Any:
         from jaxfun.galerkin import JAXFunction
 
-        return u.array if isinstance(u, JAXFunction) else u
+        return u.get_array() if isinstance(u, JAXFunction) else u
 
-    def __call__(self, u: Array | JAXFunction) -> Array:
+    def __call__(self, u: Any) -> Any:
         raise NotImplementedError
 
     def __getitem__(self, key: tuple[int, int], /) -> Array:

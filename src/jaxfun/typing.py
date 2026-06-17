@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Literal, NotRequired, Protocol, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    NotRequired,
+    Protocol,
+    cast,
+    overload,
+)
 
 import sympy as sp
 from jax import Array as Array
@@ -20,7 +28,7 @@ from sympy.vector import (
 )
 from typing_extensions import TypedDict
 
-from jaxfun.la import BaseMatrix
+from jaxfun.la import BaseMatrix, BlockArray, IndexedArray
 from jaxfun.la.matrixprotocol import (
     DiaMatrixSolveMethod as DiaMatrixSolveMethod,
     SolverNotApplicable as SolverNotApplicable,
@@ -29,6 +37,7 @@ from jaxfun.la.matrixprotocol import (
 if TYPE_CHECKING:
     from jaxfun.coordinates import BaseDyadic, BaseScalar, BaseVector
     from jaxfun.galerkin import (
+        CartesianProductSpace,
         DirectSum,
         DirectSumTPS,
         TensorProductSpace,
@@ -43,11 +52,31 @@ type FunctionSpaceType = (
     OrthogonalSpace
     | TensorProductSpace
     | VectorTensorProductSpace
+    | CartesianProductSpace
     | DirectSum
     | DirectSumTPS
 )
 type TrialSpaceType = FunctionSpaceType
-type TestSpaceType = OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+type TestSpaceType = (
+    OrthogonalSpace
+    | TensorProductSpace
+    | VectorTensorProductSpace
+    | CartesianProductSpace
+)
+type ComputationalSpaceType = (
+    OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+)
+type RankedTrialSpaceType = (
+    OrthogonalSpace
+    | TensorProductSpace
+    | VectorTensorProductSpace
+    | DirectSum
+    | DirectSumTPS
+)
+type RankedTestSpaceType = (
+    OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+)
+type ScalarSpaceType = OrthogonalSpace | TensorProductSpace | DirectSum | DirectSumTPS
 
 type VectorLike = BaseVector | Vector | VectorAdd | VectorMul | VectorZero
 type DyadicLike = BaseDyadic | Dyadic | DyadicAdd | DyadicMul | DyadicZero
@@ -123,10 +152,9 @@ type DomainType = Literal["inside", "boundary", "intersection", "all"]
 type InnerBilinearResult = Array | BaseMatrix
 type InnerBilinearResults = list[Array | BaseMatrix]
 type InnerLinearResults = list[Array]
-type InnerItems = tuple[list[BaseMatrix], list[Array]]
-type GalerkinOperator = BaseMatrix
+type InnerItems = tuple[list[BaseMatrix], list[IndexedArray]]
 type GalerkinAssembledForm = (
-    GalerkinOperator | Array | tuple[GalerkinOperator | Array, Array | None] | None
+    BaseMatrix | Array | BlockArray | tuple[BaseMatrix, Array | BlockArray]
 )
 
 

@@ -1,5 +1,8 @@
 # ruff: noqa: E402
 # Solve Poisson's equation using mixed formulation in 1D
+import os
+import sys
+
 import jax.numpy as jnp
 import sympy as sp
 
@@ -44,4 +47,9 @@ xj = D.mesh()
 uj = C.backward(uh)
 uej = lambdify(x, ue)(xj)
 error = jnp.linalg.norm(uj[0] - uej)
+
+if "PYTEST" in os.environ:
+    assert error < jnp.sqrt(ulp(1)), error
+    sys.exit(0)
+
 print("Error =", error)

@@ -52,10 +52,13 @@ def CartesianProduct(
         VectorTensorProductSpace instance.
     """
     basespaces_list = [copy.deepcopy(space) for space in basespaces]
-    if basespaces_list[0].dims == 1:
+    if all(basespace.dims == 1 for basespace in basespaces_list):
         return CartesianProductSpace(
             *cast(list[OneDimensionalSpace], basespaces_list), name=name, rank=rank
         )
+    assert all(basespace.dims > 1 for basespace in basespaces_list)
+    assert len({b.dims for b in basespaces_list}) == 1
+
     if rank == 1:
         return VectorTensorProductSpace(
             *cast(list[MultiDimensionalSpace], basespaces_list), name=name, rank=1
@@ -91,6 +94,29 @@ class CartesianBaseSpace(ABC):
     @abstractmethod
     def get_orthogonal(self) -> Self:
         """Return orthogonal version of self"""
+
+    @abstractmethod
+    def evaluate_mesh(
+        self,
+        u: tuple[Array, ...],
+        kind: MeshKind | str = MeshKind.QUADRATURE,
+        N: Any = None,
+    ) -> Array: ...
+
+    @abstractmethod
+    def backward(
+        self,
+        u: tuple[Array, ...],
+        N: Any = None,
+    ) -> Array: ...
+
+    @abstractmethod
+    def backward_primitive(
+        self,
+        u: tuple[Array, ...],
+        k: Any,
+        N: Any = None,
+    ) -> Array: ...
 
     def __len__(self) -> int:
         """Return number of subspaces."""
@@ -146,29 +172,6 @@ class CartesianBaseSpace(ABC):
             [space.evaluate(x, c[i]) for i, space in enumerate(self.flatten())]
         )
 
-    def evaluate_mesh(
-        self,
-        u: tuple[Array, ...],
-        kind: MeshKind | str = MeshKind.QUADRATURE,
-        N: tuple[int | None, ...] | None = None,
-    ) -> Array:
-        """Evaluate each component on a mesh and stack into one Array.
-
-        Args:
-            u: input coefficients.
-            kind: Mesh type for backward evaluation (MeshKind.QUADRATURE or
-                MeshKind.UNIFORM).
-            N: Number of physical points along each axis.
-
-        Note:
-            All basespaces must use the same number of points in physical space.
-
-        """
-        results = []
-        for i, space in enumerate(self.flatten()):
-            results.append(space.evaluate_mesh(u[i], kind=kind, N=N))
-        return jnp.stack(results)
-
     def forward(self, u: Array) -> tuple[Array, ...]:
         """Forward transform each physical component into spectral space."""
         return tuple(space.forward(u[i]) for i, space in enumerate(self.flatten()))
@@ -178,48 +181,6 @@ class CartesianBaseSpace(ABC):
         return tuple(
             space.scalar_product(u[i]) for i, space in enumerate(self.flatten())
         )
-
-    def backward(
-        self,
-        u: tuple[Array, ...],
-        N: tuple[int | None, ...] | None = None,
-    ) -> Array:
-        """Backward transform per-component spectral coefficients to physical
-        space.
-
-        Args:
-            u: input coefficients
-            N: Number of physical points along each axis.
-
-        Note:
-            All basespaces must use the same number of points in physical space.
-
-        """
-        coeffs = [space.backward(u[i], N=N) for i, space in enumerate(self.flatten())]
-        return jnp.stack(coeffs)
-
-    def backward_primitive(
-        self,
-        u: tuple[Array, ...],
-        k: tuple[tuple[int, ...], ...],
-        N: tuple[int | None, ...] | None = None,
-    ) -> Array:
-        """Backward primitive transform for all components.
-
-        Args:
-            u: input coefficients
-            k: tuple of the number of derivatives for each direction. One
-                tuple item for each basespace.
-            N: Number of physical points along each axis.
-
-        Note:
-            All basespaces must use the same number of points in physical space.
-        """
-        coeffs = [
-            space.backward_primitive(u[i], k=k[i], N=N)
-            for i, space in enumerate(self.flatten())
-        ]
-        return jnp.stack(coeffs)
 
     def to_orthogonal(self, c: tuple[Array, ...]) -> tuple[Array, ...]:
         """Convert coefficients to orthogonal basis."""
@@ -319,6 +280,71 @@ class CartesianTensorProductSpace(CartesianBaseSpace):
             *orthogonal_spaces, name=self.name + "O", rank=self.rank
         )
 
+    def evaluate_mesh(
+        self,
+        u: tuple[Array, ...],
+        kind: MeshKind | str = MeshKind.QUADRATURE,
+        N: tuple[int | None, ...] | None = None,
+    ) -> Array:
+        """Evaluate each component on a mesh and stack into one Array.
+
+        Args:
+            u: input coefficients.
+            kind: Mesh type for backward evaluation (MeshKind.QUADRATURE or
+                MeshKind.UNIFORM).
+            N: Number of physical points along each axis.
+
+        Note:
+            All basespaces must use the same number of points in physical space.
+
+        """
+        results = []
+        for i, space in enumerate(self.flatten()):
+            results.append(space.evaluate_mesh(u[i], kind=kind, N=N))
+        return jnp.stack(results)
+
+    def backward(
+        self,
+        u: tuple[Array, ...],
+        N: tuple[int | None, ...] | None = None,
+    ) -> Array:
+        """Backward transform per-component spectral coefficients to physical
+        space.
+
+        Args:
+            u: input coefficients
+            N: Number of physical points along each axis.
+
+        Note:
+            All basespaces must use the same number of points in physical space.
+
+        """
+        coeffs = [space.backward(u[i], N=N) for i, space in enumerate(self.flatten())]
+        return jnp.stack(coeffs)
+
+    def backward_primitive(
+        self,
+        u: tuple[Array, ...],
+        k: tuple[tuple[int, ...], ...],
+        N: tuple[int | None, ...] | None = None,
+    ) -> Array:
+        """Backward primitive transform for all components.
+
+        Args:
+            u: input coefficients
+            k: tuple of the number of derivatives for each direction. One
+                tuple item for each basespace.
+            N: Number of physical points along each axis.
+
+        Note:
+            All basespaces must use the same number of points in physical space.
+        """
+        coeffs = [
+            space.backward_primitive(u[i], k=k[i], N=N)
+            for i, space in enumerate(self.flatten())
+        ]
+        return jnp.stack(coeffs)
+
 
 class CartesianProductSpace(CartesianBaseSpace):
     """Composite 1D function space (Cartesian product of OrthogonalSpace objects).
@@ -403,6 +429,70 @@ class CartesianProductSpace(CartesianBaseSpace):
         return CartesianProduct(
             *orthogonal_spaces, name=self.name + "O", rank=self.rank
         )
+
+    def evaluate_mesh(
+        self,
+        u: tuple[Array, ...],
+        kind: MeshKind | str = MeshKind.QUADRATURE,
+        N: int | None = None,
+    ) -> Array:
+        """Evaluate each component on a mesh and stack into one Array.
+
+        Args:
+            u: input coefficients.
+            kind: Mesh type for backward evaluation (MeshKind.QUADRATURE or
+                MeshKind.UNIFORM).
+            N: Number of physical points along each axis.
+
+        Note:
+            All basespaces must use the same number of points in physical space.
+
+        """
+        results = []
+        for i, space in enumerate(self.flatten()):
+            results.append(space.evaluate_mesh(u[i], kind=kind, N=N))
+        return jnp.stack(results)
+
+    def backward(
+        self,
+        u: tuple[Array, ...],
+        N: int | None = None,
+    ) -> Array:
+        """Backward transform per-component spectral coefficients to physical
+        space.
+
+        Args:
+            u: input coefficients
+            N: Number of physical points.
+
+        Note:
+            All basespaces must use the same number of points in physical space.
+
+        """
+        coeffs = [space.backward(u[i], N=N) for i, space in enumerate(self.flatten())]
+        return jnp.stack(coeffs)
+
+    def backward_primitive(
+        self,
+        u: tuple[Array, ...],
+        k: tuple[int, ...],
+        N: int | None = None,
+    ) -> Array:
+        """Backward primitive transform for all components.
+
+        Args:
+            u: input coefficients
+            k: tuple of the number of derivatives for each space.
+            N: Number of physical points.
+
+        Note:
+            All basespaces must use the same number of points in physical space.
+        """
+        coeffs = [
+            space.backward_primitive(u[i], k=k[i], N=N)
+            for i, space in enumerate(self.flatten())
+        ]
+        return jnp.stack(coeffs)
 
 
 class VectorTensorProductSpace(CartesianTensorProductSpace):

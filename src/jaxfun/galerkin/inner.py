@@ -1112,7 +1112,7 @@ def project(ue: sp.Expr | sp.Tuple, V: FunctionSpaceType) -> Array | tuple[Array
         uh = A.solve(b)
 
     else:
-        assert isinstance(V, CartesianProductSpace)
+        assert isinstance(V, CartesianTensorProductSpace)
         assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
         spaces = V.flatten()
         uh = tuple(project(cast(sp.Expr, uei), spaces[i]) for i, uei in enumerate(ue))

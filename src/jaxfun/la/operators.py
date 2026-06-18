@@ -262,6 +262,7 @@ class GlobalMatrix(BaseMatrix):
     def scale(self, alpha: complex | Array) -> GlobalMatrix:
         return GlobalMatrix(self.global_indices, self.data.scale(alpha))
 
+    @property
     def dtype(self) -> jnp.dtype:
         return self.data.dtype
 

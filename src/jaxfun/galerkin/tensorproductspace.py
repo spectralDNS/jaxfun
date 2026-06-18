@@ -117,8 +117,8 @@ class TensorProductSpace:
 
     @property
     def shape(self) -> tuple[int, ...]:
-        """Return dofs along each axis."""
-        return tuple(space.dim for space in self.basespaces)
+        """Return physical-space shape (number of quadrature points per axis)."""
+        return tuple(space.num_quad_points for space in self.basespaces)
 
     @property
     def dim(self) -> int:

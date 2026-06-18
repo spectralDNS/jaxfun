@@ -163,7 +163,7 @@ class CartesianBaseSpace(ABC):
 
     @property
     def shape(self) -> Any:
-        """Return modal shape for each subspace."""
+        """Return physical-space shape for each subspace."""
         return tuple(space.shape for space in self.basespaces)
 
     def evaluate(self, x: Array, c: tuple[Array, ...]) -> Array:

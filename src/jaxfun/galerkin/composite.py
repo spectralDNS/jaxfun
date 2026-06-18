@@ -568,8 +568,8 @@ class DirectSum:
 
     @property
     def shape(self) -> tuple[int, ...]:
-        """Return modal shape (not including inhomogen dofs) as a tuple."""
-        return (self.dim,)
+        """Return physical-space shape (number of quadrature points)."""
+        return (self.num_quad_points,)
 
     @property
     def dim(self) -> int:

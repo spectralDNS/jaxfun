@@ -95,11 +95,23 @@ class SpecialMatrix(BaseMatrix):
     def __call__(self, u: Array | JAXFunction) -> Array:
         raise NotImplementedError
 
-    def __matmul__(self, other: Array | JAXFunction) -> Array:
-        return self(other)
+    @overload
+    def __matmul__(self, other: Array | JAXFunction) -> Array: ...
+    @overload
+    def __matmul__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix: ...
+    def __matmul__(
+        self, other: Array | JAXFunction | DiaMatrix | Matrix
+    ) -> Array | DiaMatrix | Matrix:
+        return self._as_array(other)
 
-    def __rmatmul__(self, other: Array | JAXFunction) -> Array:
-        return self(other)
+    @overload
+    def __rmatmul__(self, other: Array | JAXFunction) -> Array: ...
+    @overload
+    def __rmatmul__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix: ...
+    def __rmatmul__(
+        self, other: Array | JAXFunction | DiaMatrix | Matrix
+    ) -> Array | DiaMatrix | Matrix:
+        return self._as_array(other)
 
     def __add__(self, other):
         return NotImplemented
@@ -143,57 +155,86 @@ class IdentityMatrix(SpecialMatrix):
         return self._as_array(u)
 
     @overload
+    def __matmul__(self, other: Array | JAXFunction) -> Array: ...
+    @overload
+    def __matmul__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix: ...
+    def __matmul__(
+        self, other: Array | JAXFunction | DiaMatrix | Matrix
+    ) -> Array | DiaMatrix | Matrix:
+        if isinstance(other, DiaMatrix | Matrix):
+            self._check_matmul_shape(other)
+            return other
+        return self._as_array(other)
+
+    @overload
+    def __rmatmul__(self, other: Array | JAXFunction) -> Array: ...
+    @overload
+    def __rmatmul__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix: ...
+    def __rmatmul__(
+        self, other: Array | JAXFunction | DiaMatrix | Matrix
+    ) -> Array | DiaMatrix | Matrix:
+        if isinstance(other, DiaMatrix | Matrix):
+            if other.shape[1] != self.shape[0]:
+                raise ValueError(
+                    f"Shape mismatch for matrix product: {other.shape} @ {self.shape}"
+                )
+            return other
+        return self._as_array(other)
+
+    @overload
     def __add__(self, other: ZeroMatrix) -> IdentityMatrix: ...
     @overload
-    def __add__[T](self, other: T) -> T: ...
+    def __add__(self, other: IdentityMatrix) -> DiagonalMatrix: ...
+    @overload
+    def __add__[T: DiaMatrix | Matrix](self, other: T) -> T: ...
     def __add__(self, other):
         if isinstance(other, ZeroMatrix):
             self._check_same_shape(other)
             return self
+        if isinstance(other, DiaMatrix | Matrix):
+            self._check_same_shape(other)
+            return self.scale(1) + other
         if isinstance(other, IdentityMatrix):
             self._check_same_shape(other)
             return self.scale(1) + other.scale(1)
-        if isinstance(other, DiaMatrix):
-            self._check_same_shape(other)
-            return self.scale(1) + other
-        if isinstance(other, Matrix):
-            self._check_same_shape(other)
-            return Matrix(other.data + self.todense())
         return NotImplemented
 
     @overload
     def __sub__(self, other: ZeroMatrix) -> IdentityMatrix: ...
     @overload
-    def __sub__[T](self, other: T) -> T: ...
+    def __sub__(self, other: IdentityMatrix) -> ZeroMatrix: ...
+    @overload
+    def __sub__[T: DiaMatrix | Matrix](self, other: T) -> T: ...
     def __sub__(self, other):
         if isinstance(other, ZeroMatrix):
             self._check_same_shape(other)
             return self
-        if isinstance(other, IdentityMatrix):
-            self._check_same_shape(other)
-            return self.scale(1) - other.scale(1)
-        if isinstance(other, DiaMatrix):
+        if isinstance(other, DiaMatrix | Matrix):
             self._check_same_shape(other)
             return self.scale(1) - other
-        if isinstance(other, Matrix):
+        if isinstance(other, IdentityMatrix):
             self._check_same_shape(other)
-            return self.to_matrix() - other
+            dtype = jnp.result_type(self.dtype, other.dtype)
+            return ZeroMatrix(self.state_shape, dtype=dtype)
         return NotImplemented
 
     @overload
-    def __rsub__(self, other: ZeroMatrix) -> IdentityMatrix: ...
+    def __rsub__(self, other: ZeroMatrix) -> DiagonalMatrix: ...
     @overload
-    def __rsub__[T](self, other: T) -> T: ...
-    def __rsub__[T](self, other: T) -> Self | T:
+    def __rsub__(self, other: IdentityMatrix) -> ZeroMatrix: ...
+    @overload
+    def __rsub__[T: DiaMatrix | Matrix](self, other: T) -> T: ...
+    def __rsub__(self, other):
         if isinstance(other, ZeroMatrix):
             self._check_same_shape(other)
             return -self
-        if isinstance(other, DiaMatrix):
+        if isinstance(other, IdentityMatrix):
             self._check_same_shape(other)
-            return other - self.scale(1)
-        if isinstance(other, Matrix):
+            dtype = jnp.result_type(self.dtype, other.dtype)
+            return ZeroMatrix(self.state_shape, dtype=dtype)
+        if isinstance(other, DiaMatrix | Matrix):
             self._check_same_shape(other)
-            return Matrix(other.data - self.todense())  # ty:ignore[invalid-return-type]
+            return other.__sub__(self.scale(1))
         return NotImplemented
 
 
@@ -237,8 +278,42 @@ class ZeroMatrix(SpecialMatrix):
         w = self._as_array(u)
         return jnp.zeros_like(w)
 
+    @overload
+    def __matmul__(self, other: Array | JAXFunction) -> Array: ...
+    @overload
+    def __matmul__(self, other: DiaMatrix | Matrix) -> Matrix: ...
+    def __matmul__(
+        self, other: Array | JAXFunction | DiaMatrix | Matrix
+    ) -> Array | Matrix:
+        if isinstance(other, DiaMatrix | Matrix):
+            self._check_matmul_shape(other)
+            n = self.shape[0]
+            k = other.shape[1]
+            dtype = jnp.result_type(self.dtype, other.dtype)
+            return Matrix(jnp.zeros((n, k), dtype=dtype))
+        w = self._as_array(other)
+        return jnp.zeros_like(w)
+
+    @overload
+    def __rmatmul__(self, other: Array | JAXFunction) -> Array: ...
+    @overload
+    def __rmatmul__(self, other: DiaMatrix | Matrix) -> Matrix: ...
+    def __rmatmul__(
+        self, other: Array | JAXFunction | DiaMatrix | Matrix
+    ) -> Array | Matrix:
+        if isinstance(other, DiaMatrix | Matrix):
+            n, m = self.shape
+            if other.shape[1] != n:
+                raise ValueError(
+                    f"Shape mismatch for matrix product: {other.shape} @ {self.shape}"
+                )
+            dtype = jnp.result_type(self.dtype, other.dtype)
+            return Matrix(jnp.zeros((other.shape[0], m), dtype=dtype))
+        w = self._as_array(other)
+        return jnp.zeros_like(w)
+
     def __add__[T](self, other: T) -> T:
-        if hasattr(other, "shape"):
+        if isinstance(other, BaseMatrix):
             self._check_same_shape(other)
         return other
 
@@ -252,7 +327,90 @@ class ZeroMatrix(SpecialMatrix):
         return jnp.zeros((), dtype=self.dtype)
 
 
-class GlobalMatrix(BaseMatrix):
+class _DataDelegatingMixin:
+    """Mixin that delegates all BaseMatrix operations to ``self.data``."""
+
+    data: DiaMatrix | Matrix
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self.data.shape
+
+    @property
+    def dtype(self) -> jnp.dtype:
+        return self.data.dtype
+
+    def matvec(self, x: Array, axis: int = 0) -> Array:
+        return self.data.matvec(x, axis=axis)
+
+    def lu_factor(self, **kwargs):
+        return self.data.lu_factor(**kwargs)
+
+    def lu_solve(self, b: Array, axis: int = 0, **kwargs) -> Array:
+        return self.data.lu_solve(b, axis=axis, **kwargs)
+
+    def solve(self, b: Array, axis: int = 0, **kwargs) -> Array:
+        return self.data.solve(b, axis=axis, **kwargs)
+
+    @property
+    def T(self) -> BaseMatrix:
+        return self.data.T
+
+    def diagonal(self, k: int = 0) -> Array:
+        return self.data.diagonal(k)
+
+    def diagonal_or_none(self) -> Array | None:
+        return self.data.diagonal_or_none()
+
+    @property
+    def is_diagonal(self) -> bool:
+        return self.data.is_diagonal
+
+    def todense(self) -> Array:
+        return self.data.todense()
+
+    def tosparse(self, *, tol: int = 100) -> DiaMatrix:
+        return self.data.tosparse(tol=tol)
+
+    def to_matrix(self) -> Matrix:
+        return self.data.to_matrix()
+
+    def get_row(self, i: int | Array) -> Array:
+        return self.data.get_row(i)
+
+    def get_column(self, j: int | Array) -> Array:
+        return self.data.get_column(j)
+
+    @property
+    def size(self) -> int:
+        return self.data.size
+
+    def __call__(self, u: Array | JAXFunction) -> Array:
+        return self.data(u)
+
+    def __getitem__(self, key: tuple[int, int], /) -> Array:
+        return self.data[key]
+
+    def __matmul__(self, other) -> Array:
+        return self.data @ other
+
+    def __rmatmul__(self, other) -> Array:
+        return other @ self.data
+
+    def __add__(self, other):
+        return self.data + other
+
+    def __sub__(self, other):
+        return self.data - other
+
+    def __rsub__(self, other):
+        return other - self.data
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+
+class GlobalMatrix(_DataDelegatingMixin, BaseMatrix):
     data: DiaMatrix | Matrix
 
     def __init__(self, global_indices: tuple[int, int], matrix: DiaMatrix | Matrix):
@@ -262,12 +420,5 @@ class GlobalMatrix(BaseMatrix):
     def scale(self, alpha: complex | Array) -> GlobalMatrix:
         return GlobalMatrix(self.global_indices, self.data.scale(alpha))
 
-    @property
-    def dtype(self) -> jnp.dtype:
-        return self.data.dtype
-
-    def solve(self, b: Array, axis: int = 0) -> Array:
-        return self.data.solve(b, axis=axis)
-
-    def todense(self) -> Array:
-        return self.data.todense()
+    def astype(self, dtype: jnp.dtype) -> GlobalMatrix:
+        return GlobalMatrix(self.global_indices, self.data.astype(dtype))

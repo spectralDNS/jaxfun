@@ -38,7 +38,7 @@ B, b = inner(u.diff(x) * q - s * q, kind="system", sparse=True)
 H = A + B
 h = a + b  # ty:ignore[unsupported-operator]
 
-uh = H.solve(h, method="banded", pivot=True)
+uh = H.solve(h, method="banded", pivot=True, auto_threshold=10000)
 
 z = H @ uh
 assert jnp.linalg.norm(z.flatten() - h.flatten()) < ulp(100)

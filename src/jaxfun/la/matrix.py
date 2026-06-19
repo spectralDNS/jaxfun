@@ -338,7 +338,7 @@ class Matrix(BaseMatrix):
     def __len__(self) -> int:
         return min(self.shape)
 
-    def __add__(self, other) -> Matrix:
+    def __add__(self, other: DiaMatrix | Matrix) -> Matrix:
         from jaxfun.la import DiaMatrix
 
         if isinstance(other, Matrix):
@@ -347,6 +347,28 @@ class Matrix(BaseMatrix):
         if isinstance(other, DiaMatrix):
             self._check_same_shape(other)
             return Matrix(self.data + other.todense())
+        return NotImplemented
+
+    def __sub__(self, other: DiaMatrix | Matrix) -> Matrix:
+        from jaxfun.la import DiaMatrix
+
+        if isinstance(other, Matrix):
+            self._check_same_shape(other)
+            return Matrix(self.data - other.data)
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
+            return Matrix(self.data - other.todense())
+        return NotImplemented
+
+    def __rsub__(self, other: DiaMatrix | Matrix) -> Matrix:
+        from jaxfun.la import DiaMatrix
+
+        if isinstance(other, Matrix):
+            self._check_same_shape(other)
+            return Matrix(other.data - self.data)
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
+            return Matrix(other.todense() - self.data)
         return NotImplemented
 
     def __getitem__(self, idx: int | slice | tuple | Array) -> Array:

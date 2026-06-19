@@ -71,11 +71,12 @@ class BlockMatrix[
         else:
             _grouped: dict[str, Matrix | DiaMatrix] = {}
             for mi in mats:
-                key = f"{mi.global_indices[0]},{mi.global_indices[1]}"
+                gm = cast(GlobalMatrix, mi)
+                key = f"{gm.global_indices[0]},{gm.global_indices[1]}"
                 if key not in _grouped:
-                    _grouped[key] = cast(DiaMatrix | Matrix, mi.data)
+                    _grouped[key] = gm.data
                 else:
-                    _grouped[key] = _grouped[key] + mi.data
+                    _grouped[key] = _grouped[key] + gm.data
             self._combined_blocks = nnx.Dict(_grouped)
 
     def _matmul_array(self, w: tuple[Array, ...]) -> tuple[Array, ...]:

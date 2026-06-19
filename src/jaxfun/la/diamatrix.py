@@ -1213,7 +1213,11 @@ class DiaMatrix(BaseMatrix):
         )
         return DiaMatrix(data=result_data, offsets=all_offsets, shape=(n, m))
 
-    def __add__(self, other):
+    @overload
+    def __add__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __add__(self, other: Matrix) -> Matrix: ...
+    def __add__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix:
         from jaxfun.la import Matrix
 
         if isinstance(other, DiaMatrix):
@@ -1222,13 +1226,30 @@ class DiaMatrix(BaseMatrix):
             return other + self
         return NotImplemented
 
-    def __sub__(self, other):
+    @overload
+    def __sub__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __sub__(self, other: Matrix) -> Matrix: ...
+    def __sub__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix:
         from jaxfun.la import Matrix
 
         if isinstance(other, DiaMatrix):
             return self._merge(other, -1.0)
         if isinstance(other, Matrix):
             return Matrix(self.todense() - other.data)
+        return NotImplemented
+
+    @overload
+    def __rsub__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __rsub__(self, other: Matrix) -> Matrix: ...
+    def __rsub__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix:
+        from jaxfun.la import Matrix
+
+        if isinstance(other, DiaMatrix):
+            return other._merge(self, -1.0)
+        if isinstance(other, Matrix):
+            return Matrix(other.data - self.todense())
         return NotImplemented
 
     @jax.jit
@@ -1602,7 +1623,11 @@ class DiagonalMatrix(DiaMatrix):
     def astype(self, dtype: jnp.dtype) -> DiagonalMatrix:
         return DiagonalMatrix(self.diagonal().astype(dtype))
 
-    def __add__(self, other):
+    @overload
+    def __add__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __add__(self, other: Matrix) -> Matrix: ...
+    def __add__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix:
         from jaxfun.la import Matrix
 
         if isinstance(other, DiaMatrix):
@@ -1615,11 +1640,39 @@ class DiagonalMatrix(DiaMatrix):
             return other + self
         return NotImplemented
 
-    def __sub__(self, other):
-        return self.__add__(-other)
+    @overload
+    def __sub__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __sub__(self, other: Matrix) -> Matrix: ...
+    def __sub__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix:
+        from jaxfun.la import Matrix
 
-    def __rsub__(self, other):
-        return (-self).__add__(other)
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
+            if other.is_diagonal:
+                return DiagonalMatrix(self.diagonal() - other.diagonal())
+            return DiaMatrix.__sub__(self, other)
+        if isinstance(other, Matrix):
+            self._check_same_shape(other)
+            return Matrix(self.todense() - other.data)
+        return NotImplemented
+
+    @overload
+    def __rsub__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __rsub__(self, other: Matrix) -> Matrix: ...
+    def __rsub__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix:
+        from jaxfun.la import Matrix
+
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
+            if other.is_diagonal:
+                return DiagonalMatrix(other.diagonal() - self.diagonal())
+            return DiaMatrix.__rsub__(self, other)
+        if isinstance(other, Matrix):
+            self._check_same_shape(other)
+            return Matrix(other.data - self.todense())
+        return NotImplemented
 
 
 @jax.jit(static_argnums=(1, 2, 3))

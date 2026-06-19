@@ -26,7 +26,7 @@ import sympy as sp
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import BaseMatrix, DiaMatrix, Matrix, diags
-from jaxfun.typing import Array, MeshKind
+from jaxfun.typing import Array, MeshKind, RankTag
 from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
 
 if TYPE_CHECKING:
@@ -325,9 +325,9 @@ class OrthogonalSpace(BaseSpace):
         return self.dim
 
     @property
-    def rank(self) -> int:
+    def rank(self) -> RankTag:
         """Return tensor rank (0 for scalar spaces)."""
-        return 0
+        return RankTag.SCALAR
 
     @property
     def domain(self) -> Domain:

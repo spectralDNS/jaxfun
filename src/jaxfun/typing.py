@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from enum import StrEnum
+from enum import Enum, StrEnum, unique
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -149,6 +149,14 @@ class TestSpaceKind(StrEnum):
             return cls(value)  # match by value: "Galerkin", "Petrov-Galerkin"
         except ValueError:
             raise ValueError(f"{value!r} is not a valid {cls.__name__}") from None
+
+
+@unique
+class RankTag(Enum):
+    SCALAR = 0
+    VECTOR = 1
+    DYADIC = 2
+    NONE = -1
 
 
 type DomainType = Literal["inside", "boundary", "intersection", "all"]

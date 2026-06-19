@@ -13,7 +13,7 @@ from jaxfun.coordinates import (
 )
 from jaxfun.galerkin import Chebyshev
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
-from jaxfun.typing import Activation
+from jaxfun.typing import Activation, RankTag
 from jaxfun.utils.common import Domain
 
 
@@ -44,7 +44,7 @@ class NNSpace(BaseSpace):
     def __init__(
         self,
         dims: int = 1,
-        rank: int = 0,
+        rank: int | RankTag = RankTag.SCALAR,
         transient: bool = False,
         system: CoordSys | None = None,
         name: str = "NN",
@@ -52,10 +52,11 @@ class NNSpace(BaseSpace):
         """Initialize a neural network function space."""
         from jaxfun.coordinates import CartCoordSys, x, y, z
 
+        rank_tag = RankTag(rank) if isinstance(rank, int) else rank
         self.in_size = dims + int(transient)
-        self.out_size = dims**rank
+        self.out_size: int = int(dims**rank_tag.value)
         self.dims = dims
-        self.rank = rank
+        self.rank = rank_tag
         self.is_transient = transient
         system = (
             CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[dims])
@@ -100,7 +101,7 @@ class MLPSpace(NNSpace):
         self,
         hidden_size: list[int] | int,
         dims: int = 1,
-        rank: int = 0,
+        rank: int | RankTag = RankTag.SCALAR,
         system: CoordSys | None = None,
         transient: bool = False,
         act_fun: Activation = nnx.tanh,
@@ -115,7 +116,7 @@ class MLPSpace(NNSpace):
         self.act_fun = act_fun
 
 
-MLPVectorSpace = partial(MLPSpace, rank=1)
+MLPVectorSpace = partial(MLPSpace, rank=RankTag.VECTOR)
 
 
 class PirateSpace(NNSpace):
@@ -146,7 +147,7 @@ class PirateSpace(NNSpace):
         self,
         hidden_size: Sequence[int] | int,
         dims: int = 1,
-        rank: int = 0,
+        rank: int | RankTag = RankTag.SCALAR,
         system: CoordSys | None = None,
         name: str = "PirateNet",
         transient: bool = False,
@@ -208,7 +209,7 @@ class KANMLPSpace(NNSpace):
         spectral_size: int,
         hidden_size: int | list[int],
         dims: int = 1,
-        rank: int = 0,
+        rank: int | RankTag = RankTag.SCALAR,
         system: CoordSys | None = None,
         name: str = "KANMLP",
         transient: bool = False,
@@ -266,7 +267,7 @@ class sPIKANSpace(NNSpace):
         spectral_size: list[int] | int,
         hidden_size: list[int] | int,
         dims: int = 1,
-        rank: int = 0,
+        rank: int | RankTag = RankTag.SCALAR,
         system: CoordSys | None = None,
         name: str = "sPIKAN",
         transient: bool = False,

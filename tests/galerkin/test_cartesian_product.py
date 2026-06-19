@@ -36,6 +36,7 @@ from jaxfun.galerkin.composite import DirectSum
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.la import BlockArray, BlockMatrix, GlobalArray
+from jaxfun.typing import RankTag
 from jaxfun.utils.common import ulp
 
 pytestmark = pytest.mark.integration
@@ -84,7 +85,7 @@ def test_heterogeneous_space_properties():
     W, T0, T1 = _two_component_space(N)
     assert isinstance(W, CartesianTensorProductSpace)
     assert not isinstance(W, VectorTensorProductSpace)
-    assert W.rank == -1
+    assert W.rank == RankTag.NONE
     assert W.dims == 2
     assert W.num_components == 2
     assert W.dim == T0.dim + T1.dim
@@ -395,7 +396,7 @@ def test_1d_cartesian_product_space_properties():
     assert isinstance(C, CartesianProductSpace)
     assert not isinstance(C, CartesianTensorProductSpace)
     assert C.dims == 1
-    assert C.rank == -1
+    assert C.rank == RankTag.NONE
     assert C.num_components == 2
     assert C.dim == L0.dim + L1.dim
     assert C.block_sizes == (L0.dim, L1.dim)

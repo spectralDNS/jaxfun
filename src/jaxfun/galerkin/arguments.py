@@ -38,6 +38,7 @@ from jaxfun.typing import (
     FunctionSpaceType,
     MeshKind,
     Padding,
+    RankTag,
     ScalarSpaceType,
     TestSpaceType,
     TrialSpaceType,
@@ -75,7 +76,7 @@ def get_BasisFunction(
     vector_index: int,
     local_index: int,
     global_index: int,
-    rank: int,
+    rank: RankTag,
     offset: int,
     functionspace: BaseSpace,
     argument: ArgumentTag,
@@ -109,9 +110,9 @@ def get_BasisFunction(
         index = indices[cls.local_index + cls.offset]
         lhs = f"{cls.name}_{index}"
         rhs = f"({cls.args[0].name})"
-        if cls.rank == 0:
+        if cls.rank == RankTag.SCALAR:
             return lhs + rhs
-        elif cls.rank == 1:
+        elif cls.rank == RankTag.VECTOR:
             sup = "^{(" + str(cls.vector_index) + ")}"
             return lhs + sup + rhs
         raise NotImplementedError("Rank > 1 basis functions not supported.")
@@ -126,9 +127,9 @@ def get_BasisFunction(
         index = indices[cls.local_index + cls.offset]
         lhs = f"{latex_symbols[cls.name]}_{index}"
         rhs = f"({latex_symbols[cls.args[0].name]})"
-        if cls.rank == 0:
+        if cls.rank == RankTag.SCALAR:
             s = lhs + rhs
-        elif cls.rank == 1:
+        elif cls.rank == RankTag.VECTOR:
             sup = "^{(" + str(cls.vector_index) + ")}"
             s = lhs + sup + rhs
         else:
@@ -177,7 +178,7 @@ def _get_computational_function(
             vector_index=0,
             local_index=0,
             global_index=getattr(V, "global_index", 0),
-            rank=0,
+            rank=RankTag.SCALAR,
             offset=offset,
             functionspace=V,
             argument=ArgumentTag.TEST if arg == "test" else ArgumentTag.TRIAL,
@@ -191,7 +192,7 @@ def _get_computational_function(
                 vector_index=0,
                 local_index=getattr(a, "_id", [0])[0],
                 global_index=getattr(V, "global_index", 0),
-                rank=0,
+                rank=RankTag.SCALAR,
                 offset=offset,
                 functionspace=v,
                 argument=ArgumentTag.TEST if arg == "test" else ArgumentTag.TRIAL,
@@ -211,7 +212,7 @@ def _get_computational_function(
                 vector_index=i,
                 local_index=getattr(a, "_id", [0])[0],
                 global_index=getattr(Vi, "global_index", 0),
-                rank=1,
+                rank=RankTag.VECTOR,
                 offset=offset,
                 functionspace=v,
                 argument=ArgumentTag.TEST if arg == "test" else ArgumentTag.TRIAL,
@@ -271,14 +272,16 @@ class ExpansionFunction(BaseFunction):
 
     def __str__(self) -> str:
         V = self.functionspace
-        name = "\033[1m%s\033[0m" % (self.name,) if V.rank == 1 else self.name  # noqa: UP031
+        name = (
+            "\033[1m%s\033[0m" % (self.name,) if V.rank == RankTag.VECTOR else self.name  # noqa: UP031
+        )
         return f"{name}({self.c_names}; {V.name})"
 
     def _latex(self, printer: Any = None) -> str:
         name = self.name
         if name != self.own_name:
             assert not isinstance(self.functionspace, DirectSum)
-            if self.functionspace.rank == 1:
+            if self.functionspace.rank == RankTag.VECTOR:
                 name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return f"{name}({self.c_names}; {self.functionspace.name})"
 
@@ -352,7 +355,9 @@ class TestFunction(ExpansionFunction):
         if isinstance(V, CartesianProductSpace | CartesianTensorProductSpace):
             if name is None:
                 name = "abcdefg"[len(V)]
-            elif len(name) != len(V) and not (len(name) == 1 and V.rank == 1):
+            elif len(name) != len(V) and not (
+                len(name) == 1 and V.rank == RankTag.VECTOR
+            ):
                 raise ValueError(
                     f"Length of name str must equal the length of basespaces in "
                     f"CartesianProductSpace. Got {len(V)} basespaces and "
@@ -363,7 +368,7 @@ class TestFunction(ExpansionFunction):
         return obj
 
     def doit(self, **hints: Any) -> Expr | AppliedUndef:
-        if self.functionspace.rank < 0:
+        if self.functionspace.rank == RankTag.NONE:
             raise ValueError(
                 "TestFunction expansion not possible for Cartesian products that are "
                 "not ranked tensors"
@@ -399,7 +404,9 @@ class TrialFunction(ExpansionFunction):
         if isinstance(V, CartesianProductSpace | CartesianTensorProductSpace):
             if name is None:
                 name = "abcdefg"[len(V)]
-            elif len(name) != len(V) and not (len(name) == 1 and V.rank == 1):
+            elif len(name) != len(V) and not (
+                len(name) == 1 and V.rank == RankTag.VECTOR
+            ):
                 raise ValueError(
                     f"Length of name str must equal the length of basespaces in "
                     f"CartesianProductSpace. Got {len(V)} basespaces and "
@@ -448,7 +455,7 @@ class TrialFunction(ExpansionFunction):
                                 vector_index=i,
                                 local_index=getattr(a, "_id", [0])[0],
                                 global_index=getattr(Vi, "global_index", 0),
-                                rank=1,
+                                rank=RankTag.VECTOR,
                                 offset=fspace.dims,
                                 functionspace=v,
                                 argument=ArgumentTag.TRIAL,
@@ -599,7 +606,7 @@ def get_JAXFunction(
     *,
     array: Array,
     global_index: int,
-    rank: int,
+    rank: RankTag,
     functionspace: FunctionSpaceType,
     argument: ArgumentTag,
     args: Tuple,
@@ -629,10 +636,10 @@ def get_JAXFunction(
     def __str__(cls) -> str:
         lhs = f"{cls.name}"
 
-        if cls.rank == 0:
+        if cls.rank == RankTag.SCALAR:
             rhs = f"{cls.args}" if len(cls.args) > 1 else f"({cls.args[0].name})"
             return lhs + rhs
-        elif cls.rank == 1:
+        elif cls.rank == RankTag.VECTOR:
             rhs = f"{cls.args}"
             sup = "^{(" + str(cls.global_index) + ")}"
             return lhs + sup + rhs
@@ -646,14 +653,14 @@ def get_JAXFunction(
 
     def _latex(cls, printer: Any = None, exp: float | None = None) -> str:
         lhs = f"{latex_symbols[cls.name]}"
-        if cls.rank == 0:
+        if cls.rank == RankTag.SCALAR:
             rhs = (
                 f"({latex_symbols[cls.args[0]]})"
                 if len(cls.args) == 1
                 else f"{latex_symbols[cls.args]}"
             )
             s = lhs + rhs
-        elif cls.rank == 1:
+        elif cls.rank == RankTag.VECTOR:
             rhs = f"{latex_symbols[cls.args]}"
             sup = "^{(" + str(cls.global_index) + ")}"
             s = lhs + sup + rhs
@@ -732,7 +739,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
 
         if isinstance(array, sp.Expr | sp.Tuple):
-            if V.rank == 1:
+            if V.rank == RankTag.VECTOR:
                 assert isinstance(array, sp.Expr)
                 array = project(array, cast(VectorTensorProductSpace, V))
             else:
@@ -771,11 +778,11 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
             local_indices = slice(offset, 2 * offset)
             global_index = 0
             hat = f"\\hat{{{self.name}}}"
-            if V.rank == 0:
+            if V.rank == RankTag.SCALAR:
                 name = "".join((hat, "_{", indices[local_indices], "}"))
                 return Jaxc(cast(Array, self.array), V, name=name) * trial
 
-            elif V.rank == 1:
+            elif V.rank == RankTag.VECTOR:
                 assert isinstance(V, VectorTensorProductSpace)
                 s = []
                 for k, v in cast(Vector, trial).components.items():
@@ -804,18 +811,18 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
                 )
 
         # Nonlinear case, return a multivar function.
-        if V.rank == 0:
+        if V.rank == RankTag.SCALAR:
             return get_JAXFunction(
                 self.name,
                 array=cast(Array, self.array),
                 global_index=0,
-                rank=0,
+                rank=RankTag.SCALAR,
                 functionspace=V,
                 argument=ArgumentTag.JAXFUNC,
                 args=V.system.base_scalars(),
             )
 
-        elif V.rank == 1:
+        elif V.rank == RankTag.VECTOR:
             assert isinstance(V, VectorTensorProductSpace)
 
             return VectorAdd.fromiter(
@@ -823,7 +830,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
                     "".join((self.name, "^{(", str(i), ")}")),
                     array=self.array[i],
                     global_index=i,
-                    rank=0,
+                    rank=RankTag.SCALAR,
                     functionspace=V[i],
                     argument=ArgumentTag.JAXFUNC,
                     args=V.system.base_scalars(),
@@ -882,7 +889,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         else:
             z = V.evaluate(x, cast(tuple[Array, ...], self.array))
 
-        if V.rank == 0:
+        if V.rank == RankTag.SCALAR:
             return jnp.expand_dims(z, -1)
         return z
 

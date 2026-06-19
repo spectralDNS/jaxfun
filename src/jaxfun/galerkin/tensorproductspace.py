@@ -19,7 +19,7 @@ from jaxfun.sharding import (
     physical_sharding,
     spectral_sharding,
 )
-from jaxfun.typing import MeshKind
+from jaxfun.typing import MeshKind, RankTag
 from jaxfun.utils.common import jit_vmap, lambdify
 
 from .composite import BCGeneric, BoundaryConditions, Composite, DirectSum
@@ -106,9 +106,9 @@ class TensorProductSpace:
         return len(self)
 
     @property
-    def rank(self) -> int:
+    def rank(self) -> RankTag:
         """Return tensor rank (0 for scalar-valued space)."""
-        return 0
+        return RankTag.SCALAR
 
     @property
     def is_orthogonal(self) -> bool:

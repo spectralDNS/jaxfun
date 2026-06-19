@@ -29,6 +29,7 @@ from jaxfun.typing import (
     InnerKindLike,
     InnerResultDict,
     RankedTestSpaceType,
+    RankTag,
     ScalarSpaceType,
     TrialSpaceType,
 )
@@ -691,12 +692,12 @@ def _finalize_inner_result(
     assert test_space is not None
     dims: int = test_space.dims
     test_leaf = test_space.leaf
-    rank: int = 0 if test_leaf is None else test_leaf.rank
+    rank: RankTag = RankTag.SCALAR if test_leaf is None else test_leaf.rank
 
     bresult: Array | BlockArray | None = None
 
     if len(bresults) > 0:
-        if rank == 0:
+        if rank == RankTag.SCALAR:
             bresult = jnp.sum(jnp.array([d.data for d in bresults]), axis=0)
         else:
             bresult = BlockArray(
@@ -758,7 +759,7 @@ def _finalize_inner_result(
                 else:
                     a0.mats = nnx.List(mat.to_matrix() for mat in a0.mats)
 
-            if rank == 0:
+            if rank == RankTag.SCALAR:
                 aresult = tpresults[0] if len(tpresults) == 1 else TPMatrices(tpresults)
             else:
                 aresult = BlockMatrix(
@@ -768,7 +769,7 @@ def _finalize_inner_result(
                 )
 
         elif all(isinstance(a, TensorMatrix) for a in aresults):
-            if rank != 0:
+            if rank != RankTag.SCALAR:
                 raise NotImplementedError("Rank >0 TensorMatrix not implemented")
             tensor_results = cast(list[TensorMatrix], aresults)
             aresult = sum(tensor_results[1:], tensor_results[0])
@@ -1083,14 +1084,14 @@ def project(ue: sp.Expr | sp.Tuple, V: FunctionSpaceType) -> Array | tuple[Array
 
     if len(get_jaxfunctions(ue if isinstance(ue, sp.Expr) else sum(ue))) == 0:
         assert not isinstance(V, OrthogonalSpace | DirectSum | CartesianProductSpace)
-        if V.rank == 0:
+        if V.rank == RankTag.SCALAR:
             assert isinstance(ue, sp.Expr)
             uj = lambdify(V.system.base_scalars(), ue)(*V.mesh())
             uj = jnp.broadcast_to(uj, V.num_quad_points)
         else:
             s = V.system.base_scalars()
             bv = V.system.base_vectors()
-            if V.rank == 1:  # VectorTensorProductSpace
+            if V.rank == RankTag.VECTOR:  # VectorTensorProductSpace
                 assert isinstance(ue, sp.Expr)
                 uj = (lambdify(s, Dot(ue, n).doit())(*V.mesh()) for n in bv)
             else:
@@ -1102,11 +1103,11 @@ def project(ue: sp.Expr | sp.Tuple, V: FunctionSpaceType) -> Array | tuple[Array
 
     u = TrialFunction(V)
     v = TestFunction(V)
-    if V.rank == 0:
+    if V.rank == RankTag.SCALAR:
         A, b = inner(v * (u - ue), kind=InnerKind.SYSTEM)
         uh = A.solve(b)
 
-    elif V.rank == 1:
+    elif V.rank == RankTag.VECTOR:
         assert isinstance(V, VectorTensorProductSpace)
         A, b = inner(Dot(v, (u - ue)), kind=InnerKind.SYSTEM)
         uh = A.solve(b)

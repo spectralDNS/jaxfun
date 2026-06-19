@@ -14,7 +14,7 @@ from jaxfun.galerkin.composite import DirectSum
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.galerkin.tensorproductspace import TensorProductSpace, multiplication_sign
 from jaxfun.sharding import physical_sharding, spectral_sharding
-from jaxfun.typing import MeshKind
+from jaxfun.typing import MeshKind, RankTag
 
 type MultiDimensionalSpace = TensorProductSpace | CartesianTensorProductSpace
 type OneDimensionalSpace = OrthogonalSpace | DirectSum | CartesianProductSpace
@@ -22,20 +22,26 @@ type OneDimensionalSpace = OrthogonalSpace | DirectSum | CartesianProductSpace
 
 @overload
 def CartesianProduct(
-    *basespaces: MultiDimensionalSpace, name: str = "CP", rank: int = -1
+    *basespaces: MultiDimensionalSpace,
+    name: str = "CP",
+    rank: int | RankTag = RankTag.NONE,
 ) -> CartesianTensorProductSpace: ...
 @overload
 def CartesianProduct(
-    *basespaces: OneDimensionalSpace, name: str = "CP", rank: int = -1
+    *basespaces: OneDimensionalSpace,
+    name: str = "CP",
+    rank: int | RankTag = RankTag.NONE,
 ) -> CartesianProductSpace: ...
 @overload
 def CartesianProduct(
-    *basespaces: MultiDimensionalSpace, name: str = "CP", rank: int = 1
+    *basespaces: MultiDimensionalSpace,
+    name: str = "CP",
+    rank: int | RankTag = RankTag.VECTOR,
 ) -> VectorTensorProductSpace: ...
 def CartesianProduct(
     *basespaces: MultiDimensionalSpace | OneDimensionalSpace,
     name: str = "CP",
-    rank: int = -1,
+    rank: int | RankTag = RankTag.NONE,
 ) -> CartesianTensorProductSpace | CartesianProductSpace:
     """Factory returning the appropriate Cartesian product space.
 
@@ -51,20 +57,23 @@ def CartesianProduct(
         CartesianTensorProductSpace, CartesianProductSpace, or
         VectorTensorProductSpace instance.
     """
+    rank_tag = RankTag(rank) if isinstance(rank, int) else rank
     basespaces_list = [copy.deepcopy(space) for space in basespaces]
     if all(basespace.dims == 1 for basespace in basespaces_list):
         return CartesianProductSpace(
-            *cast(list[OneDimensionalSpace], basespaces_list), name=name, rank=rank
+            *cast(list[OneDimensionalSpace], basespaces_list), name=name, rank=rank_tag
         )
     assert all(basespace.dims > 1 for basespace in basespaces_list)
     assert len({b.dims for b in basespaces_list}) == 1
 
-    if rank == 1:
+    if rank_tag == RankTag.VECTOR:
         return VectorTensorProductSpace(
-            *cast(list[MultiDimensionalSpace], basespaces_list), name=name, rank=1
+            *cast(list[MultiDimensionalSpace], basespaces_list),
+            name=name,
+            rank=RankTag.VECTOR,
         )
     return CartesianTensorProductSpace(
-        *cast(list[MultiDimensionalSpace], basespaces_list), name=name, rank=rank
+        *cast(list[MultiDimensionalSpace], basespaces_list), name=name, rank=rank_tag
     )
 
 
@@ -73,7 +82,7 @@ class CartesianBaseSpace(ABC):
 
     is_transient = False
     basespaces: Sequence[OneDimensionalSpace | MultiDimensionalSpace]
-    _rank: int
+    _rank: RankTag
 
     @abstractmethod
     def __iter__(self) -> Iterator[Any]:
@@ -128,7 +137,7 @@ class CartesianBaseSpace(ABC):
         return len(self.flatten())
 
     @property
-    def rank(self) -> int:
+    def rank(self) -> RankTag:
         """Return tensor rank (1 for vector fields, -1 for composite)."""
         return self._rank
 
@@ -217,7 +226,7 @@ class CartesianTensorProductSpace(CartesianBaseSpace):
         self,
         *basespaces: MultiDimensionalSpace,
         name: str = "CTPS",
-        rank: int = -1,
+        rank: int | RankTag = RankTag.NONE,
     ) -> None:
         from jaxfun.galerkin import DirectSumTPS
 
@@ -227,7 +236,7 @@ class CartesianTensorProductSpace(CartesianBaseSpace):
         self.tensorname = multiplication_sign.join([b.name for b in self.basespaces])
         self._spectral_sharding = spectral_sharding if len(jax.devices()) > 1 else None
         self._physical_sharding = physical_sharding if len(jax.devices()) > 1 else None
-        self._rank = rank
+        self._rank = RankTag(rank) if isinstance(rank, int) else rank
         self.leaf: CartesianTensorProductSpace = self
 
         for space in self.basespaces:
@@ -362,19 +371,19 @@ class CartesianProductSpace(CartesianBaseSpace):
 
     is_transient = False
     basespaces: Sequence[OneDimensionalSpace]
-    _rank: int
+    _rank: RankTag
 
     def __init__(
         self,
         *basespaces: OneDimensionalSpace,
         name: str = "CPS",
-        rank: int = -1,
+        rank: int | RankTag = RankTag.NONE,
     ) -> None:
         self.basespaces = list(basespaces)
         self.system: CoordSys = self.basespaces[0].system
         self.name = name
         self.tensorname = multiplication_sign.join([b.name for b in self.basespaces])
-        self._rank = rank
+        self._rank = RankTag(rank) if isinstance(rank, int) else rank
         self.leaf: CartesianProductSpace = self
 
         for space in self.basespaces:

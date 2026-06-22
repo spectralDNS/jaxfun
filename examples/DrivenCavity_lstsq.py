@@ -19,11 +19,10 @@ import sympy as sp
 from flax import nnx
 
 from jaxfun.operators import Div, Dot, Grad
+from jaxfun.pinns import CartesianProduct, FlaxFunction, MLPSpace
 from jaxfun.pinns.bcs import DirichletBC
 from jaxfun.pinns.loss import Loss
 from jaxfun.pinns.mesh import Rectangle
-from jaxfun.pinns.module import Comp, FlaxFunction
-from jaxfun.pinns.nnspaces import MLPSpace
 from jaxfun.pinns.optimizer import Trainer, adam, lbfgs
 
 print("JAX running on", jax.devices()[0].platform.upper())
@@ -46,16 +45,16 @@ Nb = xyb.shape[0]
 
 V = MLPSpace([16], dims=2, rank=1, name="V")  # Vector space for velocity
 Q = MLPSpace([12], dims=2, rank=0, name="Q")  # Scalar space for pressure
+W = CartesianProduct(V, Q, name="W")
 
-u = FlaxFunction(V, "u", rngs=nnx.Rngs(2001))  # , bias_init=nnx.initializers.normal())
-p = FlaxFunction(Q, "p", rngs=nnx.Rngs(2002))  # , bias_init=nnx.initializers.normal())
+up = FlaxFunction(W, "up", rngs=nnx.Rngs(2001))
+u, p = up
 
 eq1 = Dot(Grad(u), u) - nu * Div(Grad(u)) + Grad(p)
 # eq1 = Div(Outer(u, u)) - nu * Div(Grad(u)) + Grad(p)  # Alternative form
 
 eq2 = Div(u)
 
-module = Comp(u, p)
 x, y = V.system.base_scalars()
 
 ub = DirichletBC(
@@ -70,8 +69,8 @@ loss_fn = Loss(
     (p, xyp, 0, 10),  # Pressure pin-point
 )
 
-opt_adam = adam(module)
-opt_lbfgs = lbfgs(module, memory_size=50, max_linesearch_steps=5)
+opt_adam = adam(up)
+opt_lbfgs = lbfgs(up, memory_size=50, max_linesearch_steps=5)
 
 trainer = Trainer(loss_fn)
 
@@ -86,7 +85,7 @@ print("Time LBFGS", time.time() - t1)
 yj = jnp.linspace(-1, 1, 50)
 xx, yy = jnp.meshgrid(yj, yj, sparse=False, indexing="ij")
 z = jnp.column_stack((xx.ravel(), yy.ravel()))
-uvp = module(z)
+uvp = up(z)
 plt.contourf(xx, yy, uvp[:, 0].reshape(xx.shape), 100)
 plt.figure()
 plt.contourf(xx, yy, uvp[:, 1].reshape(xx.shape), 100)
@@ -102,7 +101,7 @@ if pyvista is not None:
     xO = jnp.array(pts[:, 0], dtype=float)
     yO = jnp.array(pts[:, 1], dtype=float)
     zO = jnp.column_stack((xO, yO))
-    U0 = module(zO)
+    U0 = up(zO)
     U1 = jnp.array(m.cell_data["U"], dtype=float)
     UC = jnp.array(
         np.load(

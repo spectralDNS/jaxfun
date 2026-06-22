@@ -708,7 +708,7 @@ def _finalize_inner_result(
 
     if dims == 1:
         if len(aresults) > 0:
-            if all(isinstance(a, GlobalMatrix) for a in aresults):
+            if test_leaf is not None:
                 # 1D CartesianProductSpace bilinear forms
                 iresults = cast(list[GlobalMatrix], aresults)
                 indexed_mats: list[GlobalMatrix] = []

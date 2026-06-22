@@ -22,6 +22,7 @@ from sympy.vector import VectorAdd
 
 from jaxfun.coordinates import BaseTime, CoordSys
 from jaxfun.galerkin import (
+    CartesianTensorProductSpace,
     Chebyshev,
     DirectSum,
     TensorProductSpace,
@@ -34,6 +35,7 @@ from jaxfun.utils.common import Domain, lambdify
 
 from .embeddings import Embedding
 from .nnspaces import (
+    CartesianNNSpace,
     KANMLPSpace,
     MLPSpace,
     NNSpace,
@@ -606,7 +608,7 @@ class SpectralModule(BaseModule):
 
     def __init__(
         self,
-        basespace: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace,
+        basespace: (OrthogonalSpace | TensorProductSpace | CartesianTensorProductSpace),
         *,
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,  # kept for uniform API
@@ -627,20 +629,22 @@ class SpectralModule(BaseModule):
             x = jnp.logspace(0, -6, basespace.num_dofs)
             self.kernel: nnx.Param[Array] = nnx.Param(w * x[None, :])
 
-        elif basespace.dims == 2:
-            if isinstance(basespace, TensorProductSpace):
-                w = kernel_init(rngs(), basespace.num_dofs)
-                x = jnp.logspace(0, -6, basespace.num_dofs[0])
-                y = jnp.logspace(0, -6, basespace.num_dofs[1])
-                self.kernel = nnx.Param(x[:, None] * y[None, :] * w)
-            elif isinstance(basespace, VectorTensorProductSpace):
-                c = []
-                for b in basespace:
-                    w = kernel_init(rngs(), b.num_dofs)
-                    x = jnp.logspace(0, -6, b.num_dofs[0])
-                    y = jnp.logspace(0, -6, b.num_dofs[1])
-                    c.append((x[:, None] * y[None, :]) * w)
-                self.kernel: nnx.Param[tuple[Array, ...]] = nnx.Param(tuple(c))
+        elif isinstance(basespace, TensorProductSpace):
+            w = kernel_init(rngs(), basespace.num_dofs)
+            x = jnp.logspace(0, -6, basespace.num_dofs[0])
+            y = jnp.logspace(0, -6, basespace.num_dofs[1])
+            self.kernel = nnx.Param(x[:, None] * y[None, :] * w)
+
+        elif isinstance(basespace, CartesianTensorProductSpace):
+            # Handles both VectorTensorProductSpace and generic mixed spaces.
+            # Each leaf TensorProductSpace gets its own Param (kernel_0, kernel_1, ...).
+            components = list(basespace.flatten())
+            for i, b in enumerate(components):
+                w = kernel_init(rngs(), b.num_dofs)
+                bx = jnp.logspace(0, -6, b.num_dofs[0])
+                by = jnp.logspace(0, -6, b.num_dofs[1])
+                setattr(self, f"kernel_{i}", nnx.Param((bx[:, None] * by[None, :]) * w))
+            self._num_kernels = len(components)
 
         self.space = basespace
         self.name = name
@@ -657,7 +661,11 @@ class SpectralModule(BaseModule):
 
     def set_kernel(self, kernel: Array | tuple[Array, ...]) -> None:
         """Set kernel parameters directly."""
-        self.kernel: nnx.Param[Array | tuple[Array, ...]] = nnx.Param(kernel)
+        if isinstance(self.space, CartesianTensorProductSpace):
+            for i, k in enumerate(cast(tuple[Array, ...], kernel)):
+                setattr(self, f"kernel_{i}", nnx.Param(k))
+        else:
+            self.kernel = nnx.Param(cast(Array, kernel))
 
     def __call__(self, x: Array) -> Array:
         """Evaluate spectral expansion at coordinates.
@@ -673,8 +681,11 @@ class SpectralModule(BaseModule):
 
         if isinstance(self.space, TensorProductSpace):
             z = self.space.evaluate(x, cast(Array, self.kernel))
-        elif isinstance(self.space, VectorTensorProductSpace):
-            z = self.space.evaluate(x, cast(tuple[Array, ...], self.kernel))
+        elif isinstance(self.space, CartesianTensorProductSpace):
+            kernels = tuple(
+                getattr(self, f"kernel_{i}") for i in range(self._num_kernels)
+            )
+            z = self.space.evaluate(x, kernels).T
 
         if self.space.rank == RankTag.SCALAR:
             return jnp.expand_dims(z, -1)
@@ -896,8 +907,20 @@ def get_flax_module(
         return sPIKANModule(V, **params)  # ty:ignore[unknown-argument, invalid-argument-type]
     elif isinstance(V, UnionSpace):
         return UnionModule(V, **params)
+    elif isinstance(V, CartesianNNSpace):
+        sub_modules: list[BaseModule] = [
+            get_flax_module(
+                vi,
+                kernel_init=kernel_init,
+                bias_init=bias_init,
+                rngs=rngs,
+                name=vi.name,
+            )
+            for vi in V
+        ]
+        return CartesianNNModule(sub_modules, name=name or V.name)
     assert isinstance(
-        V, OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+        V, OrthogonalSpace | TensorProductSpace | CartesianTensorProductSpace
     )
     return SpectralModule(V, **params)
 
@@ -923,9 +946,10 @@ class FlaxFunction(Function):
 
     functionspace: (
         NNSpace
+        | CartesianNNSpace
         | OrthogonalSpace
         | TensorProductSpace
-        | VectorTensorProductSpace
+        | CartesianTensorProductSpace
         | DirectSum
     )
     t: BaseTime
@@ -938,9 +962,10 @@ class FlaxFunction(Function):
     def __new__(
         cls: type[Self],
         V: NNSpace
+        | CartesianNNSpace
         | OrthogonalSpace
         | TensorProductSpace
-        | VectorTensorProductSpace
+        | CartesianTensorProductSpace
         | DirectSum,
         name: str,
         *,
@@ -999,6 +1024,7 @@ class FlaxFunction(Function):
 
         For rank 0: returns a scalar Function placeholder.
         For rank 1: returns a VectorAdd assembling components.
+        For rank NONE (mixed CartesianTensorProductSpace): index with [i] first.
         """
         V = self.functionspace
         args = self.get_args(Cartesian=False)
@@ -1008,7 +1034,7 @@ class FlaxFunction(Function):
                 Callable[..., AppliedUndef],
                 Function(
                     self.fun_str,
-                    global_index=0,
+                    global_index=getattr(V, "global_index", 0),
                     functionspace_name=V.name,
                     rank_parent=V.rank,
                     module=self.module,
@@ -1019,10 +1045,25 @@ class FlaxFunction(Function):
 
         if V.rank == RankTag.VECTOR:
             b = V.system.base_vectors()
+            if isinstance(V, CartesianTensorProductSpace):
+                return VectorAdd.fromiter(
+                    Function(
+                        "".join([self.fun_str, "^{(", str(i), ")}"]),
+                        global_index=getattr(Vi, "global_index", i),
+                        functionspace_name=V.name,
+                        rank_parent=V.rank,
+                        module=self.module,
+                        argument=ArgumentTag.JAXFUNC,
+                    )(*args)  # ty:ignore[call-non-callable]
+                    * b[i]
+                    for i, Vi in enumerate(V)
+                )
+            assert isinstance(V, NNSpace)
+            base_index = getattr(V, "global_index", 0)
             return VectorAdd.fromiter(
                 Function(
                     "".join([self.fun_str, "^{(", str(i), ")}"]),
-                    global_index=i,
+                    global_index=base_index + i,
                     functionspace_name=V.name,
                     rank_parent=V.rank,
                     module=self.module,
@@ -1031,7 +1072,35 @@ class FlaxFunction(Function):
                 * b[i]
                 for i in range(V.dims)
             )
-        raise NotImplementedError
+        raise NotImplementedError(
+            "FlaxFunction.doit() is not defined for mixed CartesianTensorProductSpace "
+            "(rank=NONE). Use up[i] to access a component first."
+        )
+
+    def __getitem__(self, i: int) -> Self:
+        """Return a sub-FlaxFunction for component i of a Cartesian product space.
+
+        Works for both CartesianTensorProductSpace (spectral) and CartesianNNSpace
+        (neural). The underlying module is shared so all components are optimized
+        jointly. E.g. ``u, p = up`` when ``up = FlaxFunction(W, "up")``.
+        """
+        V = self.functionspace
+        if not isinstance(V, CartesianTensorProductSpace | CartesianNNSpace):
+            raise TypeError(
+                f"__getitem__ requires a CartesianTensorProductSpace or "
+                f"CartesianNNSpace, got {type(V).__name__}"
+            )
+        name = self.name
+        if isinstance(V, VectorTensorProductSpace) and len(name) == 1:
+            name = f"{name}_{i}"
+        elif len(name) == len(V):
+            name = name[i]
+        else:
+            raise ValueError(
+                f"Name {name!r} length must equal number of component spaces "
+                f"({len(V)}), or be a single character for a VectorTensorProductSpace"
+            )
+        return cast(Self, FlaxFunction(V[i], name, module=self.module, rngs=self.rngs))
 
     def cartesian_mesh(self, xs: Array) -> Array:
         """Map computational coordinates to Cartesian physical domain.
@@ -1084,6 +1153,31 @@ class FlaxFunction(Function):
         if self.rank == RankTag.SCALAR and y.shape[-1] == 1:
             return y[:, 0]
         return y
+
+
+class CartesianNNModule(BaseModule):
+    """Module for a CartesianNNSpace: stacks outputs of all component modules.
+
+    Created by get_flax_module when given a CartesianNNSpace. Each component
+    sub-module is stored in an nnx.List so the optimizer sees one unified
+    parameter tree. The call returns a horizontally stacked (N, total_out_size)
+    array; global_index slicing in loss._lookup_or_eval selects each variable.
+    """
+
+    def __init__(
+        self,
+        modules: list[BaseModule],
+        name: str = "CartesianNNModule",
+    ) -> None:
+        self.data = nnx.List(modules)
+        self.name = name
+
+    @property
+    def dim(self) -> int:
+        return sum(m.dim for m in self.data)
+
+    def __call__(self, x: Array) -> Array:
+        return jnp.hstack([m(x) for m in self.data])
 
 
 class Comp(nnx.Module):

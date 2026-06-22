@@ -15,6 +15,7 @@ from .operators import (
     gradient as gradient,
     outer as outer,
 )
+from .spaces import CartesianProduct as CartesianProduct
 from .utils import (
     Domain as Domain,
     common as common,

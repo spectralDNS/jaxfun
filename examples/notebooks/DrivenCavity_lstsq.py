@@ -59,15 +59,15 @@ def _(mo):
 
 @app.cell
 def _(nnx):
-    from jaxfun.pinns import FlaxFunction, MLPSpace, Comp
+    from jaxfun.pinns import CartesianProduct, FlaxFunction, MLPSpace
 
     V = MLPSpace([16], dims=2, rank=1, name="V")  # Vector space for velocity
     Q = MLPSpace([12], dims=2, rank=0, name="Q")  # Scalar space for pressure
+    W = CartesianProduct(V, Q, name="W")
 
-    u = FlaxFunction(V, "u", rngs=nnx.Rngs(2002))
-    p = FlaxFunction(Q, "p", rngs=nnx.Rngs(2002))
-    module = Comp(u, p)
-    return V, module, p, u
+    up = FlaxFunction(W, "up", rngs=nnx.Rngs(2001))
+    u, p = up
+    return V, up, p, u
 
 
 @app.cell(hide_code=True)
@@ -267,8 +267,8 @@ def _(mo):
 
 
 @app.cell
-def _(loss_fn, module):
-    loss_fn(module)
+def _(loss_fn, up):
+    loss_fn(up)
     return
 
 
@@ -281,11 +281,11 @@ def _(mo):
 
 
 @app.cell
-def _(loss_fn, module):
+def _(loss_fn, up):
     from jaxfun.pinns.optimizer import Trainer, adam
 
     trainer = Trainer(loss_fn)
-    opt_adam = adam(module)
+    opt_adam = adam(up)
     trainer.train(opt_adam, 5000, epoch_print=1000)
     return (trainer,)
 
@@ -299,8 +299,8 @@ def _(mo):
 
 
 @app.cell
-def _(loss_fn, module):
-    loss_fn(module)
+def _(loss_fn, up):
+    loss_fn(up)
     return
 
 
@@ -313,17 +313,17 @@ def _(mo):
 
 
 @app.cell
-def _(module, trainer):
+def _(trainer, up):
     from jaxfun.pinns.optimizer import lbfgs
 
-    opt_lbfgs = lbfgs(module, memory_size=100)
+    opt_lbfgs = lbfgs(up, memory_size=100)
     trainer.train(opt_lbfgs, 5000, epoch_print=1000)
     return
 
 
 @app.cell
-def _(loss_fn, module):
-    loss_fn(module)
+def _(loss_fn, up):
+    loss_fn(up)
     return
 
 
@@ -336,10 +336,10 @@ def _(mo):
 
 
 @app.cell
-def _(module, trainer):
+def _(trainer, up):
     from jaxfun.pinns.optimizer import GaussNewton
 
-    opt_hess = GaussNewton(module, use_lstsq=False, cg_max_iter=100)
+    opt_hess = GaussNewton(up, use_lstsq=False, cg_max_iter=100)
     trainer.train(opt_hess, 100, epoch_print=10)
     return
 
@@ -353,13 +353,13 @@ def _(mo):
 
 
 @app.cell
-def _(jnp, module):
+def _(jnp, up):
     import matplotlib.pyplot as plt
 
     yj = jnp.linspace(-1, 1, 50)
     xx, yy = jnp.meshgrid(yj, yj, sparse=False, indexing="ij")
     z = jnp.column_stack((xx.ravel(), yy.ravel()))
-    uvp = module(z)
+    uvp = up(z)
     fig, axs = plt.subplots(1, 3, sharex=True, sharey=True, figsize=(6, 2))
     axs[0].contourf(xx, yy, uvp[:, 0].reshape(xx.shape), 100)
     axs[0].set_title(r"$u_x$")
@@ -389,8 +389,8 @@ def _(mo):
 
 
 @app.cell
-def _(loss_fn, module):
-    loss_fn.compute_residual_i(module, 0)[:10]  # plot only 10 numbers
+def _(loss_fn, up):
+    loss_fn.compute_residual_i(up, 0)[:10]  # plot only 10 numbers
     return
 
 
@@ -403,9 +403,9 @@ def _(mo):
 
 
 @app.cell
-def _(loss_fn, module, plt, xyi):
+def _(loss_fn, up, plt, xyi):
     plt.figure(figsize=(4, 3))
-    plt.scatter(*xyi.T, c=loss_fn.compute_residual_i(module, 2), s=20)
+    plt.scatter(*xyi.T, c=loss_fn.compute_residual_i(up, 2), s=20)
     plt.colorbar()
     plt.show()
     return

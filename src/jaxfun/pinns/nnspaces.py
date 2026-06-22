@@ -58,6 +58,7 @@ class NNSpace(BaseSpace):
         self.dims = dims
         self.rank = rank_tag
         self.is_transient = transient
+        self.global_index: int = 0
         system = (
             CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[dims])
             if system is None
@@ -291,6 +292,73 @@ class sPIKANSpace(NNSpace):
             )
         if hidden_size == 1:
             self.act_fun = lambda x: x  # Pure spectral in 1D
+
+
+class CartesianNNSpace:
+    """Cartesian product of NNSpace components for coupled PINN problems.
+
+    Analogous to CartesianTensorProductSpace for neural function spaces.
+    Each component NNSpace receives a global_index attribute that records
+    its starting output-column offset in the combined module output.
+
+    Args:
+        *basespaces: Component NNSpace instances (one per variable).
+        name: Label for the space.
+        rank: Tensor rank of the combined space (typically NONE for mixed).
+
+    Attributes:
+        basespaces: Ordered list of component NNSpace objects.
+        system: Coordinate system shared by all components.
+        dims: Spatial dimension.
+        is_transient: Whether time is included as an input.
+        name: Label.
+    """
+
+    def __init__(
+        self,
+        *basespaces: NNSpace,
+        name: str = "CNN",
+        rank: int | RankTag = RankTag.NONE,
+    ) -> None:
+        self.basespaces: list[NNSpace] = list(basespaces)
+        self.name = name
+        self._rank = RankTag(rank) if isinstance(rank, int) else rank
+        self.system = basespaces[0].system
+        self.dims = basespaces[0].dims
+        self.is_transient = basespaces[0].is_transient
+
+        # Assign global_index = starting output-column offset for each component.
+        offset = 0
+        for space in self.basespaces:
+            space.global_index = offset
+            offset += space.out_size
+        self._out_size = offset
+
+    @property
+    def out_size(self) -> int:
+        """Total number of output columns across all components."""
+        return self._out_size
+
+    @property
+    def rank(self) -> RankTag:
+        return self._rank
+
+    def __len__(self) -> int:
+        return len(self.basespaces)
+
+    def __iter__(self):  # type: ignore[override]
+        return iter(self.basespaces)
+
+    def __getitem__(self, i: int) -> NNSpace:
+        return self.basespaces[i]
+
+    def flatten(self) -> list[NNSpace]:
+        """Return flat list of component NNSpace objects."""
+        return list(self.basespaces)
+
+    def base_variables(self) -> tuple[BaseScalar | BaseTime, ...] | sp.Tuple:
+        """Delegate to the first component."""
+        return self.basespaces[0].base_variables()
 
 
 class UnionSpace(NNSpace):

@@ -1,3 +1,5 @@
+from jaxfun.spaces import CartesianProduct as CartesianProduct
+
 from .embeddings import (
     Embedding as Embedding,
     FourierEmbs as FourierEmbs,
@@ -24,6 +26,7 @@ from .module import (
     FlaxFunction as FlaxFunction,
 )
 from .nnspaces import (
+    CartesianNNSpace as CartesianNNSpace,
     KANMLPSpace as KANMLPSpace,
     MLPSpace as MLPSpace,
     MLPVectorSpace as MLPVectorSpace,

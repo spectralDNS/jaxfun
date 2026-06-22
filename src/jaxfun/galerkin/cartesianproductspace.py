@@ -3,7 +3,10 @@ from __future__ import annotations
 import copy
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
-from typing import Any, Self, cast, overload
+from typing import TYPE_CHECKING, Any, Self, cast, overload
+
+if TYPE_CHECKING:
+    from jaxfun.pinns.nnspaces import CartesianNNSpace, NNSpace
 
 import jax
 import jax.numpy as jnp
@@ -22,6 +25,18 @@ type OneDimensionalSpace = OrthogonalSpace | DirectSum | CartesianProductSpace
 
 @overload
 def CartesianProduct(
+    *basespaces: NNSpace,
+    name: str = "CP",
+    rank: int | RankTag = RankTag.NONE,
+) -> CartesianNNSpace: ...
+@overload
+def CartesianProduct(
+    *basespaces: MultiDimensionalSpace,
+    name: str = "CP",
+    rank: int | RankTag = RankTag.VECTOR,
+) -> VectorTensorProductSpace: ...
+@overload
+def CartesianProduct(
     *basespaces: MultiDimensionalSpace,
     name: str = "CP",
     rank: int | RankTag = RankTag.NONE,
@@ -32,21 +47,16 @@ def CartesianProduct(
     name: str = "CP",
     rank: int | RankTag = RankTag.NONE,
 ) -> CartesianProductSpace: ...
-@overload
 def CartesianProduct(
-    *basespaces: MultiDimensionalSpace,
-    name: str = "CP",
-    rank: int | RankTag = RankTag.VECTOR,
-) -> VectorTensorProductSpace: ...
-def CartesianProduct(
-    *basespaces: MultiDimensionalSpace | OneDimensionalSpace,
+    *basespaces: Any,
     name: str = "CP",
     rank: int | RankTag = RankTag.NONE,
-) -> CartesianTensorProductSpace | CartesianProductSpace:
+) -> CartesianTensorProductSpace | CartesianProductSpace | CartesianNNSpace:
     """Factory returning the appropriate Cartesian product space.
 
-    Returns CartesianProductSpace for 1D components, VectorTensorProductSpace
-    when rank==1, and CartesianTensorProductSpace otherwise.
+    Returns CartesianNNSpace for NNSpace components, CartesianProductSpace for
+    1D spectral components, VectorTensorProductSpace when rank==1, and
+    CartesianTensorProductSpace otherwise.
 
     Args:
         *basespaces: Component spaces (all must have the same dims).
@@ -54,10 +64,17 @@ def CartesianProduct(
         rank: Rank of the Cartesian (tensor) product space.
 
     Returns:
-        CartesianTensorProductSpace, CartesianProductSpace, or
+        CartesianNNSpace, CartesianTensorProductSpace, CartesianProductSpace, or
         VectorTensorProductSpace instance.
     """
+    from jaxfun.pinns.nnspaces import NNSpace as _NNSpace  # lazy — avoids circular
+
     rank_tag = RankTag(rank) if isinstance(rank, int) else rank
+    if basespaces and all(isinstance(b, _NNSpace) for b in basespaces):
+        from jaxfun.pinns.nnspaces import CartesianNNSpace as _CartesianNNSpace
+
+        return _CartesianNNSpace(*basespaces, name=name, rank=rank_tag)
+
     basespaces_list = [copy.deepcopy(space) for space in basespaces]
     if all(basespace.dims == 1 for basespace in basespaces_list):
         return CartesianProductSpace(

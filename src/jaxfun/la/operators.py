@@ -29,6 +29,15 @@ class GlobalArray(nnx.Pytree):
         self.i = i
 
 
+class GlobalMatrix(nnx.Pytree):
+    def __init__(self, global_indices: tuple[int, int], matrix: DiaMatrix | Matrix):
+        self.data = nnx.data(matrix)
+        self.global_indices = nnx.static(global_indices)
+
+    def scale(self, alpha: complex | Array) -> GlobalMatrix:
+        return GlobalMatrix(self.global_indices, self.data.scale(alpha))
+
+
 class SpecialMatrix(BaseMatrix):
     """Base class for shape-preserving special matrix operators."""
 
@@ -325,100 +334,3 @@ class ZeroMatrix(SpecialMatrix):
 
     def __getitem__(self, key: tuple[int, int], /) -> Array:
         return jnp.zeros((), dtype=self.dtype)
-
-
-class _DataDelegatingMixin:
-    """Mixin that delegates all BaseMatrix operations to ``self.data``."""
-
-    data: DiaMatrix | Matrix
-
-    @property
-    def shape(self) -> tuple[int, int]:
-        return self.data.shape
-
-    @property
-    def dtype(self) -> jnp.dtype:
-        return self.data.dtype
-
-    def matvec(self, x: Array, axis: int = 0) -> Array:
-        return self.data.matvec(x, axis=axis)
-
-    def lu_factor(self, **kwargs):
-        return self.data.lu_factor(**kwargs)
-
-    def lu_solve(self, b: Array, axis: int = 0, **kwargs) -> Array:
-        return self.data.lu_solve(b, axis=axis, **kwargs)
-
-    def solve(self, b: Array, axis: int = 0, **kwargs) -> Array:
-        return self.data.solve(b, axis=axis, **kwargs)
-
-    @property
-    def T(self) -> BaseMatrix:
-        return self.data.T
-
-    def diagonal(self, k: int = 0) -> Array:
-        return self.data.diagonal(k)
-
-    def diagonal_or_none(self) -> Array | None:
-        return self.data.diagonal_or_none()
-
-    @property
-    def is_diagonal(self) -> bool:
-        return self.data.is_diagonal
-
-    def todense(self) -> Array:
-        return self.data.todense()
-
-    def tosparse(self, *, tol: int = 100) -> DiaMatrix:
-        return self.data.tosparse(tol=tol)
-
-    def to_matrix(self) -> Matrix:
-        return self.data.to_matrix()
-
-    def get_row(self, i: int | Array) -> Array:
-        return self.data.get_row(i)
-
-    def get_column(self, j: int | Array) -> Array:
-        return self.data.get_column(j)
-
-    @property
-    def size(self) -> int:
-        return self.data.size
-
-    def __call__(self, u: Array | JAXFunction) -> Array:
-        return self.data(u)
-
-    def __getitem__(self, key: tuple[int, int], /) -> Array:
-        return self.data[key]
-
-    def __matmul__(self, other) -> Array:
-        return self.data @ other
-
-    def __rmatmul__(self, other) -> Array:
-        return other @ self.data
-
-    def __add__(self, other):
-        return self.data + other
-
-    def __sub__(self, other):
-        return self.data - other
-
-    def __rsub__(self, other):
-        return other - self.data
-
-    def __len__(self) -> int:
-        return len(self.data)
-
-
-class GlobalMatrix(_DataDelegatingMixin, BaseMatrix):
-    data: DiaMatrix | Matrix
-
-    def __init__(self, global_indices: tuple[int, int], matrix: DiaMatrix | Matrix):
-        self.data = matrix
-        self.global_indices = global_indices
-
-    def scale(self, alpha: complex | Array) -> GlobalMatrix:
-        return GlobalMatrix(self.global_indices, self.data.scale(alpha))
-
-    def astype(self, dtype: jnp.dtype) -> GlobalMatrix:
-        return GlobalMatrix(self.global_indices, self.data.astype(dtype))

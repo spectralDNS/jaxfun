@@ -727,7 +727,7 @@ def _finalize_inner_result(
                     cast(CartesianProductSpace, trial_leaf),
                 )
             else:
-                plain_results = aresults
+                plain_results = cast(list[BaseMatrix], aresults)
                 amats: list[Matrix | DiaMatrix] = []
                 for a in plain_results:
                     amats.append(

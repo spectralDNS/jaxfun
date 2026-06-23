@@ -47,7 +47,7 @@ V = MLPSpace([16], dims=2, rank=1, name="V")  # Vector space for velocity
 Q = MLPSpace([12], dims=2, rank=0, name="Q")  # Scalar space for pressure
 W = CartesianProduct(V, Q, name="W")
 
-up = FlaxFunction(W, "up", rngs=nnx.Rngs(2001))
+up = FlaxFunction(W, name="up", rngs=nnx.Rngs(2001))
 u, p = up
 
 eq1 = Dot(Grad(u), u) - nu * Div(Grad(u)) + Grad(p)

@@ -40,7 +40,6 @@ from .nnspaces import (
     MLPSpace,
     NNSpace,
     PirateSpace,
-    UnionSpace,
     sPIKANSpace,
 )
 
@@ -905,9 +904,7 @@ def get_flax_module(
     elif isinstance(V, sPIKANSpace):
         params.pop("bias_init")  # sPIKANModule does not use bias_init
         return sPIKANModule(V, **params)  # ty:ignore[unknown-argument, invalid-argument-type]
-    elif isinstance(V, UnionSpace):
-        return UnionModule(V, **params)
-    elif isinstance(V, CartesianNNSpace):
+    elif isinstance(V, CartesianNNSpace | CartesianTensorProductSpace):
         sub_modules: list[BaseModule] = [
             get_flax_module(
                 vi,
@@ -919,9 +916,7 @@ def get_flax_module(
             for vi in V
         ]
         return CartesianNNModule(sub_modules, name=name or V.name)
-    assert isinstance(
-        V, OrthogonalSpace | TensorProductSpace | CartesianTensorProductSpace
-    )
+    assert isinstance(V, OrthogonalSpace | TensorProductSpace)
     return SpectralModule(V, **params)
 
 
@@ -1074,7 +1069,7 @@ class FlaxFunction(Function):
             )
         raise NotImplementedError(
             "FlaxFunction.doit() is not defined for mixed CartesianTensorProductSpace "
-            "(rank=NONE). Use up[i] to access a component first."
+            "(rank=NONE). Use __getitem__ to access a component first."
         )
 
     def __getitem__(self, i: int) -> Self:
@@ -1100,7 +1095,10 @@ class FlaxFunction(Function):
                 f"Name {name!r} length must equal number of component spaces "
                 f"({len(V)}), or be a single character for a VectorTensorProductSpace"
             )
-        return cast(Self, FlaxFunction(V[i], name, module=self.module, rngs=self.rngs))
+        assert isinstance(self.module, CartesianNNModule)
+        return cast(
+            Self, FlaxFunction(V[i], name, module=self.module[i], rngs=self.rngs)
+        )
 
     def cartesian_mesh(self, xs: Array) -> Array:
         """Map computational coordinates to Cartesian physical domain.
@@ -1172,6 +1170,9 @@ class CartesianNNModule(BaseModule):
         self.data = nnx.List(modules)
         self.name = name
 
+    def __getitem__(self, i: int) -> BaseModule:
+        return self.data[i]
+
     @property
     def dim(self) -> int:
         return sum(m.dim for m in self.data)
@@ -1216,65 +1217,3 @@ class Comp(nnx.Module):
             Concatenated outputs (N, sum(out_sizes)).
         """
         return jnp.hstack([f.module(x) for f in self.flaxfunctions])
-
-
-# Experimental!
-class UnionModule(BaseModule):  # pragma: no cover
-    """Module wrapping a UnionSpace of multiple function spaces.
-
-    Attributes:
-        modules: nnx.List of underlying modules.
-    """
-
-    def __init__(
-        self,
-        V: UnionSpace,
-        *,
-        kernel_init: Initializer = default_kernel_init,
-        bias_init: Initializer = default_bias_init,
-        rngs: nnx.Rngs,
-        name: str = "UnionModule",
-    ) -> None:
-        """Store list of nnx.Modules and register as attributes.
-
-        Args:
-            modules: One or more nnx.Module instances.
-            V: UnionSpace instance.
-        """
-        self.modules = nnx.List(
-            [
-                get_flax_module(
-                    v,
-                    kernel_init=kernel_init,
-                    bias_init=bias_init,
-                    rngs=rngs,
-                    name=f"{v.name}",
-                )
-                for i, v in enumerate(V.spaces)
-            ]
-        )
-        self.V = V
-        self.name = name
-
-    def __getitem__(self, i: int) -> nnx.Module:
-        """Return component module for a given function space."""
-        return self.modules[i]
-
-    def __call__(self, x: Array | list[Array], at_interfaces: bool = True) -> Array:
-        """Evaluate and horizontally stack all component module outputs.
-        Args:
-            x: List of input batches for each module.
-            at_interfaces: If True, average outputs over neighbouring elements.
-        Returns:
-            Concatenated outputs (N, sum(out_sizes)).
-        """
-        if at_interfaces:
-            assert isinstance(x, Array)
-            z0 = [self.modules[0](x[0])]
-            for i in range(1, len(self.modules) - 1):
-                z0.append(self.modules[i](x[1 + 2 * (i - 1) : 1 + 2 * i]))
-            z0.append(self.modules[-1](x[-1]))
-            y = jnp.vstack(z0).reshape((-1, 2))
-            return (y - y.mean(axis=1, keepdims=True)).reshape(x.shape)
-        y = jnp.vstack([self.modules[i](x[i]) for i in range(len(self.modules))])
-        return y

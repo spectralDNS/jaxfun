@@ -31,7 +31,6 @@ from .nnspaces import (
     MLPSpace as MLPSpace,
     MLPVectorSpace as MLPVectorSpace,
     PirateSpace as PirateSpace,
-    UnionSpace as UnionSpace,
     sPIKANSpace as sPIKANSpace,
 )
 from .optimizer import (

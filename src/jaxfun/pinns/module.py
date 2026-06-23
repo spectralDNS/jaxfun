@@ -607,7 +607,7 @@ class SpectralModule(BaseModule):
 
     def __init__(
         self,
-        basespace: (OrthogonalSpace | TensorProductSpace | CartesianTensorProductSpace),
+        basespace: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace,
         *,
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,  # kept for uniform API
@@ -634,9 +634,8 @@ class SpectralModule(BaseModule):
             y = jnp.logspace(0, -6, basespace.num_dofs[1])
             self.kernel = nnx.Param(x[:, None] * y[None, :] * w)
 
-        elif isinstance(basespace, CartesianTensorProductSpace):
-            # Handles both VectorTensorProductSpace and generic mixed spaces.
-            # Each leaf TensorProductSpace gets its own Param (kernel_0, kernel_1, ...).
+        elif isinstance(basespace, VectorTensorProductSpace):
+            # Each component TPS gets its own Param (kernel_0, kernel_1, ...).
             components = list(basespace.flatten())
             for i, b in enumerate(components):
                 w = kernel_init(rngs(), b.num_dofs)
@@ -680,7 +679,7 @@ class SpectralModule(BaseModule):
 
         if isinstance(self.space, TensorProductSpace):
             z = self.space.evaluate(x, cast(Array, self.kernel))
-        elif isinstance(self.space, CartesianTensorProductSpace):
+        elif isinstance(self.space, VectorTensorProductSpace):
             kernels = tuple(
                 getattr(self, f"kernel_{i}") for i in range(self._num_kernels)
             )
@@ -904,7 +903,7 @@ def get_flax_module(
     elif isinstance(V, sPIKANSpace):
         params.pop("bias_init")  # sPIKANModule does not use bias_init
         return sPIKANModule(V, **params)  # ty:ignore[unknown-argument, invalid-argument-type]
-    elif isinstance(V, CartesianNNSpace | CartesianTensorProductSpace):
+    elif isinstance(V, CartesianNNSpace):
         sub_modules: list[BaseModule] = [
             get_flax_module(
                 vi,
@@ -915,8 +914,24 @@ def get_flax_module(
             )
             for vi in V
         ]
-        return CartesianNNModule(sub_modules, name=name or V.name)
-    assert isinstance(V, OrthogonalSpace | TensorProductSpace)
+        return CartesianModule(sub_modules, name=name or V.name)
+    elif isinstance(V, CartesianTensorProductSpace) and not isinstance(
+        V, VectorTensorProductSpace
+    ):
+        spectral_sub: list[BaseModule] = [
+            SpectralModule(
+                vi,
+                kernel_init=kernel_init,
+                bias_init=bias_init,
+                rngs=rngs,
+                name=vi.name,
+            )
+            for vi in V
+        ]
+        return CartesianModule(spectral_sub, name=name or V.name)
+    assert isinstance(
+        V, OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+    )
     return SpectralModule(V, **params)
 
 
@@ -953,6 +968,7 @@ class FlaxFunction(Function):
     fun_str: str
     argument: Literal[ArgumentTag.JAXFUNC]
     rngs: nnx.Rngs
+    global_offset: int
 
     def __new__(
         cls: type[Self],
@@ -989,6 +1005,7 @@ class FlaxFunction(Function):
         obj.fun_str = fun_str if fun_str is not None else name
         obj.argument = ArgumentTag.JAXFUNC
         obj.rngs = rngs
+        obj.global_offset = 0
         return obj
 
     @property
@@ -1023,13 +1040,14 @@ class FlaxFunction(Function):
         """
         V = self.functionspace
         args = self.get_args(Cartesian=False)
+        offset = self.global_offset
 
         if V.rank == RankTag.SCALAR:
             function = cast(
                 Callable[..., AppliedUndef],
                 Function(
                     self.fun_str,
-                    global_index=getattr(V, "global_index", 0),
+                    vector_index=getattr(V, "global_index", 0) - offset,
                     functionspace_name=V.name,
                     rank_parent=V.rank,
                     module=self.module,
@@ -1040,11 +1058,11 @@ class FlaxFunction(Function):
 
         if V.rank == RankTag.VECTOR:
             b = V.system.base_vectors()
-            if isinstance(V, CartesianTensorProductSpace):
+            if isinstance(V, VectorTensorProductSpace):
                 return VectorAdd.fromiter(
                     Function(
                         "".join([self.fun_str, "^{(", str(i), ")}"]),
-                        global_index=getattr(Vi, "global_index", i),
+                        vector_index=getattr(Vi, "global_index", i) - offset,
                         functionspace_name=V.name,
                         rank_parent=V.rank,
                         module=self.module,
@@ -1058,7 +1076,7 @@ class FlaxFunction(Function):
             return VectorAdd.fromiter(
                 Function(
                     "".join([self.fun_str, "^{(", str(i), ")}"]),
-                    global_index=base_index + i,
+                    vector_index=base_index + i - offset,
                     functionspace_name=V.name,
                     rank_parent=V.rank,
                     module=self.module,
@@ -1095,10 +1113,28 @@ class FlaxFunction(Function):
                 f"Name {name!r} length must equal number of component spaces "
                 f"({len(V)}), or be a single character for a VectorTensorProductSpace"
             )
-        assert isinstance(self.module, CartesianNNModule)
-        return cast(
-            Self, FlaxFunction(V[i], name, module=self.module[i], rngs=self.rngs)
-        )
+        assert isinstance(self.module, CartesianModule | SpectralModule)
+        if isinstance(V, CartesianNNSpace):
+            # Use the sub-module so only that network is evaluated/differentiated.
+            # Store the joint-output offset; doit() subtracts it so global_index is
+            # 0-based relative to the sub-module output.
+            cmod = cast(CartesianModule, self.module)
+            Vi = V[i]
+            sub_ff = FlaxFunction(Vi, name, module=cmod[i], rngs=self.rngs)
+            sub_ff.global_offset = Vi.global_index
+            return cast(Self, sub_ff)
+        if isinstance(V, CartesianTensorProductSpace) and isinstance(
+            self.module, CartesianModule
+        ):
+            Vi = V[i]
+            if isinstance(Vi, CartesianTensorProductSpace):
+                offset = Vi.flatten()[0].global_index
+            else:
+                offset = getattr(Vi, "global_index", 0)
+            sub_ff = FlaxFunction(Vi, name, module=self.module[i], rngs=self.rngs)
+            sub_ff.global_offset = offset
+            return cast(Self, sub_ff)
+        return cast(Self, FlaxFunction(V[i], name, module=self.module, rngs=self.rngs))
 
     def cartesian_mesh(self, xs: Array) -> Array:
         """Map computational coordinates to Cartesian physical domain.
@@ -1153,21 +1189,23 @@ class FlaxFunction(Function):
         return y
 
 
-class CartesianNNModule(BaseModule):
-    """Module for a CartesianNNSpace: stacks outputs of all component modules.
+class CartesianModule(BaseModule):
+    """Module for a Cartesian product space: stacks outputs of all component sub-modules
 
-    Created by get_flax_module when given a CartesianNNSpace. Each component
-    sub-module is stored in an nnx.List so the optimizer sees one unified
-    parameter tree. The call returns a horizontally stacked (N, total_out_size)
-    array; global_index slicing in loss._lookup_or_eval selects each variable.
+    Used for both CartesianNNSpace (NN sub-modules) and CartesianTensorProductSpace
+    (SpectralModule sub-modules). Each component is stored in an nnx.List so the
+    optimizer sees one unified parameter tree. The call returns a horizontally stacked
+    (N, total_out_size) array; vector_index slicing in loss._lookup_or_eval selects
+    each variable's columns.
     """
 
     def __init__(
         self,
         modules: list[BaseModule],
-        name: str = "CartesianNNModule",
+        name: str = "CartesianModule",
     ) -> None:
         self.data = nnx.List(modules)
+        self.mod_index = {str(hash(m)): i for i, m in enumerate(modules)}
         self.name = name
 
     def __getitem__(self, i: int) -> BaseModule:

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Sequence
 from functools import partial
 
@@ -48,6 +50,7 @@ class NNSpace(BaseSpace):
         transient: bool = False,
         system: CoordSys | None = None,
         name: str = "NN",
+        leaf: CartesianNNSpace | None = None,
     ) -> None:
         """Initialize a neural network function space."""
         from jaxfun.coordinates import CartCoordSys, x, y, z
@@ -59,6 +62,7 @@ class NNSpace(BaseSpace):
         self.rank = rank_tag
         self.is_transient = transient
         self.global_index: int = 0
+        self.leaf = leaf
         system = (
             CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[dims])
             if system is None
@@ -326,12 +330,14 @@ class CartesianNNSpace:
         self.system = basespaces[0].system
         self.dims = basespaces[0].dims
         self.is_transient = basespaces[0].is_transient
+        self.leaf: CartesianNNSpace = self
 
         # Assign global_index = starting output-column offset for each component.
         offset = 0
         for space in self.basespaces:
             space.global_index = offset
             offset += space.out_size
+            space.leaf = self
         self._out_size = offset
 
     @property
@@ -359,33 +365,3 @@ class CartesianNNSpace:
     def base_variables(self) -> tuple[BaseScalar | BaseTime, ...] | sp.Tuple:
         """Delegate to the first component."""
         return self.basespaces[0].base_variables()
-
-
-class UnionSpace(NNSpace):
-    """Union of multiple neural network function spaces.
-
-    Combines several NNSpace instances into a single space, e.g. for
-    domain decomposition or multi-fidelity modeling.
-
-    Args:
-        spaces: Iterable of NNSpace instances to combine.
-        name: Name of the union space.
-
-    Attributes:
-        spaces: Tuple of constituent NNSpace instances.
-    """
-
-    def __init__(self, *spaces: NNSpace, name: str = "UnionNN") -> None:
-        """Initialize UnionSpace metadata."""
-        self.spaces = spaces
-        NNSpace.__init__(
-            self,
-            dims=self.spaces[0].dims,
-            rank=self.spaces[0].rank,
-            transient=self.spaces[0].is_transient,
-            system=self.spaces[0].system,
-            name=name,
-        )
-
-    def __getitem__(self, i: int) -> NNSpace:
-        return self.spaces[i]

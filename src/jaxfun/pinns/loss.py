@@ -24,7 +24,7 @@ from jaxfun.galerkin.arguments import ArgumentTag, get_arg
 from jaxfun.typing import Array, Loss_Tuple
 from jaxfun.utils import lambdify
 
-from .module import Comp
+from .module import CartesianNNModule, Comp
 
 if TYPE_CHECKING:
     from jaxfun.pinns import FlaxFunction
@@ -1126,7 +1126,8 @@ def _lookup_or_eval(
     """Compute or look up k-th order Jacobian of module at points x"""
     if Js is None:
         Js = {}
-    module = mod.data[mod.mod_index[str(mod_id)]] if isinstance(mod, Comp) else mod
+    # module = mod.data[mod.mod_index[str(mod_id)]] if isinstance(mod, Comp) else mod
+    module = mod[mod_id] if isinstance(mod, CartesianNNModule) else mod
     assert mod_id == hash(module), (mod_id, hash(module), module)
     var = tuple((slice(None), global_index)) + tuple(int(s._id[0]) for s in variables)
     key: tuple[int, int, int] = (x_id, mod_id, k)

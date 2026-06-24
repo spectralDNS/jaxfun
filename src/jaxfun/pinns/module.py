@@ -629,23 +629,24 @@ class SpectralModule(BaseModule):
         """
         if isinstance(basespace, OrthogonalSpace | DirectSum):
             w = kernel_init(rngs(), (1, basespace.num_dofs))
-            # Spectral modes should decay - apply logscaled weighting
-            x = jnp.logspace(0, -6, basespace.num_dofs)
-            self.kernel: nnx.Param[Array] = nnx.Param(w * x[None, :])
+            # Spectral modes should decay - apply logscaled weighting.
+            # dtype=w.dtype prevents accidental float64 promotion via jax_enable_x64.
+            decay = jnp.logspace(0, -6, basespace.num_dofs, dtype=w.dtype)
+            self.kernel: nnx.Param[Array] = nnx.Param(w * decay[None, :])
 
         elif isinstance(basespace, TensorProductSpace):
             w = kernel_init(rngs(), basespace.num_dofs)
-            x = jnp.logspace(0, -6, basespace.num_dofs[0])
-            y = jnp.logspace(0, -6, basespace.num_dofs[1])
-            self.kernel = nnx.Param(x[:, None] * y[None, :] * w)
+            dx = jnp.logspace(0, -6, basespace.num_dofs[0], dtype=w.dtype)
+            dy = jnp.logspace(0, -6, basespace.num_dofs[1], dtype=w.dtype)
+            self.kernel = nnx.Param(dx[:, None] * dy[None, :] * w)
 
         elif isinstance(basespace, VectorTensorProductSpace):
             # Each component TPS gets its own Param (kernel_0, kernel_1, ...).
             components = list(basespace.flatten())
             for i, b in enumerate(components):
                 w = kernel_init(rngs(), b.num_dofs)
-                bx = jnp.logspace(0, -6, b.num_dofs[0])
-                by = jnp.logspace(0, -6, b.num_dofs[1])
+                bx = jnp.logspace(0, -6, b.num_dofs[0], dtype=w.dtype)
+                by = jnp.logspace(0, -6, b.num_dofs[1], dtype=w.dtype)
                 setattr(self, f"kernel_{i}", nnx.Param((bx[:, None] * by[None, :]) * w))
             self._num_kernels = len(components)
 
@@ -935,7 +936,7 @@ def get_flax_module(
         ]
         return CartesianModule(spectral_sub, name=name or V.name)
     assert isinstance(
-        V, OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+        V, OrthogonalSpace | DirectSum | TensorProductSpace | VectorTensorProductSpace
     )
     return SpectralModule(V, **params)
 

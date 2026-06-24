@@ -29,6 +29,7 @@ from sympy.vector.vector import Vector
 
 from jaxfun.typing import (
     DyadicLike,
+    RankTag,
     TensorLike,
     VectorLike,
     cast_args,
@@ -231,38 +232,23 @@ def cross(v1: VectorLike, v2: VectorLike) -> VectorLike:
     return from_cartesian(cross(v1._sys.to_cartesian(v1), v2._sys.to_cartesian(v2)))
 
 
-type Rank = Literal[0, 1, 2]
 type AdderType = Add | VectorAdd | DyadicAdd
 
 
-@overload
-def _rank_of_dot(t1: VectorLike, t2: VectorLike) -> Literal[0]: ...
-@overload
-def _rank_of_dot(t1: VectorLike, t2: DyadicLike) -> Literal[1]: ...
-@overload
-def _rank_of_dot(t1: DyadicLike, t2: VectorLike) -> Literal[1]: ...
-@overload
-def _rank_of_dot(t1: DyadicLike, t2: DyadicLike) -> Literal[2]: ...
-def _rank_of_dot(t1: TensorLike, t2: TensorLike) -> Rank:
+def _rank_of_dot(t1: TensorLike, t2: TensorLike) -> RankTag:
     if _is_vectorlike(t1):
-        return 0 if _is_vectorlike(t2) else 1
+        return RankTag.SCALAR if _is_vectorlike(t2) else RankTag.VECTOR
     else:
-        return 1 if _is_vectorlike(t2) else 2
+        return RankTag.VECTOR if _is_vectorlike(t2) else RankTag.DYADIC
 
 
-@overload
-def _adder_for(rank: Literal[0]) -> type[Add]: ...
-@overload
-def _adder_for(rank: Literal[1]) -> type[VectorAdd]: ...
-@overload
-def _adder_for(rank: Literal[2]) -> type[DyadicAdd]: ...
-def _adder_for(rank: Rank) -> type[AdderType]:
+def _adder_for(rank: RankTag) -> type[AdderType]:
     match rank:
-        case 0:
+        case RankTag.SCALAR:
             return Add
-        case 1:
+        case RankTag.VECTOR:
             return VectorAdd
-        case 2:
+        case RankTag.DYADIC:
             return DyadicAdd
 
 
@@ -270,19 +256,22 @@ type BasisZero = BasisDependentZero | sp.core.numbers.Zero
 
 
 @overload
-def _zero_for_rank(rank: Literal[0]) -> sp.core.numbers.Zero: ...
+def _zero_for_rank(rank: Literal[RankTag.SCALAR]) -> sp.core.numbers.Zero: ...
 @overload
-def _zero_for_rank(rank: Literal[1]) -> VectorZero: ...
+def _zero_for_rank(rank: Literal[RankTag.VECTOR]) -> VectorZero: ...
 @overload
-def _zero_for_rank(rank: Literal[2]) -> DyadicZero: ...
-def _zero_for_rank(rank: Rank) -> BasisZero:
+def _zero_for_rank(rank: Literal[RankTag.DYADIC]) -> DyadicZero: ...
+@overload
+def _zero_for_rank(rank: RankTag) -> BasisZero: ...
+def _zero_for_rank(rank: RankTag) -> BasisZero:
     match rank:
-        case 0:
+        case RankTag.SCALAR:
             return sp.S.Zero
-        case 1:
+        case RankTag.VECTOR:
             return Vector.zero
-        case 2:
+        case RankTag.DYADIC:
             return Dyadic.zero
+    raise ValueError("rank must be 0, 1 or 2")
 
 
 def fromiter[T: AdderType](cls: type[T], args: Iterator[Expr], **assumptions) -> T:
@@ -438,7 +427,7 @@ def divergence(v: TensorLike) -> VectorLike | Expr:
         3
     """
     v = v.doit()
-    rank = 0 if _is_vectorlike(v) else 1
+    rank = RankTag.SCALAR if _is_vectorlike(v) else RankTag.VECTOR
     if not _is_tensorlike(v):
         raise TypeError("divergence only defined for tensors. Consider using Div.")
     if isinstance(v, BasisDependentZero) or v == sp.S.Zero:
@@ -499,12 +488,12 @@ def gradient(field: Expr | VectorLike, transpose: bool = False) -> TensorLike:
     """
     field = field.doit()
     coord_sys = _get_coord_systems(field)
-    rank = 2 if _is_vectorlike(field) else 1
+    rank = RankTag.DYADIC if _is_vectorlike(field) else RankTag.VECTOR
 
     if isinstance(field, BasisDependentZero) or field == sp.S.Zero:
-        return _zero_for_rank(rank)
+        return cast(TensorLike, _zero_for_rank(rank))
     if len(coord_sys) == 0:
-        return _zero_for_rank(rank)
+        return cast(TensorLike, _zero_for_rank(rank))
     if len(coord_sys) == 1:
         coord_sys = next(iter(coord_sys))
         x = cast_bs(coord_sys.base_scalars())
@@ -895,7 +884,7 @@ def diff_covariant_vector(
     x2i = self._sys._map_base_scalar_to_index
     arg = args[0]
     j = x2i[arg]
-    res = _zero_for_rank(1)
+    res = _zero_for_rank(rank=RankTag.VECTOR)
     for bi, vi in self.components.items():
         i = b2i[bi]
         di = df(vi, arg, **kwargs)
@@ -946,7 +935,7 @@ def diff_covariant_dyadic(
     x2i = self._sys._map_base_scalar_to_index
     arg = args[0]
     k = x2i[arg]
-    res = _zero_for_rank(2)
+    res = _zero_for_rank(RankTag.DYADIC)
     for bij, aij in self.components.items():
         i, j = bb2ij[bij]
         di = df(aij, arg, **kwargs)

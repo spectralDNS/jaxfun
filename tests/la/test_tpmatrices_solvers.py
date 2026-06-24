@@ -20,7 +20,7 @@ from jaxfun.galerkin.inner import inner
 from jaxfun.la import (
     BaseMatrix,
     BlockArray,
-    BlockTPMatrix,
+    BlockMatrix,
     TPMatrices,
     TPMatrix,
     tpmats_to_kron,
@@ -329,7 +329,7 @@ def test_tpmatrices_solve_fourier_fourier_legendre_3d():
 
 
 # ---------------------------------------------------------------------------
-# BlockTPMatrix
+# BlockMatrix
 # ---------------------------------------------------------------------------
 
 BCS_VEC = {"left": {"D": 0}, "right": {"D": 0}}
@@ -349,7 +349,7 @@ def _vector_block_system(N: int, poly):
     u = TrialFunction(V)
     v = TestFunction(V)
     A = inner(Dot(v, u), sparse=True)
-    assert isinstance(A, BlockTPMatrix)
+    assert isinstance(A, BlockMatrix)
     assert isinstance(A, BaseMatrix)
     rng = np.random.default_rng(0)
     x_true = jnp.array(rng.standard_normal(A.shape[1]))
@@ -358,7 +358,7 @@ def _vector_block_system(N: int, poly):
 
 
 @POLY_SPACES
-def test_blocktpmatrix_tosparse_returns_diamatrix(poly):
+def test_blockmatrix_tosparse_returns_diamatrix(poly):
     A, b, _ = _vector_block_system(8, poly)
     sparse = A.tosparse()
     assert A.ndim == 2
@@ -367,7 +367,7 @@ def test_blocktpmatrix_tosparse_returns_diamatrix(poly):
 
 
 @POLY_SPACES
-def test_blocktpmatrix_solve_sparse_matches_dense(poly):
+def test_blockmatrix_solve_sparse_matches_dense(poly):
     A, b, x_true = _vector_block_system(8, poly)
     # Dense reference
     x_dense = A.to_matrix().solve(b.flatten())
@@ -378,7 +378,7 @@ def test_blocktpmatrix_solve_sparse_matches_dense(poly):
 
 
 @POLY_SPACES
-def test_blocktpmatrix_rcm_reduces_bandwidth(poly):
+def test_blockmatrix_rcm_reduces_bandwidth(poly):
     A, _, _ = _vector_block_system(8, poly)
     sparse = A.tosparse()
     A_perm, _, _ = sparse.rcm()
@@ -388,7 +388,7 @@ def test_blocktpmatrix_rcm_reduces_bandwidth(poly):
 
 
 @POLY_SPACES
-def test_blocktpmatrix_call_matches_dense_matvec(poly):
+def test_blockmatrix_call_matches_dense_matvec(poly):
     A, b, x_true = _vector_block_system(8, poly)
     # Warm the RCM cache via solve
     _ = A.solve(b)
@@ -398,7 +398,7 @@ def test_blocktpmatrix_call_matches_dense_matvec(poly):
 
 
 @POLY_SPACES
-def test_blocktpmatrix_solve_cached_rcm(poly):
+def test_blockmatrix_solve_cached_rcm(poly):
     """Second solve reuses cached RCM without reassembly."""
     A, b, _ = _vector_block_system(8, poly)
     x1 = A.solve(b)

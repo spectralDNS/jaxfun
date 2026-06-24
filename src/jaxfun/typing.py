@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from enum import StrEnum
+from enum import Enum, StrEnum, unique
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -28,7 +28,7 @@ from sympy.vector import (
 )
 from typing_extensions import TypedDict
 
-from jaxfun.la import BaseMatrix, BlockArray, IndexedArray
+from jaxfun.la import BaseMatrix, BlockArray, GlobalArray, GlobalMatrix
 from jaxfun.la.matrixprotocol import (
     DiaMatrixSolveMethod as DiaMatrixSolveMethod,
     SolverNotApplicable as SolverNotApplicable,
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from jaxfun.coordinates import BaseDyadic, BaseScalar, BaseVector
     from jaxfun.galerkin import (
         CartesianProductSpace,
+        CartesianTensorProductSpace,
         DirectSum,
         DirectSumTPS,
         TensorProductSpace,
@@ -52,6 +53,7 @@ type FunctionSpaceType = (
     OrthogonalSpace
     | TensorProductSpace
     | VectorTensorProductSpace
+    | CartesianTensorProductSpace
     | CartesianProductSpace
     | DirectSum
     | DirectSumTPS
@@ -61,6 +63,7 @@ type TestSpaceType = (
     OrthogonalSpace
     | TensorProductSpace
     | VectorTensorProductSpace
+    | CartesianTensorProductSpace
     | CartesianProductSpace
 )
 type ComputationalSpaceType = (
@@ -148,11 +151,19 @@ class TestSpaceKind(StrEnum):
             raise ValueError(f"{value!r} is not a valid {cls.__name__}") from None
 
 
+@unique
+class RankTag(Enum):
+    SCALAR = 0
+    VECTOR = 1
+    DYADIC = 2
+    NONE = -1
+
+
 type DomainType = Literal["inside", "boundary", "intersection", "all"]
 type InnerBilinearResult = Array | BaseMatrix
 type InnerBilinearResults = list[Array | BaseMatrix]
 type InnerLinearResults = list[Array]
-type InnerItems = tuple[list[BaseMatrix], list[IndexedArray]]
+type InnerItems = tuple[list[BaseMatrix | GlobalMatrix], list[GlobalArray]]
 type GalerkinAssembledForm = (
     BaseMatrix | Array | BlockArray | tuple[BaseMatrix, Array | BlockArray]
 )

@@ -65,12 +65,6 @@ class _CacheBox[T]:
         return f"_CacheBox({self.value!r})"
 
 
-class IndexedArray(nnx.Pytree):
-    def __init__(self, i: int, data: Array):
-        self.data = data
-        self.i = i
-
-
 class BaseMatrix(ABC, nnx.Pytree):
     """Nominal base class for matrix-like operators in ``jaxfun.la``.
 

@@ -14,7 +14,12 @@ from jax.flatten_util import ravel_pytree
 from jax.sharding import NamedSharding, PartitionSpec as P
 
 from jaxfun.coordinates import BaseScalar, get_system
-from jaxfun.galerkin import CartesianProductSpace, TensorProductSpace, TestFunction
+from jaxfun.galerkin import (
+    CartesianProductSpace,
+    CartesianTensorProductSpace,
+    TensorProductSpace,
+    TestFunction,
+)
 from jaxfun.galerkin.arguments import ArgumentTag, get_arg
 from jaxfun.typing import Array, Loss_Tuple
 from jaxfun.utils import lambdify
@@ -482,9 +487,12 @@ class ResidualVPINN(Residual):
     def _compute_test_function(self, x: Array) -> dict[str, Array]:
         # The test functions should be evaluated once per derivative count
         # FIXME: only implemented for 1D currently
-        assert not isinstance(self.V, TensorProductSpace | CartesianProductSpace), (
-            "Only implemented for 1D spaces currently"
-        )
+        if isinstance(
+            self.V,
+            TensorProductSpace | CartesianProductSpace | CartesianTensorProductSpace,
+        ):
+            raise NotImplementedError("For now only implemented for 1D spaces.")
+
         TD = {
             k: self.V.evaluate_basis_derivative(
                 self.V.map_reference_domain(x[:, 0]), int(k)

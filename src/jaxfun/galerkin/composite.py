@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterator
-from typing import Literal, overload
+from typing import TYPE_CHECKING, Literal, overload
 
 import jax
 import jax.numpy as jnp
@@ -15,6 +15,9 @@ from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import MeshKind, TestSpaceKind
 from jaxfun.utils.common import Domain, matmat, n
+
+if TYPE_CHECKING:
+    from jaxfun.galerkin.cartesianproductspace import CartesianProductSpace
 
 from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
@@ -192,6 +195,12 @@ class Composite(OrthogonalSpace):
     def _evaluate(self, X: Array, c: Array) -> Array:
         """Evaluate constrained expansion at X with composite coeffs c."""
         return self.orthogonal._evaluate(X, self.to_orthogonal(c))
+
+    @jax.jit(static_argnums=(0, 2, 3))
+    def evaluate_mesh(
+        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
+    ) -> Array:
+        return self.orthogonal.evaluate_mesh(self.to_orthogonal(c), kind=kind, N=N)
 
     @jax.jit(static_argnums=(0, 2))
     def backward(self, c: Array, N: int | None = None) -> Array:
@@ -526,6 +535,8 @@ class DirectSum:
         self.dims = a.dims
         self.rank = a.rank
         self.domain = a.domain
+        self.leaf: CartesianProductSpace | None = None
+        self.global_index: int = 0
 
     @overload
     def __getitem__(self, i: Literal[0]) -> Composite: ...
@@ -554,6 +565,11 @@ class DirectSum:
     def bnd_vals(self) -> Array:
         """Return boundary lifting values (from BCGeneric)."""
         return self[1].bnd_vals()
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Return physical-space shape (number of quadrature points)."""
+        return (self.num_quad_points,)
 
     @property
     def dim(self) -> int:
@@ -585,6 +601,12 @@ class DirectSum:
     def evaluate(self, x: Array, c: Array) -> Array:
         """Evaluate direct-sum expansion at points x."""
         return self.orthogonal.evaluate(x, self.to_orthogonal(c))
+
+    @jax.jit(static_argnums=(0, 2, 3))
+    def evaluate_mesh(
+        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
+    ) -> Array:
+        return self.orthogonal.evaluate_mesh(self.to_orthogonal(c), kind=kind, N=N)
 
     @jax.jit(static_argnums=(0, 2))
     def backward(self, c: Array, N: int | None = None) -> Array:

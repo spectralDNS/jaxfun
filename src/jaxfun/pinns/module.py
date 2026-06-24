@@ -29,7 +29,7 @@ from jaxfun.galerkin import (
 )
 from jaxfun.galerkin.arguments import ArgumentTag
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
-from jaxfun.typing import Activation
+from jaxfun.typing import Activation, RankTag
 from jaxfun.utils.common import Domain, lambdify
 
 from .embeddings import Embedding
@@ -676,7 +676,7 @@ class SpectralModule(BaseModule):
         elif isinstance(self.space, VectorTensorProductSpace):
             z = self.space.evaluate(x, cast(tuple[Array, ...], self.kernel))
 
-        if self.space.rank == 0:
+        if self.space.rank == RankTag.SCALAR:
             return jnp.expand_dims(z, -1)
         return z
 
@@ -972,7 +972,7 @@ class FlaxFunction(Function):
         return obj
 
     @property
-    def rank(self) -> int:
+    def rank(self) -> RankTag:
         """Return tensor rank of the represented field."""
         return self.functionspace.rank
 
@@ -1003,7 +1003,7 @@ class FlaxFunction(Function):
         V = self.functionspace
         args = self.get_args(Cartesian=False)
 
-        if V.rank == 0:
+        if V.rank == RankTag.SCALAR:
             function = cast(
                 Callable[..., AppliedUndef],
                 Function(
@@ -1017,7 +1017,7 @@ class FlaxFunction(Function):
             )
             return function(*args)
 
-        if V.rank == 1:
+        if V.rank == RankTag.VECTOR:
             b = V.system.base_vectors()
             return VectorAdd.fromiter(
                 Function(
@@ -1057,11 +1057,19 @@ class FlaxFunction(Function):
         return ", ".join([i.name for i in self.args[:-1]])
 
     def __str__(self) -> str:
-        name = "\033[1m%s\033[0m" % (self.name,) if self.rank == 1 else self.name  # noqa: UP031
+        name = (
+            "\033[1m%s\033[0m" % (self.name,)  # noqa: UP031
+            if self.rank == RankTag.VECTOR
+            else self.name
+        )
         return f"{name}({self.c_names}; {self.module.name})"
 
     def _latex(self, printer: Any = None) -> str:
-        name = r"\mathbf{ {%s} }" % (self.name,) if self.rank == 1 else self.name  # noqa: UP031
+        name = (
+            r"\mathbf{ {%s} }" % (self.name,)  # noqa: UP031
+            if self.rank == RankTag.VECTOR
+            else self.name
+        )
         return f"{name}({self.c_names}; {self.module.name})"
 
     def _pretty(self, printer: Any = None) -> prettyForm:
@@ -1073,7 +1081,7 @@ class FlaxFunction(Function):
     def __call__(self, x: Array) -> Array:
         """Evaluate underlying module; flatten scalar output if rank 0."""
         y = self.module(x)
-        if self.rank == 0 and y.shape[-1] == 1:
+        if self.rank == RankTag.SCALAR and y.shape[-1] == 1:
             return y[:, 0]
         return y
 

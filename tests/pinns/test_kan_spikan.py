@@ -6,6 +6,7 @@ from flax import nnx
 
 from jaxfun.coordinates import BaseTime, CartCoordSys, x
 from jaxfun.pinns import module as mod, nnspaces as nns
+from jaxfun.typing import RankTag
 
 pytestmark = pytest.mark.pinn
 
@@ -31,7 +32,7 @@ def test_kanlayer_forward_shape_and_params():
 def test_kanmlpspace_basic_attributes():
     V = nns.KANMLPSpace(spectral_size=5, hidden_size=[8, 4], dims=2)
     assert V.dims == 2
-    assert V.rank == 0
+    assert V.rank == RankTag.SCALAR
     assert V.out_size == 1
     assert V.in_size >= 2
     bv = V.base_variables()
@@ -62,7 +63,7 @@ def test_spikanspace_basic_attributes():
         name="sPIKAN",
     )
     assert V.dims == 2
-    assert V.rank == 1
+    assert V.rank == RankTag.VECTOR
     assert V.out_size == 2
     assert V.in_size == 2
     bv = V.base_variables()
@@ -72,7 +73,7 @@ def test_spikanspace_basic_attributes():
 def test_spikanspace_hidden_size_1():
     V = nns.sPIKANSpace(spectral_size=6, hidden_size=1, dims=1, rank=0)
     assert V.dims == 1
-    assert V.rank == 0
+    assert V.rank == RankTag.SCALAR
     assert V.out_size == 1
     assert V.in_size == 1
     assert V.act_fun(1) == 1
@@ -81,7 +82,7 @@ def test_spikanspace_hidden_size_1():
 def test_kanmplspace_hidden_size_1():
     V = nns.KANMLPSpace(spectral_size=6, hidden_size=1, dims=1, rank=0)
     assert V.dims == 1
-    assert V.rank == 0
+    assert V.rank == RankTag.SCALAR
     assert V.out_size == 1
     assert V.in_size == 1
     assert V.act_fun(1) == 1

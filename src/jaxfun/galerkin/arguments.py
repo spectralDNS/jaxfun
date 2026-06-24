@@ -30,6 +30,7 @@ from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseScalar, CoordSys, Vector, latex_symbols
 from jaxfun.galerkin.cartesianproductspace import (
     CartesianProductSpace,
+    CartesianTensorProductSpace,
     VectorTensorProductSpace,
 )
 from jaxfun.typing import (
@@ -37,6 +38,7 @@ from jaxfun.typing import (
     FunctionSpaceType,
     MeshKind,
     Padding,
+    RankTag,
     ScalarSpaceType,
     TestSpaceType,
     TrialSpaceType,
@@ -50,7 +52,9 @@ t, x, y, z = sp.symbols("t,x,y,z", real=True)
 
 indices = "ijklmn"
 
-_CompositeSpaceT = TypeVar("_CompositeSpaceT", bound=CartesianProductSpace)
+_CompositeSpaceT = TypeVar(
+    "_CompositeSpaceT", bound=CartesianTensorProductSpace | CartesianProductSpace
+)
 _ScalarSpaceT = TypeVar("_ScalarSpaceT", bound=ScalarSpaceType)
 
 
@@ -72,7 +76,7 @@ def get_BasisFunction(
     vector_index: int,
     local_index: int,
     global_index: int,
-    rank: int,
+    rank: RankTag,
     offset: int,
     functionspace: BaseSpace,
     argument: ArgumentTag,
@@ -106,9 +110,9 @@ def get_BasisFunction(
         index = indices[cls.local_index + cls.offset]
         lhs = f"{cls.name}_{index}"
         rhs = f"({cls.args[0].name})"
-        if cls.rank == 0:
+        if cls.rank == RankTag.SCALAR:
             return lhs + rhs
-        elif cls.rank == 1:
+        elif cls.rank == RankTag.VECTOR:
             sup = "^{(" + str(cls.vector_index) + ")}"
             return lhs + sup + rhs
         raise NotImplementedError("Rank > 1 basis functions not supported.")
@@ -123,9 +127,9 @@ def get_BasisFunction(
         index = indices[cls.local_index + cls.offset]
         lhs = f"{latex_symbols[cls.name]}_{index}"
         rhs = f"({latex_symbols[cls.args[0].name]})"
-        if cls.rank == 0:
+        if cls.rank == RankTag.SCALAR:
             s = lhs + rhs
-        elif cls.rank == 1:
+        elif cls.rank == RankTag.VECTOR:
             sup = "^{(" + str(cls.vector_index) + ")}"
             s = lhs + sup + rhs
         else:
@@ -174,7 +178,7 @@ def _get_computational_function(
             vector_index=0,
             local_index=0,
             global_index=getattr(V, "global_index", 0),
-            rank=0,
+            rank=RankTag.SCALAR,
             offset=offset,
             functionspace=V,
             argument=ArgumentTag.TEST if arg == "test" else ArgumentTag.TRIAL,
@@ -188,7 +192,7 @@ def _get_computational_function(
                 vector_index=0,
                 local_index=getattr(a, "_id", [0])[0],
                 global_index=getattr(V, "global_index", 0),
-                rank=0,
+                rank=RankTag.SCALAR,
                 offset=offset,
                 functionspace=v,
                 argument=ArgumentTag.TEST if arg == "test" else ArgumentTag.TRIAL,
@@ -208,7 +212,7 @@ def _get_computational_function(
                 vector_index=i,
                 local_index=getattr(a, "_id", [0])[0],
                 global_index=getattr(Vi, "global_index", 0),
-                rank=1,
+                rank=RankTag.VECTOR,
                 offset=offset,
                 functionspace=v,
                 argument=ArgumentTag.TEST if arg == "test" else ArgumentTag.TRIAL,
@@ -268,41 +272,46 @@ class ExpansionFunction(BaseFunction):
 
     def __str__(self) -> str:
         V = self.functionspace
-        name = "\033[1m%s\033[0m" % (self.name,) if V.rank == 1 else self.name  # noqa: UP031
+        name = (
+            "\033[1m%s\033[0m" % (self.name,) if V.rank == RankTag.VECTOR else self.name  # noqa: UP031
+        )
         return f"{name}({self.c_names}; {V.name})"
 
     def _latex(self, printer: Any = None) -> str:
         name = self.name
         if name != self.own_name:
             assert not isinstance(self.functionspace, DirectSum)
-            if self.functionspace.rank == 1:
+            if self.functionspace.rank == RankTag.VECTOR:
                 name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return f"{name}({self.c_names}; {self.functionspace.name})"
 
     def __getitem__(self, i: int) -> Self:
-        assert isinstance(self.functionspace, CartesianProductSpace)
+        assert isinstance(
+            self.functionspace, CartesianTensorProductSpace | CartesianProductSpace
+        )
         name = self.name
-        if (
-            isinstance(self.functionspace, VectorTensorProductSpace)
-            and len(self.name) == 1
-        ):
-            # use indices
-            name = self.name + "_" + str(i)
+        if isinstance(self.functionspace, VectorTensorProductSpace) and len(name) == 1:
+            name = f"{name}_{i}"
         elif len(name) == len(self.functionspace):
             name = name[i]
         else:
             raise ValueError(
-                f"Lenght of self.name {self.name} != "
-                f"len(self.functionspace) = {len(self.functionspace)}"
+                f"Length of self.name ({name}) != {len(self.functionspace) = }"
             )
         result = self.__class__(self.functionspace[i], name=name)
         parent = self.functionspace
-        if isinstance(result.functionspace, CartesianProductSpace):
-            result.functionspace.leaf = parent
+        if isinstance(result.functionspace, CartesianTensorProductSpace):
+            result.functionspace.leaf = cast(CartesianTensorProductSpace, parent)
             for space in result.functionspace.flatten():
-                space.leaf = parent
+                space.leaf = cast(CartesianTensorProductSpace, parent)
+        elif isinstance(result.functionspace, CartesianProductSpace):
+            result.functionspace.leaf = cast(CartesianProductSpace, parent)
+            for space in result.functionspace.flatten():
+                space.leaf = cast(CartesianProductSpace, parent)
         elif isinstance(result.functionspace, TensorProductSpace):
-            result.functionspace.leaf = parent
+            result.functionspace.leaf = cast(CartesianTensorProductSpace, parent)
+        elif isinstance(result.functionspace, OrthogonalSpace | DirectSum):
+            result.functionspace.leaf = cast(CartesianProductSpace, parent)
         return result
 
 
@@ -330,30 +339,39 @@ class TestFunction(ExpansionFunction):
         obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
         obj.argument = ArgumentTag.TEST
 
-        if isinstance(V, DirectSum | DirectSumTPS | CartesianProductSpace):
+        _composite = (
+            DirectSum
+            | DirectSumTPS
+            | CartesianProductSpace
+            | CartesianTensorProductSpace
+        )
+        if isinstance(V, _composite):
             obj.functionspace = V.get_homogeneous()
         elif isinstance(V, OrthogonalSpace | TensorProductSpace):
             obj.functionspace = V
         else:
             raise ValueError("Unknown test space")
 
-        if isinstance(V, CartesianProductSpace):
+        if isinstance(V, CartesianProductSpace | CartesianTensorProductSpace):
             if name is None:
                 name = "abcdefg"[len(V)]
-            elif len(name) != len(V) and not (len(name) == 1 and V.rank == 1):
+            elif len(name) != len(V) and not (
+                len(name) == 1 and V.rank == RankTag.VECTOR
+            ):
                 raise ValueError(
-                    f"Lenght of name str must equal the length of basespaces in "
+                    f"Length of name str must equal the length of basespaces in "
                     f"CartesianProductSpace. Got {len(V)} basespaces and "
-                    f"len({name}) == {len(name)}"
+                    f"{len({name}) = }"
                 )
         obj.name = name if name is not None else "TestFunction"
         obj.own_name = "TestFunction"
         return obj
 
     def doit(self, **hints: Any) -> Expr | AppliedUndef:
-        if self.functionspace.rank < 0:
+        if self.functionspace.rank == RankTag.NONE:
             raise ValueError(
-                "TestFunction expansion not possible for CartesianProductSpace"
+                "TestFunction expansion not possible for Cartesian products that are "
+                "not ranked tensors"
             )
         return _get_computational_function(
             "test", cast(ComputationalSpaceType, self.functionspace)
@@ -383,14 +401,16 @@ class TrialFunction(ExpansionFunction):
             cls, *(list(coors._cartesian_xyz) + time_arg + [sp.Dummy()])
         )
         obj.functionspace = V
-        if isinstance(V, CartesianProductSpace):
+        if isinstance(V, CartesianProductSpace | CartesianTensorProductSpace):
             if name is None:
                 name = "abcdefg"[len(V)]
-            elif len(name) != len(V) and not (len(name) == 1 and V.rank == 1):
+            elif len(name) != len(V) and not (
+                len(name) == 1 and V.rank == RankTag.VECTOR
+            ):
                 raise ValueError(
-                    f"Lenght of name str must equal the length of basespaces in "
+                    f"Length of name str must equal the length of basespaces in "
                     f"CartesianProductSpace. Got {len(V)} basespaces and "
-                    f"len({name}) == {len(name)}"
+                    f"{len({name}) = }"
                 )
         obj.name = name if name is not None else "TrialFunction"
         obj.own_name = "TrialFunction"
@@ -435,7 +455,7 @@ class TrialFunction(ExpansionFunction):
                                 vector_index=i,
                                 local_index=getattr(a, "_id", [0])[0],
                                 global_index=getattr(Vi, "global_index", 0),
-                                rank=1,
+                                rank=RankTag.VECTOR,
                                 offset=fspace.dims,
                                 functionspace=v,
                                 argument=ArgumentTag.TRIAL,
@@ -586,7 +606,7 @@ def get_JAXFunction(
     *,
     array: Array,
     global_index: int,
-    rank: int,
+    rank: RankTag,
     functionspace: FunctionSpaceType,
     argument: ArgumentTag,
     args: Tuple,
@@ -616,10 +636,10 @@ def get_JAXFunction(
     def __str__(cls) -> str:
         lhs = f"{cls.name}"
 
-        if cls.rank == 0:
+        if cls.rank == RankTag.SCALAR:
             rhs = f"{cls.args}" if len(cls.args) > 1 else f"({cls.args[0].name})"
             return lhs + rhs
-        elif cls.rank == 1:
+        elif cls.rank == RankTag.VECTOR:
             rhs = f"{cls.args}"
             sup = "^{(" + str(cls.global_index) + ")}"
             return lhs + sup + rhs
@@ -633,14 +653,14 @@ def get_JAXFunction(
 
     def _latex(cls, printer: Any = None, exp: float | None = None) -> str:
         lhs = f"{latex_symbols[cls.name]}"
-        if cls.rank == 0:
+        if cls.rank == RankTag.SCALAR:
             rhs = (
                 f"({latex_symbols[cls.args[0]]})"
                 if len(cls.args) == 1
                 else f"{latex_symbols[cls.args]}"
             )
             s = lhs + rhs
-        elif cls.rank == 1:
+        elif cls.rank == RankTag.VECTOR:
             rhs = f"{latex_symbols[cls.args]}"
             sup = "^{(" + str(cls.global_index) + ")}"
             s = lhs + sup + rhs
@@ -717,11 +737,19 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
 
         coors: CoordSys = V.system
         obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
-        if isinstance(array, sp.Expr):
-            array = project(array, cast(ScalarSpaceType, V))
 
-        elif isinstance(array, sp.Tuple):
-            array = project(array, cast(CartesianProductSpace, V))
+        if isinstance(array, sp.Expr | sp.Tuple):
+            if V.rank == RankTag.VECTOR:
+                assert isinstance(array, sp.Expr)
+                array = project(array, cast(VectorTensorProductSpace, V))
+            else:
+                if isinstance(array, sp.Expr):
+                    array = project(array, cast(ScalarSpaceType, V))
+                else:
+                    array = project(
+                        array,
+                        cast(CartesianTensorProductSpace | CartesianProductSpace, V),
+                    )
 
         obj.array = array
         obj.functionspace = V
@@ -750,11 +778,11 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
             local_indices = slice(offset, 2 * offset)
             global_index = 0
             hat = f"\\hat{{{self.name}}}"
-            if V.rank == 0:
+            if V.rank == RankTag.SCALAR:
                 name = "".join((hat, "_{", indices[local_indices], "}"))
                 return Jaxc(cast(Array, self.array), V, name=name) * trial
 
-            elif V.rank == 1:
+            elif V.rank == RankTag.VECTOR:
                 assert isinstance(V, VectorTensorProductSpace)
                 s = []
                 for k, v in cast(Vector, trial).components.items():
@@ -778,22 +806,23 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
 
             else:
                 raise ValueError(
-                    "Unranked Composite space not supported for linear expansion."
+                    "JAXFunction expansion not possible for Cartesian products that "
+                    "are not ranked tensors"
                 )
 
         # Nonlinear case, return a multivar function.
-        if V.rank == 0:
+        if V.rank == RankTag.SCALAR:
             return get_JAXFunction(
                 self.name,
                 array=cast(Array, self.array),
                 global_index=0,
-                rank=0,
+                rank=RankTag.SCALAR,
                 functionspace=V,
                 argument=ArgumentTag.JAXFUNC,
                 args=V.system.base_scalars(),
             )
 
-        elif V.rank == 1:
+        elif V.rank == RankTag.VECTOR:
             assert isinstance(V, VectorTensorProductSpace)
 
             return VectorAdd.fromiter(
@@ -801,7 +830,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
                     "".join((self.name, "^{(", str(i), ")}")),
                     array=self.array[i],
                     global_index=i,
-                    rank=0,
+                    rank=RankTag.SCALAR,
                     functionspace=V[i],
                     argument=ArgumentTag.JAXFUNC,
                     args=V.system.base_scalars(),
@@ -860,7 +889,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         else:
             z = V.evaluate(x, cast(tuple[Array, ...], self.array))
 
-        if V.rank == 0:
+        if V.rank == RankTag.SCALAR:
             return jnp.expand_dims(z, -1)
         return z
 

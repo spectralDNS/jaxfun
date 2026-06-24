@@ -4,6 +4,7 @@ import sympy as sp
 
 from jaxfun.coordinates import BaseScalar, BaseTime
 from jaxfun.pinns.nnspaces import MLPSpace, MLPVectorSpace, NNSpace, PirateSpace
+from jaxfun.typing import RankTag
 
 pytestmark = pytest.mark.pinn
 
@@ -15,7 +16,7 @@ def test_nnspace_basic_attributes_and_out_size():
     # out_size computed as dims ** rank
     assert ns.out_size == 3**2
     assert ns.dims == 3
-    assert ns.rank == 2
+    assert ns.rank == RankTag.DYADIC
     assert ns.is_transient is False
     # base_variables should contain spatial BaseScalar objects only
     bv = ns.base_variables()
@@ -52,7 +53,7 @@ def test_mlpspace_sets_hidden_and_activation_callable():
 def test_mlpvectorspace_partial_sets_rank_one():
     vec = MLPVectorSpace(hidden_size=5, dims=2, transient=False, name="vecspace")
     # partial should have applied rank=1
-    assert vec.rank == 1
+    assert vec.rank == RankTag.VECTOR
     # hidden_size should be stored as given
     assert vec.hidden_size == 5
 

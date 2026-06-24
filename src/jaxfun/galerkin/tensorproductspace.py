@@ -19,7 +19,7 @@ from jaxfun.sharding import (
     physical_sharding,
     spectral_sharding,
 )
-from jaxfun.typing import MeshKind
+from jaxfun.typing import MeshKind, RankTag
 from jaxfun.utils.common import jit_vmap, lambdify
 
 from .composite import BCGeneric, BoundaryConditions, Composite, DirectSum
@@ -29,7 +29,7 @@ tensor_product_symbol = "\u2297"
 multiplication_sign = "\u00d7"
 
 if TYPE_CHECKING:
-    from jaxfun.galerkin import CartesianProductSpace
+    from jaxfun.galerkin import CartesianTensorProductSpace
 
 
 IndivisibleError = ValueError
@@ -68,7 +68,7 @@ class TensorProductSpace:
         basespaces: Sequence[OrthogonalSpace],
         system: CoordSys | None = None,
         name: str = "TPS",
-        leaf: CartesianProductSpace | None = None,
+        leaf: CartesianTensorProductSpace | None = None,
         global_index: int = 0,
     ) -> None:
         from jaxfun.coordinates import CartCoordSys, x, y, z
@@ -106,18 +106,19 @@ class TensorProductSpace:
         return len(self)
 
     @property
-    def rank(self) -> int:
+    def rank(self) -> RankTag:
         """Return tensor rank (0 for scalar-valued space)."""
-        return 0
+        return RankTag.SCALAR
 
     @property
     def is_orthogonal(self) -> bool:
         """Return True if underlying bases are all orthogonal."""
         return all(space.is_orthogonal for space in self.basespaces)
 
+    @property
     def shape(self) -> tuple[int, ...]:
-        """Return raw modal shape (N0, N1, ...)."""
-        return tuple([space.N for space in self.basespaces])
+        """Return physical-space shape (number of quadrature points per axis)."""
+        return tuple(space.num_quad_points for space in self.basespaces)
 
     @property
     def dim(self) -> int:
@@ -580,7 +581,7 @@ class DirectSumTPS(TensorProductSpace):
         system: CoordSys,
         name: str = "DSTPS",
         global_index: int = 0,
-        leaf: CartesianProductSpace | None = None,
+        leaf: CartesianTensorProductSpace | None = None,
     ) -> None:
         from jaxfun.galerkin.inner import project, project1D
 

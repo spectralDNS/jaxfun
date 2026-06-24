@@ -4,10 +4,10 @@ from math import prod
 from typing import TYPE_CHECKING, Self, overload
 
 import jax.numpy as jnp
+from flax import nnx
 from jax import Array
 
-from jaxfun.la import DiagonalMatrix
-from jaxfun.la.diamatrix import DiaMatrix, diags
+from jaxfun.la.diamatrix import DiagonalMatrix, DiaMatrix, diags
 from jaxfun.la.matrix import Matrix
 from jaxfun.la.matrixprotocol import BaseMatrix
 
@@ -21,6 +21,21 @@ def _as_state_shape(shape: int | tuple[int, ...]) -> tuple[int, ...]:
 
 def _dtype_or_default(dtype) -> jnp.dtype:
     return jnp.dtype(jnp.float32 if dtype is None else dtype)
+
+
+class GlobalArray(nnx.Pytree):
+    def __init__(self, i: int, data: Array):
+        self.data = data
+        self.i = i
+
+
+class GlobalMatrix(nnx.Pytree):
+    def __init__(self, global_indices: tuple[int, int], matrix: DiaMatrix | Matrix):
+        self.data = nnx.data(matrix)
+        self.global_indices = nnx.static(global_indices)
+
+    def scale(self, alpha: complex | Array) -> GlobalMatrix:
+        return GlobalMatrix(self.global_indices, self.data.scale(alpha))
 
 
 class SpecialMatrix(BaseMatrix):
@@ -89,11 +104,23 @@ class SpecialMatrix(BaseMatrix):
     def __call__(self, u: Array | JAXFunction) -> Array:
         raise NotImplementedError
 
-    def __matmul__(self, other: Array | JAXFunction) -> Array:
-        return self(other)
+    @overload
+    def __matmul__(self, other: Array | JAXFunction) -> Array: ...
+    @overload
+    def __matmul__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix: ...
+    def __matmul__(
+        self, other: Array | JAXFunction | DiaMatrix | Matrix
+    ) -> Array | DiaMatrix | Matrix:
+        return self._as_array(other)
 
-    def __rmatmul__(self, other: Array | JAXFunction) -> Array:
-        return self(other)
+    @overload
+    def __rmatmul__(self, other: Array | JAXFunction) -> Array: ...
+    @overload
+    def __rmatmul__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix: ...
+    def __rmatmul__(
+        self, other: Array | JAXFunction | DiaMatrix | Matrix
+    ) -> Array | DiaMatrix | Matrix:
+        return self._as_array(other)
 
     def __add__(self, other):
         return NotImplemented
@@ -137,57 +164,86 @@ class IdentityMatrix(SpecialMatrix):
         return self._as_array(u)
 
     @overload
+    def __matmul__(self, other: Array | JAXFunction) -> Array: ...
+    @overload
+    def __matmul__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix: ...
+    def __matmul__(
+        self, other: Array | JAXFunction | DiaMatrix | Matrix
+    ) -> Array | DiaMatrix | Matrix:
+        if isinstance(other, DiaMatrix | Matrix):
+            self._check_matmul_shape(other)
+            return other
+        return self._as_array(other)
+
+    @overload
+    def __rmatmul__(self, other: Array | JAXFunction) -> Array: ...
+    @overload
+    def __rmatmul__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix: ...
+    def __rmatmul__(
+        self, other: Array | JAXFunction | DiaMatrix | Matrix
+    ) -> Array | DiaMatrix | Matrix:
+        if isinstance(other, DiaMatrix | Matrix):
+            if other.shape[1] != self.shape[0]:
+                raise ValueError(
+                    f"Shape mismatch for matrix product: {other.shape} @ {self.shape}"
+                )
+            return other
+        return self._as_array(other)
+
+    @overload
     def __add__(self, other: ZeroMatrix) -> IdentityMatrix: ...
     @overload
-    def __add__[T](self, other: T) -> T: ...
+    def __add__(self, other: IdentityMatrix) -> DiagonalMatrix: ...
+    @overload
+    def __add__[T: DiaMatrix | Matrix](self, other: T) -> T: ...
     def __add__(self, other):
         if isinstance(other, ZeroMatrix):
             self._check_same_shape(other)
             return self
+        if isinstance(other, DiaMatrix | Matrix):
+            self._check_same_shape(other)
+            return self.scale(1) + other
         if isinstance(other, IdentityMatrix):
             self._check_same_shape(other)
             return self.scale(1) + other.scale(1)
-        if isinstance(other, DiaMatrix):
-            self._check_same_shape(other)
-            return self.scale(1) + other
-        if isinstance(other, Matrix):
-            self._check_same_shape(other)
-            return Matrix(other.data + self.todense())
         return NotImplemented
 
     @overload
     def __sub__(self, other: ZeroMatrix) -> IdentityMatrix: ...
     @overload
-    def __sub__[T](self, other: T) -> T: ...
+    def __sub__(self, other: IdentityMatrix) -> ZeroMatrix: ...
+    @overload
+    def __sub__[T: DiaMatrix | Matrix](self, other: T) -> T: ...
     def __sub__(self, other):
         if isinstance(other, ZeroMatrix):
             self._check_same_shape(other)
             return self
-        if isinstance(other, IdentityMatrix):
-            self._check_same_shape(other)
-            return self.scale(1) - other.scale(1)
-        if isinstance(other, DiaMatrix):
+        if isinstance(other, DiaMatrix | Matrix):
             self._check_same_shape(other)
             return self.scale(1) - other
-        if isinstance(other, Matrix):
+        if isinstance(other, IdentityMatrix):
             self._check_same_shape(other)
-            return self.to_matrix() - other
+            dtype = jnp.result_type(self.dtype, other.dtype)
+            return ZeroMatrix(self.state_shape, dtype=dtype)
         return NotImplemented
 
     @overload
-    def __rsub__(self, other: ZeroMatrix) -> IdentityMatrix: ...
+    def __rsub__(self, other: ZeroMatrix) -> DiagonalMatrix: ...
     @overload
-    def __rsub__[T](self, other: T) -> T: ...
-    def __rsub__[T](self, other: T) -> Self | T:
+    def __rsub__(self, other: IdentityMatrix) -> ZeroMatrix: ...
+    @overload
+    def __rsub__[T: DiaMatrix | Matrix](self, other: T) -> T: ...
+    def __rsub__(self, other):
         if isinstance(other, ZeroMatrix):
             self._check_same_shape(other)
             return -self
-        if isinstance(other, DiaMatrix):
+        if isinstance(other, IdentityMatrix):
             self._check_same_shape(other)
-            return other - self.scale(1)
-        if isinstance(other, Matrix):
+            dtype = jnp.result_type(self.dtype, other.dtype)
+            return ZeroMatrix(self.state_shape, dtype=dtype)
+        if isinstance(other, DiaMatrix | Matrix):
             self._check_same_shape(other)
-            return Matrix(other.data - self.todense())  # ty:ignore[invalid-return-type]
+            return other.__sub__(self.scale(1))
         return NotImplemented
 
 
@@ -231,8 +287,42 @@ class ZeroMatrix(SpecialMatrix):
         w = self._as_array(u)
         return jnp.zeros_like(w)
 
+    @overload
+    def __matmul__(self, other: Array | JAXFunction) -> Array: ...
+    @overload
+    def __matmul__(self, other: DiaMatrix | Matrix) -> Matrix: ...
+    def __matmul__(
+        self, other: Array | JAXFunction | DiaMatrix | Matrix
+    ) -> Array | Matrix:
+        if isinstance(other, DiaMatrix | Matrix):
+            self._check_matmul_shape(other)
+            n = self.shape[0]
+            k = other.shape[1]
+            dtype = jnp.result_type(self.dtype, other.dtype)
+            return Matrix(jnp.zeros((n, k), dtype=dtype))
+        w = self._as_array(other)
+        return jnp.zeros_like(w)
+
+    @overload
+    def __rmatmul__(self, other: Array | JAXFunction) -> Array: ...
+    @overload
+    def __rmatmul__(self, other: DiaMatrix | Matrix) -> Matrix: ...
+    def __rmatmul__(
+        self, other: Array | JAXFunction | DiaMatrix | Matrix
+    ) -> Array | Matrix:
+        if isinstance(other, DiaMatrix | Matrix):
+            n, m = self.shape
+            if other.shape[1] != n:
+                raise ValueError(
+                    f"Shape mismatch for matrix product: {other.shape} @ {self.shape}"
+                )
+            dtype = jnp.result_type(self.dtype, other.dtype)
+            return Matrix(jnp.zeros((other.shape[0], m), dtype=dtype))
+        w = self._as_array(other)
+        return jnp.zeros_like(w)
+
     def __add__[T](self, other: T) -> T:
-        if hasattr(other, "shape"):
+        if isinstance(other, BaseMatrix):
             self._check_same_shape(other)
         return other
 

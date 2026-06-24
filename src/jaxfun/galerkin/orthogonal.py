@@ -26,10 +26,11 @@ import sympy as sp
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import BaseMatrix, DiaMatrix, Matrix, diags
-from jaxfun.typing import Array, MeshKind
+from jaxfun.typing import Array, MeshKind, RankTag
 from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
 
 if TYPE_CHECKING:
+    from jaxfun.galerkin.cartesianproductspace import CartesianProductSpace
     from jaxfun.galerkin.composite import BoundaryConditions
 
 
@@ -47,10 +48,14 @@ class OrthogonalSpace(BaseSpace):
         N: Number of modes.
         domain: Physical Domain (None -> reference).
         num_quad_points: Default quadrature resolution (== N).
+        bcs: dictionary describing boundary conditions.
         S: Stencil matrix (identity here; overridden in Composite).
         P: DiaMatrix representing S @ S.T.
         stencil: Dict describing diagonal shifts (0:1 for identity).
         orthogonal: Self alias (Composite replaces with underlying).
+        leaf: If not None the CartesianProductSpace this space
+            belongs to.
+        global_index: Global index into CartesianProductSpace.
     """
 
     is_orthogonal = True
@@ -75,6 +80,8 @@ class OrthogonalSpace(BaseSpace):
         self.stencil = {0: 1}
         self.S: DiaMatrix = diags([jnp.ones(N)], offsets=(0,), shape=(N, N))
         self.P: DiaMatrix = self.S
+        self.leaf: CartesianProductSpace | None = None
+        self.global_index: int = 0
         super().__init__(system, name, fun_str)
 
     @abstractmethod
@@ -298,8 +305,13 @@ class OrthogonalSpace(BaseSpace):
         return a
 
     @property
+    def shape(self) -> tuple[int, ...]:
+        """Return physical-space shape (number of quadrature points)."""
+        return (self.num_quad_points,)
+
+    @property
     def dim(self) -> int:
-        """Return total number of raw modes N."""
+        """Return total number of degrees of freedom."""
         return self.N
 
     @property
@@ -313,9 +325,9 @@ class OrthogonalSpace(BaseSpace):
         return self.dim
 
     @property
-    def rank(self) -> int:
+    def rank(self) -> RankTag:
         """Return tensor rank (0 for scalar spaces)."""
-        return 0
+        return RankTag.SCALAR
 
     @property
     def domain(self) -> Domain:
@@ -450,6 +462,14 @@ class OrthogonalSpace(BaseSpace):
     def get_orthogonal(self) -> Self:
         """Return self (orthogonal space is self; overridden in Composite)."""
         return self
+
+    def to_orthogonal(self, c: Array) -> Array:
+        """Return coefficients unchanged (already in the orthogonal basis)."""
+        return c
+
+    def from_orthogonal(self, c: Array) -> Array:
+        """Return coefficients unchanged (already in the orthogonal basis)."""
+        return c
 
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0

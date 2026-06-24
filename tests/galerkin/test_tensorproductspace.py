@@ -115,7 +115,7 @@ def test_vectortensorproductspace_padded_backward_forward_truncation_roundtrip()
     )
     u = JAXFunction(coeffs, V)
 
-    ua = V.backward(cast(tuple[Array, ...], u.array), N=(pad, pad))
+    ua = V.backward(cast(tuple[Array, ...], u.array), N=pad)
     coeffs_rt = V.forward(ua)
 
     assert ua[0].shape == pad and ua[1].shape == pad

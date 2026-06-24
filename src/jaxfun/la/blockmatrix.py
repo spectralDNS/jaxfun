@@ -1,65 +1,91 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self, cast
 
-import jax
 import jax.numpy as jnp
 from flax import nnx
 from jax import Array
 
 from jaxfun.la.diamatrix import DiaMatrix
 from jaxfun.la.matrix import Matrix
-from jaxfun.la.matrixprotocol import BaseMatrix, IndexedArray, _CacheBox
+from jaxfun.la.matrixprotocol import (
+    BaseMatrix,
+    DiaMatrixSolveMethod,
+    _CacheBox,
+)
+from jaxfun.la.operators import GlobalArray, GlobalMatrix
 from jaxfun.la.tpmatrix import TPMatrices, TPMatrix, tpmats_to_kron
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import (
         CartesianProductSpace,
+        CartesianTensorProductSpace,
         JAXFunction,
     )
 
 type _SparseMatrixCache = _CacheBox[DiaMatrix]
 
 
-class BlockTPMatrix(BaseMatrix):
-    """Block matrix of TPMatrix objects.
+class BlockMatrix[
+    MatrixT: TPMatrix | GlobalMatrix,
+    SpaceT: CartesianTensorProductSpace | CartesianProductSpace,
+](BaseMatrix):
+    """Shared implementation for block matrices over a Cartesian-product space.
 
-    Args:
-        tpmats: List of TPMatrix objects.
-        test_space: descriptor for the (leaf) test space.
-        trial_space: descriptor for the (leaf) trial space.
+    Works for both multidimensional CartesianTensorProductSpace and the single-
+    dimensional CartesianProductSpace.
 
-    Attributes:
-        blocks: list of TPMatrix objects.
-        test_space, trial_space: VectorTensorProductSpace descriptors.
     """
+
+    _combined_blocks: nnx.Dict
+    test_space: SpaceT
+    trial_space: SpaceT
+    test_block_sizes: tuple[int, ...]
+    trial_block_sizes: tuple[int, ...]
+    shape: tuple[int, int]
 
     def __init__(
         self,
-        tpmats: list[TPMatrix],
-        test_space: CartesianProductSpace,
-        trial_space: CartesianProductSpace,
+        mats: list[MatrixT],
+        test_space: SpaceT,
+        trial_space: SpaceT,
     ) -> None:
-        self.tpmats = nnx.List(tpmats)
+        self.mats = nnx.List(mats)
         self.test_space = test_space
         self.trial_space = trial_space
         self.shape = (self.test_space.dim, self.trial_space.dim)
         self.test_block_sizes: tuple[int, ...] = self.test_space.block_sizes
         self.trial_block_sizes: tuple[int, ...] = self.trial_space.block_sizes
 
-        # Pre-compute one combined matrix per (test_block, trial_block) pair so
-        # that matvec, todense and tosparse each iterate over at most one entry
-        # per block instead of one entry per contributing TPMatrix.
-        _grouped: dict[str, TPMatrices] = {}
-        for mat in tpmats:
-            idx = f"{mat.global_indices[0]},{mat.global_indices[1]}"
-            if idx not in _grouped:
-                _grouped[idx] = TPMatrices([mat])
-            else:
-                _grouped[idx].tpmats.append(mat)
-        self._combined_blocks = nnx.Dict(
-            {idx: tpmats_to_kron(list(tpm.tpmats)) for idx, tpm in _grouped.items()}
-        )
+        if isinstance(mats[0], TPMatrix):
+            _grouped: dict[str, TPMatrices] = {}
+            for mat in mats:
+                idx = f"{mat.global_indices[0]},{mat.global_indices[1]}"
+                if idx not in _grouped:
+                    _grouped[idx] = TPMatrices([cast(TPMatrix, mat)])
+                else:
+                    _grouped[idx].tpmats.append(cast(TPMatrix, mat))
+            self._combined_blocks = nnx.Dict(
+                {idx: tpmats_to_kron(list(tpm.tpmats)) for idx, tpm in _grouped.items()}
+            )
+        else:
+            _grouped: dict[str, Matrix | DiaMatrix] = {}
+            for mi in mats:
+                gm = cast(GlobalMatrix, mi)
+                key = f"{gm.global_indices[0]},{gm.global_indices[1]}"
+                if key not in _grouped:
+                    _grouped[key] = gm.data
+                else:
+                    _grouped[key] = _grouped[key] + gm.data
+            self._combined_blocks = nnx.Dict(_grouped)
+
+    def _matmul_array(self, w: tuple[Array, ...]) -> tuple[Array, ...]:
+        shapes = self.test_space.num_dofs
+        out = [jnp.zeros(shape) for shape in shapes]
+        for s, block_mat in self._combined_blocks.items():
+            bi, bj = map(int, s.split(","))
+            out[bi] = out[bi] + (block_mat @ w[bj].ravel()).reshape(shapes[bi])
+        return tuple(out)
 
     @property
     def dtype(self) -> jnp.dtype:
@@ -68,43 +94,12 @@ class BlockTPMatrix(BaseMatrix):
             dtype = jnp.result_type(dtype, block_mat.dtype)
         return jnp.dtype(dtype)
 
-    def scale(self, alpha: complex | Array) -> BlockTPMatrix:
-        return BlockTPMatrix(
-            [mat.scale(alpha) for mat in self.tpmats],
-            self.test_space,
-            self.trial_space,
-        )
-
-    def __add__(self, other: BlockTPMatrix) -> BlockTPMatrix:
-        return BlockTPMatrix(
-            list(self.tpmats) + list(other.tpmats),
-            self.test_space,
-            self.trial_space,
-        )
-
-    def __sub__(self, other: BlockTPMatrix) -> BlockTPMatrix:
-        return BlockTPMatrix(
-            list(self.tpmats) + [mat.scale(-1) for mat in other.tpmats],
-            self.test_space,
-            self.trial_space,
-        )
-
-    @jax.jit
-    def _matmul_array(self, w: tuple[Array, ...]) -> tuple[Array, ...]:
-        out = []
-        flat_spaces = self.test_space.flatten()
-        for s, block_mat in self._combined_blocks.items():
-            bi, bj = map(int, s.split(","))
-            out.append((block_mat @ w[bj].ravel()).reshape(flat_spaces[bi].num_dofs))
-        return tuple(out)
-
-    def slice(self, indices: tuple[int, ...]) -> tuple[slice, ...]:  # ty:ignore[invalid-type-form]
-        """Return slice object for block matrix indices."""
+    def _block_slice(self, bi: int, bj: int) -> tuple[slice, slice]:
         N = self.test_block_sizes
         M = self.trial_block_sizes
         return (
-            slice(sum(N[: indices[0]]), sum(N[: indices[0] + 1])),
-            slice(sum(M[: indices[1]]), sum(M[: indices[1] + 1])),
+            slice(sum(N[:bi]), sum(N[: bi + 1])),
+            slice(sum(M[:bj]), sum(M[: bj + 1])),
         )
 
     def todense(self) -> Array:
@@ -112,7 +107,7 @@ class BlockTPMatrix(BaseMatrix):
         out = jnp.zeros(self.shape)
         for s, block_mat in self._combined_blocks.items():
             bi, bj = map(int, s.split(","))
-            out = out.at[self.slice((bi, bj))].add(block_mat.todense())
+            out = out.at[self._block_slice(bi, bj)].add(block_mat.todense())
         return out
 
     def to_matrix(self) -> Matrix:
@@ -152,7 +147,6 @@ class BlockTPMatrix(BaseMatrix):
         total_rows = sum(test_block_sizes)
         total_cols = sum(trial_block_sizes)
 
-        # Build per-block DiaMatrix and collect all global diagonal offsets.
         block_dias: dict[tuple[int, int], DiaMatrix] = {}
         global_offsets: set[int] = set()
         for s, block_kron in self._combined_blocks.items():
@@ -169,7 +163,6 @@ class BlockTPMatrix(BaseMatrix):
         sorted_offsets = tuple(sorted(global_offsets))
         offset_to_idx = {k: i for i, k in enumerate(sorted_offsets)}
 
-        # Allocate global DIA data array and scatter each block's diagonals.
         dtype = jnp.result_type(*[d.data.dtype for d in block_dias.values()])
         global_data = jnp.zeros((len(sorted_offsets), total_cols), dtype=dtype)
         for (bi, bj), block_dia in block_dias.items():
@@ -191,10 +184,9 @@ class BlockTPMatrix(BaseMatrix):
     def __call__(self, u: BlockArray | JAXFunction) -> BlockArray:
         """Apply block matrix to coefficient array u.
 
-        Uses the RCM-permuted :class:`~jaxfun.la.DiaMatrix` for a single
-        global matvec when the sparse cache has been populated (e.g. after
-        :meth:`solve` or an explicit :meth:`tosparse` call); otherwise falls
-        back to the per-block path.
+        Uses direct sparse matvec when the sparse cache has been populated
+        (e.g. after :meth:`solve` or an explicit :meth:`tosparse` call);
+        otherwise falls back to the per-block path.
         """
         if not isinstance(u, BlockArray):
             w = BlockArray(self.test_space, tuple_array=u.get_array())
@@ -204,12 +196,7 @@ class BlockTPMatrix(BaseMatrix):
         sparse_box: _SparseMatrixCache | None = getattr(self, "_sparse_cache", None)
         if sparse_box is not None:
             wf = w.flatten()
-            sparse = sparse_box.value
-            if getattr(sparse, "_rcm_cache", None) is not None:
-                A_perm, perm, inv_perm = sparse.rcm()
-                z = A_perm.matvec(wf[perm])[inv_perm]
-            else:
-                z = sparse.matvec(wf)
+            z = sparse_box.value.matvec(wf)
             return BlockArray(self.test_space, flat_array=z)
 
         return BlockArray(self.test_space, tuple_array=self._matmul_array(w.array))
@@ -222,26 +209,56 @@ class BlockTPMatrix(BaseMatrix):
         """Return number of rows (test space dimension)."""
         return self.shape[0]
 
-    def solve(self, b: BlockArray) -> BlockArray:  # ty:ignore[invalid-method-override]
+    def solve(
+        self,
+        b: BlockArray,
+        *,
+        pivot: bool = False,
+        method: DiaMatrixSolveMethod | str = DiaMatrixSolveMethod.AUTO,
+        auto_threshold: int = 100,
+    ) -> BlockArray:  # ty:ignore[invalid-method-override]
         """Solve ``M x = b``.
 
         When all factor matrices are :class:`~jaxfun.la.DiaMatrix` instances,
-        assembles the global sparse matrix via :meth:`tosparse`, applies the
-        reverse Cuthill-McKee permutation to minimise bandwidth, and solves
-        with the banded LU.  The permuted matrix and permutation vectors are
-        cached so repeated solves are cheap.
+        assembles the global sparse matrix via :meth:`tosparse`.
 
-        Falls back to a dense factorisation when any factor is a
-        :class:`~jaxfun.la.Matrix`.
+        Args:
+            b: Right-hand side BlockArray.
+            pivot: Passed to :meth:`lu_factor` (banded and RCM paths only).
+            method: One of ``"auto"``, ``"banded"``, ``"rcm"``, or
+                ``"dense"``.  Default ``"auto"``.
+            auto_threshold: Threshold for the ``"auto"`` method.  Default 100.
         """
         all_dia = all(isinstance(m, DiaMatrix) for m in self._combined_blocks.values())
         x = b.flatten()
         if all_dia:
-            A_perm, perm, inv_perm = self.tosparse().rcm()
-            x_perm = A_perm.solve(x[perm])
-            return BlockArray(b.cartspace, flat_array=x_perm[inv_perm])
+            uh = self.tosparse().lu_solve(
+                x, pivot=pivot, method=method, auto_threshold=auto_threshold
+            )
+            return BlockArray(b.cartspace, flat_array=uh)
         M = self.to_matrix()
         return BlockArray(b.cartspace, flat_array=M.solve(x))
+
+    def scale(self, alpha: complex | Array) -> Self:
+        scaled = cast(
+            list[MatrixT],
+            [cast(GlobalMatrix | TPMatrix, m).scale(alpha) for m in self.mats],
+        )
+        return self.__class__(scaled, self.test_space, self.trial_space)
+
+    def __add__(self, other: Self) -> Self:
+        return self.__class__(
+            list(self.mats) + list(other.mats), self.test_space, self.trial_space
+        )
+
+    def __sub__(self, other: Self) -> Self:
+        scaled = cast(
+            list[MatrixT],
+            [cast(GlobalMatrix | TPMatrix, m).scale(-1) for m in other.mats],
+        )
+        return self.__class__(
+            list(self.mats) + scaled, self.test_space, self.trial_space
+        )
 
 
 class BlockArray(nnx.Pytree):
@@ -249,23 +266,23 @@ class BlockArray(nnx.Pytree):
 
     Args:
         cartspace: descriptor for the (leaf) space.
-        indexed_arrays: List of IndexedArray objects.
+        indexed_arrays: List of GlobalArray objects.
         flat_array: 1D Array of length cartspace.dim.
         tuple_array: tuple of Arrays for flattened space, one item
-            for each TensorProductSpace in the flattened space. This
+            for each space in the flattened space. This
             is, e.g., the output from forward/scalar_product.
 
     Attributes:
         data: nnx.List of Arrays representing each block.
         block_sizes: tuple of ints, dim of each block.
         num_dofs: tuple of tuple of ints, num_dof of each block.
-        cartspace: CartesianProductSpace.
+        cartspace: CartesianTensorProductSpace or CartesianProductSpace.
     """
 
     def __init__(
         self,
-        cartspace: CartesianProductSpace,
-        indexed_arrays: list[IndexedArray] | None = None,
+        cartspace: CartesianTensorProductSpace | CartesianProductSpace,
+        indexed_arrays: list[GlobalArray] | None = None,
         flat_array: Array | None = None,
         tuple_array: tuple[Array, ...] | None = None,
     ) -> None:
@@ -300,19 +317,19 @@ class BlockArray(nnx.Pytree):
         a = [d.ravel() for d in self._broadcast_data()]
         return jnp.concatenate(tuple(a))
 
-    def _list_from_flat_array(self, x: Array) -> list[IndexedArray]:
+    def _list_from_flat_array(self, x: Array) -> list[GlobalArray]:
         s0: int = 0
-        d: list[IndexedArray] = []
+        d: list[GlobalArray] = []
         for i, s1 in enumerate(self.block_sizes):
-            d.append(IndexedArray(i, x[slice(s0, s0 + s1)].reshape(self.num_dofs[i])))
+            d.append(GlobalArray(i, x[slice(s0, s0 + s1)].reshape(self.num_dofs[i])))
             s0 += s1
         return d
 
-    def _list_from_tuple_array(self, x: tuple[Array, ...]) -> list[IndexedArray]:
-        return [IndexedArray(i, xi) for i, xi in enumerate(x)]
+    def _list_from_tuple_array(self, x: tuple[Array, ...]) -> list[GlobalArray]:
+        return [GlobalArray(i, xi) for i, xi in enumerate(x)]
 
-    def accumulate(self, b: IndexedArray | list[IndexedArray]) -> None:
-        b_list: list[IndexedArray] = [b] if isinstance(b, IndexedArray) else b
+    def accumulate(self, b: GlobalArray | list[GlobalArray]) -> None:
+        b_list: list[GlobalArray] = [b] if isinstance(b, GlobalArray) else b
         for bi in b_list:
             self.data[bi.i] += bi.data
 

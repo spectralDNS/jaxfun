@@ -504,6 +504,7 @@ class ResidualVPINN(Residual):
     def _compute_target(self, x: Array, weights: Array | None = None) -> Array:
         s = self.base_scalars
         assert weights is not None, "Weights must be provided"
+        weights = jnp.atleast_1d(weights)
         t0 = jnp.expand_dims(jnp.atleast_1d(self.target0), axis=-1)
         tns = []
         for tv, tn in self.target_dict.items():

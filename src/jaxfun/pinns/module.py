@@ -22,6 +22,7 @@ from sympy.vector import VectorAdd
 
 from jaxfun.coordinates import BaseTime, CoordSys
 from jaxfun.galerkin import (
+    CartesianProductSpace,
     CartesianTensorProductSpace,
     Chebyshev,
     DirectSum,
@@ -29,6 +30,7 @@ from jaxfun.galerkin import (
     VectorTensorProductSpace,
 )
 from jaxfun.galerkin.arguments import ArgumentTag
+from jaxfun.galerkin.cartesianproductspace import CartesianBaseSpace
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.typing import Activation, RankTag
 from jaxfun.utils.common import Domain, lambdify
@@ -607,7 +609,10 @@ class SpectralModule(BaseModule):
 
     def __init__(
         self,
-        basespace: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace,
+        basespace: OrthogonalSpace
+        | DirectSum
+        | TensorProductSpace
+        | VectorTensorProductSpace,
         *,
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,  # kept for uniform API
@@ -622,7 +627,7 @@ class SpectralModule(BaseModule):
             bias_init: Ignored (present for consistency).
             rngs: RNG container.
         """
-        if isinstance(basespace, OrthogonalSpace):
+        if isinstance(basespace, OrthogonalSpace | DirectSum):
             w = kernel_init(rngs(), (1, basespace.num_dofs))
             # Spectral modes should decay - apply logscaled weighting
             x = jnp.logspace(0, -6, basespace.num_dofs)
@@ -915,7 +920,7 @@ def get_flax_module(
             for vi in V
         ]
         return CartesianModule(sub_modules, name=name or V.name)
-    elif isinstance(V, CartesianTensorProductSpace) and not isinstance(
+    elif isinstance(V, CartesianBaseSpace) and not isinstance(
         V, VectorTensorProductSpace
     ):
         spectral_sub: list[BaseModule] = [
@@ -958,6 +963,7 @@ class FlaxFunction(Function):
         NNSpace
         | CartesianNNSpace
         | OrthogonalSpace
+        | CartesianProductSpace
         | TensorProductSpace
         | CartesianTensorProductSpace
         | DirectSum
@@ -975,6 +981,7 @@ class FlaxFunction(Function):
         V: NNSpace
         | CartesianNNSpace
         | OrthogonalSpace
+        | CartesianProductSpace
         | TensorProductSpace
         | CartesianTensorProductSpace
         | DirectSum,
@@ -1098,7 +1105,7 @@ class FlaxFunction(Function):
         jointly. E.g. ``u, p = up`` when ``up = FlaxFunction(W, "up")``.
         """
         V = self.functionspace
-        if not isinstance(V, CartesianTensorProductSpace | CartesianNNSpace):
+        if not isinstance(V, CartesianBaseSpace | CartesianNNSpace):
             raise TypeError(
                 f"__getitem__ requires a CartesianTensorProductSpace or "
                 f"CartesianNNSpace, got {type(V).__name__}"
@@ -1123,11 +1130,11 @@ class FlaxFunction(Function):
             sub_ff = FlaxFunction(Vi, name, module=cmod[i], rngs=self.rngs)
             sub_ff.global_offset = Vi.global_index
             return cast(Self, sub_ff)
-        if isinstance(V, CartesianTensorProductSpace) and isinstance(
+        if isinstance(V, CartesianBaseSpace) and isinstance(
             self.module, CartesianModule
         ):
             Vi = V[i]
-            if isinstance(Vi, CartesianTensorProductSpace):
+            if isinstance(Vi, CartesianBaseSpace):
                 offset = Vi.flatten()[0].global_index
             else:
                 offset = getattr(Vi, "global_index", 0)

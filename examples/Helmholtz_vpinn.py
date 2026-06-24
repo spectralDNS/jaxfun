@@ -23,7 +23,7 @@ V = FunctionSpace(
     domain=domain,
 )
 W = MLPSpace(64, dims=1, rank=0, name="V")
-w = FlaxFunction(W, "w", rngs=nnx.Rngs(11))
+w = FlaxFunction(V, "w", rngs=nnx.Rngs(11))
 v = TestFunction(V, name="v")
 
 # Manufactured solution
@@ -38,7 +38,7 @@ wj = mesh.get_weights(N, domain="inside", kind="legendre")
 xb = mesh.get_points(N, domain="boundary")
 
 # fv = (Div(Grad(w)) + w - (Div(Grad(ue)) + ue)) * v
-fv = -Dot(Grad(w), Grad(v)) + w * v - (-Dot(Grad(ue), Grad(v)) + ue * v)
+fv = -Dot(Grad(w), Grad(v)) + w**3 * v - (-Dot(Grad(ue), Grad(v)) + ue**3 * v)
 loss_fn = Loss((fv, xj, 0, wj), (w, xb))
 trainer = Trainer(loss_fn)
 

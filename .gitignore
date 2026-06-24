@@ -4,6 +4,17 @@
 # Avoid bloating the repo
 *.gif
 
+# Claude Code local settings (machine-specific)
+.claude/
+
+# Local data files and build artifacts
+examples/data/
+index_preview.html
+
+# Archived/layout notebooks (local only)
+examples/notebooks/old/
+examples/notebooks/layouts/
+
 # Sandbox — local experiments, not for the repo (exceptions tracked explicitly)
 sandbox/*
 !sandbox/poisson1D_multi.py

@@ -250,7 +250,8 @@ def _adder_for(rank: RankTag) -> type[AdderType]:
             return VectorAdd
         case RankTag.DYADIC:
             return DyadicAdd
-    raise ValueError("rank must be 0, 1 or 2")
+        case _:
+            raise ValueError("rank must be 0, 1 or 2")
 
 
 type BasisZero = BasisDependentZero | sp.core.numbers.Zero

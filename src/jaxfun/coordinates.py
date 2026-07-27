@@ -192,6 +192,7 @@ class BaseScalar(AtomicExpr):
 
     _id: tuple[int, CoordSys]
     _system: CoordSys
+    name: str
     _name: str
     _pretty_form: str
     _latex_form: str
@@ -267,7 +268,7 @@ class BaseScalar(AtomicExpr):
         return self.system._map_base_scalar_to_symbol[self]
 
 
-class BaseVector(Vector, AtomicExpr):
+class BaseVector(Vector, AtomicExpr):  # ty:ignore[invalid-method-override]
     """Covariant base vector of a coordinate system
 
         b_j = ∂r/∂q^j
@@ -366,7 +367,7 @@ class BaseVector(Vector, AtomicExpr):
         return self._system.to_cartesian(self)
 
 
-class BaseDyadic(Dyadic, AtomicExpr):
+class BaseDyadic(Dyadic, AtomicExpr):  # ty:ignore[invalid-method-override]
     """Dyadic (tensor product) of two base vectors.
 
     Represents a rank-2 basis tensor constructed from two covariant base vectors
@@ -606,9 +607,10 @@ class CoordSys(Basic):
 
         position_vector = position_vector.xreplace(obj._map_symbol_to_base_scalar)
         assert isinstance(position_vector, Tuple)
-        obj._map_xyz_to_base_scalar: dict[BaseScalar, BaseScalar] = {
+        xyz_to_bs: dict[Symbol, BaseScalar] = {
             k: v for k, v in zip(obj._cartesian_xyz, position_vector)
         }
+        obj._map_xyz_to_base_scalar = xyz_to_bs
 
         # Add doit to Cartesian coordinates, such that x, y, z are evaluated in
         # computational space as x(psi), y(psi), z(psi)

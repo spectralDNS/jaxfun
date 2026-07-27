@@ -70,12 +70,11 @@ def CartesianProduct(
     from jaxfun.pinns.nnspaces import NNSpace as _NNSpace  # lazy — avoids circular
 
     rank_tag = RankTag(rank) if isinstance(rank, int) else rank
-    if basespaces and all(isinstance(b, _NNSpace) for b in basespaces):
+    basespaces_list = [copy.deepcopy(space) for space in basespaces]
+    if basespaces_list and all(isinstance(b, _NNSpace) for b in basespaces_list):
         from jaxfun.pinns.nnspaces import CartesianNNSpace as _CartesianNNSpace
 
-        return _CartesianNNSpace(*basespaces, name=name, rank=rank_tag)
-
-    basespaces_list = [copy.deepcopy(space) for space in basespaces]
+        return _CartesianNNSpace(*basespaces_list, name=name, rank=rank_tag)
     if all(basespace.dims == 1 for basespace in basespaces_list):
         return CartesianProductSpace(
             *cast(list[OneDimensionalSpace], basespaces_list), name=name, rank=rank_tag

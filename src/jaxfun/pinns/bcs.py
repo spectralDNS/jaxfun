@@ -5,6 +5,8 @@ Currently provides:
       multiple (component) expressions over a boundary mesh.
 """
 
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -50,5 +52,5 @@ def DirichletBC(
         if isinstance(b, sp.Number | float | int):  # overkill check for ty
             g.append(float(b) * jnp.ones(bnd_mesh.shape[0]))
         else:
-            g.append(lambdify(s, b)(*bnd_mesh.T))
+            g.append(lambdify(s, cast(sp.Expr, b))(*bnd_mesh.T))
     return jnp.array(g).T

@@ -20,7 +20,7 @@ from sympy.core.function import AppliedUndef
 from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
-from jaxfun.coordinates import BaseTime, CoordSys
+from jaxfun.coordinates import BaseScalar, BaseTime, CoordSys
 from jaxfun.galerkin import (
     CartesianProductSpace,
     CartesianTensorProductSpace,
@@ -604,6 +604,13 @@ class PirateNet(BaseModule):
         return self.act_fun_final(self.output_layer(x))
 
 
+def _logspace_outer(num_dofs: tuple[int, ...], dtype: Any) -> Array:
+    decay = jnp.logspace(0, -6, num_dofs[0], dtype=dtype)
+    for n in num_dofs[1:]:
+        decay = decay[..., None] * jnp.logspace(0, -6, n, dtype=dtype)
+    return decay
+
+
 class SpectralModule(BaseModule):
     """Wrapper for a spectral function space (1D or tensor product)."""
 
@@ -630,24 +637,20 @@ class SpectralModule(BaseModule):
         if isinstance(basespace, OrthogonalSpace | DirectSum):
             w = kernel_init(rngs(), (1, basespace.num_dofs))
             # Spectral modes should decay - apply logscaled weighting.
-            # dtype=w.dtype prevents accidental float64 promotion via jax_enable_x64.
             decay = jnp.logspace(0, -6, basespace.num_dofs, dtype=w.dtype)
             self.kernel: nnx.Param[Array] = nnx.Param(w * decay[None, :])
 
         elif isinstance(basespace, TensorProductSpace):
             w = kernel_init(rngs(), basespace.num_dofs)
-            dx = jnp.logspace(0, -6, basespace.num_dofs[0], dtype=w.dtype)
-            dy = jnp.logspace(0, -6, basespace.num_dofs[1], dtype=w.dtype)
-            self.kernel = nnx.Param(dx[:, None] * dy[None, :] * w)
+            self.kernel = nnx.Param(_logspace_outer(basespace.num_dofs, w.dtype) * w)
 
         elif isinstance(basespace, VectorTensorProductSpace):
             # Each component TPS gets its own Param (kernel_0, kernel_1, ...).
             components = list(basespace.flatten())
             for i, b in enumerate(components):
                 w = kernel_init(rngs(), b.num_dofs)
-                bx = jnp.logspace(0, -6, b.num_dofs[0], dtype=w.dtype)
-                by = jnp.logspace(0, -6, b.num_dofs[1], dtype=w.dtype)
-                setattr(self, f"kernel_{i}", nnx.Param((bx[:, None] * by[None, :]) * w))
+                decay = _logspace_outer(b.num_dofs, w.dtype)
+                setattr(self, f"kernel_{i}", nnx.Param(decay * w))
             self._num_kernels = len(components)
 
         self.space = basespace
@@ -662,14 +665,6 @@ class SpectralModule(BaseModule):
     def dims(self) -> int:
         """Return spatial dimensionality of the basespace."""
         return self.space.dims
-
-    def set_kernel(self, kernel: Array | tuple[Array, ...]) -> None:
-        """Set kernel parameters directly."""
-        if isinstance(self.space, CartesianTensorProductSpace):
-            for i, k in enumerate(cast(tuple[Array, ...], kernel)):
-                setattr(self, f"kernel_{i}", nnx.Param(k))
-        else:
-            self.kernel = nnx.Param(cast(Array, kernel))
 
     def __call__(self, x: Array) -> Array:
         """Evaluate spectral expansion at coordinates.
@@ -908,31 +903,33 @@ def get_flax_module(
         return KANMLPModule(V, **params)
     elif isinstance(V, sPIKANSpace):
         params.pop("bias_init")  # sPIKANModule does not use bias_init
-        return sPIKANModule(V, **params)  # ty:ignore[unknown-argument, invalid-argument-type]
+        return sPIKANModule(V, **params)  # ty:ignore[unknown-argument]
     elif isinstance(V, CartesianNNSpace):
+        vi_names = [vi.name for vi in V]
         sub_modules: list[BaseModule] = [
             get_flax_module(
                 vi,
                 kernel_init=kernel_init,
                 bias_init=bias_init,
                 rngs=rngs,
-                name=vi.name,
+                name=f"{vi.name}_{i}" if vi_names.count(vi.name) > 1 else vi.name,
             )
-            for vi in V
+            for i, vi in enumerate(V)
         ]
         return CartesianModule(sub_modules, name=name or V.name)
     elif isinstance(V, CartesianBaseSpace) and not isinstance(
         V, VectorTensorProductSpace
     ):
+        vi_names = [vi.name for vi in V]
         spectral_sub: list[BaseModule] = [
             SpectralModule(
                 vi,
                 kernel_init=kernel_init,
                 bias_init=bias_init,
                 rngs=rngs,
-                name=vi.name,
+                name=f"{vi.name}_{i}" if vi_names.count(vi.name) > 1 else vi.name,
             )
-            for vi in V
+            for i, vi in enumerate(V)
         ]
         return CartesianModule(spectral_sub, name=name or V.name)
     assert isinstance(
@@ -1026,10 +1023,10 @@ class FlaxFunction(Function):
         """Return flattened parameter count of underlying module."""
         return self.module.dim
 
-    def get_args(self, Cartesian=True) -> tuple[sp.Symbol, ...] | sp.Tuple:
+    def get_args(self, Cartesian=True) -> tuple[sp.Symbol | BaseScalar, ...] | sp.Tuple:
         """Return symbolic arguments (Cartesian or base scalars + time)."""
         if Cartesian:
-            return self.args[:-1]
+            return cast(tuple[sp.Symbol | BaseScalar, ...], self.args[:-1])
         V = self.functionspace
         s = V.system.base_scalars()
         res = s + (self.t,) if V.is_transient else s
@@ -1101,48 +1098,62 @@ class FlaxFunction(Function):
     def __getitem__(self, i: int) -> Self:
         """Return a sub-FlaxFunction for component i of a Cartesian product space.
 
-        Works for both CartesianTensorProductSpace (spectral) and CartesianNNSpace
-        (neural). The underlying module is shared so all components are optimized
-        jointly. E.g. ``u, p = up`` when ``up = FlaxFunction(W, "up")``.
+        The sub-FF shares the parent module so all components are optimized jointly.
+        ``global_offset`` is set so that ``doit()`` computes the correct
+        ``vector_index = getattr(Vi, "global_index", 0) - global_offset`` for
+        selecting the right column from the module output.
+
+        Two dispatch paths, determined by the module type:
+
+        CartesianModule (CartesianNNSpace or CartesianBaseSpace without VectorTPS):
+            Sub-module is ``module[i]``; its output columns start at 0.
+            ``global_offset = Vi.global_index`` (NNSpace, always set) or 0
+            (spectral TPS, no global_index), giving ``vector_index = 0``.
+
+        SpectralModule (VectorTensorProductSpace only):
+            A single module evaluates all components and returns (N, num_components).
+            ``global_offset = -i`` so ``vector_index = 0 - (-i) = i``.
+
+        Name expansion: a single-character name ``"u"`` becomes ``"u_i"`` for
+        VectorTPS and ``"ui"`` otherwise; a multi-character name must have exactly
+        ``len(V)`` characters (one per component). E.g. ``u, p = up[0], up[1]``.
         """
         V = self.functionspace
         if not isinstance(V, CartesianBaseSpace | CartesianNNSpace):
             raise TypeError(
-                f"__getitem__ requires a CartesianTensorProductSpace or "
+                f"__getitem__ requires a CartesianBaseSpace or "
                 f"CartesianNNSpace, got {type(V).__name__}"
             )
         name = self.name
-        if isinstance(V, VectorTensorProductSpace) and len(name) == 1:
-            name = f"{name}_{i}"
+        if len(name) == 1:
+            if isinstance(V, VectorTensorProductSpace):
+                name = f"{name}_{i}"
+            else:
+                name = f"{name}{i}"
         elif len(name) == len(V):
             name = name[i]
         else:
             raise ValueError(
                 f"Name {name!r} length must equal number of component spaces "
-                f"({len(V)}), or be a single character for a VectorTensorProductSpace"
+                f"({len(V)}), or be a single character"
             )
         assert isinstance(self.module, CartesianModule | SpectralModule)
-        if isinstance(V, CartesianNNSpace):
-            # Use the sub-module so only that network is evaluated/differentiated.
-            # Store the joint-output offset; doit() subtracts it so global_index is
-            # 0-based relative to the sub-module output.
-            cmod = cast(CartesianModule, self.module)
+        if isinstance(self.module, CartesianModule):
             Vi = V[i]
-            sub_ff = FlaxFunction(Vi, name, module=cmod[i], rngs=self.rngs)
-            sub_ff.global_offset = Vi.global_index
-            return cast(Self, sub_ff)
-        if isinstance(V, CartesianBaseSpace) and isinstance(
-            self.module, CartesianModule
-        ):
-            Vi = V[i]
-            if isinstance(Vi, CartesianBaseSpace):
-                offset = Vi.flatten()[0].global_index
-            else:
-                offset = getattr(Vi, "global_index", 0)
+            offset = (
+                Vi.flatten()[0].global_index
+                if isinstance(Vi, CartesianBaseSpace)
+                else getattr(Vi, "global_index", 0)
+            )
             sub_ff = FlaxFunction(Vi, name, module=self.module[i], rngs=self.rngs)
             sub_ff.global_offset = offset
             return cast(Self, sub_ff)
-        return cast(Self, FlaxFunction(V[i], name, module=self.module, rngs=self.rngs))
+        # VectorTPS + SpectralModule: output is (N, num_components).
+        # global_offset = -i so doit() gives vector_index = 0 - (-i) = i.
+        assert isinstance(V, VectorTensorProductSpace)
+        sub_ff = FlaxFunction(V[i], name, module=self.module, rngs=self.rngs)
+        sub_ff.global_offset = -i
+        return cast(Self, sub_ff)
 
     def cartesian_mesh(self, xs: Array) -> Array:
         """Map computational coordinates to Cartesian physical domain.
@@ -1165,7 +1176,8 @@ class FlaxFunction(Function):
     @property
     def c_names(self) -> str:
         """Return comma-separated coordinate names."""
-        return ", ".join([i.name for i in self.args[:-1]])
+        args = cast(tuple[sp.Symbol | BaseScalar, ...], self.args[:-1])
+        return ", ".join([i.name for i in args])
 
     def __str__(self) -> str:
         name = (

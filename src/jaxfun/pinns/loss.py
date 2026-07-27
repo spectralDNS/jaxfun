@@ -440,14 +440,10 @@ class ResidualVPINN(Residual):
         self.t_split = nnx.List(t_split)
 
         # Add all terms with the same test function derivative count
-        t_v = {}
+        grouped: dict[str, list[sp.Expr | int]] = {}
         for tn, tv in t_split:
-            tv = str(tv)
-            if tv not in t_v:
-                t_v[tv] = []
-            t_v[tv].append(tn)
-        for tv, tn in t_v.items():
-            t_v[tv] = sp.Add(*tn)
+            grouped.setdefault(str(tv), []).append(tn)
+        t_v: dict[str, sp.Expr] = {tv: sp.Add(*tn) for tv, tn in grouped.items()}
         self.target_dict = nnx.Dict(t_v)
 
         # Build list of equations and all required evaluations of flaxfunctions
@@ -785,7 +781,7 @@ class Loss:
             if len(w.shape) == 0:
                 w = jnp.array([w])
             JTJ.append(((J * w[:, None]).T @ J) / N)
-        return 2 * sum(JTJ)
+        return cast(Array, 2 * sum(JTJ))
 
     @nnx.jit(static_argnums=0)
     def value_and_grad_and_JTJ(

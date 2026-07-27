@@ -777,17 +777,13 @@ def _finalize_inner_result(
         else:
             raise ValueError("Inconsistent matrix types in aresults")
 
-    match aresult, bresult:
-        case None, None:
+    if aresult is None:
+        if bresult is None:
             raise ValueError("No bilinear or linear forms found in expression")
-        case aresult, None:
-            return aresult
-        case None, bresult:
-            return bresult
-        case aresult, bresult:
-            return aresult, bresult
-
-    raise ValueError("Something wrong in _finalize_inner_result")
+        return bresult
+    if bresult is None:
+        return aresult
+    return aresult, bresult
 
 
 @overload

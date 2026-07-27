@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.19.11"
+__generated_with = "0.23.15"
 app = marimo.App()
 
 
@@ -67,7 +67,7 @@ def _(nnx):
 
     up = FlaxFunction(W, "up", rngs=nnx.Rngs(2001))
     u, p = up
-    return V, up, p, u
+    return V, p, u, up
 
 
 @app.cell(hide_code=True)
@@ -268,7 +268,7 @@ def _(mo):
 
 @app.cell
 def _(loss_fn, up):
-    loss_fn(up)
+    loss_fn(up.module)
     return
 
 
@@ -300,7 +300,7 @@ def _(mo):
 
 @app.cell
 def _(loss_fn, up):
-    loss_fn(up)
+    loss_fn(up.module)
     return
 
 
@@ -323,7 +323,7 @@ def _(trainer, up):
 
 @app.cell
 def _(loss_fn, up):
-    loss_fn(up)
+    loss_fn(up.module)
     return
 
 
@@ -390,7 +390,7 @@ def _(mo):
 
 @app.cell
 def _(loss_fn, up):
-    loss_fn.compute_residual_i(up, 0)[:10]  # plot only 10 numbers
+    loss_fn.compute_residual_i(up.module, 0)[:10]  # plot only 10 numbers
     return
 
 
@@ -403,9 +403,9 @@ def _(mo):
 
 
 @app.cell
-def _(loss_fn, up, plt, xyi):
+def _(loss_fn, plt, up, xyi):
     plt.figure(figsize=(4, 3))
-    plt.scatter(*xyi.T, c=loss_fn.compute_residual_i(up, 2), s=20)
+    plt.scatter(*xyi.T, c=loss_fn.compute_residual_i(up.module, 2), s=20)
     plt.colorbar()
     plt.show()
     return

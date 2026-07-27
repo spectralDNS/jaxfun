@@ -9,7 +9,7 @@ from flax import nnx
 
 from jaxfun.galerkin import FunctionSpace, Legendre, TestFunction
 from jaxfun.operators import Dot, Grad
-from jaxfun.pinns import FlaxFunction, Loss, MLPSpace, Trainer
+from jaxfun.pinns import FlaxFunction, Loss, Trainer
 from jaxfun.pinns.mesh import Line
 from jaxfun.pinns.optimizer import adam, lbfgs
 from jaxfun.utils.common import Domain, jacn, lambdify, ulp
@@ -22,7 +22,6 @@ V = FunctionSpace(
     name="V",
     domain=domain,
 )
-W = MLPSpace(64, dims=1, rank=0, name="V")
 w = FlaxFunction(V, "w", rngs=nnx.Rngs(11))
 v = TestFunction(V, name="v")
 

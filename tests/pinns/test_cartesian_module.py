@@ -85,6 +85,23 @@ def nn_pressure_first():
     return pu, p, u
 
 
+@pytest.fixture(scope="module")
+def nn_three_component():
+    """CartesianNNSpace(u, p, t): vector NN, then two scalar NNs.
+
+    Exercises global_offset arithmetic beyond the 2-component case:
+    u has 2 output columns, so p and t (each 1 column) must start at
+    offsets 2 and 3 respectively.
+    """
+    u_space = MLPSpace([8], dims=2, rank=1, name="u")
+    p_space = MLPSpace([8], dims=2, rank=0, name="p")
+    t_space = MLPSpace([8], dims=2, rank=0, name="t")
+    W = CartesianNNSpace(u_space, p_space, t_space, name="upt")
+    upt = FlaxFunction(W, "upt", rngs=nnx.Rngs(50))
+    u, p, t = upt
+    return upt, u, p, t
+
+
 # ---------------------------------------------------------------------------
 # Spectral — module structure
 # ---------------------------------------------------------------------------
@@ -273,6 +290,49 @@ def test_nn_pf_global_offset(nn_pressure_first):
     assert u.global_offset == 1
 
 
+def test_nn_three_component_creates_cartesian_module(nn_three_component):
+    upt, u, p, t = nn_three_component
+    assert isinstance(upt.module, CartesianModule)
+
+
+def test_nn_three_component_sub_module_identity(nn_three_component):
+    upt, u, p, t = nn_three_component
+    assert u.module is upt.module.data[0]
+    assert p.module is upt.module.data[1]
+    assert t.module is upt.module.data[2]
+
+
+def test_nn_three_component_output_shapes(nn_three_component):
+    """u (vector, 2 cols) + p (scalar, 1 col) + t (scalar, 1 col) → combined (N, 4)."""
+    upt, u, p, t = nn_three_component
+    pts = jnp.zeros((N_PTS, 2))
+    pin = jnp.zeros((1, 2))
+
+    assert upt(pts).shape == (N_PTS, 4)
+    assert u(pts).shape == (N_PTS, 2)
+    assert p(pin).shape == (1,)
+    assert t(pin).shape == (1,)
+
+
+def test_nn_three_component_global_offset(nn_three_component):
+    """u takes columns 0-1, so p and t (1 col each) start at offsets 2 and 3."""
+    upt, u, p, t = nn_three_component
+    assert u.global_offset == 0
+    assert p.global_offset == 2
+    assert t.global_offset == 3
+
+
+def test_nn_three_component_loss_evaluates(nn_three_component):
+    upt, u, p, t = nn_three_component
+    pts = jnp.zeros((N_PTS, 2))
+    pin = jnp.zeros((1, 2))
+
+    loss = Loss((Div(u), pts), (p, pin, 0, 10), (t, pin, 0, 10))
+    val = loss(upt.module)
+    assert val.shape == ()
+    assert jnp.isfinite(val)
+
+
 # ---------------------------------------------------------------------------
 # NN — Loss dispatch
 # ---------------------------------------------------------------------------
@@ -299,3 +359,30 @@ def test_nn_pf_loss_evaluates(nn_pressure_first):
     val = loss(pu.module)
     assert val.shape == ()
     assert jnp.isfinite(val)
+
+
+# ---------------------------------------------------------------------------
+# NN — nesting guard
+# ---------------------------------------------------------------------------
+
+
+def test_nested_cartesian_nn_space_via_factory_raises():
+    """CartesianProduct() must reject a CartesianNNSpace passed back into it."""
+    u_space = MLPSpace([8], dims=2, rank=1, name="u")
+    p_space = MLPSpace([8], dims=2, rank=0, name="p")
+    up_space = CartesianNNSpace(u_space, p_space, name="up")
+    t_space = MLPSpace([8], dims=2, rank=0, name="t")
+
+    with pytest.raises(TypeError, match="Nesting a CartesianNNSpace"):
+        CartesianProduct(up_space, t_space, name="upt")  # ty:ignore[no-matching-overload]
+
+
+def test_nested_cartesian_nn_space_via_constructor_raises():
+    """CartesianNNSpace() must reject a CartesianNNSpace among its basespaces."""
+    u_space = MLPSpace([8], dims=2, rank=1, name="u")
+    p_space = MLPSpace([8], dims=2, rank=0, name="p")
+    up_space = CartesianNNSpace(u_space, p_space, name="up")
+    t_space = MLPSpace([8], dims=2, rank=0, name="t")
+
+    with pytest.raises(TypeError, match="Nesting a CartesianNNSpace"):
+        CartesianNNSpace(up_space, t_space, name="upt")  # ty:ignore[invalid-argument-type]

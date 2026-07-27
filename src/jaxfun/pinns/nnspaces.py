@@ -324,6 +324,11 @@ class CartesianNNSpace:
         name: str = "CNN",
         rank: int | RankTag = RankTag.NONE,
     ) -> None:
+        if any(isinstance(b, CartesianNNSpace) for b in basespaces):
+            raise TypeError(
+                "Nesting a CartesianNNSpace inside another CartesianNNSpace is "
+                "not supported — pass component NNSpace objects directly instead."
+            )
         self.basespaces: list[NNSpace] = list(basespaces)
         self.name = name
         self._rank = RankTag(rank) if isinstance(rank, int) else rank

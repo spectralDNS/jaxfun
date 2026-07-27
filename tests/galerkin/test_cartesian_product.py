@@ -279,14 +279,21 @@ def test_inner_system_heterogeneous_solve():
     x_joint = A.solve(b)
     assert isinstance(x_joint, BlockArray)
 
-    # Compare against independent single-block solves
+    # Compare against independent single-block solves. ue/pe are transcendental,
+    # so the reference solves must use the same num_quad_points as the joint
+    # solve above — otherwise the two paths integrate slightly different
+    # quantities and disagree by quadrature-truncation error rather than roundoff.
     u0 = TrialFunction(T0)
     v0 = TestFunction(T0)
-    A_ref0, b_ref0 = inner(v0 * (u0 - ue), sparse=True, kind="system")
+    A_ref0, b_ref0 = inner(
+        v0 * (u0 - ue), sparse=True, kind="system", num_quad_points=(N, N)
+    )
     x_ref0 = A_ref0.solve(b_ref0)
 
     v1 = TestFunction(T1)
-    A_ref1, b_ref1 = inner(v1 * (p - pe), sparse=True, kind="system")
+    A_ref1, b_ref1 = inner(
+        v1 * (p - pe), sparse=True, kind="system", num_quad_points=(N, N)
+    )
     x_ref1 = A_ref1.solve(b_ref1)
 
     assert jnp.linalg.norm(x_joint[0] - x_ref0) < jnp.sqrt(ulp(1000))
@@ -617,8 +624,13 @@ def test_1d_coupled_system_solve():
     # Residual check
     assert jnp.linalg.norm((H @ uh).flatten() - h.flatten()) < ulp(100)
 
-    # Solution accuracy: evaluate u (block 0) on quadrature mesh
+    # Solution accuracy: evaluate u (block 0) on quadrature mesh.
+    # ue = sin(pi x) is transcendental, so at fixed N the dominant error is
+    # spectral truncation (~1e-3 at N=8, converging exponentially with N — not
+    # roundoff), so the tolerance here is a fixed constant rather than
+    # ulp-scaled: it must not shrink just because a wider dtype reduces
+    # floating-point error.
     xj = D.mesh()
     u_phys = C.backward(uh)[0]
     ue_phys = jnp.sin(jnp.pi * xj)
-    assert jnp.linalg.norm(u_phys - ue_phys) < jnp.sqrt(ulp(100))
+    assert jnp.linalg.norm(u_phys - ue_phys) < 2e-3

@@ -67,13 +67,20 @@ def CartesianProduct(
         CartesianNNSpace, CartesianTensorProductSpace, CartesianProductSpace, or
         VectorTensorProductSpace instance.
     """
-    from jaxfun.pinns.nnspaces import NNSpace as _NNSpace  # lazy — avoids circular
+    # lazy — avoids circular import between galerkin and pinns subpackages
+    from jaxfun.pinns.nnspaces import (
+        CartesianNNSpace as _CartesianNNSpace,
+        NNSpace as _NNSpace,
+    )
 
     rank_tag = RankTag(rank) if isinstance(rank, int) else rank
     basespaces_list = [copy.deepcopy(space) for space in basespaces]
+    if any(isinstance(b, _CartesianNNSpace) for b in basespaces_list):
+        raise TypeError(
+            "Nesting a CartesianNNSpace inside CartesianProduct() is not "
+            "supported — pass its component NNSpace objects directly instead."
+        )
     if basespaces_list and all(isinstance(b, _NNSpace) for b in basespaces_list):
-        from jaxfun.pinns.nnspaces import CartesianNNSpace as _CartesianNNSpace
-
         return _CartesianNNSpace(*basespaces_list, name=name, rank=rank_tag)
     if all(basespace.dims == 1 for basespace in basespaces_list):
         return CartesianProductSpace(

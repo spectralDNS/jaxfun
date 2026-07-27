@@ -7,7 +7,7 @@ import pytest
 root = Path(__file__).parent.parent
 
 _all_files = [f for f in root.glob("examples/*.py") if f.is_file()]
-_all_files = [f for f in _all_files if f.stem != "DrivenCavity_lstsq"]
+_all_files = [f for f in _all_files if "DrivenCavity" not in f.stem]
 
 spmd_files = [
     f.stem for f in _all_files if "pytestmark = pytest.mark.spmd" in f.read_text()

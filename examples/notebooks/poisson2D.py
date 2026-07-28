@@ -216,7 +216,7 @@ def _(h, hj, jnp):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Note that each functionspace V contains $N$ unknowns, but $N+2$ quadrature points since there are two restrictions on the boundary conditions.
+    Note that each functionspace T contains $N$ unknowns, but $N+2$ quadrature points since there are two restrictions on the boundary conditions.
 
     Alternatively, use a flattened mesh of shape $((N+2)^2, 2)$:
     """)

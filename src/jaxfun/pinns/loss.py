@@ -24,7 +24,7 @@ from jaxfun.galerkin.arguments import ArgumentTag, get_arg
 from jaxfun.typing import Array, Loss_Tuple
 from jaxfun.utils import lambdify
 
-from .module import Comp
+from .module import CartesianModule, Comp
 
 if TYPE_CHECKING:
     from jaxfun.pinns import FlaxFunction
@@ -292,7 +292,7 @@ class Residual(nnx.Pytree):
             x_id, mod_id, k = key
             mod = (
                 module.data[module.mod_index[str(mod_id)]]
-                if isinstance(module, Comp)
+                if isinstance(module, Comp | CartesianModule)
                 else module
             )
             Js[key] = jacn(mod, key[2])(x)
@@ -440,14 +440,10 @@ class ResidualVPINN(Residual):
         self.t_split = nnx.List(t_split)
 
         # Add all terms with the same test function derivative count
-        t_v = {}
+        grouped: dict[str, list[sp.Expr | int]] = {}
         for tn, tv in t_split:
-            tv = str(tv)
-            if tv not in t_v:
-                t_v[tv] = []
-            t_v[tv].append(tn)
-        for tv, tn in t_v.items():
-            t_v[tv] = sp.Add(*tn)
+            grouped.setdefault(str(tv), []).append(tn)
+        t_v: dict[str, sp.Expr] = {tv: sp.Add(*tn) for tv, tn in grouped.items()}
         self.target_dict = nnx.Dict(t_v)
 
         # Build list of equations and all required evaluations of flaxfunctions
@@ -504,6 +500,7 @@ class ResidualVPINN(Residual):
     def _compute_target(self, x: Array, weights: Array | None = None) -> Array:
         s = self.base_scalars
         assert weights is not None, "Weights must be provided"
+        weights = jnp.atleast_1d(weights)
         t0 = jnp.expand_dims(jnp.atleast_1d(self.target0), axis=-1)
         tns = []
         for tv, tn in self.target_dict.items():
@@ -784,7 +781,7 @@ class Loss:
             if len(w.shape) == 0:
                 w = jnp.array([w])
             JTJ.append(((J * w[:, None]).T @ J) / N)
-        return 2 * sum(JTJ)
+        return cast(Array, 2 * sum(JTJ))
 
     @nnx.jit(static_argnums=0)
     def value_and_grad_and_JTJ(
@@ -972,7 +969,7 @@ class Loss:
             x_id, mod_id, k = key
             mod = (
                 module.data[module.mod_index[str(mod_id)]]
-                if isinstance(module, Comp)
+                if isinstance(module, Comp | CartesianModule)
                 else module
             )
             Js[key] = jacn(mod, k)(xs[x_id])
@@ -1107,7 +1104,7 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar | sp.Symbol, ...] | None) -> Residual
     return partial(
         _lookup_or_eval,
         mod_id=hash(v.module),
-        global_index=v.global_index,  # ty:ignore[unresolved-attribute]
+        vector_index=v.vector_index,  # ty:ignore[unresolved-attribute]
         k=int(getattr(f, "derivative_count", "0")),
         variables=getattr(f, "variables", ()),
     )  # ty:ignore[invalid-return-type]
@@ -1119,16 +1116,20 @@ def _lookup_or_eval(
     Js: dict[tuple[int, int, int], Array] | None = None,
     x_id: int = 0,
     mod_id: int = 0,
-    global_index: int = 0,
+    vector_index: int = 0,
     k: int = 1,
     variables: tuple[BaseScalar, ...] = (),
 ) -> Array:
     """Compute or look up k-th order Jacobian of module at points x"""
     if Js is None:
         Js = {}
-    module = mod.data[mod.mod_index[str(mod_id)]] if isinstance(mod, Comp) else mod
+    module = (
+        mod.data[mod.mod_index[str(mod_id)]]
+        if isinstance(mod, Comp | CartesianModule)
+        else mod
+    )
     assert mod_id == hash(module), (mod_id, hash(module), module)
-    var = tuple((slice(None), global_index)) + tuple(int(s._id[0]) for s in variables)
+    var = tuple((slice(None), vector_index)) + tuple(int(s._id[0]) for s in variables)
     key: tuple[int, int, int] = (x_id, mod_id, k)
     if key not in Js:
         # Compute gradient

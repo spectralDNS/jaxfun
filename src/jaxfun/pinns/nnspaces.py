@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Sequence
 from functools import partial
 
@@ -48,6 +50,7 @@ class NNSpace(BaseSpace):
         transient: bool = False,
         system: CoordSys | None = None,
         name: str = "NN",
+        leaf: CartesianNNSpace | None = None,
     ) -> None:
         """Initialize a neural network function space."""
         from jaxfun.coordinates import CartCoordSys, x, y, z
@@ -58,6 +61,8 @@ class NNSpace(BaseSpace):
         self.dims = dims
         self.rank = rank_tag
         self.is_transient = transient
+        self.global_index: int = 0
+        self.leaf = leaf
         system = (
             CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[dims])
             if system is None
@@ -293,31 +298,75 @@ class sPIKANSpace(NNSpace):
             self.act_fun = lambda x: x  # Pure spectral in 1D
 
 
-class UnionSpace(NNSpace):
-    """Union of multiple neural network function spaces.
+class CartesianNNSpace:
+    """Cartesian product of NNSpace components for coupled PINN problems.
 
-    Combines several NNSpace instances into a single space, e.g. for
-    domain decomposition or multi-fidelity modeling.
+    Analogous to CartesianTensorProductSpace for neural function spaces.
+    Each component NNSpace receives a global_index attribute that records
+    its starting output-column offset in the combined module output.
 
     Args:
-        spaces: Iterable of NNSpace instances to combine.
-        name: Name of the union space.
+        *basespaces: Component NNSpace instances (one per variable).
+        name: Label for the space.
+        rank: Tensor rank of the combined space (typically NONE for mixed).
 
     Attributes:
-        spaces: Tuple of constituent NNSpace instances.
+        basespaces: Ordered list of component NNSpace objects.
+        system: Coordinate system shared by all components.
+        dims: Spatial dimension.
+        is_transient: Whether time is included as an input.
+        name: Label.
     """
 
-    def __init__(self, *spaces: NNSpace, name: str = "UnionNN") -> None:
-        """Initialize UnionSpace metadata."""
-        self.spaces = spaces
-        NNSpace.__init__(
-            self,
-            dims=self.spaces[0].dims,
-            rank=self.spaces[0].rank,
-            transient=self.spaces[0].is_transient,
-            system=self.spaces[0].system,
-            name=name,
-        )
+    def __init__(
+        self,
+        *basespaces: NNSpace,
+        name: str = "CNN",
+        rank: int | RankTag = RankTag.NONE,
+    ) -> None:
+        if any(isinstance(b, CartesianNNSpace) for b in basespaces):
+            raise TypeError(
+                "Nesting a CartesianNNSpace inside another CartesianNNSpace is "
+                "not supported — pass component NNSpace objects directly instead."
+            )
+        self.basespaces: list[NNSpace] = list(basespaces)
+        self.name = name
+        self._rank = RankTag(rank) if isinstance(rank, int) else rank
+        self.system = basespaces[0].system
+        self.dims = basespaces[0].dims
+        self.is_transient = basespaces[0].is_transient
+        self.leaf: CartesianNNSpace = self
+
+        # Assign global_index = starting output-column offset for each component.
+        offset = 0
+        for space in self.basespaces:
+            space.global_index = offset
+            offset += space.out_size
+            space.leaf = self
+        self._out_size = offset
+
+    @property
+    def out_size(self) -> int:
+        """Total number of output columns across all components."""
+        return self._out_size
+
+    @property
+    def rank(self) -> RankTag:
+        return self._rank
+
+    def __len__(self) -> int:
+        return len(self.basespaces)
+
+    def __iter__(self):  # type: ignore[override]
+        return iter(self.basespaces)
 
     def __getitem__(self, i: int) -> NNSpace:
-        return self.spaces[i]
+        return self.basespaces[i]
+
+    def flatten(self) -> list[NNSpace]:
+        """Return flat list of component NNSpace objects."""
+        return list(self.basespaces)
+
+    def base_variables(self) -> tuple[BaseScalar | BaseTime, ...] | sp.Tuple:
+        """Delegate to the first component."""
+        return self.basespaces[0].base_variables()

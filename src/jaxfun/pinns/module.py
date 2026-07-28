@@ -20,25 +20,28 @@ from sympy.core.function import AppliedUndef
 from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
-from jaxfun.coordinates import BaseTime, CoordSys
+from jaxfun.coordinates import BaseScalar, BaseTime, CoordSys
 from jaxfun.galerkin import (
+    CartesianProductSpace,
+    CartesianTensorProductSpace,
     Chebyshev,
     DirectSum,
     TensorProductSpace,
     VectorTensorProductSpace,
 )
 from jaxfun.galerkin.arguments import ArgumentTag
+from jaxfun.galerkin.cartesianproductspace import CartesianBaseSpace
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.typing import Activation, RankTag
 from jaxfun.utils.common import Domain, lambdify
 
 from .embeddings import Embedding
 from .nnspaces import (
+    CartesianNNSpace,
     KANMLPSpace,
     MLPSpace,
     NNSpace,
     PirateSpace,
-    UnionSpace,
     sPIKANSpace,
 )
 
@@ -601,12 +604,22 @@ class PirateNet(BaseModule):
         return self.act_fun_final(self.output_layer(x))
 
 
+def _logspace_outer(num_dofs: tuple[int, ...], dtype: Any) -> Array:
+    decay = jnp.logspace(0, -6, num_dofs[0], dtype=dtype)
+    for n in num_dofs[1:]:
+        decay = decay[..., None] * jnp.logspace(0, -6, n, dtype=dtype)
+    return decay
+
+
 class SpectralModule(BaseModule):
     """Wrapper for a spectral function space (1D or tensor product)."""
 
     def __init__(
         self,
-        basespace: OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace,
+        basespace: OrthogonalSpace
+        | DirectSum
+        | TensorProductSpace
+        | VectorTensorProductSpace,
         *,
         kernel_init: Initializer = default_kernel_init,
         bias_init: Initializer = default_bias_init,  # kept for uniform API
@@ -621,26 +634,24 @@ class SpectralModule(BaseModule):
             bias_init: Ignored (present for consistency).
             rngs: RNG container.
         """
-        if isinstance(basespace, OrthogonalSpace):
+        if isinstance(basespace, OrthogonalSpace | DirectSum):
             w = kernel_init(rngs(), (1, basespace.num_dofs))
-            # Spectral modes should decay - apply logscaled weighting
-            x = jnp.logspace(0, -6, basespace.num_dofs)
-            self.kernel: nnx.Param[Array] = nnx.Param(w * x[None, :])
+            # Spectral modes should decay - apply logscaled weighting.
+            decay = jnp.logspace(0, -6, basespace.num_dofs, dtype=w.dtype)
+            self.kernel: nnx.Param[Array] = nnx.Param(w * decay[None, :])
 
-        elif basespace.dims == 2:
-            if isinstance(basespace, TensorProductSpace):
-                w = kernel_init(rngs(), basespace.num_dofs)
-                x = jnp.logspace(0, -6, basespace.num_dofs[0])
-                y = jnp.logspace(0, -6, basespace.num_dofs[1])
-                self.kernel = nnx.Param(x[:, None] * y[None, :] * w)
-            elif isinstance(basespace, VectorTensorProductSpace):
-                c = []
-                for b in basespace:
-                    w = kernel_init(rngs(), b.num_dofs)
-                    x = jnp.logspace(0, -6, b.num_dofs[0])
-                    y = jnp.logspace(0, -6, b.num_dofs[1])
-                    c.append((x[:, None] * y[None, :]) * w)
-                self.kernel: nnx.Param[tuple[Array, ...]] = nnx.Param(tuple(c))
+        elif isinstance(basespace, TensorProductSpace):
+            w = kernel_init(rngs(), basespace.num_dofs)
+            self.kernel = nnx.Param(_logspace_outer(basespace.num_dofs, w.dtype) * w)
+
+        elif isinstance(basespace, VectorTensorProductSpace):
+            # Each component TPS gets its own Param (kernel_0, kernel_1, ...).
+            components = list(basespace.flatten())
+            for i, b in enumerate(components):
+                w = kernel_init(rngs(), b.num_dofs)
+                decay = _logspace_outer(b.num_dofs, w.dtype)
+                setattr(self, f"kernel_{i}", nnx.Param(decay * w))
+            self._num_kernels = len(components)
 
         self.space = basespace
         self.name = name
@@ -654,10 +665,6 @@ class SpectralModule(BaseModule):
     def dims(self) -> int:
         """Return spatial dimensionality of the basespace."""
         return self.space.dims
-
-    def set_kernel(self, kernel: Array | tuple[Array, ...]) -> None:
-        """Set kernel parameters directly."""
-        self.kernel: nnx.Param[Array | tuple[Array, ...]] = nnx.Param(kernel)
 
     def __call__(self, x: Array) -> Array:
         """Evaluate spectral expansion at coordinates.
@@ -674,7 +681,10 @@ class SpectralModule(BaseModule):
         if isinstance(self.space, TensorProductSpace):
             z = self.space.evaluate(x, cast(Array, self.kernel))
         elif isinstance(self.space, VectorTensorProductSpace):
-            z = self.space.evaluate(x, cast(tuple[Array, ...], self.kernel))
+            kernels = tuple(
+                getattr(self, f"kernel_{i}") for i in range(self._num_kernels)
+            )
+            z = self.space.evaluate(x, kernels).T
 
         if self.space.rank == RankTag.SCALAR:
             return jnp.expand_dims(z, -1)
@@ -893,11 +903,37 @@ def get_flax_module(
         return KANMLPModule(V, **params)
     elif isinstance(V, sPIKANSpace):
         params.pop("bias_init")  # sPIKANModule does not use bias_init
-        return sPIKANModule(V, **params)  # ty:ignore[unknown-argument, invalid-argument-type]
-    elif isinstance(V, UnionSpace):
-        return UnionModule(V, **params)
+        return sPIKANModule(V, **params)  # ty:ignore[unknown-argument]
+    elif isinstance(V, CartesianNNSpace):
+        vi_names = [vi.name for vi in V]
+        sub_modules: list[BaseModule] = [
+            get_flax_module(
+                vi,
+                kernel_init=kernel_init,
+                bias_init=bias_init,
+                rngs=rngs,
+                name=f"{vi.name}_{i}" if vi_names.count(vi.name) > 1 else vi.name,
+            )
+            for i, vi in enumerate(V)
+        ]
+        return CartesianModule(sub_modules, name=name or V.name)
+    elif isinstance(V, CartesianBaseSpace) and not isinstance(
+        V, VectorTensorProductSpace
+    ):
+        vi_names = [vi.name for vi in V]
+        spectral_sub: list[BaseModule] = [
+            SpectralModule(
+                vi,
+                kernel_init=kernel_init,
+                bias_init=bias_init,
+                rngs=rngs,
+                name=f"{vi.name}_{i}" if vi_names.count(vi.name) > 1 else vi.name,
+            )
+            for i, vi in enumerate(V)
+        ]
+        return CartesianModule(spectral_sub, name=name or V.name)
     assert isinstance(
-        V, OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
+        V, OrthogonalSpace | DirectSum | TensorProductSpace | VectorTensorProductSpace
     )
     return SpectralModule(V, **params)
 
@@ -923,9 +959,11 @@ class FlaxFunction(Function):
 
     functionspace: (
         NNSpace
+        | CartesianNNSpace
         | OrthogonalSpace
+        | CartesianProductSpace
         | TensorProductSpace
-        | VectorTensorProductSpace
+        | CartesianTensorProductSpace
         | DirectSum
     )
     t: BaseTime
@@ -934,13 +972,16 @@ class FlaxFunction(Function):
     fun_str: str
     argument: Literal[ArgumentTag.JAXFUNC]
     rngs: nnx.Rngs
+    global_offset: int
 
     def __new__(
         cls: type[Self],
         V: NNSpace
+        | CartesianNNSpace
         | OrthogonalSpace
+        | CartesianProductSpace
         | TensorProductSpace
-        | VectorTensorProductSpace
+        | CartesianTensorProductSpace
         | DirectSum,
         name: str,
         *,
@@ -969,6 +1010,7 @@ class FlaxFunction(Function):
         obj.fun_str = fun_str if fun_str is not None else name
         obj.argument = ArgumentTag.JAXFUNC
         obj.rngs = rngs
+        obj.global_offset = 0
         return obj
 
     @property
@@ -981,10 +1023,10 @@ class FlaxFunction(Function):
         """Return flattened parameter count of underlying module."""
         return self.module.dim
 
-    def get_args(self, Cartesian=True) -> tuple[sp.Symbol, ...] | sp.Tuple:
+    def get_args(self, Cartesian=True) -> tuple[sp.Symbol | BaseScalar, ...] | sp.Tuple:
         """Return symbolic arguments (Cartesian or base scalars + time)."""
         if Cartesian:
-            return self.args[:-1]
+            return cast(tuple[sp.Symbol | BaseScalar, ...], self.args[:-1])
         V = self.functionspace
         s = V.system.base_scalars()
         res = s + (self.t,) if V.is_transient else s
@@ -999,16 +1041,18 @@ class FlaxFunction(Function):
 
         For rank 0: returns a scalar Function placeholder.
         For rank 1: returns a VectorAdd assembling components.
+        For rank NONE (mixed CartesianTensorProductSpace): index with [i] first.
         """
         V = self.functionspace
         args = self.get_args(Cartesian=False)
+        offset = self.global_offset
 
         if V.rank == RankTag.SCALAR:
             function = cast(
                 Callable[..., AppliedUndef],
                 Function(
                     self.fun_str,
-                    global_index=0,
+                    vector_index=getattr(V, "global_index", 0) - offset,
                     functionspace_name=V.name,
                     rank_parent=V.rank,
                     module=self.module,
@@ -1019,10 +1063,25 @@ class FlaxFunction(Function):
 
         if V.rank == RankTag.VECTOR:
             b = V.system.base_vectors()
+            if isinstance(V, VectorTensorProductSpace):
+                return VectorAdd.fromiter(
+                    Function(
+                        "".join([self.fun_str, "^{(", str(i), ")}"]),
+                        vector_index=getattr(Vi, "global_index", i) - offset,
+                        functionspace_name=V.name,
+                        rank_parent=V.rank,
+                        module=self.module,
+                        argument=ArgumentTag.JAXFUNC,
+                    )(*args)  # ty:ignore[call-non-callable]
+                    * b[i]
+                    for i, Vi in enumerate(V)
+                )
+            assert isinstance(V, NNSpace)
+            base_index = getattr(V, "global_index", 0)
             return VectorAdd.fromiter(
                 Function(
                     "".join([self.fun_str, "^{(", str(i), ")}"]),
-                    global_index=i,
+                    vector_index=base_index + i - offset,
                     functionspace_name=V.name,
                     rank_parent=V.rank,
                     module=self.module,
@@ -1031,7 +1090,70 @@ class FlaxFunction(Function):
                 * b[i]
                 for i in range(V.dims)
             )
-        raise NotImplementedError
+        raise NotImplementedError(
+            "FlaxFunction.doit() is not defined for mixed CartesianTensorProductSpace "
+            "(rank=NONE). Use __getitem__ to access a component first."
+        )
+
+    def __getitem__(self, i: int) -> Self:
+        """Return a sub-FlaxFunction for component i of a Cartesian product space.
+
+        The sub-FF shares the parent module so all components are optimized jointly.
+        ``global_offset`` is set so that ``doit()`` computes the correct
+        ``vector_index = getattr(Vi, "global_index", 0) - global_offset`` for
+        selecting the right column from the module output.
+
+        Two dispatch paths, determined by the module type:
+
+        CartesianModule (CartesianNNSpace or CartesianBaseSpace without VectorTPS):
+            Sub-module is ``module[i]``; its output columns start at 0.
+            ``global_offset = Vi.global_index`` (NNSpace, always set) or 0
+            (spectral TPS, no global_index), giving ``vector_index = 0``.
+
+        SpectralModule (VectorTensorProductSpace only):
+            A single module evaluates all components and returns (N, num_components).
+            ``global_offset = -i`` so ``vector_index = 0 - (-i) = i``.
+
+        Name expansion: a single-character name ``"u"`` becomes ``"u_i"`` for
+        VectorTPS and ``"ui"`` otherwise; a multi-character name must have exactly
+        ``len(V)`` characters (one per component). E.g. ``u, p = up[0], up[1]``.
+        """
+        V = self.functionspace
+        if not isinstance(V, CartesianBaseSpace | CartesianNNSpace):
+            raise TypeError(
+                f"__getitem__ requires a CartesianBaseSpace or "
+                f"CartesianNNSpace, got {type(V).__name__}"
+            )
+        name = self.name
+        if len(name) == 1:
+            if isinstance(V, VectorTensorProductSpace):
+                name = f"{name}_{i}"
+            else:
+                name = f"{name}{i}"
+        elif len(name) == len(V):
+            name = name[i]
+        else:
+            raise ValueError(
+                f"Name {name!r} length must equal number of component spaces "
+                f"({len(V)}), or be a single character"
+            )
+        assert isinstance(self.module, CartesianModule | SpectralModule)
+        if isinstance(self.module, CartesianModule):
+            Vi = V[i]
+            offset = (
+                Vi.flatten()[0].global_index
+                if isinstance(Vi, CartesianBaseSpace)
+                else getattr(Vi, "global_index", 0)
+            )
+            sub_ff = FlaxFunction(Vi, name, module=self.module[i], rngs=self.rngs)
+            sub_ff.global_offset = offset
+            return cast(Self, sub_ff)
+        # VectorTPS + SpectralModule: output is (N, num_components).
+        # global_offset = -i so doit() gives vector_index = 0 - (-i) = i.
+        assert isinstance(V, VectorTensorProductSpace)
+        sub_ff = FlaxFunction(V[i], name, module=self.module, rngs=self.rngs)
+        sub_ff.global_offset = -i
+        return cast(Self, sub_ff)
 
     def cartesian_mesh(self, xs: Array) -> Array:
         """Map computational coordinates to Cartesian physical domain.
@@ -1054,7 +1176,8 @@ class FlaxFunction(Function):
     @property
     def c_names(self) -> str:
         """Return comma-separated coordinate names."""
-        return ", ".join([i.name for i in self.args[:-1]])
+        args = cast(tuple[sp.Symbol | BaseScalar, ...], self.args[:-1])
+        return ", ".join([i.name for i in args])
 
     def __str__(self) -> str:
         name = (
@@ -1084,6 +1207,36 @@ class FlaxFunction(Function):
         if self.rank == RankTag.SCALAR and y.shape[-1] == 1:
             return y[:, 0]
         return y
+
+
+class CartesianModule(BaseModule):
+    """Module for a Cartesian product space: stacks outputs of all component sub-modules
+
+    Used for both CartesianNNSpace (NN sub-modules) and CartesianTensorProductSpace
+    (SpectralModule sub-modules). Each component is stored in an nnx.List so the
+    optimizer sees one unified parameter tree. The call returns a horizontally stacked
+    (N, total_out_size) array; vector_index slicing in loss._lookup_or_eval selects
+    each variable's columns.
+    """
+
+    def __init__(
+        self,
+        modules: list[BaseModule],
+        name: str = "CartesianModule",
+    ) -> None:
+        self.data = nnx.List(modules)
+        self.mod_index = {str(hash(m)): i for i, m in enumerate(modules)}
+        self.name = name
+
+    def __getitem__(self, i: int) -> BaseModule:
+        return self.data[i]
+
+    @property
+    def dim(self) -> int:
+        return sum(m.dim for m in self.data)
+
+    def __call__(self, x: Array) -> Array:
+        return jnp.hstack([m(x) for m in self.data])
 
 
 class Comp(nnx.Module):
@@ -1122,65 +1275,3 @@ class Comp(nnx.Module):
             Concatenated outputs (N, sum(out_sizes)).
         """
         return jnp.hstack([f.module(x) for f in self.flaxfunctions])
-
-
-# Experimental!
-class UnionModule(BaseModule):  # pragma: no cover
-    """Module wrapping a UnionSpace of multiple function spaces.
-
-    Attributes:
-        modules: nnx.List of underlying modules.
-    """
-
-    def __init__(
-        self,
-        V: UnionSpace,
-        *,
-        kernel_init: Initializer = default_kernel_init,
-        bias_init: Initializer = default_bias_init,
-        rngs: nnx.Rngs,
-        name: str = "UnionModule",
-    ) -> None:
-        """Store list of nnx.Modules and register as attributes.
-
-        Args:
-            modules: One or more nnx.Module instances.
-            V: UnionSpace instance.
-        """
-        self.modules = nnx.List(
-            [
-                get_flax_module(
-                    v,
-                    kernel_init=kernel_init,
-                    bias_init=bias_init,
-                    rngs=rngs,
-                    name=f"{v.name}",
-                )
-                for i, v in enumerate(V.spaces)
-            ]
-        )
-        self.V = V
-        self.name = name
-
-    def __getitem__(self, i: int) -> nnx.Module:
-        """Return component module for a given function space."""
-        return self.modules[i]
-
-    def __call__(self, x: Array | list[Array], at_interfaces: bool = True) -> Array:
-        """Evaluate and horizontally stack all component module outputs.
-        Args:
-            x: List of input batches for each module.
-            at_interfaces: If True, average outputs over neighbouring elements.
-        Returns:
-            Concatenated outputs (N, sum(out_sizes)).
-        """
-        if at_interfaces:
-            assert isinstance(x, Array)
-            z0 = [self.modules[0](x[0])]
-            for i in range(1, len(self.modules) - 1):
-                z0.append(self.modules[i](x[1 + 2 * (i - 1) : 1 + 2 * i]))
-            z0.append(self.modules[-1](x[-1]))
-            y = jnp.vstack(z0).reshape((-1, 2))
-            return (y - y.mean(axis=1, keepdims=True)).reshape(x.shape)
-        y = jnp.vstack([self.modules[i](x[i]) for i in range(len(self.modules))])
-        return y

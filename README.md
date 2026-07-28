@@ -50,7 +50,7 @@ from jaxfun.galerkin.inner import inner
 from jaxfun.operators import Div, Grad
 
 C = Chebyshev.Chebyshev(16)
-T = TensorProduct((C, C))
+T = TensorProduct(C, C)
 v = TestFunction(T)
 u = TrialFunction(T)
 A = inner(Div(Grad(u)) * v)

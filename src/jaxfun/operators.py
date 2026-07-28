@@ -250,6 +250,8 @@ def _adder_for(rank: RankTag) -> type[AdderType]:
             return VectorAdd
         case RankTag.DYADIC:
             return DyadicAdd
+        case _:
+            raise ValueError("rank must be 0, 1 or 2")
 
 
 type BasisZero = BasisDependentZero | sp.core.numbers.Zero
@@ -1055,7 +1057,7 @@ def doit(self, **hints: Any) -> Basic:
     return z
 
 
-sp.core.Expr.doit = doit  # ty:ignore[invalid-assignment]
+sp.core.Expr.doit = doit
 sp.vector.vector.dot = dot  # ty:ignore[possibly-missing-submodule]
 sp.vector.vector.cross = cross  # ty:ignore[possibly-missing-submodule]
 sp.vector.operators.gradient = gradient  # ty:ignore[possibly-missing-submodule]

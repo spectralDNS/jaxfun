@@ -94,10 +94,10 @@ dev = [
   "ipykernel>=6.30.1",
   "pytest-cov>=6.2.1",
   "plotly>=6.3.0",
-  "marimo[recommended]>=0.19.7",
+  "marimo[recommended]>=0.23.9",
   "pre-commit>=4.3.0",
   "shapely>=2.1.0",
-  "ty>=0.0.37",
+  "ty>=0.0.63",
   "urllib3>=2.6.3",
 ]
 

@@ -238,12 +238,12 @@ def test_linear_inner(space):
     f = [sp.sin(x), a]
     l0 = []
     for fi in f:
-        l0.append(inner(v * fi))
+        l0.append(cast(Array, inner(v * fi)))
     assert jnp.allclose(l0[0], l0[1], atol=ulp(100))
 
     l1 = []
     for fi in f:
-        l1.append(inner(v.diff(x, 1) * fi))
+        l1.append(cast(Array, inner(v.diff(x, 1) * fi)))
     assert jnp.allclose(l1[0], l1[1], atol=ulp(1000))
 
 
@@ -259,12 +259,12 @@ def test_linear_inner_2d(space):
     f = [sp.sin(x) * sp.cos(y), a]
     l0 = []
     for fi in f:
-        l0.append(inner(v * fi))
+        l0.append(cast(Array, inner(v * fi)))
     assert jnp.allclose(l0[0], l0[1], atol=ulp(100)), jnp.max(jnp.abs(l0[0] - l0[1]))
 
     l1 = []
     for fi in f:
-        l1.append(inner(v.diff(x, 1) * fi))
+        l1.append(cast(Array, inner(v.diff(x, 1) * fi)))
     assert jnp.allclose(l1[0], l1[1], atol=ulp(10000)), jnp.max(jnp.abs(l1[0] - l1[1]))
 
 
@@ -280,12 +280,12 @@ def test_linear_inner_3d(space):
     f = [sp.sin(x) * sp.cos(y) * sp.sin(z), a]
     l0 = []
     for fi in f:
-        l0.append(inner(v * fi))
+        l0.append(cast(Array, inner(v * fi)))
     assert jnp.allclose(l0[0], l0[1], atol=ulp(100)), jnp.max(jnp.abs(l0[0] - l0[1]))
 
     l1 = []
     for fi in f:
-        l1.append(inner(v.diff(x, 1) * fi))
+        l1.append(cast(Array, inner(v.diff(x, 1) * fi)))
     assert jnp.allclose(l1[0], l1[1], atol=ulp(10000)), jnp.max(jnp.abs(l1[0] - l1[1]))
 
 
@@ -301,12 +301,12 @@ def test_nonlinear_inner_3d(space):
     f = [(sp.sin(x) * sp.cos(y) * sp.sin(z)) ** 2, a**2]  # nonlinear jaxfunction
     l0 = []
     for fi in f:
-        l0.append(inner(v * fi))
+        l0.append(cast(Array, inner(v * fi)))
     assert jnp.allclose(l0[0], l0[1], atol=ulp(100))
 
     l1 = []
     for fi in f:
-        l1.append(inner(v.diff(y, 1) * fi))
+        l1.append(cast(Array, inner(v.diff(y, 1) * fi)))
     assert jnp.allclose(l1[0], l1[1], atol=ulp(1000))
 
 

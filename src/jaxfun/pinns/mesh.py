@@ -413,15 +413,15 @@ class CartesianProductMesh(MultiParameterMesh):
             weights.append(mi.get_all_weights(*args, kind=knd))
 
         if len(weights) == 2:
-            wx = jnp.outer(weights[0], weights[1])
+            wx = jnp.outer(weights[0], jnp.asarray(weights[1]))
             if wx.shape == (1, 1):
                 return wx.item()
             if 1 in wx.shape:
                 return jnp.broadcast_to(wx, N).flatten()
             return wx.flatten()
         elif len(weights) == 3:
-            wx = jnp.outer(weights[0], weights[1])
-            wx = jnp.outer(wx.flatten(), weights[2])
+            wx = jnp.outer(weights[0], jnp.asarray(weights[1]))
+            wx = jnp.outer(wx.flatten(), jnp.asarray(weights[2]))
             if wx.shape == (1, 1):
                 return wx.item()
             if 1 in wx.shape:

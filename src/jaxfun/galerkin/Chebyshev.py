@@ -119,7 +119,7 @@ class Chebyshev(Jacobi):
         return c0 + c1 * X
 
     @jit_vmap(in_axes=(0, None))
-    def _evaluate3(self, X: float, c: Array) -> Array:
+    def _evaluate3(self, X: float | Array, c: Array) -> Array:
         """Evaluate Chebyshev series via forward recurrence.
 
         Builds successive T_n(X) terms with a scan, accumulating
@@ -132,11 +132,12 @@ class Chebyshev(Jacobi):
         Returns:
             Series evaluation p(X) at each X.
         """
+        X = jnp.asarray(X)
         x0 = jnp.ones_like(X)
 
         def inner_loop(
-            carry: tuple[float, float], i: int
-        ) -> tuple[tuple[float, float], Array]:
+            carry: tuple[Array, Array], i: int | Array
+        ) -> tuple[tuple[Array, Array], Array]:
             x0, x1 = carry
             x2 = 2 * X * x1 - x0
             return (x1, x2), x1 * c[i - 1]
@@ -302,7 +303,7 @@ class Chebyshev(Jacobi):
             return jnp.array([x1, x0])
 
         def inner_loop(
-            carry: tuple[Array, Array], n: int
+            carry: tuple[Array, Array], n: int | Array
         ) -> tuple[tuple[Array, Array], Array]:
             x0, x1 = carry
             x2 = 2 * (n + 1) * c[n + 1] + x0

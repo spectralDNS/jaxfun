@@ -99,7 +99,7 @@ class Jacobi(OrthogonalSpace):
             return c[0] * x0 + c[1] * x1
 
         def inner_loop(
-            carry: tuple[Array, Array], i: int
+            carry: tuple[Array, Array], i: int | Array
         ) -> tuple[tuple[Array, Array], Array]:
             x0, x1 = carry
             x2 = ((X - aa[i - 1]) * x1 - ap[i - 2] * x0) / am[i - 1]
@@ -188,7 +188,7 @@ class Jacobi(OrthogonalSpace):
         x1 = (X - aa[0]) / am[0] * x0
 
         def inner_loop(
-            carry: tuple[Array, Array], n: int
+            carry: tuple[Array, Array], n: int | Array
         ) -> tuple[tuple[Array, Array], Array]:
             x0, x1 = carry
             x2 = ((X - aa[n - 1]) * x1 - ap[n - 2] * x0) / am[n - 1]
@@ -237,7 +237,7 @@ class Jacobi(OrthogonalSpace):
             return jnp.array([x1, x0])
 
         def inner_loop(
-            carry: tuple[Array, Array], n: int
+            carry: tuple[Array, Array], n: int | Array
         ) -> tuple[tuple[Array, Array], Array]:
             x0, x1 = carry
             x2 = (c[n + 1] - bb[n] * x1 - bp[n] * x0) / bm[n]

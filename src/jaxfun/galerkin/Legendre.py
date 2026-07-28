@@ -109,10 +109,11 @@ class Legendre(Jacobi):
         Returns:
             Series values p(X) with shape like X.
         """
+        X = jnp.asarray(X)
         x0 = jnp.ones_like(X)
 
         def inner_loop(
-            carry: tuple[Array, Array], i: int
+            carry: tuple[Array, Array], i: int | Array
         ) -> tuple[tuple[Array, Array], Array]:
             x0, x1 = carry
             x2 = (x1 * X * (2 * i - 1) - x0 * (i - 1)) / i
@@ -168,10 +169,11 @@ class Legendre(Jacobi):
         Returns:
             Array (N,) per X with stacked values.
         """
+        X = jnp.asarray(X)
         x0 = X * 0 + 1
 
         def inner_loop(
-            carry: tuple[Array, Array], i: int
+            carry: tuple[Array, Array], i: int | Array
         ) -> tuple[tuple[Array, Array], Array]:
             x0, x1 = carry
             x2 = (x1 * X * (2 * i - 1) - x0 * (i - 1)) / i
@@ -204,7 +206,7 @@ class Legendre(Jacobi):
             return jnp.array([x1, x0])
 
         def inner_loop(
-            carry: tuple[Array, Array], n: int
+            carry: tuple[Array, Array], n: int | Array
         ) -> tuple[tuple[Array, Array], Array]:
             x0, x1 = carry
             x2 = (2 * n + 1) * c[n + 1] + (2 * n + 1) / (2 * n + 5) * x0

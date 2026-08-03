@@ -17,11 +17,11 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-  "flax>=0.12",
-  "jax>=0.10",
+  "flax>=0.12.8",
+  "jax>=0.11",
   "marimo>=0.19.10",
   "matplotlib>=3.9.3",
-  "optax>=0.2.6",
+  "optax>=0.2.8",
   "pre-commit>=4.3",
   "pytest-xdist[psutil]>=3.8",
   "sympy>=1.14",
@@ -88,7 +88,7 @@ dev = [
   "ipython>=8.37.0",
   "pytest>=8.4.1",
   "pyvista>=0.46.2",
-  "ruff>=0.15.0",
+  "ruff>=0.16.0",
   "soap-jax",
   "mpi4py>=4.1.1",
   "ipykernel>=6.30.1",

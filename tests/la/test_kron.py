@@ -258,7 +258,7 @@ class TestTpmatsToKron:
         import jax
         import pytest
 
-        if not jax.config.x64_enabled:  # ty:ignore[unresolved-attribute]
+        if not jax.config.x64_enabled:
             pytest.skip("requires float64 (run with jax_enable_x64=True)")
 
         A, _ = _biharmonic_tpmats(N=10)
@@ -320,7 +320,7 @@ class TestKronSolve:
         import jax
         import pytest
 
-        if not jax.config.x64_enabled:  # ty:ignore[unresolved-attribute]
+        if not jax.config.x64_enabled:
             pytest.skip("requires float64 (run with jax_enable_x64=True)")
 
         A, b = _biharmonic_tpmats(N=12)

@@ -61,7 +61,7 @@ class NonlinearCompiler:
             evaluator = self.compile_node(expanded)
         elif is_jaxfunc_primitive(node):
             evaluator = self.compile_primitive(node)
-        elif not _contains_jaxfunction(node):
+        elif not contains_jaxfunction(node):
             evaluator = self.memoize(
                 node,
                 lambda _cache, N=None, node=node: self.get_static_value(node, N),
@@ -268,7 +268,7 @@ def replace_trial_with_jaxfunction(
     return cast(sp.Expr, expr.replace(trial, jax_func))
 
 
-def _contains_jaxfunction(expr: sp.Basic) -> bool:
+def contains_jaxfunction(expr: sp.Basic) -> bool:
     """Return True when any subexpression depends on the JAX-backed field."""
     return any(
         is_jaxfunc_leaf(node) for node in sp.core.traversal.preorder_traversal(expr)

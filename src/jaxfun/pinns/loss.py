@@ -20,9 +20,9 @@ from jaxfun.galerkin import (
     TensorProductSpace,
     TestFunction,
 )
-from jaxfun.galerkin.arguments import ArgumentTag, get_arg
+from jaxfun.galerkin.arguments import ArgumentTag, get_arg, is_jaxfunc_primitive
 from jaxfun.typing import Array, Loss_Tuple
-from jaxfun.utils import lambdify
+from jaxfun.utils import JAX_FUNCTION_BY_NAME, lambdify
 
 from .module import CartesianModule, Comp
 
@@ -697,7 +697,9 @@ class Loss:
             >>> loss_fn = Loss((eq, xj), (u, xb, 0, 10))
         """
 
-        self.residuals: tuple[Residual, ...] = process_input(*fs, residuals=[])
+        self.residuals: tuple[Residual | ResidualVPINN, ...] = process_input(
+            *fs, residuals=[]
+        )
 
         # Store the unique collocation points and their order for later use
         xs: dict[int, Array] = {id(eq.x): eq.x for eq in self.residuals}
@@ -1098,6 +1100,30 @@ def get_fn(f: sp.Expr, s: tuple[BaseScalar | sp.Symbol, ...] | None) -> Residual
             return get_fn(f0, s)(x, mod, Js, x_id) ** p0
 
         return res_fun
+
+    elif type(f).__name__ in JAX_FUNCTION_BY_NAME and len(f.args) == 1:
+        # Elementwise nonlinear function (sin, exp, tanh, ...) wrapping an expression
+        # that contains a FlaxFunction, e.g. sin(u) or (after sympy's automatic chain
+        # rule via .doit()) cos(u) in cos(u) * Derivative(u, x).
+        inner_fn = get_fn(cast(sp.Expr, f.args[0]), s)
+        jnp_fn = JAX_FUNCTION_BY_NAME[type(f).__name__]
+
+        def res_fun(
+            x: Array,
+            mod: nnx.Module | None = None,
+            Js: dict[tuple[int, int, int], Array] | None = None,
+            x_id: int | None = None,
+        ) -> Array:
+            return jnp_fn(inner_fn(x, mod, Js, x_id))
+
+        return res_fun
+
+    if not is_jaxfunc_primitive(f):
+        raise NotImplementedError(
+            f"get_fn cannot evaluate {f!r}: expected a bare FlaxFunction application, "
+            "a Derivative of one, a Mul, a Pow, or one of the elementwise functions in "
+            "JAX_FUNCTION_BY_NAME applied to a single FlaxFunction-containing argument"
+        )
 
     assert len(v) == 1
     v = v.pop()

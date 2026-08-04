@@ -97,7 +97,7 @@ def test_backward_primitive(jspace: type[Jacobi], domain: Domain):
     df = D.backward_primitive(uf.array, 1)
     error = jnp.linalg.norm(df - du.backward())
     assert error < jnp.sqrt(ulp(10))
-    if jax.config.jax_enable_x64:  # ty:ignore[unresolved-attribute]
+    if jax.config.jax_enable_x64:
         du = JAXFunction(sp.diff(f, x, 2), D)
         df = D.backward_primitive(uf.array, 2)
         error = jnp.linalg.norm(df - du.backward())
@@ -115,7 +115,7 @@ def test_backward_primitive_composite(jspace: type[Jacobi], domain: Domain):
     df = D.backward_primitive(uf.array, 1)
     error = jnp.linalg.norm(df - du.backward())
     assert error < jnp.sqrt(ulp(10))
-    if jax.config.jax_enable_x64:  # ty:ignore[unresolved-attribute]
+    if jax.config.jax_enable_x64:
         du = JAXFunction(sp.diff(f, x, 2), D.orthogonal)
         df = D.backward_primitive(uf.array, 2)
         error = jnp.linalg.norm(df - du.backward())
@@ -139,7 +139,7 @@ def test_backward_primitive_directsum(jspace: type[Jacobi], domain: Domain):
     df = D.backward_primitive(uf.array, 1)
     error = jnp.linalg.norm(df - du.backward())
     assert error < jnp.sqrt(ulp(100))
-    if jax.config.jax_enable_x64:  # ty:ignore[unresolved-attribute]
+    if jax.config.jax_enable_x64:
         du = JAXFunction(sp.diff(f, x, 2), D.orthogonal)
         df = D.backward_primitive(uf.array, 2)
         error = jnp.linalg.norm(df - du.backward())
@@ -165,7 +165,7 @@ def test_backward_primitive_2d(space):
 def test_backward_primitive_directsum_2d(jspace: type[Jacobi], domain: Domain):
     from jaxfun.coordinates import x, y
 
-    if not jax.config.jax_enable_x64:  # ty:ignore[unresolved-attribute]
+    if not jax.config.jax_enable_x64:
         pytest.skip("x64 is disabled")
 
     N = 24

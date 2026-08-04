@@ -20,7 +20,7 @@ f = (1 - x) ** 2 * (1 + x) ** 2
 N = 24
 bcsx = {"left": {"D": 0}, "right": {"D": 0}}
 bcsy = {"left": {"D": 0}, "right": {"D": f}}
-Re = 10.0
+Re = 100.0
 rho = 1.0
 nu = Constant("nu", 2.0 / Re)
 

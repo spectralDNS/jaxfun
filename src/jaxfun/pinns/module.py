@@ -56,9 +56,12 @@ class BaseModule(nnx.Module):
     name: str
 
     def __hash__(self) -> int:
-        # Use static hash for module (does not reflect a change of state)
+        # Use static hash for module (does not reflect a change of state).
+        # Based on type + name rather than the graphdef itself: some modules
+        # (e.g. MLP.act_fun) carry plain lists as static metadata, and current
+        # flax GraphDef.__hash__ requires all metadata to be hashable.
         if not hasattr(self, "_hash"):
-            self._hash = hash(nnx.graphdef(self)) + hash(self.name)
+            self._hash = hash((type(self), self.name))
         return self._hash
 
     def __eq__(self, other: object) -> bool:
@@ -1212,11 +1215,11 @@ class FlaxFunction(Function):
 class CartesianModule(BaseModule):
     """Module for a Cartesian product space: stacks outputs of all component sub-modules
 
-    Used for both CartesianNNSpace (NN sub-modules) and CartesianTensorProductSpace
-    (SpectralModule sub-modules). Each component is stored in an nnx.List so the
-    optimizer sees one unified parameter tree. The call returns a horizontally stacked
-    (N, total_out_size) array; vector_index slicing in loss._lookup_or_eval selects
-    each variable's columns.
+    Used for both CartesianNNSpace (NN sub-modules) and CartesianTensorProductSpace and
+    CartesianProductSpace (SpectralModule sub-modules). Each component is stored in an
+    nnx.List so the optimizer sees one unified parameter tree. The call returns a
+    horizontally stacked (N, total_out_size) array; vector_index slicing in
+    loss._lookup_or_eval selects each variable's columns.
     """
 
     def __init__(

@@ -66,7 +66,7 @@ from jaxfun.operators import Div, Grad
 
 # Create an MLP neural network space with two hidden layers
 V = MLPSpace([12, 12], dims=2, rank=0, name="V")
-u = FlaxFunction(V, name="u") # The trial function, which here is a neural network
+u = FlaxFunction(V, name="u")  # The trial function, which here is a neural network
 
 # Get mesh points on and inside the unit square
 N = 50

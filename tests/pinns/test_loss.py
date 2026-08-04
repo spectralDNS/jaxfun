@@ -19,6 +19,7 @@ from jaxfun.pinns.loss import (
     get_flaxfunctions,
     get_fn,
     get_testfunction,
+    jacn,
 )
 from jaxfun.pinns.module import FlaxFunction, MLPSpace
 
@@ -475,6 +476,81 @@ def test_get_fn_with_mul_and_flaxfunction(flax_func):
     x = jnp.array([[1.0, 2.0]])
     result = fn(x, flax_func.module)
     assert result.shape[0] == x.shape[0]
+
+
+def test_get_fn_sin_of_flaxfunction(flax_func):
+    s = flax_func.functionspace.system.base_scalars()
+    fn = get_fn(sp.sin(flax_func).doit(), s)
+    x = jnp.array([[1.0, 2.0], [0.5, -0.5]])
+    result = fn(x, flax_func.module)
+    expected = jnp.sin(flax_func.module(x)[:, 0])
+    assert jnp.allclose(result, expected)
+
+
+def test_get_fn_exp_of_flaxfunction(flax_func):
+    s = flax_func.functionspace.system.base_scalars()
+    fn = get_fn(sp.exp(flax_func).doit(), s)
+    x = jnp.array([[1.0, 2.0]])
+    result = fn(x, flax_func.module)
+    expected = jnp.exp(flax_func.module(x)[:, 0])
+    assert jnp.allclose(result, expected)
+
+
+def test_get_fn_tanh_of_flaxfunction(flax_func):
+    s = flax_func.functionspace.system.base_scalars()
+    fn = get_fn(sp.tanh(flax_func).doit(), s)
+    x = jnp.array([[1.0, 2.0]])
+    result = fn(x, flax_func.module)
+    expected = jnp.tanh(flax_func.module(x)[:, 0])
+    assert jnp.allclose(result, expected)
+
+
+def test_get_fn_elementwise_function_composed_with_mul(flax_func):
+    # exp(2 * u): the inner argument recurses through the existing Mul branch
+    s = flax_func.functionspace.system.base_scalars()
+    fn = get_fn(sp.exp(2 * flax_func).doit(), s)
+    x = jnp.array([[1.0, 2.0]])
+    result = fn(x, flax_func.module)
+    expected = jnp.exp(2 * flax_func.module(x)[:, 0])
+    assert jnp.allclose(result, expected)
+
+
+def test_get_fn_chain_rule_derivative_of_sin_of_flaxfunction(flax_func):
+    # sympy auto-applies the chain rule on .diff(): sin(u).diff(x) -> cos(u) * u_x
+    x_sym = flax_func.functionspace.system.base_scalars()[0]
+    s = flax_func.functionspace.system.base_scalars()
+    f = sp.sin(flax_func).diff(x_sym)
+    fn = get_fn(f.doit(), s)
+
+    x = jnp.array([[1.0, 2.0], [0.3, -0.7]])
+    result = fn(x, flax_func.module)
+
+    u_val = flax_func.module(x)[:, 0]
+    du_dx = jacn(flax_func.module, 1)(x)[:, 0, 0]
+    expected = jnp.cos(u_val) * du_dx
+    assert jnp.allclose(result, expected)
+
+
+def test_get_fn_raises_on_multiarg_function_of_flaxfunction(flax_func):
+    # atan2(u, x) has one FlaxFunction and one plain coordinate: get_flaxfunctions
+    # finds exactly one FlaxFunction, but atan2 is not a bare application/Derivative
+    # of it, so this must raise rather than silently drop the atan2 wrapper.
+    x_sym = flax_func.functionspace.system.base_scalars()[0]
+    s = flax_func.functionspace.system.base_scalars()
+    f = sp.atan2(flax_func, x_sym)
+    with pytest.raises(NotImplementedError, match="get_fn cannot evaluate"):
+        get_fn(f.doit(), s)
+
+
+def test_get_fn_raises_on_undoit_derivative_of_wrapped_flaxfunction(flax_func):
+    # An un-doit'd Derivative(sin(u), x): isinstance(f, sp.Derivative) is True, but
+    # f.args[0] is sin(u), not a bare FlaxFunction application, so this must raise
+    # rather than silently compute du/dx instead of d(sin(u))/dx = cos(u) * du/dx.
+    x_sym = flax_func.functionspace.system.base_scalars()[0]
+    s = flax_func.functionspace.system.base_scalars()
+    f = sp.Derivative(sp.sin(flax_func), x_sym, evaluate=False)
+    with pytest.raises(NotImplementedError, match="get_fn cannot evaluate"):
+        get_fn(f, s)
 
 
 def test_loss_with_vector_equation_and_array_target():

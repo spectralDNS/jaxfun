@@ -111,7 +111,7 @@ def test_directsumtps_biharmonic_dirichlet_3d():
     x, y, z = T.system.base_scalars()
     ue = T.system.expr_psi_to_base_scalar(ue)
 
-    if jax.config.jax_enable_x64:  # ty:ignore[unresolved-attribute]
+    if jax.config.jax_enable_x64:
         A, b = inner(
             (Div(Grad(u)) + u.diff(z, 4)) * v - (Div(Grad(ue)) + ue.diff(z, 4)) * v,
             kind="system",

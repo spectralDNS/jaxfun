@@ -1,4 +1,5 @@
 from .common import (
+    JAX_FUNCTION_BY_NAME as JAX_FUNCTION_BY_NAME,
     Domain as Domain,
     diff as diff,
     diffx as diffx,

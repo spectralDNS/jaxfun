@@ -30,7 +30,7 @@ def test_fourier_backward_primitive_matches_analytical() -> None:
         expected = lambdify(x, deriv)(xj)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
         assert float(rel) < ulp(100), f"k={k}: rel={float(rel)}"
-    if jax.config.jax_enable_x64:  # ty: ignore[unresolved-attribute]
+    if jax.config.jax_enable_x64:
         got = V.backward_primitive(uh, k=3)
         expected = lambdify(x, sp.diff(ue, x, 3))(xj)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
@@ -50,7 +50,7 @@ def test_chebyshev_backward_primitive_matches_analytical() -> None:
         expected = lambdify(x, deriv)(xj)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
         assert float(rel) < ulp(1000), f"k={k}: rel={float(rel)}"
-    if jax.config.jax_enable_x64:  # ty: ignore[unresolved-attribute]
+    if jax.config.jax_enable_x64:
         got = V.backward_primitive(uh, k=2)
         expected = lambdify(x, sp.diff(ue, x, 2))(xj)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
@@ -94,7 +94,7 @@ def test_tensorproduct_fourier_backward_primitive_matches_analytical() -> None:
         expected = lambdify((x, y), deriv)(*xj)
         rel = jnp.linalg.norm(got - expected) / jnp.linalg.norm(expected)
         assert float(rel) < ulp(100), f"k={k}: rel={float(rel)}"
-    if jax.config.jax_enable_x64:  # ty: ignore[unresolved-attribute]
+    if jax.config.jax_enable_x64:
         k2 = (0, 2)
         got = V.backward_primitive(uh, k=k2)
         deriv = sp.diff(sp.diff(ue, x, k2[0]), y, k2[1])

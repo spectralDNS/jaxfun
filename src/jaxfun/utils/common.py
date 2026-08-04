@@ -26,10 +26,33 @@ __all__ = (
     "diffx",
     "Domain",
     "jacn",
+    "JAX_FUNCTION_BY_NAME",
     "matmat",
     "tosparse",
     "lambdify",
 )
+
+
+JAX_FUNCTION_BY_NAME: dict[str, Callable[..., Array]] = {
+    "Abs": jnp.abs,
+    "acos": jnp.arccos,
+    "acosh": jnp.arccosh,
+    "asin": jnp.arcsin,
+    "asinh": jnp.arcsinh,
+    "atan": jnp.arctan,
+    "atan2": jnp.arctan2,
+    "atanh": jnp.arctanh,
+    "cos": jnp.cos,
+    "cosh": jnp.cosh,
+    "exp": jnp.exp,
+    "log": jnp.log,
+    "sign": jnp.sign,
+    "sin": jnp.sin,
+    "sinh": jnp.sinh,
+    "sqrt": jnp.sqrt,
+    "tan": jnp.tan,
+    "tanh": jnp.tanh,
+}
 
 
 def jit_vmap[FuncT: Callable[..., Array]](

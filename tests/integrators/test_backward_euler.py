@@ -207,10 +207,10 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
 
     primitive_orders = {
         0
-        if integrator_nonlinear._is_jaxfunction_leaf(node)
+        if integrator_nonlinear.is_jaxfunc_leaf(node)
         else int(sp.sympify(node).derivative_count)  # ty:ignore[unresolved-attribute]
         for node in sp.core.traversal.preorder_traversal(integrator.nonlinear_expr)
-        if integrator_nonlinear._is_jaxfunction_primitive(node)
+        if integrator_nonlinear.is_jaxfunc_primitive(node)
     }
 
     # The derivative primitive should be evaluated once even though it appears

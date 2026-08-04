@@ -20,7 +20,7 @@ import numpy as np
 from matplotlib.animation import FuncAnimation
 
 from jaxfun import Div, Domain, Grad
-from jaxfun.galerkin import TensorProductSpace
+from jaxfun.galerkin import TensorProduct
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.integrators import ETDRK4
@@ -74,7 +74,7 @@ elif "CH_FAST" in os.environ:
 dt = T / steps
 
 F = Fourier(N, Domain(0.0, 1.0))
-V = TensorProductSpace((F, F), name="V")
+V = TensorProduct(F, F, name="V")
 v = TestFunction(V, name="v")
 u = TrialFunction(V, name="u", transient=True)
 

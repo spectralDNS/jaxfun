@@ -1497,7 +1497,7 @@ class DiaMatrix(BaseMatrix):
         n, m = self.shape
         nd = len(self.offsets)
         return (
-            f"DiaMatrix(shape=({n}, {m}), dtype={self.dtype}, "
+            f"{self.__class__.__name__}(shape=({n}, {m}), dtype={self.dtype}, "
             f"n_diags={nd}, nnz={self.nnz}, offsets={self.offsets})"
         )
 

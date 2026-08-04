@@ -127,7 +127,7 @@ def test_backward_primitive_tps_2d(domain):
     error = jnp.linalg.norm(df - du.backward())
 
     assert error < jnp.sqrt(ulp(100))
-    if jax.config.jax_enable_x64:  # ty:ignore[unresolved-attribute]
+    if jax.config.jax_enable_x64:
         du = JAXFunction(sp.diff(f, x, 2, y, 1), T)
         df = T.backward_primitive(uf.get_array(), (2, 1))
         error = jnp.linalg.norm(df - du.backward())
@@ -136,7 +136,7 @@ def test_backward_primitive_tps_2d(domain):
 
 @pytest.mark.parametrize("domain", [(-1, 1), (0, 2), (-2, 2)])
 def test_backward_primitive_tps_3d(domain):
-    if jax.config.jax_enable_x64:  # ty:ignore[unresolved-attribute]
+    if jax.config.jax_enable_x64:
         N = 16
         D = FunctionSpace(N, Legendre.Legendre, domain=domain)
         T = TensorProduct(D, D, D)

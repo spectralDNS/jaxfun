@@ -9,9 +9,14 @@ import sympy as sp
 from sympy.core.function import AppliedUndef
 
 from jaxfun.galerkin import TestFunction, TrialFunction
-from jaxfun.galerkin.arguments import ArgumentTag, JAXFunction, get_arg
+from jaxfun.galerkin.arguments import (
+    JAXFunction,
+    is_derivative_of_jaxfunc_leaf,
+    is_jaxfunc_leaf,
+    is_jaxfunc_primitive,
+)
 from jaxfun.typing import Array, Padding, ScalarSpaceType
-from jaxfun.utils import lambdify
+from jaxfun.utils import JAX_FUNCTION_BY_NAME, lambdify
 
 type NodeValueCache = dict[sp.Basic, Array]
 type NodeEvaluator = Callable[[NodeValueCache, Padding], Array]
@@ -24,28 +29,6 @@ class NonlinearCompileContext:
     spatial_symbols: tuple[sp.Symbol, ...]
     functionspace: ScalarSpaceType
     jaxfunction: AppliedUndef
-
-
-_JAX_FUNCTION_BY_NAME: dict[str, Callable[..., Array]] = {
-    "Abs": jnp.abs,
-    "acos": jnp.arccos,
-    "acosh": jnp.arccosh,
-    "asin": jnp.arcsin,
-    "asinh": jnp.arcsinh,
-    "atan": jnp.arctan,
-    "atan2": jnp.arctan2,
-    "atanh": jnp.arctanh,
-    "cos": jnp.cos,
-    "cosh": jnp.cosh,
-    "exp": jnp.exp,
-    "log": jnp.log,
-    "sign": jnp.sign,
-    "sin": jnp.sin,
-    "sinh": jnp.sinh,
-    "sqrt": jnp.sqrt,
-    "tan": jnp.tan,
-    "tanh": jnp.tanh,
-}
 
 
 class NonlinearCompiler:
@@ -73,12 +56,12 @@ class NonlinearCompiler:
 
         # Product/chain-rule derivatives must be expanded symbolically before
         # evaluation; only direct d^k(u)/dx^k terms are primitive lookups.
-        if isinstance(node, sp.Derivative) and not _is_direct_jax_derivative(node):
+        if isinstance(node, sp.Derivative) and not is_derivative_of_jaxfunc_leaf(node):
             expanded = sp.expand(node.doit())
             evaluator = self.compile_node(expanded)
-        elif _is_jaxfunction_primitive(node):
+        elif is_jaxfunc_primitive(node):
             evaluator = self.compile_primitive(node)
-        elif not _contains_jaxfunction(node):
+        elif not contains_jaxfunction(node):
             evaluator = self.memoize(
                 node,
                 lambda _cache, N=None, node=node: self.get_static_value(node, N),
@@ -107,7 +90,7 @@ class NonlinearCompiler:
         """Compile a primitive field or spatial derivative evaluation."""
         space = self.context.functionspace
         jaxf = cast(JAXFunction[ScalarSpaceType], self.context.jaxfunction)
-        if _is_jaxfunction_leaf(node):
+        if is_jaxfunc_leaf(node):
 
             def evaluate_leaf(
                 _cache: NodeValueCache,
@@ -119,7 +102,7 @@ class NonlinearCompiler:
 
             return self.memoize(node, evaluate_leaf)
 
-        assert _is_direct_jax_derivative(node)
+        assert is_derivative_of_jaxfunc_leaf(node)
         derivative = cast(sp.Derivative, node)
         known = set(self.context.spatial_symbols)
         unknown = tuple(var for var in derivative.variables if var not in known)
@@ -201,7 +184,7 @@ class NonlinearCompiler:
                 jnp.asarray(child_eval[0](cache, N)), 0.5
             )
 
-        jnp_function = _JAX_FUNCTION_BY_NAME.get(node.func.__name__)
+        jnp_function = JAX_FUNCTION_BY_NAME.get(node.func.__name__)
         if jnp_function is None:
             return self.compile_lambdified(node, child_eval)
 
@@ -285,27 +268,11 @@ def replace_trial_with_jaxfunction(
     return cast(sp.Expr, expr.replace(trial, jax_func))
 
 
-def _is_jaxfunction_leaf(expr: sp.Basic) -> bool:
-    """Return True when ``expr`` is the base JAXFunction field."""
-    return get_arg(expr) is ArgumentTag.JAXFUNC
-
-
-def _contains_jaxfunction(expr: sp.Basic) -> bool:
+def contains_jaxfunction(expr: sp.Basic) -> bool:
     """Return True when any subexpression depends on the JAX-backed field."""
     return any(
-        _is_jaxfunction_leaf(node)
-        for node in sp.core.traversal.preorder_traversal(expr)
+        is_jaxfunc_leaf(node) for node in sp.core.traversal.preorder_traversal(expr)
     )
-
-
-def _is_direct_jax_derivative(expr: sp.Basic) -> bool:
-    """Return True for direct spatial derivatives of the JAXFunction field."""
-    return isinstance(expr, sp.Derivative) and _is_jaxfunction_leaf(expr.expr)
-
-
-def _is_jaxfunction_primitive(expr: sp.Basic) -> bool:
-    """Return True for primitive field/derivative nodes handled directly."""
-    return _is_jaxfunction_leaf(expr) or _is_direct_jax_derivative(expr)
 
 
 def compile_nonlinear_evaluator(

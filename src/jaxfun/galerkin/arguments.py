@@ -70,6 +70,26 @@ def get_arg(p: Any) -> ArgumentTag:
     return getattr(p, "argument", ArgumentTag.NONE)
 
 
+def is_jaxfunc_leaf(expr: Basic) -> bool:
+    """Return True when ``expr`` is itself a bare node tagged ArgumentTag.JAXFUNC.
+
+    Applies equally to a Galerkin JAXFunction and a PINN FlaxFunction: both are
+    tagged the same way, only through get_arg / ArgumentTag.
+    """
+    return get_arg(expr) is ArgumentTag.JAXFUNC
+
+
+def is_derivative_of_jaxfunc_leaf(expr: Basic) -> bool:
+    """Return True for a Derivative whose differentiated expression is itself a bare
+    JAXFUNC-tagged leaf, e.g. Derivative(u, x) but not Derivative(sin(u), x)."""
+    return isinstance(expr, sp.Derivative) and is_jaxfunc_leaf(expr.expr)
+
+
+def is_jaxfunc_primitive(expr: Basic) -> bool:
+    """Return True for a bare JAXFUNC-tagged leaf or a direct Derivative of one."""
+    return is_jaxfunc_leaf(expr) or is_derivative_of_jaxfunc_leaf(expr)
+
+
 def get_BasisFunction(
     name: str,
     *,

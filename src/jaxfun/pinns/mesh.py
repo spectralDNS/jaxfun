@@ -41,6 +41,7 @@ type SampleMethodLike = SampleMethod | str
 type KindType = SampleMethodLike | Sequence[SampleMethodLike] | None
 type NPointsType = int | tuple[int, ...]
 type ParameterMesh = MultiParameterMesh | SingleParameterMesh
+type TimeMarchingDomainType = DomainType | Literal["initial-time", "end-time"]
 
 
 def _coerce_sample_method(kind: SampleMethodLike) -> SampleMethod:
@@ -507,7 +508,7 @@ class TimeMarchingMesh(CartesianProductMesh):
     def get_points(
         self,
         *N: NPointsType,
-        domain: DomainType = "all",
+        domain: TimeMarchingDomainType = "all",
         kind: KindType = "uniform",
     ) -> Array:
         """Return sampled points.
@@ -521,10 +522,10 @@ class TimeMarchingMesh(CartesianProductMesh):
         """
         if domain == "initial-time":
             xi = super().get_points(*N, domain="boundary", kind=kind)
-            return xi[xi[:, -1] <= self.submeshes[-1].left + 1e-7]
+            return xi[xi[:, -1] <= cast(Line, self.submeshes[-1]).left + 1e-7]
         elif domain == "end-time":
             xi = super().get_points(*N, domain="boundary", kind=kind)
-            return xi[xi[:, -1] >= self.submeshes[-1].right - 1e-7]
+            return xi[xi[:, -1] >= cast(Line, self.submeshes[-1]).right - 1e-7]
         return super().get_points(*N, domain=domain, kind=kind)
 
     def get_spatial_mesh(self) -> ParameterMesh:
@@ -600,9 +601,6 @@ class Line(SingleParameterMesh):
         elif kind == SampleMethod.RANDOM:
             x = jax.random.uniform(self.key, (N - 2,))
 
-        else:
-            raise NotImplementedError
-
         return jnp.hstack(
             (
                 jnp.array([self.left]),
@@ -666,7 +664,6 @@ class Line(SingleParameterMesh):
             return jnp.hstack(
                 (jnp.array([1.0]), jnp.pi / (N - 2) * jnp.ones(N - 2), jnp.array([1.0]))
             )
-        raise NotImplementedError
 
     def get_weights_inside_domain(
         self, N: int, kind: SampleMethodLike | None = None

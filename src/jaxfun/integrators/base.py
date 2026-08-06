@@ -18,7 +18,7 @@ from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import project
 from jaxfun.la import BaseMatrix, IdentityMatrix, ZeroMatrix
 from jaxfun.la.matrixprotocol import SolverNotApplicable
-from jaxfun.typing import Array, Padding, ScalarSpaceType
+from jaxfun.typing import Array, ScalarPadding, ScalarSpaceType
 from jaxfun.utils import split_linear_nonlinear_terms, split_time_derivative_terms
 from jaxfun.utils.operator_tools import assemble_linear_term
 from jaxfun.utils.sympy_factoring import time_derivative_as_operator
@@ -113,7 +113,7 @@ class BaseIntegrator(ABC, nnx.Module):
         )
 
         self._nonlinear_jaxfunction: AppliedUndef | None = None
-        self._nonlinear_evaluator: Callable[[Array, Padding], Array] | None = None
+        self._nonlinear_evaluator: Callable[[Array, ScalarPadding], Array] | None = None
         if self.has_nonlinear:
             self._setup_nonlinear_evaluator(trial)
 
@@ -123,7 +123,7 @@ class BaseIntegrator(ABC, nnx.Module):
         num_dofs = V.num_dofs
         return num_dofs if isinstance(num_dofs, tuple) else (num_dofs,)
 
-    def _physical_shape(self, N: Padding | None) -> Padding | None:
+    def _physical_shape(self, N: ScalarPadding) -> int | tuple[int | None, ...]:
         if N is None:
             N = self.testspace.shape
             if self.testspace.dims == 1:
@@ -227,7 +227,7 @@ class BaseIntegrator(ABC, nnx.Module):
         """Apply the inverse mass operator to a coefficient-space right-hand side."""
         return self.mass_operator.solve(rhs)
 
-    def nonlinear_rhs(self, uh: Array, N: Padding = None) -> Array:
+    def nonlinear_rhs(self, uh: Array, N: ScalarPadding = None) -> Array:
         """Return the nonlinear contribution in coefficient space."""
         if not self.has_nonlinear:
             return jnp.zeros_like(uh)
@@ -235,7 +235,7 @@ class BaseIntegrator(ABC, nnx.Module):
         M = self._physical_shape(N)
         return self.testspace.forward(self._nonlinear_evaluator(uh, M))
 
-    def nonlinear_rhs_scalar_product(self, uh: Array, N: Padding = None) -> Array:
+    def nonlinear_rhs_scalar_product(self, uh: Array, N: ScalarPadding = None) -> Array:
         """Return the nonlinear contribution in coefficient space.
 
         Do *not* apply the mass inverse to complete the forward transformation,
@@ -255,12 +255,12 @@ class BaseIntegrator(ABC, nnx.Module):
         return self.apply_mass_inverse(rhs)
 
     @jax.jit(static_argnums=(0, 2))
-    def total_rhs(self, uh: Array, N: Padding = None) -> Array:
+    def total_rhs(self, uh: Array, N: ScalarPadding = None) -> Array:
         """Return the full semi-discrete right-hand side."""
         return self.linear_rhs(uh) + self.nonlinear_rhs(uh, N)
 
     @abstractmethod
-    def step(self, u_hat: Array, dt: float, N: Padding = None) -> Array: ...
+    def step(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array: ...
 
     def setup(self, dt: float) -> None:
         """Precompute step-size-dependent coefficients before time stepping."""
@@ -272,7 +272,7 @@ class BaseIntegrator(ABC, nnx.Module):
         steps: int | None = None,
         state0: Array | None = None,
         trange: tuple[float, float] | None = None,
-        N: int | tuple[int | None, ...] | None = None,
+        N: ScalarPadding = None,
         progress: bool = True,
         n_batches: int = 100,
         return_batch_snapshots: bool = False,

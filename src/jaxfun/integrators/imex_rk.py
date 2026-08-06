@@ -8,7 +8,7 @@ import sympy as sp
 from flax import nnx
 
 from jaxfun.la import BaseMatrix
-from jaxfun.typing import Array, Padding
+from jaxfun.typing import Array, ScalarPadding
 
 from .base import BaseIntegrator, _warm_operator_solve_cache
 from .tableau import IMEXTableau
@@ -86,7 +86,7 @@ class IMEXRungeKutta(BaseIntegrator):
         return self._stage_operator(a_ii).solve(rhs)
 
     @jax.jit(static_argnums=(0, 3))
-    def step(self, u_hat: Array, dt: float, N: Padding = None) -> Array:
+    def step(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:
         """Advance one IMEX Runge-Kutta step in coefficient space.
 
         Three final-combination paths, selected by `tableau`'s (static)

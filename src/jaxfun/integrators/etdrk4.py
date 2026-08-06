@@ -10,7 +10,7 @@ from flax import nnx
 from jax.scipy.linalg import expm as _expm
 
 from jaxfun.la import DiagonalMatrix, Matrix
-from jaxfun.typing import Array, Padding
+from jaxfun.typing import Array, ScalarPadding
 
 from .base import BaseIntegrator
 
@@ -140,7 +140,7 @@ class ETDRK4(BaseIntegrator):
         f1, f2, f3 = _etdrk4_nonlinear_weights(phi1, phi2, phi3)
         return tuple(map(Matrix, (E, E2, Q, f1, f2, f3)))
 
-    def _N(self, u_hat: Array, N: Padding = None) -> Array:
+    def _N(self, u_hat: Array, N: ScalarPadding = None) -> Array:
         """Return the nonlinear-plus-forcing contribution used in ETDRK4 stages."""
         nval = (
             self.nonlinear_rhs(u_hat, N)
@@ -150,7 +150,7 @@ class ETDRK4(BaseIntegrator):
         return nval + self._forcing_rhs
 
     @jax.jit(static_argnums=(0, 3))
-    def step(self, u_hat: Array, dt: float, N: Padding = None) -> Array:
+    def step(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:
         """Advance one ETDRK4 step in coefficient space."""
         dtQ = dt * self.Q
         n1 = self._N(u_hat, N)

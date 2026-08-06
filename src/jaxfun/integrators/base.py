@@ -11,6 +11,7 @@ import tqdm
 from flax import nnx
 from sympy.core.function import AppliedUndef
 
+from jaxfun.coordinates import get_system
 from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.arguments import JAXFunction
 from jaxfun.galerkin.forms import get_basisfunctions
@@ -51,7 +52,6 @@ class BaseIntegrator(ABC, nnx.Module):
 
     def __init__(
         self,
-        V: ScalarSpaceType,
         equation: sp.Expr,
         *,
         initial: sp.Expr | Array,
@@ -62,7 +62,6 @@ class BaseIntegrator(ABC, nnx.Module):
         """Build an integrator from a weak form and an initial condition.
 
         Args:
-            V: Function space used for the semi-discrete state.
             equation: Weak-form expression containing a first-order time
                 derivative of a transient TrialFunction.
             initial: Initial condition, either symbolically in physical space or
@@ -78,12 +77,13 @@ class BaseIntegrator(ABC, nnx.Module):
         self.sparse_tol = sparse_tol
         self.time = time
         self.initial_condition = initial
-        self.functionspace = V
-        self._state_shape = self._coefficient_shape(V)
 
-        trial, mass_expr, linear_expr, nonlinear_expr = self._extract_equation_terms(
-            equation
+        test, trial, mass_expr, linear_expr, nonlinear_expr = (
+            self._extract_equation_terms(equation)
         )
+        self.trialspace = cast(ScalarSpaceType, trial.functionspace)
+        self.testspace = cast(ScalarSpaceType, test.functionspace)
+        self._state_shape = self._coefficient_shape(self.trialspace)
         self.mass_expr = mass_expr
         self.linear_expr = linear_expr
         self.nonlinear_expr = nonlinear_expr
@@ -123,11 +123,19 @@ class BaseIntegrator(ABC, nnx.Module):
         num_dofs = V.num_dofs
         return num_dofs if isinstance(num_dofs, tuple) else (num_dofs,)
 
+    def _physical_shape(self, N: Padding | None) -> Padding | None:
+        if N is None:
+            N = self.testspace.shape
+            if self.testspace.dims == 1:
+                N = N[0]
+        return N
+
     def _extract_equation_terms(
         self, equation: sp.Expr
-    ) -> tuple[TrialFunction, sp.Expr, sp.Expr, sp.Expr]:
+    ) -> tuple[TestFunction, TrialFunction, sp.Expr, sp.Expr, sp.Expr]:
         """Split a weak form into mass, linear, and nonlinear components."""
-        t = self.functionspace.system.base_time()
+        system = get_system(equation)
+        t = system.base_time()
         lhs, rhs = split_time_derivative_terms(equation, t)
         if sp.sympify(lhs) == 0:
             raise ValueError(
@@ -156,12 +164,12 @@ class BaseIntegrator(ABC, nnx.Module):
 
         linear, nonlinear = split_linear_nonlinear_terms(-rhs, trial)
         nonlinear = sp.expand(remove_test_function(nonlinear, test))
-        return trial, mass_expr, linear, nonlinear
+        return test, trial, mass_expr, linear, nonlinear
 
     def _setup_nonlinear_evaluator(self, trial: TrialFunction) -> None:
         """Compile the nonlinear physical-space evaluator for the trial field."""
         base_jaxfunction = JAXFunction(
-            jnp.zeros(self._state_shape), self.functionspace, name=f"{trial.name}_jax"
+            jnp.zeros(self._state_shape), self.trialspace, name=f"{trial.name}_jax"
         )
         jaxfunction = cast(AppliedUndef, base_jaxfunction.doit())
         nonlinear_expr = replace_trial_with_jaxfunction(
@@ -170,7 +178,7 @@ class BaseIntegrator(ABC, nnx.Module):
         self.nonlinear_expr = nonlinear_expr
         self._nonlinear_jaxfunction = jaxfunction
         self._nonlinear_evaluator = compile_nonlinear_evaluator(
-            nonlinear_expr, self.functionspace, jaxfunction
+            nonlinear_expr, self.trialspace, jaxfunction
         )
 
     def _dense_matrix(self, operator: BaseMatrix) -> Array:
@@ -189,8 +197,8 @@ class BaseIntegrator(ABC, nnx.Module):
         """Return coefficient-space data for an initial condition."""
         init = self.initial_condition if initial is None else initial
         if isinstance(init, sp.Expr):
-            return project(init, self.functionspace)
-        return jnp.asarray(init).reshape(self.functionspace.num_dofs)
+            return project(init, self.trialspace)
+        return jnp.asarray(init).reshape(self.trialspace.num_dofs)
 
     def resolve_time(
         self,
@@ -224,7 +232,8 @@ class BaseIntegrator(ABC, nnx.Module):
         if not self.has_nonlinear:
             return jnp.zeros_like(uh)
         assert self._nonlinear_evaluator is not None
-        return self.functionspace.forward(self._nonlinear_evaluator(uh, N))
+        M = self._physical_shape(N)
+        return self.testspace.forward(self._nonlinear_evaluator(uh, M))
 
     def nonlinear_rhs_scalar_product(self, uh: Array, N: Padding = None) -> Array:
         """Return the nonlinear contribution in coefficient space.
@@ -235,7 +244,8 @@ class BaseIntegrator(ABC, nnx.Module):
         if not self.has_nonlinear:
             return jnp.zeros_like(uh)
         assert self._nonlinear_evaluator is not None
-        return self.functionspace.scalar_product(self._nonlinear_evaluator(uh, N))
+        M = self._physical_shape(N)
+        return self.testspace.scalar_product(self._nonlinear_evaluator(uh, M))
 
     def linear_rhs(self, uh: Array) -> Array:
         """Return the linear contribution after applying the inverse mass matrix."""
@@ -292,7 +302,7 @@ class BaseIntegrator(ABC, nnx.Module):
         if state0 is None:
             u_hat = self.initial_coefficients()
         else:
-            u_hat = jnp.asarray(state0).reshape(self.functionspace.num_dofs)
+            u_hat = jnp.asarray(state0).reshape(self.trialspace.num_dofs)
         if n_steps <= 0:
             if not return_batch_snapshots:
                 return u_hat

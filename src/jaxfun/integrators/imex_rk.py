@@ -8,7 +8,7 @@ import sympy as sp
 from flax import nnx
 
 from jaxfun.la import BaseMatrix
-from jaxfun.typing import Array, Padding, ScalarSpaceType
+from jaxfun.typing import Array, Padding
 
 from .base import BaseIntegrator, _warm_operator_solve_cache
 from .tableau import IMEXTableau
@@ -25,7 +25,6 @@ class IMEXRungeKutta(BaseIntegrator):
 
     def __init__(
         self,
-        V: ScalarSpaceType,
         equation: sp.Expr,
         *,
         tableau: IMEXTableau,
@@ -34,7 +33,7 @@ class IMEXRungeKutta(BaseIntegrator):
         **params,
     ):
         """Construct an IMEX Runge-Kutta integrator for a semilinear weak form."""
-        super().__init__(V, equation, initial=initial, time=time, **params)
+        super().__init__(equation, initial=initial, time=time, **params)
         self.tableau = nnx.static(tableau)
 
     def setup(self, dt: float) -> None:
@@ -51,6 +50,40 @@ class IMEXRungeKutta(BaseIntegrator):
         """Return the cached implicit system operator for diagonal coeff `a_ii`."""
         idx = self.tableau.distinct_diagonal_coeffs.index(a_ii)
         return self._stage_operators[idx]
+
+    def stage(
+        self,
+        i: int,
+        m_u: Array,
+        dt: float,
+        nonlinear_stage: list[Array | None],
+        linear_stage: list[Array | None],
+        forcing: Array | None,
+    ) -> Array:
+        """Compute stage `i` from the caches already populated for `j < i`.
+
+        `nonlinear_stage`/`linear_stage` are read-only here (entries for
+        `j < i` must already be populated by the caller); this method does
+        not append to them -- that bookkeeping is `step`-specific (it depends
+        on `step`'s choice of final-combination path) and stays there.
+        """
+        tableau: IMEXTableau = self.tableau
+        a_e, a_i = tableau.explicit.A, tableau.implicit.A
+        c_i = tableau.implicit.c
+
+        a_ii = a_i[i][i]
+        rhs = m_u
+        for j in range(i):
+            if a_e[i][j] != 0.0:
+                rhs = rhs + dt * a_e[i][j] * cast(Array, nonlinear_stage[j])
+            if a_i[i][j] != 0.0:
+                rhs = rhs + dt * a_i[i][j] * cast(Array, linear_stage[j])
+        if forcing is not None and c_i[i] != 0.0:
+            rhs = rhs + dt * c_i[i] * forcing
+
+        if a_ii == 0.0:
+            return self.apply_mass_inverse(rhs)
+        return self._stage_operator(a_ii).solve(rhs)
 
     @jax.jit(static_argnums=(0, 3))
     def step(self, u_hat: Array, dt: float, N: Padding = None) -> Array:
@@ -75,8 +108,8 @@ class IMEXRungeKutta(BaseIntegrator):
         needed for the implicit-only path).
         """
         tableau: IMEXTableau = self.tableau
-        a_e, a_i = tableau.explicit.A, tableau.implicit.A
-        b_e, b_i, c_i = tableau.explicit.b, tableau.implicit.b, tableau.implicit.c
+        a_e = tableau.explicit.A
+        b_e, b_i = tableau.explicit.b, tableau.implicit.b
 
         full_gsa = tableau.is_stiffly_accurate
         implicit_only_sa = (not full_gsa) and tableau.implicit_is_stiffly_accurate
@@ -94,21 +127,7 @@ class IMEXRungeKutta(BaseIntegrator):
         linear_stage: list[Array | None] = []
 
         for i in range(tableau.stages):
-            a_ii = a_i[i][i]
-            rhs = m_u
-            for j in range(i):
-                if a_e[i][j] != 0.0:
-                    rhs = rhs + dt * a_e[i][j] * cast(Array, nonlinear_stage[j])
-                if a_i[i][j] != 0.0:
-                    rhs = rhs + dt * a_i[i][j] * cast(Array, linear_stage[j])
-            if forcing is not None and c_i[i] != 0.0:
-                rhs = rhs + dt * c_i[i] * forcing
-
-            if a_ii == 0.0:
-                stage = self.apply_mass_inverse(rhs)
-            else:
-                stage = self._stage_operator(a_ii).solve(rhs)
-
+            stage = self.stage(i, m_u, dt, nonlinear_stage, linear_stage, forcing)
             stages.append(stage)
             is_last = i == last
             skip_nonlinear = is_last and full_gsa

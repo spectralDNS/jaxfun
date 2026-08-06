@@ -10,7 +10,7 @@ from flax import nnx
 from jax.scipy.linalg import expm as _expm
 
 from jaxfun.la import DiagonalMatrix, Matrix
-from jaxfun.typing import Array, Padding, ScalarSpaceType
+from jaxfun.typing import Array, Padding
 
 from .base import BaseIntegrator
 
@@ -69,7 +69,6 @@ class ETDRK4(BaseIntegrator):
 
     def __init__(
         self,
-        V: ScalarSpaceType,
         equation: sp.Expr,
         *,
         initial: sp.Expr | Array,
@@ -77,8 +76,8 @@ class ETDRK4(BaseIntegrator):
         **params,
     ):
         """Construct an ETDRK4 integrator for a semilinear weak form."""
-        super().__init__(V, equation, initial=initial, time=time, **params)
-        zero = jnp.zeros(self.functionspace.num_dofs)
+        super().__init__(equation, initial=initial, time=time, **params)
+        zero = jnp.zeros(self.trialspace.num_dofs)
         forcing_rhs = (
             self.apply_mass_inverse(jnp.asarray(self.linear_forcing))
             if self.linear_forcing is not None

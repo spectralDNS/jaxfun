@@ -76,7 +76,6 @@ psi0 = bright_soliton(alpha1, shift1, velocity1, phase1) + bright_soliton(
 weak_form = v * (psi.diff(t) - sp.I * psi.diff(x, 2) - sp.I * sp.Abs(psi) ** 2 * psi)
 
 integrator = ETDRK4(
-    V,
     weak_form,
     time=(0.0, T),
     initial=psi0,

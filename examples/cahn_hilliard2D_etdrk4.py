@@ -94,7 +94,6 @@ u0_phys = jnp.asarray(
 u0_hat = V.forward(u0_phys)
 
 integrator = ETDRK4(
-    V,
     weak_form,
     time=(0.0, T),
     initial=u0_hat,

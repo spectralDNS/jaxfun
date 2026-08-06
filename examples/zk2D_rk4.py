@@ -53,7 +53,6 @@ laplace_u = Div(Grad(u))
 weak_form = v * (u.diff(t) + (u * u).diff(x) / 2 + mu**2 * laplace_u.diff(x))
 
 integrator = ETDRK4(
-    V,
     weak_form,
     time=(0.0, T),
     initial=u0,

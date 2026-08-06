@@ -54,7 +54,6 @@ ue = (x + y) * sp.exp(-0.03 * (x**2 + y**2))
 u0_hat = JAXFunction(ue, V, name="u0")
 
 integrator = IMEXRungeKutta(
-    V,
     weak_form,
     tableau=ARS443,
     time=(0.0, T),

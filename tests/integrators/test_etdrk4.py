@@ -61,12 +61,7 @@ def test_etdrk4_setup_stage_coefficient_matches_coeff_builder() -> None:
 
     weak_form = v * (u.diff(t) + c * u.diff(x))
     integrator = ETDRK4(
-        V,
-        weak_form,
-        time=(0.0, 0.1),
-        initial=sp.cos(x),
-        sparse=True,
-        sparse_tol=1000,
+        weak_form, time=(0.0, 0.1), initial=sp.cos(x), sparse=True, sparse_tol=1000
     )
     dt = 0.1
     integrator.setup(dt=dt)
@@ -101,12 +96,7 @@ def test_etdrk4_solve_and_frames_interface() -> None:
     weak_form = v * (u.diff(t) + c * u.diff(x))
 
     integrator = ETDRK4(
-        V,
-        weak_form,
-        time=(0.0, T),
-        initial=u0,
-        sparse=True,
-        sparse_tol=1000,
+        weak_form, time=(0.0, T), initial=u0, sparse=True, sparse_tol=1000
     )
     uhat_t = integrator.solve(dt=dt, steps=steps, progress=False)
 
@@ -138,12 +128,7 @@ def test_etdrk4_kdv_short_run_is_finite(u0f, domain) -> None:
     weak_form = v * (u.diff(t) + (u * u).diff(x) / 2 + mu**2 * u.diff(x, 3))
 
     integrator = ETDRK4(
-        V,
-        weak_form,
-        time=(0.0, dt * steps),
-        initial=u0,
-        sparse=True,
-        sparse_tol=1000,
+        weak_form, time=(0.0, dt * steps), initial=u0, sparse=True, sparse_tol=1000
     )
     states = integrator.solve(
         dt=dt,
@@ -185,12 +170,7 @@ def test_etdrk4_kdv_soliton_tracks_exact_short_time() -> None:
     u0 = 3 * wave_speed * sp.sech(0.5 * sp.sqrt(wave_speed) / mu_val * (x - x0)) ** 2
     weak_form = v * (u.diff(t) + u * u.diff(x) + mu**2 * u.diff(x, 3))
     integrator = ETDRK4(
-        V,
-        weak_form,
-        time=(0.0, T),
-        initial=u0,
-        sparse=True,
-        sparse_tol=1000,
+        weak_form, time=(0.0, T), initial=u0, sparse=True, sparse_tol=1000
     )
 
     with warnings.catch_warnings(record=True) as caught:
@@ -229,7 +209,6 @@ def test_etdrk4_kdv_nonlinear_jaxpr_uses_fft_path() -> None:
 
     weak_form = v * (u.diff(t) + (u * u).diff(x) / 2 + mu**2 * u.diff(x, 3))
     integrator = ETDRK4(
-        V,
         weak_form,
         time=(0.0, 0.01),
         initial=sp.cos(sp.pi * x),
@@ -260,7 +239,6 @@ def test_etdrk4_zk_step_jaxpr_uses_diagonal_fft_path() -> None:
 
     weak_form = v * (u.diff(t) + (u * u).diff(x) / 2 + mu**2 * Div(Grad(u)).diff(x))
     integrator = ETDRK4(
-        V,
         weak_form,
         time=(0.0, T),
         initial=sp.cos(sp.pi * x),
@@ -305,7 +283,6 @@ def test_etdrk4_2d_cahn_hilliard_compact_form_matches_expanded_form() -> None:
     )
 
     compact_integrator = ETDRK4(
-        V,
         compact,
         time=(0.0, dt),
         initial=jnp.zeros(V.num_dofs),
@@ -313,7 +290,6 @@ def test_etdrk4_2d_cahn_hilliard_compact_form_matches_expanded_form() -> None:
         sparse_tol=1000,
     )
     expanded_integrator = ETDRK4(
-        V,
         expanded,
         time=(0.0, dt),
         initial=jnp.zeros(V.num_dofs),
@@ -356,7 +332,6 @@ def test_etdrk4_tensorproduct_solve_passes_padding_through(
 
     weak_form = v * (u.diff(t) + (u * u).diff(x) / 2)
     integrator = ETDRK4(
-        V,
         weak_form,
         time=(0.0, dt * steps),
         initial=sp.cos(sp.pi * x),
@@ -365,7 +340,7 @@ def test_etdrk4_tensorproduct_solve_passes_padding_through(
     )
 
     calls: list[tuple[int, ...] | None] = []
-    original_eval = integrator.functionspace.backward_primitive
+    original_eval = integrator.trialspace.backward_primitive
 
     def count_eval(
         c,
@@ -375,7 +350,7 @@ def test_etdrk4_tensorproduct_solve_passes_padding_through(
         calls.append(N)
         return original_eval(c, k=k, N=N)  # ty:ignore[invalid-argument-type]
 
-    monkeypatch.setattr(integrator.functionspace, "backward_primitive", count_eval)
+    monkeypatch.setattr(integrator.trialspace, "backward_primitive", count_eval)
     _ = integrator.solve(dt=dt, steps=steps, N=(pad, pad), progress=False)
 
     assert calls

@@ -23,7 +23,7 @@ def test_etdrk4_splits_weak_form_and_drops_time_from_rhs() -> None:
     eta = Constant("eta", 1.0)
     eq = v * (u.diff(t) + eta * u * u.diff(x) + nu**2 * u.diff(x, 3))
 
-    _integrator = ETDRK4(F, eq, time=(0.0, 1.0), initial=sp.cos(sp.pi * x))
+    _integrator = ETDRK4(eq, time=(0.0, 1.0), initial=sp.cos(sp.pi * x))
 
 
 def test_etdrk4_rejects_second_order_time_derivative() -> None:
@@ -37,7 +37,7 @@ def test_etdrk4_rejects_second_order_time_derivative() -> None:
     eq = v * (u.diff(t, 2) - u.diff(x, 2))
 
     with pytest.raises(ValueError, match="first-order time derivatives"):
-        _integrator = ETDRK4(F, eq, time=(0.0, 1.0), initial=sp.sin(sp.pi * x))
+        _integrator = ETDRK4(eq, time=(0.0, 1.0), initial=sp.sin(sp.pi * x))
 
 
 def test_prepare_assembles_mass_and_linear_forms_for_first_order() -> None:
@@ -52,13 +52,7 @@ def test_prepare_assembles_mass_and_linear_forms_for_first_order() -> None:
     eta = Constant("eta", 1.0)
     eq = v * (u.diff(t) + eta * u * u.diff(x) + nu**2 * u.diff(x, 3))
 
-    integrator = ETDRK4(
-        F,
-        eq,
-        time=(0.0, 1.0),
-        initial=sp.cos(sp.pi * x),
-        sparse=True,
-    )
+    integrator = ETDRK4(eq, time=(0.0, 1.0), initial=sp.cos(sp.pi * x), sparse=True)
     assert integrator.mass_operator is not None or integrator.mass_diag is not None
 
     u_ind = TrialFunction(F, name="u", transient=False)
@@ -104,13 +98,7 @@ def test_prepare_assembles_weighted_time_derivative_operator() -> None:
     rho = 2 + sp.cos(x)
     eq = v * (rho * u.diff(t) - u.diff(x, 2))
 
-    integrator = ETDRK4(
-        F,
-        eq,
-        time=(0.0, 1.0),
-        initial=sp.sin(sp.pi * x),
-        sparse=True,
-    )
+    integrator = ETDRK4(eq, time=(0.0, 1.0), initial=sp.sin(sp.pi * x), sparse=True)
 
     u_ind = TrialFunction(F, name="u", transient=False)
     expected_mass = inner(v * rho * u_ind, sparse=True, kind="bilinear")

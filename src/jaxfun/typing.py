@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 
 type FloatLike = float | sp.Number
 type Padding = int | tuple[int | None, ...] | tuple[tuple[int | None, ...], ...] | None
+type ScalarPadding = int | tuple[int | None, ...] | None
 type FunctionSpaceType = (
     OrthogonalSpace
     | TensorProductSpace

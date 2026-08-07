@@ -45,12 +45,11 @@ def test_imex_euler_matches_backward_euler() -> None:
     weak_form = v * (u.diff(t) + c * u.diff(x))
 
     be = BackwardEuler(
-        V, weak_form, time=(0.0, T), initial=u0, sparse=True, sparse_tol=1000
+        weak_form, time=(0.0, T), initial=u0, sparse=True, sparse_tol=1000
     )
     be_result = be.solve(dt=dt, steps=steps, progress=False)
 
     imex = IMEXRungeKutta(
-        V,
         weak_form,
         tableau=IMEX_EULER,
         time=(0.0, T),
@@ -82,7 +81,6 @@ def _chebyshev_diffusion_error(
     weak_form = v * (u.diff(t) - nu * Div(Grad(u)))
 
     integrator = IMEXRungeKutta(
-        V,
         weak_form,
         tableau=tableau,
         time=(0.0, T),
@@ -181,7 +179,6 @@ def test_imex_ssp2_222_kdv_soliton_is_accurate() -> None:
     weak_form = v * (u.diff(t) + u * u.diff(x) + mu**2 * u.diff(x, 3))
 
     ssp2 = IMEXRungeKutta(
-        V,
         weak_form,
         tableau=IMEX_SSP2_222,
         time=(0.0, T),
@@ -227,7 +224,6 @@ def test_ark4_kdv_soliton_matches_etdrk4_reference() -> None:
     weak_form = v * (u.diff(t) + u * u.diff(x) + mu**2 * u.diff(x, 3))
 
     ark = IMEXRungeKutta(
-        V,
         weak_form,
         tableau=ARK4_3_6L2SA,
         time=(0.0, T),
@@ -238,7 +234,6 @@ def test_ark4_kdv_soliton_matches_etdrk4_reference() -> None:
     uhat_ark = ark.solve(dt=dt, steps=steps, progress=False)
 
     etdrk4 = ETDRK4(
-        V,
         weak_form,
         time=(0.0, T),
         initial=u0,

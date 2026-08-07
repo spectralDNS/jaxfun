@@ -45,7 +45,6 @@ u0 = sp.cos(sp.pi * x)
 weak_form = v * (u.diff(t) + (u * u).diff(x) / 2 + mu**2 * u.diff(x, 3))
 
 integrator = ETDRK4(
-    V,
     weak_form,
     time=(0.0, T),
     initial=u0,

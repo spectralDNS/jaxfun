@@ -4,7 +4,7 @@ import sympy as sp
 
 import jaxfun.integrators.nonlinear as integrator_nonlinear
 from jaxfun import Domain
-from jaxfun.galerkin import TensorProductSpace
+from jaxfun.galerkin import TensorProduct
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev as Cheb
 from jaxfun.galerkin.Fourier import Fourier as FourierSpace
@@ -248,7 +248,7 @@ def test_rk4_tensorproduct_projects_symbolic_initial_condition() -> None:
     steps = 4
 
     F = FourierSpace(N, domain=Domain(-1, 1))
-    V = TensorProductSpace((F, F), name="V")
+    V = TensorProduct(F, F, name="V")
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
     t = V.system.base_time()
@@ -272,7 +272,7 @@ def test_rk4_tensorproduct_projects_x_only_initial_condition() -> None:
     steps = 2
 
     F = FourierSpace(N, domain=Domain(-1, 1))
-    V = TensorProductSpace((F, F), name="V")
+    V = TensorProduct(F, F, name="V")
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
     t = V.system.base_time()
@@ -298,7 +298,7 @@ def test_rk4_tensorproduct_projects_x_only_initial_condition() -> None:
 def test_rk4_tensorproduct_nonlinear_rhs_uses_mixed_derivative_path() -> None:
     N = 16
     F = FourierSpace(N, domain=Domain(-1, 1))
-    V = TensorProductSpace((F, F), name="V")
+    V = TensorProduct(F, F, name="V")
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
     t = V.system.base_time()
@@ -326,7 +326,7 @@ def test_etdrk4_tensorproduct_nonlinear_short_run_is_finite() -> None:
     steps = 8
 
     F = FourierSpace(N, domain=Domain(-1, 1))
-    V = TensorProductSpace((F, F), name="V")
+    V = TensorProduct(F, F, name="V")
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
     t = V.system.base_time()

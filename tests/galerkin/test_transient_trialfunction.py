@@ -1,7 +1,7 @@
 import sympy as sp
 
 from jaxfun import Domain
-from jaxfun.galerkin import TensorProductSpace, TestFunction, TrialFunction
+from jaxfun.galerkin import TensorProduct, TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.operators import Constant
@@ -58,7 +58,7 @@ def test_trialfunction_splitting_kdv() -> None:
 
 def test_trialfunction_splitting_zk() -> None:
     F = Fourier(8, Domain(-1, 1))
-    T = TensorProductSpace((F, F))
+    T = TensorProduct(F, F)
 
     u = TrialFunction(T, name="u", transient=True)
     v = TestFunction(T, name="v")

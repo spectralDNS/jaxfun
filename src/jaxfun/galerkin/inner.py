@@ -22,13 +22,13 @@ from jaxfun.la import (
 )
 from jaxfun.typing import (
     CoeffDict,
+    ComputationalSpaceType,
     FunctionSpaceType,
     GalerkinAssembledForm,
     InnerItems,
     InnerKind,
     InnerKindLike,
     InnerResultDict,
-    RankedTestSpaceType,
     RankTag,
     ScalarSpaceType,
     TrialSpaceType,
@@ -73,7 +73,7 @@ type _LinearFactor = Array | tuple[Array, ...]
 
 @dataclass(frozen=True)
 class _InnerContext:
-    test_space: RankedTestSpaceType
+    test_space: ComputationalSpaceType
     trial_space: TrialSpaceType | None
     a_forms: list[InnerResultDict]
     b_forms: list[InnerResultDict]
@@ -250,7 +250,7 @@ def _prepare_inner_context(
     assert V is not None, "No TestFunction found in expression"
     V = unwrap_single_testfunction(V)
     assert _has_testspace(V), "TestFunction has no associated function space"
-    test_space = cast(RankedTestSpaceType, V.functionspace)
+    test_space = cast(ComputationalSpaceType, V.functionspace)
     if isinstance(U, set):
         leaf = set(
             cast(
@@ -672,7 +672,7 @@ def _assemble_linear_tensor3d(
 def _finalize_inner_result(
     aresults: list[BaseMatrix | GlobalMatrix],
     bresults: list[GlobalArray],
-    test_space: RankedTestSpaceType,
+    test_space: ComputationalSpaceType,
     trial_space: TrialSpaceType | None,
     sparse: bool,
     sparse_tol: int,

@@ -34,6 +34,12 @@ if TYPE_CHECKING:
 
 IndivisibleError = ValueError
 
+# Sentinel restricting TensorProductSpace/DirectSumTPS creation to the
+# TensorProduct() factory (and this module's own derived-space helpers) \u2014
+# a tensor product space should only ever result from the tensor product
+# operation, not be assembled by hand.
+_factory_token = object()
+
 
 class TensorProductSpace:
     """d-dimensional tensor product of 1D BaseSpace instances.
@@ -70,7 +76,15 @@ class TensorProductSpace:
         name: str = "TPS",
         leaf: CartesianTensorProductSpace | None = None,
         global_index: int = 0,
+        *,
+        _token: object = None,
     ) -> None:
+        if _token is not _factory_token:
+            raise TypeError(
+                "TensorProductSpace must be created via TensorProduct(), "
+                "not instantiated directly — a tensor product space is the "
+                "result of the tensor product operation."
+            )
         from jaxfun.coordinates import CartCoordSys, x, y, z
 
         system = (
@@ -324,7 +338,10 @@ class TensorProductSpace:
         """Return underlying orthogonal basis instance."""
         orthogonal_spaces = [space.get_orthogonal() for space in self.basespaces]
         return TensorProductSpace(
-            orthogonal_spaces, system=self.system, name=self.name + "o"
+            orthogonal_spaces,
+            system=self.system,
+            name=self.name + "o",
+            _token=_factory_token,
         )
 
     def backward(
@@ -549,11 +566,14 @@ def TensorProduct(
             space.basespaces[1].orthogonal.system = space.system
 
     if any(isinstance(s, DirectSum) for s in basespaces_list):
-        return DirectSumTPS(basespaces_list, system, name)
+        return DirectSumTPS(basespaces_list, system, name, _token=_factory_token)
 
     assert all(isinstance(s, OrthogonalSpace) for s in basespaces_list)
     return TensorProductSpace(
-        cast(list[OrthogonalSpace], basespaces_list), system, name
+        cast(list[OrthogonalSpace], basespaces_list),
+        system,
+        name,
+        _token=_factory_token,
     )
 
 
@@ -582,7 +602,15 @@ class DirectSumTPS(TensorProductSpace):
         name: str = "DSTPS",
         global_index: int = 0,
         leaf: CartesianTensorProductSpace | None = None,
+        *,
+        _token: object = None,
     ) -> None:
+        if _token is not _factory_token:
+            raise TypeError(
+                "DirectSumTPS must be created via TensorProduct(), "
+                "not instantiated directly — a tensor product space is the "
+                "result of the tensor product operation."
+            )
         from jaxfun.galerkin.inner import project, project1D
 
         self.basespaces: list[OrthogonalSpace | DirectSum] = basespaces
@@ -766,6 +794,7 @@ class DirectSumTPS(TensorProductSpace):
                 f"{self.name}{i}",
                 leaf=self.leaf,
                 global_index=self.global_index,
+                _token=_factory_token,
             )
             for i, s in enumerate(tensorspaces)
         }

@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import sympy as sp
 
 from jaxfun.galerkin import (
+    CartesianProduct,
     Chebyshev,
     DirectSumTPS,
     Fourier,
@@ -13,7 +14,6 @@ from jaxfun.galerkin import (
     TensorProduct,
     TestFunction,
     TrialFunction,
-    VectorTensorProductSpace,
 )
 from jaxfun.galerkin.arguments import JAXFunction, ScalarFunction, VectorFunction
 from jaxfun.galerkin.forms import split_coeff
@@ -26,7 +26,7 @@ def test_vector_tensor_product_space_and_jaxfunction_latex_and_matmul():
     C = Chebyshev.Chebyshev(4)
     # Need at least 2D tensorspace for sub_system logic
     TP = TensorProduct(C, C)
-    VT = VectorTensorProductSpace(TP)  # rank 1 space
+    VT = CartesianProduct(TP, TP, rank=1)  # rank 1 space
     coeffs = jax.random.normal(jax.random.PRNGKey(0), shape=(C.N, C.N))
     jf = JAXFunction(coeffs, TP, name="U")
     # Latex function (no bold since rank==0 for scalar TensorProductSpace)

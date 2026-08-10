@@ -6,7 +6,7 @@ import pytest
 import sympy as sp
 
 from jaxfun import Div, Domain, Grad
-from jaxfun.galerkin import TensorProductSpace
+from jaxfun.galerkin import TensorProduct
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Fourier import Fourier as FourierSpace
 from jaxfun.galerkin.functionspace import FunctionSpace
@@ -231,7 +231,7 @@ def test_etdrk4_zk_step_jaxpr_uses_diagonal_fft_path() -> None:
     mu = Constant("mu", sp.Rational(3, 20))
 
     F = FourierSpace(N, Domain(-1, 1))
-    V = TensorProductSpace((F, F), name="V")
+    V = TensorProduct(F, F, name="V")
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
     x, _y = V.system.base_scalars()
@@ -264,7 +264,7 @@ def test_etdrk4_2d_cahn_hilliard_compact_form_matches_expanded_form() -> None:
     dt = 1e-4
 
     F = FourierSpace(N, Domain(0, 1))
-    V = TensorProductSpace((F, F), name="V")
+    V = TensorProduct(F, F, name="V")
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
     x, y = V.system.base_scalars()
@@ -324,7 +324,7 @@ def test_etdrk4_tensorproduct_solve_passes_padding_through(
     steps = 2
 
     F = FourierSpace(N, Domain(-1, 1))
-    V = TensorProductSpace((F, F), name="V")
+    V = TensorProduct(F, F, name="V")
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
     x, _y = V.system.base_scalars()

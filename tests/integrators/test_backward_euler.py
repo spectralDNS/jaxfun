@@ -33,12 +33,7 @@ def test_backward_euler_linear_advection_fourier() -> None:
     weak_form = v * (u.diff(t) + c * u.diff(x))
 
     integrator = BackwardEuler(
-        V,
-        weak_form,
-        time=(0.0, T),
-        initial=u0,
-        sparse=True,
-        sparse_tol=1000,
+        weak_form, time=(0.0, T), initial=u0, sparse=True, sparse_tol=1000
     )
     uhat_t = integrator.solve(dt=dt, steps=steps, progress=False)
 
@@ -67,14 +62,7 @@ def test_rk4_solve_uses_initial_and_time_api() -> None:
     u0 = sp.sin(sp.pi * (x + 1) / 2)
     weak_form = v * (u.diff(t) - nu * Div(Grad(u)))
 
-    integrator = RK4(
-        V,
-        weak_form,
-        time=(0.0, T),
-        initial=u0,
-        sparse=True,
-        sparse_tol=1000,
-    )
+    integrator = RK4(weak_form, time=(0.0, T), initial=u0, sparse=True, sparse_tol=1000)
     uhat_t = integrator.solve(dt=dt, steps=steps, progress=False)
 
     xj = V.mesh()
@@ -98,7 +86,7 @@ def test_solve_n_batches_and_return_batch_snapshots() -> None:
 
     u0 = sp.sin(x)
     weak_form = v * (u.diff(t) + u.diff(x))
-    integrator = RK4(V, weak_form, time=(0.0, dt * steps), initial=u0, sparse=True)
+    integrator = RK4(weak_form, time=(0.0, dt * steps), initial=u0, sparse=True)
 
     states = integrator.solve(
         dt=dt,
@@ -107,13 +95,9 @@ def test_solve_n_batches_and_return_batch_snapshots() -> None:
         return_batch_snapshots=True,
         progress=False,
     )
-    integrator_final = RK4(
-        V, weak_form, time=(0.0, dt * steps), initial=u0, sparse=True
-    )
+    integrator_final = RK4(weak_form, time=(0.0, dt * steps), initial=u0, sparse=True)
     final = integrator_final.solve(dt=dt, steps=steps, n_batches=5, progress=False)
-    integrator_restart = RK4(
-        V, weak_form, time=(0.0, dt * steps), initial=u0, sparse=True
-    )
+    integrator_restart = RK4(weak_form, time=(0.0, dt * steps), initial=u0, sparse=True)
     restarted = integrator_restart.solve(
         dt=dt,
         steps=steps,
@@ -147,7 +131,7 @@ def test_rk4_nonlinear_rhs_uses_direct_jaxfunction_evaluation() -> None:
 
     u0 = sp.sin(x) + sp.cos(2 * x)
     weak_form = v * (u.diff(t) + u * u.diff(x))
-    integrator = RK4(V, weak_form, time=(0.0, 0.01), initial=u0, sparse=True)
+    integrator = RK4(weak_form, time=(0.0, 0.01), initial=u0, sparse=True)
 
     uhat = integrator.initial_coefficients()
     nonlinear = integrator.nonlinear_rhs(uhat)
@@ -173,15 +157,15 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
 
     # Contains repeated subterms of both u and u_x after expansion.
     weak_form = v * (u.diff(t) + (u + u.diff(x)) ** 2)
-    integrator = RK4(V, weak_form, time=(0.0, 0.01), initial=sp.sin(x), sparse=True)
+    integrator = RK4(weak_form, time=(0.0, 0.01), initial=sp.sin(x), sparse=True)
     uhat = integrator.initial_coefficients()
     u_phys = V.backward(uhat)
     ux_phys = V.backward_primitive(uhat, k=1)
     expected = V.forward(-((u_phys + ux_phys) ** 2))
 
     calls: list[int] = []
-    original_backward = integrator.functionspace.backward
-    original_eval = integrator.functionspace.backward_primitive
+    original_backward = integrator.trialspace.backward
+    original_eval = integrator.trialspace.backward_primitive
 
     def count_backward(
         c,
@@ -198,8 +182,8 @@ def test_rk4_nonlinear_rhs_caches_repeated_primitives(
         calls.append(int(k))
         return original_eval(c, k=k, N=N)  # ty:ignore[invalid-argument-type]
 
-    monkeypatch.setattr(integrator.functionspace, "backward", count_backward)
-    monkeypatch.setattr(integrator.functionspace, "backward_primitive", count_eval)
+    monkeypatch.setattr(integrator.trialspace, "backward", count_backward)
+    monkeypatch.setattr(integrator.trialspace, "backward_primitive", count_eval)
 
     nonlinear = integrator.nonlinear_rhs(uhat)
 
@@ -237,10 +221,10 @@ def test_rk4_solve_passes_padding_to_nonlinear_backward_calls(
     t = V.system.base_time()
 
     weak_form = v * (u.diff(t) + u * u.diff(x))
-    integrator = RK4(V, weak_form, time=(0.0, dt * steps), initial=sp.sin(x))
+    integrator = RK4(weak_form, time=(0.0, dt * steps), initial=sp.sin(x))
 
     calls: list[int | None] = []
-    original_eval = integrator.functionspace.backward_primitive
+    original_eval = integrator.trialspace.backward_primitive
 
     def count_eval(
         c,
@@ -250,7 +234,7 @@ def test_rk4_solve_passes_padding_to_nonlinear_backward_calls(
         calls.append(N)
         return original_eval(c, k=k, N=N)  # ty:ignore[invalid-argument-type]
 
-    monkeypatch.setattr(integrator.functionspace, "backward_primitive", count_eval)
+    monkeypatch.setattr(integrator.trialspace, "backward_primitive", count_eval)
 
     _ = integrator.solve(dt=dt, steps=steps, N=pad, progress=False)
 
@@ -272,7 +256,7 @@ def test_rk4_tensorproduct_projects_symbolic_initial_condition() -> None:
 
     u0 = sp.cos(sp.pi * x) * sp.cos(sp.pi * y)
     weak_form = v * (u.diff(t) + u.diff(x) + u.diff(y))
-    integrator = RK4(V, weak_form, time=(0.0, dt * steps), initial=u0, sparse=True)
+    integrator = RK4(weak_form, time=(0.0, dt * steps), initial=u0, sparse=True)
 
     uhat0 = integrator.initial_coefficients()
     assert uhat0.shape == V.num_dofs
@@ -296,7 +280,7 @@ def test_rk4_tensorproduct_projects_x_only_initial_condition() -> None:
 
     u0 = sp.cos(sp.pi * x)
     weak_form = v * (u.diff(t) + u.diff(x) + u.diff(y))
-    integrator = RK4(V, weak_form, time=(0.0, dt * steps), initial=u0, sparse=True)
+    integrator = RK4(weak_form, time=(0.0, dt * steps), initial=u0, sparse=True)
 
     uhat0 = integrator.initial_coefficients()
     assert uhat0.shape == V.num_dofs
@@ -322,7 +306,7 @@ def test_rk4_tensorproduct_nonlinear_rhs_uses_mixed_derivative_path() -> None:
 
     u0 = sp.cos(sp.pi * x) * sp.cos(sp.pi * y)
     weak_form = v * (u.diff(t) + u * u.diff(x) + u * u.diff(y))
-    integrator = RK4(V, weak_form, time=(0.0, 0.01), initial=u0, sparse=True)
+    integrator = RK4(weak_form, time=(0.0, 0.01), initial=u0, sparse=True)
 
     uhat = integrator.initial_coefficients()
     nonlinear = integrator.nonlinear_rhs(uhat)
@@ -352,20 +336,11 @@ def test_etdrk4_tensorproduct_nonlinear_short_run_is_finite() -> None:
     laplace_u = u.diff(x, 2) + u.diff(y, 2)
     weak_form = v * (u.diff(t) + (u * u).diff(x) / 2 + mu**2 * laplace_u.diff(x))
     integrator = ETDRK4(
-        V,
-        weak_form,
-        time=(0.0, dt * steps),
-        initial=u0,
-        sparse=True,
-        sparse_tol=1000,
+        weak_form, time=(0.0, dt * steps), initial=u0, sparse=True, sparse_tol=1000
     )
 
     states = integrator.solve(
-        dt=dt,
-        steps=steps,
-        n_batches=4,
-        return_batch_snapshots=True,
-        progress=False,
+        dt=dt, steps=steps, n_batches=4, return_batch_snapshots=True, progress=False
     )
     assert states.shape == (5,) + V.num_dofs
 

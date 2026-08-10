@@ -2,7 +2,7 @@
 
 from flax import nnx
 
-from jaxfun.typing import Array, Padding
+from jaxfun.typing import Array, ScalarPadding
 
 from .base import BaseIntegrator
 
@@ -11,7 +11,7 @@ class RK4(BaseIntegrator):
     """Regular 4th-order Runge-Kutta integrator."""
 
     @nnx.jit(static_argnames=("N",))
-    def step(self, u_hat: Array, dt: float, N: Padding = None) -> Array:
+    def step(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:
         """Advance one classical RK4 step in coefficient space."""
         k1 = self.total_rhs(u_hat, N)
         k2 = self.total_rhs(u_hat + 0.5 * dt * k1, N)

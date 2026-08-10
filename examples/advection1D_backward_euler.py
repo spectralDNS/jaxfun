@@ -42,7 +42,6 @@ u0 = sp.sin(x)
 weak_form = v * (u.diff(t) + c * u.diff(x))
 
 integrator = BackwardEuler(
-    V,
     weak_form,
     time=(0.0, T),
     initial=u0,

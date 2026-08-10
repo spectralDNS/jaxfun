@@ -45,7 +45,6 @@ u0 = sp.sin(sp.pi * (x + 1) / 2)
 weak_form = v * (u.diff(t) - nu * Div(Grad(u)))
 
 integrator = RK4(
-    V,
     weak_form,
     time=(0.0, T),
     initial=u0,

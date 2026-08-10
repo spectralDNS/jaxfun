@@ -3,7 +3,7 @@
 import jax.numpy as jnp
 from flax import nnx
 
-from jaxfun.typing import Array, Padding
+from jaxfun.typing import Array, ScalarPadding
 
 from .base import BaseIntegrator, _warm_operator_solve_cache
 
@@ -26,7 +26,7 @@ class BackwardEuler(BaseIntegrator):
         self._system_diag = nnx.data(self._system_operator.diagonal_or_none())
         _warm_operator_solve_cache(self._system_operator)
 
-    def step(self, u_hat: Array, dt: float, N: Padding = None) -> Array:
+    def step(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:
         """Advance one backward-Euler step in coefficient space."""
         rhs = self.apply_mass(u_hat)
         if self.linear_forcing is not None:

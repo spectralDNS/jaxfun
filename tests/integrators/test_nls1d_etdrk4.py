@@ -37,12 +37,7 @@ def test_etdrk4_focusing_nls_soliton_tracks_exact_short_time() -> None:
     )
 
     integrator = ETDRK4(
-        V,
-        weak_form,
-        time=(0.0, T),
-        initial=psi0,
-        sparse=True,
-        sparse_tol=1000,
+        weak_form, time=(0.0, T), initial=psi0, sparse=True, sparse_tol=1000
     )
     psi_hat_t = integrator.solve(dt=dt, steps=steps, progress=False)
 

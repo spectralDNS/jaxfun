@@ -2,15 +2,18 @@
 
 Each equation of the system is advanced by its own scalar integrator, so the
 implicit (linear) operators stay decoupled and are assembled and factorized once
-per equation. The equations see each other only through their nonlinear terms,
-which are evaluated explicitly from the state of *all* fields at the current
-stage. Every field is represented by a single shared JAXFunction node, so
-updating a stage makes it visible to all equations at once.
+per equation. The equations see each other only explicitly, from the state of
+*all* fields at the current stage: terms linear in a single foreign field are
+assembled as operators between the two spaces and applied as matrix-vector
+products, and everything else is evaluated pointwise in physical space. Every
+field is represented by a single shared JAXFunction node, so updating a stage
+makes it visible to all equations at once.
 """
 
+import inspect
 from abc import ABC
 from collections.abc import Sequence
-from typing import cast, get_args, get_origin
+from typing import Any, cast, get_args, get_origin
 
 import jax.numpy as jnp
 import sympy as sp
@@ -24,22 +27,23 @@ from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
 from jaxfun.utils import get_time_independent, split_time_derivative_terms
 
-from .base import BaseIntegrator, TimeStepper
+from .base import BaseIntegrator, TimeStepper, apply_field_couplings
+from .constraint import ConstraintSolver
 from .nonlinear import compile_coupled_nonlinear_evaluator
 
 
-def _own_trial(equation: sp.Expr) -> TrialFunction:
+def _transient_trial(equation: sp.Expr) -> TrialFunction | None:
     """Return the transient field an equation is the evolution equation for.
 
     The time-derivative term identifies it unambiguously; every other field
     appearing in the equation belongs to a different equation of the system.
+    Returns None for a *constraint* equation, which has no time derivative and
+    is solved for its field rather than integrated.
     """
     t = get_system(equation).base_time()
     lhs, _ = split_time_derivative_terms(equation, t)
     if sp.sympify(lhs) == 0:
-        raise ValueError(
-            "Time integrators require a first-order time derivative in the weak form"
-        )
+        return None
     _, trial = get_basisfunctions(lhs)
     if not isinstance(trial, TrialFunction):
         raise ValueError(
@@ -47,6 +51,42 @@ def _own_trial(equation: sp.Expr) -> TrialFunction:
             "Equations coupled through their time derivatives are not supported."
         )
     return trial
+
+
+def _own_trial(equation: sp.Expr) -> TrialFunction:
+    """Return the transient field an equation evolves, requiring there to be one."""
+    trial = _transient_trial(equation)
+    if trial is None:
+        raise ValueError(
+            "Time integrators require a first-order time derivative in the weak form"
+        )
+    return trial
+
+
+def _constrained_trial(
+    equation: sp.Expr, transient: Sequence[TrialFunction]
+) -> TrialFunction:
+    """Return the field a constraint equation determines.
+
+    A constraint carries no time derivative to name its field, so it is the one
+    trial function in the equation that no evolution equation already owns.
+    """
+    _, trials = get_basisfunctions(equation)
+    found = trials if isinstance(trials, set) else {trials}
+    owned = {get_time_independent(u) for u in transient}
+    candidates = {
+        u
+        for u in found
+        if isinstance(u, TrialFunction) and get_time_independent(u) not in owned
+    }
+    if len(candidates) != 1:
+        names = ", ".join(sorted(str(u) for u in candidates)) or "none"
+        raise ValueError(
+            "A constraint equation must be solvable for exactly one field of its "
+            f"own -- a TrialFunction no other equation evolves -- but found {names}. "
+            "Add an evolution equation for the extra fields, or drop them."
+        )
+    return get_time_independent(candidates.pop())
 
 
 def _coefficient_shape(V: ScalarSpaceType) -> tuple[int, ...]:
@@ -122,14 +162,26 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
 ):
     """Base class for integrating systems coupled through nonlinear terms.
 
-    Holds one scalar sub-integrator of type `integrator_type` per equation, plus
-    the shared field registry that lets their nonlinear terms see each other.
-    `IntegratorT` is that sub-integrator type, so subclasses keep access to the
-    methods specific to it. Subclasses implement `step`.
+    Holds one scalar sub-integrator of type `integrator_type` per *evolution*
+    equation, plus the shared field registry that lets their nonlinear terms see
+    each other. `IntegratorT` is that sub-integrator type, so subclasses keep
+    access to the methods specific to it. Subclasses implement `step`.
+
+    An equation without a time derivative is a *constraint*: it is solved for
+    its own field at every stage rather than integrated, and is held in
+    `constraints` instead. Its field is still part of the state tuple -- carried
+    along in equation declaration order, so `step` returns one array per
+    equation either way -- but it is recomputed from the transient fields rather
+    than stepped, and so can never drift out of sync with them.
+
+    `integrators` and `constraints` are each indexed in their own order, and
+    `transient_slots` / `constraint_slots` map those local indices to the global
+    field order that the state tuple and the shared nodes use.
     """
 
     integrator_type: type[IntegratorT]
     integrators: tuple[IntegratorT, ...]
+    constraints: tuple[ConstraintSolver, ...]
 
     def __init_subclass__(cls, **kwargs) -> None:
         """Take the sub-integrator class from the `SystemIntegrator[...]` argument.
@@ -154,16 +206,22 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
         self,
         equations: Sequence[sp.Expr],
         *,
-        initial: Sequence[sp.Expr | Array],
+        initial: Sequence[sp.Expr | Array | None],
         time: tuple[float, float] | None = None,
         **params,
     ):
-        """Build one sub-integrator per equation over a shared set of fields.
+        """Build one sub-integrator or constraint solver per equation.
 
         Args:
-            equations: One weak form per equation, each with a first-order time
-                derivative of its own transient TrialFunction.
-            initial: One initial condition per equation, in the same order.
+            equations: One weak form per equation. An equation with a
+                first-order time derivative of its own transient TrialFunction
+                is integrated; one without is a constraint, solved at every
+                stage for the field no other equation evolves.
+            initial: One entry per equation, in the same order. A constraint
+                equation may be given None, and its field is then derived from
+                the transient ones; passing a value instead states it directly,
+                which is worth doing when the field is what the problem is
+                naturally posed in terms of.
             time: Optional default integration interval.
             **params: Forwarded unchanged to every sub-integrator.
         """
@@ -178,23 +236,76 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
             raise ValueError("A system needs at least one equation")
 
         self.time = time
-        trials = tuple(_own_trial(eq) for eq in equations)
+        transient = tuple(_transient_trial(eq) for eq in equations)
+        if all(u is None for u in transient):
+            raise ValueError(
+                "A system needs at least one equation with a time derivative; "
+                "every equation given is a constraint, so nothing evolves."
+            )
+        evolved = tuple(u for u in transient if u is not None)
+        trials = tuple(
+            u if u is not None else _constrained_trial(eq, evolved)
+            for eq, u in zip(equations, transient, strict=True)
+        )
+
+        self.transient_slots = nnx.static(
+            tuple(k for k, u in enumerate(transient) if u is not None)
+        )
+        self.constraint_slots = nnx.static(
+            tuple(k for k, u in enumerate(transient) if u is None)
+        )
+        for k in self.transient_slots:
+            if initial[k] is None:
+                raise ValueError(
+                    f"Equation {k} has a time derivative, so its field "
+                    f"{trials[k].name} is integrated and needs an initial "
+                    "condition. Only a constraint equation may be given None."
+                )
+
         self.fields = nnx.static(FieldRegistry(trials))
         registry: FieldRegistry = self.fields
+
+        def coupling(k: int) -> dict[str, Any]:
+            """Hooks tying equation `k` to every other field of the system."""
+            return {
+                "explicit_trials": tuple(u for j, u in enumerate(trials) if j != k),
+                "fields": registry.pairs,
+                "field_order": registry.nodes,
+                "field_index": k,
+            }
+
+        # A constraint is not stepped, so the stepping-specific parameters of the
+        # sub-integrators (a Butcher tableau, say) mean nothing to it. It is
+        # offered only the assembly and solver parameters it declares. Inspect
+        # `__init__` rather than the class: `nnx.Module` wraps construction, so
+        # the class signature is a bare `(*args, **kwargs)` that would match
+        # nothing and silently drop every parameter.
+        accepted = frozenset(inspect.signature(ConstraintSolver.__init__).parameters)
+        constraint_params = {k: v for k, v in params.items() if k in accepted}
 
         self.integrators = nnx.data(
             tuple(
                 self.integrator_type(
-                    eq,
-                    initial=init_k,
+                    equations[k],
+                    # Not None at a transient slot; checked above.
+                    initial=cast("sp.Expr | Array", initial[k]),
                     time=time,
-                    explicit_trials=tuple(u for j, u in enumerate(trials) if j != k),
-                    fields=registry.pairs,
-                    field_order=registry.nodes,
-                    field_index=k,
+                    **coupling(k),
                     **params,
                 )
-                for k, (eq, init_k) in enumerate(zip(equations, initial, strict=True))
+                for k in self.transient_slots
+            )
+        )
+        self.constraints = nnx.data(
+            tuple(
+                ConstraintSolver(
+                    equations[k],
+                    own_trial=trials[k],
+                    initial=initial[k],
+                    **coupling(k),
+                    **constraint_params,
+                )
+                for k in self.constraint_slots
             )
         )
         self._validate_common_mesh()
@@ -246,6 +357,11 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
           that matters: the transforms above are common subexpressions that XLA
           already merges on its own, whereas terms differing by a constant reach
           the transform with different values and cannot be merged.
+
+        Constraints are deliberately left out and keep their own evaluators.
+        They could not share this pass even in principle: a constraint has to be
+        solved *before* the evolution equations are evaluated, because those
+        read its field at the stage it was just solved for.
         """
         nonlinear = tuple(k for k, g in enumerate(self.integrators) if g.has_nonlinear)
         self._coupled_nonlinear_evaluator = None
@@ -267,17 +383,24 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
     ) -> tuple[Array, ...]:
         """Return each equation's nonlinear term in coefficient space.
 
-        As in `BaseIntegrator.nonlinear_rhs_scalar_product`, the mass inverse is
+        Includes both explicit paths: assembled couplings to other fields, and
+        terms evaluated pointwise. As in
+        `BaseIntegrator.nonlinear_rhs_scalar_product`, the mass inverse is
         deliberately not applied.
         """
-        results: list[Array] = [g._no_nonlinear(states) for g in self.integrators]
+        results: list[Array] = []
+        for g in self.integrators:
+            coupling = apply_field_couplings(g._couplings, states)
+            results.append(g._no_nonlinear(states) if coupling is None else coupling)
         if self._coupled_nonlinear_evaluator is None:
             return tuple(results)
         values = self._coupled_nonlinear_evaluator(states, N)
         for (rep, members), value in zip(self._nonlinear_groups, values, strict=True):
             projected = self.integrators[rep].testspace.scalar_product(value)
             for k, coefficient in members:
-                results[k] = (
+                # Added, not assigned: an equation may have both an assembled
+                # coupling and a term that has to be evaluated pointwise.
+                results[k] = results[k] + (
                     projected if coefficient == 1.0 else _scale(projected, coefficient)
                 )
         return tuple(results)
@@ -285,7 +408,13 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
     @property
     def num_fields(self) -> int:
         """Return the number of coupled fields."""
-        return len(self.integrators)
+        return len(self.integrators) + len(self.constraints)
+
+    def _solvers(self) -> tuple[tuple[int, Any], ...]:
+        """Return every equation's solver, paired with its global field slot."""
+        return tuple(zip(self.transient_slots, self.integrators, strict=True)) + tuple(
+            zip(self.constraint_slots, self.constraints, strict=True)
+        )
 
     def common_padding(self, N: ScalarPadding = None) -> ScalarPadding:
         """Resolve one physical-space shape shared by every field.
@@ -298,8 +427,8 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
         """
         if N is not None:
             return N
-        shapes = [g.testspace.shape for g in self.integrators]
-        shapes += [g.trialspace.shape for g in self.integrators]
+        shapes = [g.testspace.shape for _, g in self._solvers()]
+        shapes += [g.trialspace.shape for _, g in self._solvers()]
         common = tuple(max(axis) for axis in zip(*shapes, strict=True))
         return common[0] if len(common) == 1 else common
 
@@ -313,7 +442,7 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
         """
         N = self.common_padding()
         spaces: list[tuple[str, ScalarSpaceType]] = []
-        for k, g in enumerate(self.integrators):
+        for k, g in sorted(self._solvers()):
             spaces.append((f"equation {k} trial space", g.trialspace))
             spaces.append((f"equation {k} test space", g.testspace))
 
@@ -345,29 +474,85 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
                         "would require interpolation between meshes."
                     )
 
-    def initial_coefficients(
-        self, initial: Sequence[sp.Expr | Array] | None = None
+    def resolve_constraints(
+        self,
+        states: tuple[Array, ...],
+        N: ScalarPadding = None,
+        slots: tuple[int, ...] | None = None,
     ) -> tuple[Array, ...]:
-        """Return coefficient-space data for the initial condition of each field."""
-        if initial is None:
-            return tuple(g.initial_coefficients() for g in self.integrators)
-        return tuple(
-            g.initial_coefficients(init_k)
-            for g, init_k in zip(self.integrators, initial, strict=True)
-        )
+        """Return `states` with every constrained field solved from the others.
+
+        Constraints are resolved in equation declaration order, so one may read
+        the field of a constraint declared before it. `slots` restricts the work
+        to those global field slots, which initialization uses to leave a field
+        the caller supplied alone.
+        """
+        out = list(states)
+        for slot, c in zip(self.constraint_slots, self.constraints, strict=True):
+            if slots is None or slot in slots:
+                out[slot] = c.solve_field(tuple(out), N)
+        return tuple(out)
+
+    def _check_state_length(self, states: Sequence[Any], what: str) -> None:
+        if len(states) != self.num_fields:
+            raise ValueError(
+                f"A system {what} must have one entry per equation "
+                f"({self.num_fields}), got {len(states)}."
+            )
+
+    def initial_coefficients(
+        self, initial: Sequence[sp.Expr | Array | None] | None = None
+    ) -> tuple[Array, ...]:
+        """Return coefficient-space data for the initial condition of each field.
+
+        A constrained field given no initial condition is solved for once the
+        transient fields are in place. One given a value keeps it: the two agree
+        whenever the pair is consistent, and stating the field directly is often
+        how the problem is posed -- a cavity started from rest is `psi = 0` with
+        a moving lid, whose vorticity is then whatever the constraint says.
+        """
+        out: list[Array] = [jnp.zeros(())] * self.num_fields
+        if initial is not None:
+            initial = tuple(initial)
+            self._check_state_length(initial, "initial condition")
+        for slot, g in zip(self.transient_slots, self.integrators, strict=True):
+            out[slot] = g.initial_coefficients(
+                None if initial is None else initial[slot]
+            )
+        derive: list[int] = []
+        for slot, c in zip(self.constraint_slots, self.constraints, strict=True):
+            given = c.initial_coefficients(None if initial is None else initial[slot])
+            if given is None:
+                derive.append(slot)
+                # A placeholder, so the tuple the constraints read is complete.
+                out[slot] = jnp.zeros(c._state_shape)
+            else:
+                out[slot] = given
+        return self.resolve_constraints(tuple(out), slots=tuple(derive))
 
     def _coerce_state(self, state0: IntegratorState) -> tuple[Array, ...]:
-        """Coerce a restart state into one coefficient array per field."""
+        """Coerce a restart state into one coefficient array per field.
+
+        The constrained entries are recomputed from the transient ones rather
+        than taken as given, so a restart cannot resume from a state where the
+        two disagree.
+        """
         if not isinstance(state0, tuple):
             raise TypeError(
                 "A system restart state must be a tuple with one array per field, "
                 f"got {type(state0).__name__}."
             )
-        return tuple(
-            g._coerce_state(s) for g, s in zip(self.integrators, state0, strict=True)
-        )
+        self._check_state_length(state0, "restart state")
+        out = list(state0)
+        for slot, g in zip(self.transient_slots, self.integrators, strict=True):
+            out[slot] = g._coerce_state(state0[slot])
+        for slot, c in zip(self.constraint_slots, self.constraints, strict=True):
+            out[slot] = jnp.zeros(c._state_shape)
+        return self.resolve_constraints(tuple(out))
 
     def setup(self, dt: float) -> None:
         """Precompute step-size-dependent data for every equation."""
         for g in self.integrators:
             g.setup(dt)
+        for c in self.constraints:
+            c.setup()

@@ -187,6 +187,58 @@ def split_linear_nonlinear_terms(
     return sp.expand(sp.Add(*linear_terms)), sp.expand(sp.Add(*nonlinear_terms))
 
 
+def split_linear_couplings(
+    expr: sp.Expr, explicit: Sequence[Dependent]
+) -> tuple[dict[Dependent, sp.Expr], sp.Expr]:
+    """Split out the terms that are linear in exactly one foreign field.
+
+    `split_linear_nonlinear_terms` sends every term touching a foreign field to
+    the explicit part, because a term holding a foreign field cannot be
+    assembled as a bilinear form in the equation's *own* trial function. But a
+    term linear in exactly one foreign field and in no other can be assembled as
+    a bilinear form in *that* field -- a rectangular operator between the two
+    spaces -- and then applied as a matrix-vector product instead of being
+    evaluated pointwise in physical space.
+
+    That is worth doing: the pointwise route costs a padded transform of the
+    field and a padded scalar product back, where a matvec costs neither. It is
+    also exact for such terms either way, so this is purely a saving.
+
+    Args:
+        expr: The explicit part of a weak form, test function still attached.
+        explicit: The foreign fields of the system.
+
+    Returns:
+        `(couplings, remaining)`, where `couplings` maps a foreign field to the
+        part of `expr` that is linear in it alone, and `remaining` is everything
+        left for pointwise evaluation.
+    """
+    from jaxfun.galerkin.arguments import TrialFunction
+
+    fields = normalize_explicit(explicit)
+    couplings: dict[Dependent, sp.Expr] = {}
+    remaining: list[sp.Expr] = []
+
+    for term in sp.Add.make_args(sp.expand(expr)):
+        present = {
+            get_time_independent(u)
+            for u in term.atoms(TrialFunction)
+            if isinstance(u, TrialFunction)
+        }
+        candidates = [f for f in fields if f in present]
+        # Exactly one field in the term, that field foreign, and the term linear
+        # in it -- otherwise it has to be evaluated pointwise.
+        if len(present) == 1 and len(candidates) == 1:
+            field = candidates[0]
+            linear, nonlinear = split_linear_nonlinear_terms(term, field)
+            if sp.sympify(nonlinear) == 0:
+                couplings[field] = couplings.get(field, sp.S.Zero) + linear
+                continue
+        remaining.append(_as_expr(term))
+
+    return couplings, sp.expand(sp.Add(*remaining))
+
+
 def _split_add(
     node: sp.Add, dependent: Dependent, explicit: Sequence[sp.Expr]
 ) -> tuple[sp.Expr, sp.Expr]:

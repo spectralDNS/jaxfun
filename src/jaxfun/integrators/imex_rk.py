@@ -164,12 +164,17 @@ class IMEXRungeKutta(BaseIntegrator):
 class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
     """IMEX Runge-Kutta integration of equations coupled through nonlinear terms.
 
-    Every equation is advanced by its own `IMEXRungeKutta`, so each keeps a
-    separate implicit operator and needs one linear solve per stage. The
+    Every evolution equation is advanced by its own `IMEXRungeKutta`, so each
+    keeps a separate implicit operator and needs one linear solve per stage. The
     equations are marched through the stages together: within a stage all fields
     are solved for first (their implicit systems are mutually independent), and
     only then are the nonlinear terms evaluated, so each sees every field at the
     same stage.
+
+    Constraint equations are solved in between those two: after the transient
+    fields of a stage are known and before anything is evaluated from them. A
+    constrained field is therefore never lagged -- at every stage it is the
+    exact solution of its equation for the transient fields at that same stage.
     """
 
     def __init__(
@@ -177,7 +182,7 @@ class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
         equations: Sequence[sp.Expr],
         *,
         tableau: IMEXTableau,
-        initial: Sequence[sp.Expr | Array],
+        initial: Sequence[sp.Expr | Array | None],
         time: tuple[float, float] | None = None,
         **params,
     ):
@@ -194,8 +199,14 @@ class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
         """Advance every field one IMEX Runge-Kutta step in coefficient space.
 
         Mirrors `IMEXRungeKutta.step`, including its three final-combination
-        paths, but applies each of them per field. The stage loop is what
-        couples the equations; see the comments inside it.
+        paths, but applies each of them per evolved field. The stage loop is
+        what couples the equations; see the comments inside it.
+
+        The state carries one array per equation, constrained fields included,
+        in declaration order. Only the transient entries are combined into the
+        accepted solution; the constrained ones are re-solved from it at the
+        end, which is the only correct choice for the two paths whose accepted
+        solution is not simply the last stage.
         """
         tableau: IMEXTableau = self.tableau
         a_e = tableau.explicit.A
@@ -206,11 +217,15 @@ class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
         last = tableau.stages - 1
 
         integrators = self.integrators
+        slots = self.transient_slots
         # One shared padding for every field: the nonlinear terms are evaluated
         # pointwise, so all fields must land on the same physical mesh.
         M = self.common_padding(N)
 
-        m_u = tuple(g.apply_mass(u) for g, u in zip(integrators, u_hats, strict=True))
+        m_u = tuple(
+            g.apply_mass(u_hats[slot])
+            for g, slot in zip(integrators, slots, strict=True)
+        )
         forcing = tuple(
             jnp.asarray(g.linear_forcing) if g.linear_forcing is not None else None
             for g in integrators
@@ -219,16 +234,20 @@ class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
         stages: list[list[Array]] = [[] for _ in integrators]
         nonlinear_stage: list[list[Array | None]] = [[] for _ in integrators]
         linear_stage: list[list[Array | None]] = [[] for _ in integrators]
+        state_i: tuple[Array, ...] = u_hats
 
         for i in range(tableau.stages):
-            # The implicit solves are mutually independent, so every field's
-            # stage `i` is computed first. This tuple must be complete before
-            # any nonlinear evaluation below, otherwise an equation would see a
+            # The implicit solves are mutually independent, so every transient
+            # field's stage `i` is computed first, then the constrained fields
+            # are solved from them. The tuple must be complete before any
+            # nonlinear evaluation below, otherwise an equation would see a
             # mixture of stages `i` and `i-1`.
-            stage_i = tuple(
-                g.stage(i, m_u[k], dt, nonlinear_stage[k], linear_stage[k], forcing[k])
-                for k, g in enumerate(integrators)
-            )
+            stage_i = list(u_hats)
+            for k, (g, slot) in enumerate(zip(integrators, slots, strict=True)):
+                stage_i[slot] = g.stage(
+                    i, m_u[k], dt, nonlinear_stage[k], linear_stage[k], forcing[k]
+                )
+            state_i = self.resolve_constraints(tuple(stage_i), M)
             is_last = i == last
             skip_nonlinear = is_last and full_gsa
             skip_linear = is_last and (full_gsa or implicit_only_sa)
@@ -236,30 +255,45 @@ class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
             # stage-`i` coefficients into the shared JAXFunction nodes, and it
             # transforms each field to physical space once for all equations.
             reaction = (
-                None if skip_nonlinear else self.nonlinear_scalar_products(stage_i, M)
+                None if skip_nonlinear else self.nonlinear_scalar_products(state_i, M)
             )
-            for k, g in enumerate(integrators):
-                stages[k].append(stage_i[k])
+            for k, (g, slot) in enumerate(zip(integrators, slots, strict=True)):
+                stages[k].append(state_i[slot])
                 nonlinear_stage[k].append(None if reaction is None else reaction[k])
                 linear_stage[k].append(
-                    None if skip_linear else (g.linear_operator @ stage_i[k])
+                    None if skip_linear else (g.linear_operator @ state_i[slot])
                 )
 
+        def accepted(evolved: Sequence[Array]) -> tuple[Array, ...]:
+            """Scatter the evolved fields back, then re-solve the constraints.
+
+            Needed for the two paths whose accepted solution is a weighted
+            combination rather than the last stage: the constrained fields have
+            to follow the combination, not the stage they were last solved at.
+            """
+            out = list(u_hats)
+            for slot, value in zip(slots, evolved, strict=True):
+                out[slot] = value
+            return self.resolve_constraints(tuple(out), M)
+
         if full_gsa:
-            return tuple(stages[k][-1] for k in range(len(integrators)))
+            # The last stage *is* the accepted solution, so its constrained
+            # fields were already solved from exactly these transient values.
+            # Re-resolving them would recompute the same answer.
+            return state_i
 
         if implicit_only_sa:
-            out: list[Array] = []
+            evolved: list[Array] = []
             for k, g in enumerate(integrators):
                 rhs = g.apply_mass(stages[k][-1])
                 for j in range(tableau.stages):
                     weight = b_e[j] - a_e[-1][j]
                     if weight != 0.0:
                         rhs = rhs + dt * weight * cast(Array, nonlinear_stage[k][j])
-                out.append(g.apply_mass_inverse(rhs))
-            return tuple(out)
+                evolved.append(g.apply_mass_inverse(rhs))
+            return accepted(evolved)
 
-        out = []
+        evolved = []
         for k, g in enumerate(integrators):
             rhs = m_u[k]
             for j in range(tableau.stages):
@@ -270,5 +304,5 @@ class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
             forcing_k = forcing[k]
             if forcing_k is not None:
                 rhs = rhs + dt * forcing_k
-            out.append(g.apply_mass_inverse(rhs))
-        return tuple(out)
+            evolved.append(g.apply_mass_inverse(rhs))
+        return accepted(evolved)

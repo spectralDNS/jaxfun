@@ -15,8 +15,8 @@ from jaxfun.galerkin.arguments import (
     is_jaxfunc_leaf,
     is_jaxfunc_primitive,
 )
-from jaxfun.typing import Array, ScalarPadding, ScalarSpaceType
-from jaxfun.utils import JAX_FUNCTION_BY_NAME, lambdify
+from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
+from jaxfun.utils import JAX_FUNCTION_BY_NAME, lambdify, normalize_explicit
 
 type NodeValueCache = dict[sp.Basic, Array]
 type NodeEvaluator = Callable[[NodeValueCache, ScalarPadding], Array]
@@ -329,6 +329,58 @@ def compile_nonlinear_evaluator(
         return compiled({}, N)
 
     return evaluate
+
+
+def compile_field_evaluator(
+    nonlinear_expr: sp.Expr,
+    own_trial: TrialFunction,
+    explicit_trials: Sequence[TrialFunction],
+    node_for: Callable[[TrialFunction], AppliedUndef],
+    functionspace: ScalarSpaceType,
+    field_order: tuple[AppliedUndef, ...] | None = None,
+) -> tuple[sp.Expr, AppliedUndef, Callable[[IntegratorState, ScalarPadding], Array]]:
+    """Substitute every field of a nonlinear term by its node, then compile it.
+
+    Shared by the evolution equations and the constraint equations of a system:
+    both need every TrialFunction -- their own and the foreign ones they are
+    coupled to -- replaced by the system's shared JAXFunction nodes before the
+    term can be evaluated in physical space.
+
+    Args:
+        nonlinear_expr: Nonlinear part of a weak form, test function removed.
+        own_trial: The equation's own field, time-independent.
+        explicit_trials: Fields of the other equations, lagged into this term.
+        node_for: Resolves a field to the shared node representing it.
+        functionspace: Space used to evaluate static (purely spatial) factors.
+        field_order: Global field order the compiled evaluator takes its
+            coefficient tuple in. `None` for a standalone scalar equation, whose
+            evaluator then takes that one field's coefficients directly.
+
+    Returns:
+        The substituted expression, the node standing for `own_trial`, and the
+        compiled evaluator.
+    """
+    jaxfunction = node_for(own_trial)
+    nonlinear_expr = replace_trial_with_jaxfunction(
+        nonlinear_expr, own_trial, jaxfunction
+    )
+    for item in normalize_explicit(explicit_trials):
+        foreign = cast(TrialFunction, item)
+        nonlinear_expr = replace_trial_with_jaxfunction(
+            nonlinear_expr, foreign, node_for(foreign)
+        )
+    if nonlinear_expr.atoms(TrialFunction):
+        raise ValueError(
+            "Nonlinear term still contains TrialFunctions after substitution: "
+            f"{nonlinear_expr}. This usually means a coupled field was not "
+            "declared through `explicit_trials`."
+        )
+    evaluator = compile_nonlinear_evaluator(
+        nonlinear_expr,
+        functionspace,
+        field_order if field_order is not None else jaxfunction,
+    )
+    return nonlinear_expr, jaxfunction, evaluator
 
 
 def compile_coupled_nonlinear_evaluator(

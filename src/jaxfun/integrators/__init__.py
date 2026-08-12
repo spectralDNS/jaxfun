@@ -1,5 +1,6 @@
 from .backward_euler import BackwardEuler as BackwardEuler
 from .base import BaseIntegrator as BaseIntegrator
+from .constraint import ConstraintSolver as ConstraintSolver
 from .etdrk4 import ETDRK4 as ETDRK4
 from .imex_rk import (
     IMEXRungeKutta as IMEXRungeKutta,

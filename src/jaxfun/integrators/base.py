@@ -23,17 +23,14 @@ from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
 from jaxfun.utils import (
     get_time_independent,
     normalize_explicit,
+    split_linear_couplings,
     split_linear_nonlinear_terms,
     split_time_derivative_terms,
 )
 from jaxfun.utils.operator_tools import assemble_linear_term
 from jaxfun.utils.sympy_factoring import time_derivative_as_operator
 
-from .nonlinear import (
-    compile_nonlinear_evaluator,
-    remove_test_function,
-    replace_trial_with_jaxfunction,
-)
+from .nonlinear import compile_field_evaluator, remove_test_function
 
 type SolverOptions = tuple[tuple[str, Any], ...]
 
@@ -142,6 +139,55 @@ def _warm_operator_solve_cache(
         _solve(op, jnp.zeros(shape), options)
     except (SolverNotApplicable, ValueError, TypeError, RuntimeError):
         return
+
+
+type FieldCoupling = tuple[int, BaseMatrix, Array | None]
+
+
+def assemble_field_couplings(
+    coupling_exprs: Mapping[Any, sp.Expr],
+    node_for: Callable[[Any], AppliedUndef],
+    field_order: tuple[AppliedUndef, ...] | None,
+    *,
+    sparse: bool,
+    sparse_tol: int,
+) -> tuple[FieldCoupling, ...]:
+    """Assemble linear couplings into `(field slot, operator, forcing)` triples.
+
+    Each expression is bilinear in the test function and one foreign field, so
+    `inner` assembles it as an operator between the two spaces -- rectangular
+    when they differ in size. Applying that is what replaces evaluating the term
+    pointwise on the padded mesh.
+    """
+    if not coupling_exprs:
+        return ()
+    if field_order is None:
+        raise ValueError(
+            "Linear couplings to other fields need `field_order`, to know which "
+            "entry of the state tuple each field is."
+        )
+    out: list[FieldCoupling] = []
+    for field, expr in coupling_exprs.items():
+        operator, forcing = assemble_linear_term(
+            expr, sparse=sparse, sparse_tol=sparse_tol
+        )
+        if operator is None:  # pragma: no cover - a coupling always assembles one
+            raise ValueError(f"Coupling term in {field} assembled no operator: {expr}")
+        out.append((field_order.index(node_for(field)), operator, forcing))
+    return tuple(out)
+
+
+def apply_field_couplings(
+    couplings: Sequence[FieldCoupling], uh: IntegratorState
+) -> Array | None:
+    """Sum every coupling operator applied to its field; None when there are none."""
+    total: Array | None = None
+    for slot, operator, forcing in couplings:
+        term = operator @ cast(tuple[Array, ...], uh)[slot]
+        if forcing is not None:
+            term = term + jnp.asarray(forcing)
+        total = term if total is None else total + term
+    return total
 
 
 def _boundary_values(space) -> list[sp.Expr]:
@@ -363,7 +409,7 @@ class BaseIntegrator(TimeStepper[Array]):
             _validate_solver_options(solver_options)
         )
 
-        test, trial, mass_expr, linear_expr, nonlinear_expr = (
+        test, trial, mass_expr, linear_expr, nonlinear_expr, coupling_exprs = (
             self._extract_equation_terms(equation)
         )
         self.trialspace = cast(ScalarSpaceType, trial.functionspace)
@@ -404,6 +450,16 @@ class BaseIntegrator(TimeStepper[Array]):
         self.linear_forcing: Array | None = nnx.data(linear_forcing)
         self.linear_diag: Array | None = nnx.data(
             self.linear_operator.diagonal_or_none()
+        )
+
+        self._couplings: tuple[FieldCoupling, ...] = nnx.data(
+            assemble_field_couplings(
+                coupling_exprs,
+                self._node_for,
+                self._field_order,
+                sparse=self.sparse,
+                sparse_tol=self.sparse_tol,
+            )
         )
 
         self._nonlinear_jaxfunction: AppliedUndef | None = None
@@ -451,7 +507,9 @@ class BaseIntegrator(TimeStepper[Array]):
 
     def _extract_equation_terms(
         self, equation: sp.Expr
-    ) -> tuple[TestFunction, TrialFunction, sp.Expr, sp.Expr, sp.Expr]:
+    ) -> tuple[
+        TestFunction, TrialFunction, sp.Expr, sp.Expr, sp.Expr, dict[Any, sp.Expr]
+    ]:
         """Split a weak form into mass, linear, and nonlinear components."""
         system = get_system(equation)
         t = system.base_time()
@@ -505,8 +563,11 @@ class BaseIntegrator(TimeStepper[Array]):
             )
 
         linear, nonlinear = split_linear_nonlinear_terms(-rhs, trial, explicit=explicit)
+        # Terms linear in one foreign field assemble as operators instead of
+        # being evaluated pointwise; the rest stay with the nonlinear evaluator.
+        couplings, nonlinear = split_linear_couplings(nonlinear, explicit)
         nonlinear = sp.expand(remove_test_function(nonlinear, test))
-        return test, trial, mass_expr, linear, nonlinear
+        return test, trial, mass_expr, linear, nonlinear, couplings
 
     def _node_for(self, trial: TrialFunction) -> AppliedUndef:
         """Return the shared JAXFunction node representing ``trial``."""
@@ -523,27 +584,17 @@ class BaseIntegrator(TimeStepper[Array]):
 
     def _setup_nonlinear_evaluator(self, trial: TrialFunction) -> None:
         """Compile the nonlinear physical-space evaluator for the trial field."""
-        jaxfunction = self._node_for(trial)
-        nonlinear_expr = replace_trial_with_jaxfunction(
-            self.nonlinear_expr, trial, jaxfunction
-        )
-        for item in normalize_explicit(self._explicit_trials):
-            foreign = cast(TrialFunction, item)
-            nonlinear_expr = replace_trial_with_jaxfunction(
-                nonlinear_expr, foreign, self._node_for(foreign)
-            )
-        if nonlinear_expr.atoms(TrialFunction):
-            raise ValueError(
-                "Nonlinear term still contains TrialFunctions after substitution: "
-                f"{nonlinear_expr}. This usually means a coupled field was not "
-                "declared through `explicit_trials`."
-            )
-        self.nonlinear_expr = nonlinear_expr
-        self._nonlinear_jaxfunction = jaxfunction
-        self._nonlinear_evaluator = compile_nonlinear_evaluator(
-            nonlinear_expr,
+        (
+            self.nonlinear_expr,
+            self._nonlinear_jaxfunction,
+            self._nonlinear_evaluator,
+        ) = compile_field_evaluator(
+            self.nonlinear_expr,
+            trial,
+            self._explicit_trials,
+            self._node_for,
             self.trialspace,
-            self._field_order if self._field_order is not None else jaxfunction,
+            self._field_order,
         )
 
     def _dense_matrix(self, operator: BaseMatrix) -> Array:
@@ -588,6 +639,15 @@ class BaseIntegrator(TimeStepper[Array]):
         For a system of coupled equations `uh` is the tuple of all fields'
         coefficients, in the global field order.
         """
+        if self._couplings:
+            # `forward` divides by the *test space* mass, while the coupling
+            # operators produce a scalar product, and this equation's own mass
+            # operator need not be either. Only the explicit scalar-product path
+            # is used for systems, so rather than guess a normalization here:
+            raise NotImplementedError(
+                "nonlinear_rhs does not carry assembled field couplings; use "
+                "nonlinear_rhs_scalar_product, which the system integrators do."
+            )
         if not self.has_nonlinear:
             return self._no_nonlinear(uh)
         assert self._nonlinear_evaluator is not None
@@ -599,14 +659,20 @@ class BaseIntegrator(TimeStepper[Array]):
     ) -> Array:
         """Return the nonlinear contribution in coefficient space.
 
+        Covers both explicit paths: terms evaluated pointwise in physical space,
+        and terms linear in a single foreign field, which are applied as
+        assembled operators instead.
+
         Do *not* apply the mass inverse to complete the forward transformation,
         because the mass inverse may be required elsewhere.
         """
-        if not self.has_nonlinear:
-            return self._no_nonlinear(uh)
-        assert self._nonlinear_evaluator is not None
-        M = self._physical_shape(N)
-        return self.testspace.scalar_product(self._nonlinear_evaluator(uh, M))
+        total = apply_field_couplings(self._couplings, uh)
+        if self.has_nonlinear:
+            assert self._nonlinear_evaluator is not None
+            M = self._physical_shape(N)
+            pointwise = self.testspace.scalar_product(self._nonlinear_evaluator(uh, M))
+            total = pointwise if total is None else total + pointwise
+        return self._no_nonlinear(uh) if total is None else total
 
     def linear_rhs(self, uh: Array) -> Array:
         """Return the linear contribution after applying the inverse mass matrix."""

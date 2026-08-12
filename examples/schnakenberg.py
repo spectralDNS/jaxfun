@@ -24,9 +24,12 @@ import jax
 if "PYTEST" not in os.environ:
     jax.config.update("jax_enable_x64", True)
 
+from typing import cast
+
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
+from jax import Array
 from matplotlib.animation import FuncAnimation
 
 from jaxfun import Div, Domain, Grad
@@ -74,7 +77,7 @@ integrator = SystemIMEXRungeKutta(
     (eq1, eq2),
     tableau=ARS443,
     time=(0.0, T),
-    initial=(u0_hat.array, v0_hat.array),
+    initial=(cast(Array, u0_hat.array), cast(Array, v0_hat.array)),
     sparse=True,
 )
 

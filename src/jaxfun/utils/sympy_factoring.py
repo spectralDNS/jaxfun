@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, cast
 
 import sympy as sp
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import TrialFunction
+
+type Dependent = TrialFunction | sp.Function
 
 # Operators treated as linear in the dependent field.
 _LINEAR_UNARY = {"Grad", "Div", "Curl", "Derivative"}
@@ -47,8 +50,32 @@ def drop_time_argument(expr: sp.Expr, t: sp.Symbol) -> sp.Expr:
     return expr.xreplace(repl)
 
 
+def normalize_explicit(explicit: Sequence[Dependent]) -> tuple[Dependent, ...]:
+    """Return the time-independent counterparts of explicitly treated fields.
+
+    Terms containing any of these are always classified as nonlinear, no matter how
+    they enter. Used for systems of equations that couple through nonlinear terms:
+    each equation is implicit in its own field only, and every foreign field is
+    lagged into the explicit part.
+    """
+    from jaxfun.galerkin.arguments import TrialFunction
+
+    out: list[Dependent] = []
+    for field in explicit:
+        item = (
+            get_time_independent(field) if isinstance(field, TrialFunction) else field
+        )
+        if not any(item == seen for seen in out):
+            out.append(item)
+    return tuple(out)
+
+
 def time_derivative_as_operator(
-    expr: sp.Expr, dependent: TrialFunction, time_symbol: sp.Symbol
+    expr: sp.Expr,
+    dependent: TrialFunction,
+    time_symbol: sp.Symbol,
+    *,
+    explicit: Sequence[Dependent] = (),
 ) -> sp.Expr:
     """Convert first-order time derivatives into a linear operator on ``dependent``.
 
@@ -82,7 +109,9 @@ def time_derivative_as_operator(
     )
     transformed_expr = cast(sp.Expr, transformed)
     transformed = sp.expand(drop_time_argument(transformed_expr, time_symbol))
-    linear, nonlinear = split_linear_nonlinear_terms(transformed, dependent_ind)
+    linear, nonlinear = split_linear_nonlinear_terms(
+        transformed, dependent_ind, explicit=explicit
+    )
     if sp.sympify(nonlinear) != 0:
         raise ValueError(
             "Time-derivative terms must be linear in the transient trial function"
@@ -118,7 +147,10 @@ def split_time_derivative_terms(
 
 
 def split_linear_nonlinear_terms(
-    expr: sp.Expr, dependent: TrialFunction | sp.Function
+    expr: sp.Expr,
+    dependent: Dependent,
+    *,
+    explicit: Sequence[Dependent] = (),
 ) -> tuple[sp.Expr, sp.Expr]:
     """Split an expression into linear and nonlinear parts in ``dependent``.
 
@@ -126,18 +158,27 @@ def split_linear_nonlinear_terms(
     and the dependent does not appear inside nonlinear functions. Common linear
     operators (Grad/Div/Curl/Derivative and Dot/Cross/Outer with a single
     dependent operand) are treated as linear.
+
+    Args:
+        expr: Expression to split.
+        dependent: The field the linear part is linear in.
+        explicit: Foreign fields that must always end up in the nonlinear part,
+            regardless of how they enter. See :func:`normalize_explicit`.
     """
     from jaxfun.galerkin.arguments import TrialFunction
 
     if isinstance(dependent, TrialFunction):
         dependent = get_time_independent(dependent)
+    explicit_fields = normalize_explicit(explicit)
     expr = sp.expand(expr)
 
     linear_terms: list[sp.Expr] = []
     nonlinear_terms: list[sp.Expr] = []
 
     for term in sp.Add.make_args(expr):
-        linear, nonlinear = split_linear_nonlinear_node(term, dependent)
+        linear, nonlinear = split_linear_nonlinear_node(
+            term, dependent, explicit=explicit_fields
+        )
         if sp.sympify(linear) != 0:
             linear_terms.append(linear)
         if sp.sympify(nonlinear) != 0:
@@ -146,12 +187,41 @@ def split_linear_nonlinear_terms(
     return sp.expand(sp.Add(*linear_terms)), sp.expand(sp.Add(*nonlinear_terms))
 
 
+def _split_add(
+    node: sp.Add, dependent: Dependent, explicit: Sequence[sp.Expr]
+) -> tuple[sp.Expr, sp.Expr]:
+    """Split an additive node term by term."""
+    linear_terms: list[sp.Expr] = []
+    nonlinear_terms: list[sp.Expr] = []
+    for arg in node.args:
+        linear, nonlinear = split_linear_nonlinear_node(
+            arg, dependent, explicit=explicit
+        )
+        if sp.sympify(linear) != 0:
+            linear_terms.append(linear)
+        if sp.sympify(nonlinear) != 0:
+            nonlinear_terms.append(nonlinear)
+    return sp.Add(*linear_terms), sp.Add(*nonlinear_terms)
+
+
 def split_linear_nonlinear_node(
-    node: sp.Basic, dependent: TrialFunction | sp.Function
+    node: sp.Basic,
+    dependent: Dependent,
+    *,
+    explicit: Sequence[sp.Expr] = (),
 ) -> tuple[sp.Expr, sp.Expr]:
     """Split a single node into parts linear and nonlinear in ``dependent``."""
     node = sp.sympify(node)
     node_expr = _as_expr(node)
+
+    # A foreign field makes the term explicit however it enters. This check must
+    # precede the `not node.has(dependent)` shortcut below: a term holding only a
+    # foreign field would otherwise be reported linear and assembled by `inner` as
+    # a bilinear form in the wrong field's trial function.
+    if explicit and any(node.has(field) for field in explicit):
+        if isinstance(node, sp.Add):
+            return _split_add(node, dependent, explicit)
+        return sp.Integer(0), node_expr
 
     if not node.has(dependent):
         return node_expr, sp.Integer(0)
@@ -159,18 +229,12 @@ def split_linear_nonlinear_node(
         return node_expr, sp.Integer(0)
 
     if isinstance(node, sp.Add):
-        linear_terms: list[sp.Expr] = []
-        nonlinear_terms: list[sp.Expr] = []
-        for arg in node.args:
-            linear, nonlinear = split_linear_nonlinear_node(arg, dependent)
-            if sp.sympify(linear) != 0:
-                linear_terms.append(linear)
-            if sp.sympify(nonlinear) != 0:
-                nonlinear_terms.append(nonlinear)
-        return sp.Add(*linear_terms), sp.Add(*nonlinear_terms)
+        return _split_add(node, dependent, explicit)
 
     if isinstance(node, sp.Derivative):
-        linear, nonlinear = split_linear_nonlinear_node(sp.expand(node.expr), dependent)
+        linear, nonlinear = split_linear_nonlinear_node(
+            sp.expand(node.expr), dependent, explicit=explicit
+        )
         return _apply_linear_unary_operator(node, linear), _apply_linear_unary_operator(
             node, nonlinear
         )
@@ -183,7 +247,7 @@ def split_linear_nonlinear_node(
                 sp.Mul(*(arg for arg in node.args if arg is not dependent_factor))
             )
             linear, nonlinear = split_linear_nonlinear_node(
-                sp.expand(dependent_factor), dependent
+                sp.expand(dependent_factor), dependent, explicit=explicit
             )
             return (
                 sp.expand(static_factor * linear),
@@ -193,7 +257,7 @@ def split_linear_nonlinear_node(
 
     if len(node.args) == 1 and node.func.__name__ in _LINEAR_UNARY:
         linear, nonlinear = split_linear_nonlinear_node(
-            sp.expand(node.args[0]), dependent
+            sp.expand(node.args[0]), dependent, explicit=explicit
         )
         return _apply_linear_unary_operator(node, linear), _apply_linear_unary_operator(
             node, nonlinear
@@ -206,12 +270,16 @@ def split_linear_nonlinear_node(
         if has0 and has1:
             return sp.Integer(0), node_expr
         if has0:
-            linear, nonlinear = split_linear_nonlinear_node(sp.expand(a0), dependent)
+            linear, nonlinear = split_linear_nonlinear_node(
+                sp.expand(a0), dependent, explicit=explicit
+            )
             return _apply_linear_binary_operator(
                 node, linear, a1
             ), _apply_linear_binary_operator(node, nonlinear, a1)
         if has1:
-            linear, nonlinear = split_linear_nonlinear_node(sp.expand(a1), dependent)
+            linear, nonlinear = split_linear_nonlinear_node(
+                sp.expand(a1), dependent, explicit=explicit
+            )
             return _apply_linear_binary_operator(
                 node, a0, linear
             ), _apply_linear_binary_operator(node, a0, nonlinear)

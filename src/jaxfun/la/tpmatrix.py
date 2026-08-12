@@ -6,6 +6,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, cast, overload
 
 import jax
+import jax.core
 import jax.numpy as jnp
 import numpy as np
 from flax import nnx
@@ -206,11 +207,20 @@ class TPMatrix(BaseMatrix):  # noqa: B903
         """Pre-compute LU factors for every Kronecker factor.
 
         Returns a :class:`TPLUFactors` whose :meth:`~TPLUFactors.solve` method
-        solves the Kronecker system without rebuilding the factorisation.
+        solves the Kronecker system without rebuilding the factorisation. The
+        result is cached, as in :meth:`TPMatrices.lu_factor`, so that repeated
+        solves against the same operator reuse one factorisation -- and one set
+        of `TPLUFactors`/`LUFactors` instances, which the jit caches of their
+        `solve` methods are keyed on.
         """
+        cached: _CacheBox[TPLUFactors] | None = getattr(self, "_lu_cache", None)
+        if cached is not None:
+            return cached.value
         lu_factors = [mat.lu_factor() for mat in self.mats]
         shape = tuple(int(mat.shape[0]) for mat in self.mats)
-        return TPLUFactors(lu_factors=lu_factors, scale=self.coefficient, shape=shape)
+        result = TPLUFactors(lu_factors=lu_factors, scale=self.coefficient, shape=shape)
+        object.__setattr__(self, "_lu_cache", _CacheBox(result))
+        return result
 
     def __add__(self, other):
         if isinstance(other, TPMatrix):
@@ -412,17 +422,29 @@ class TPMatrices(BaseMatrix):
         ) = getattr(self, "_lu_cache", None)
         if cached is not None:
             return cached.value
+        # A previous attempt that found no applicable factored solver is cached
+        # too. Whether one applies is a property of the matrix structure, so the
+        # answer cannot change -- and re-deciding it is not free: the structural
+        # inspection below reads matrix values, which a caller that traces
+        # `solve` (the time integrators jit their step) cannot do a second time.
+        why: str | None = getattr(self, "_lu_not_applicable", None)
+        if why is not None:
+            raise SolverNotApplicable(why)
         result: (
             TPMatricesDenseLUFactors | TPMatricesLUFactors | TPMatricesWavenumberSolver
         )
         tpmats_list = list(self.tpmats)
-        if all(isinstance(mat, Matrix) for tp in tpmats_list for mat in tp.mats):
-            result = tpmats_dense_lu_factor(tpmats_list)
-        else:
-            try:
-                result = tpmats_wavenumber_factor(tpmats_list)
-            except SolverNotApplicable:
-                result = tpmats_lu_factor(tpmats_list)
+        try:
+            if all(isinstance(mat, Matrix) for tp in tpmats_list for mat in tp.mats):
+                result = tpmats_dense_lu_factor(tpmats_list)
+            else:
+                try:
+                    result = tpmats_wavenumber_factor(tpmats_list)
+                except SolverNotApplicable:
+                    result = tpmats_lu_factor(tpmats_list)
+        except SolverNotApplicable as e:
+            object.__setattr__(self, "_lu_not_applicable", str(e))
+            raise
         object.__setattr__(self, "_lu_cache", _CacheBox(result))
         return result
 
@@ -968,7 +990,12 @@ class TPMatricesWavenumberSolver:
                 for d in range(_n_local)
             ]
 
+            # The L/U data held here covers only this process's wavenumbers, so
+            # there is no whole-array solve to fall back on.
+            self._solve_jit = None
+
         else:
+            self._local_solve_jits = None
 
             @jax.jit
             def _solve_jit(L: Array, U: Array, rhs: Array) -> Array:
@@ -998,7 +1025,14 @@ class TPMatricesWavenumberSolver:
         Returns:
             Solution with the same shape and sharding as ``rhs``.
         """
-        if len(rhs.devices()) > 1:
+        # `rhs.devices()` needs a concrete array, so a traced rhs (this solve
+        # called from inside a caller's jit, as the time integrators do) can
+        # only take the whole-array path.
+        if (
+            self._local_solve_jits is not None
+            and not isinstance(rhs, jax.core.Tracer)
+            and len(rhs.devices()) > 1
+        ):
             # Dispatch one JIT per local device (JAX async — XLA schedules
             # them concurrently).  Each JIT is communication-free and closes
             # over its own L/U slice already placed on that device.
@@ -1010,6 +1044,12 @@ class TPMatricesWavenumberSolver:
                 rhs.shape, rhs.sharding, results
             )
 
+        if self._solve_jit is None:
+            raise SolverNotApplicable(
+                "The multi-device wavenumber solver holds only this process's "
+                "wavenumbers; it needs a concrete rhs sharded over all devices "
+                "and cannot be traced by an enclosing jit."
+            )
         return self._solve_jit(rhs)
 
 

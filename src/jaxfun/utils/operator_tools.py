@@ -30,7 +30,16 @@ def _normalize_assembled_operator(
 def split_operator_and_forcing(
     form: GalerkinAssembledForm,
 ) -> AssembledTerm:
-    """Split an assembled Galerkin form into operator and forcing pieces."""
+    """Split an assembled Galerkin form into operator and forcing pieces.
+
+    The result is normalized so that the assembled expression is always
+    ``operator @ u + forcing``. `inner` does not use that convention on its own:
+    when a form has a bilinear part it moves the linear part to the other side
+    of the equation and returns it negated (`_linear_sign`), while a form
+    consisting only of a linear part is returned as written. Undo that flip here
+    so callers get one convention regardless of whether the expression happens
+    to contain an operator.
+    """
     if isinstance(form, list) or (
         isinstance(form, tuple) and any(isinstance(part, list) for part in form)
     ):
@@ -43,7 +52,7 @@ def split_operator_and_forcing(
         return None, None
     if isinstance(form, tuple):
         operator, forcing = cast(tuple[BaseMatrix | Array, Array | None], form)
-        rhs = jnp.asarray(forcing) if forcing is not None else None
+        rhs = -jnp.asarray(forcing) if forcing is not None else None
         return _normalize_assembled_operator(operator), rhs
 
     if isinstance(form, Array):

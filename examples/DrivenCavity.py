@@ -20,7 +20,7 @@ f = (1 - x) ** 2 * (1 + x) ** 2
 N = 24
 bcsx = {"left": {"D": 0}, "right": {"D": 0}}
 bcsy = {"left": {"D": 0}, "right": {"D": f}}
-Re = 100.0
+Re = 200.0
 rho = 1.0
 nu = Constant("nu", 2.0 / Re)
 
@@ -67,9 +67,9 @@ yj = jnp.linspace(-1, 1, 50)
 xx, yy = jnp.meshgrid(yj, yj, sparse=False, indexing="ij")
 z = jnp.column_stack((xx.ravel(), yy.ravel()))
 uvp = pu(z)
-plt.contourf(xx, yy, uvp[:, 0].reshape(xx.shape), 100)
+plt.contourf(xx, yy, uvp[:, 0].reshape(xx.shape), levels=40, cmap="RdBu_r")
 plt.figure()
-plt.contourf(xx, yy, uvp[:, 1].reshape(xx.shape), 100)
+plt.contourf(xx, yy, uvp[:, 1].reshape(xx.shape), levels=40, cmap="RdBu_r")
 plt.figure()
-plt.contourf(xx, yy, uvp[:, 2].reshape(xx.shape), 100)
+plt.contourf(xx, yy, uvp[:, 2].reshape(xx.shape), levels=40, cmap="RdBu_r")
 plt.colorbar()

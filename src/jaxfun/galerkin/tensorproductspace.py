@@ -167,6 +167,36 @@ class TensorProductSpace:
             mesh.append(self.broadcast_to_ndims(X, ax) if broadcast else X)
         return tuple(mesh)
 
+    def weights(
+        self,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
+        N: tuple[int | None, ...] | None = None,
+        broadcast: bool = True,
+    ) -> tuple[Array, ...]:
+        """Return tensor weights (as tuple of arrays).
+
+        Args:
+            kind: Mesh type for backward evaluation (MeshKind.QUADRATURE or
+            MeshKind.UNIFORM).
+            N: Optional per-axis counts (defaults each to space.num_quad_points).
+            broadcast: If True broadcast each axis array to nd-grid shape.
+
+        Returns:
+            Tuple (W0, W1, ...) each either 1D or broadcasted.
+        """
+        weights = []
+        N = tuple(
+            self.basespaces[ax].num_quad_points if N is None else N[ax]
+            for ax in range(len(self))
+        )
+        for ax, space in enumerate(self.basespaces):
+            if kind == MeshKind.QUADRATURE:
+                X = space.quad_points_and_weights(N[ax])[1]
+            else:
+                X = jnp.ones(N[ax])
+            weights.append(self.broadcast_to_ndims(X, ax) if broadcast else X)
+        return tuple(weights)
+
     def flatmesh(
         self,
         kind: MeshKind | str = MeshKind.QUADRATURE,
@@ -184,6 +214,29 @@ class TensorProductSpace:
         mesh = self.mesh(kind, N, broadcast=False)
         return jnp.array(
             list(itertools.product(*[m.flatten() for m in mesh])), dtype=mesh[0].dtype
+        )
+
+    def flatweights(
+        self,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
+        N: tuple[int | None, ...] | None = None,
+    ) -> Array:
+        """Return flattened list of all weight tuples.
+
+        Args:
+            kind: Sampling kind.
+            N: Optional per-axis counts.
+
+        Returns:
+            Array (M, dims) with Cartesian products of weights.
+        """
+        weights = self.weights(kind, N, broadcast=False)
+        return jnp.prod(
+            jnp.array(
+                list(itertools.product(*[m.flatten() for m in weights])),
+                dtype=weights[0].dtype,
+            ),
+            axis=-1,
         )
 
     def cartesian_mesh(

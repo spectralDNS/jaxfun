@@ -342,7 +342,9 @@ def _assemble_bilinear_factor(
         "Both test and trial functions required in bilinear form"
     )
     if isinstance(v, set) and isinstance(u, set):
-        raise ValueError("Too many test/trial functions found in bilinear form")
+        raise ValueError(
+            f"Too many test/trial functions {(v, u)} found in bilinear form"
+        )
 
     assert _has_testspace(v), "TestFunction has no associated function space"
     assert _has_functionspace(u), "TrialFunction has no associated function space"

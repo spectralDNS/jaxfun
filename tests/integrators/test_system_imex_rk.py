@@ -97,7 +97,7 @@ def test_term_containing_only_a_foreign_field_is_explicit() -> None:
     expr = q * (Div(Grad(v)) + 5 * u)
 
     linear, nonlinear = split_linear_nonlinear_terms(expr, v)
-    assert linear.has(u)  # today's behaviour without `explicit`
+    assert linear.has(u)  # behaviour without `explicit`
 
     linear, nonlinear = split_linear_nonlinear_terms(expr, v, explicit=(u,))
     assert not linear.has(u)

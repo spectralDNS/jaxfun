@@ -109,12 +109,7 @@ v = TrialFunction(V, name="v")  # constrained: no transient=True
 x, y = V.system.base_scalars()
 t = V.system.base_time()
 
-# Div(u*(1 - u)*Grad(v)) written out, so that the nonlinear compiler sees only
-# products and derivatives of the two fields.
-chemotaxis = (1 - 2 * u) * (
-    u.diff(x, 1) * v.diff(x, 1) + u.diff(y, 1) * v.diff(y, 1)
-) + (u - u**2) * Div(Grad(v))
-
+chemotaxis = Div(u * (1 - u) * Grad(v))
 eq1 = (u.diff(t) - D * Div(Grad(u)) + CHI * chemotaxis) * w
 eq2 = (Div(Grad(v)) - v + u) * q
 

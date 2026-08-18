@@ -198,6 +198,7 @@ def test_imex_rk_2d_inhomogeneous_in_both_directions() -> None:
         initial=V.system.expr_psi_to_base_scalar(ue.subs(ts, 0)),
         sparse=True,
         sparse_tol=1000,
+        solver_options={"auto_threshold": 1000},
     )
     uhat_T = integrator.solve(dt=dt, steps=steps, progress=False)
 

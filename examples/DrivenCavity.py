@@ -58,10 +58,8 @@ opt_adam = adam(pu)
 opt_lbfgs = lbfgs(pu, memory_size=50, max_linesearch_steps=5)
 
 trainer = Trainer(loss_fn)
-
 trainer.train(opt_adam, 5000, epoch_print=1000)
-
-trainer.train(opt_lbfgs, 5000, epoch_print=1000, abs_limit_change=0)
+trainer.train(opt_lbfgs, 1000, epoch_print=100, abs_limit_change=0)
 
 yj = jnp.linspace(-1, 1, 50)
 xx, yy = jnp.meshgrid(yj, yj, sparse=False, indexing="ij")

@@ -70,16 +70,6 @@ type TestSpaceType = (
 type ComputationalSpaceType = (
     OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
 )
-type RankedTrialSpaceType = (
-    OrthogonalSpace
-    | TensorProductSpace
-    | VectorTensorProductSpace
-    | DirectSum
-    | DirectSumTPS
-)
-type RankedTestSpaceType = (
-    OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
-)
 type ScalarSpaceType = OrthogonalSpace | TensorProductSpace | DirectSum | DirectSumTPS
 
 type VectorLike = BaseVector | Vector | VectorAdd | VectorMul | VectorZero
@@ -161,9 +151,6 @@ class RankTag(Enum):
 
 
 type DomainType = Literal["inside", "boundary", "intersection", "all"]
-type InnerBilinearResult = Array | BaseMatrix
-type InnerBilinearResults = list[Array | BaseMatrix]
-type InnerLinearResults = list[Array]
 type InnerItems = tuple[list[BaseMatrix | GlobalMatrix], list[GlobalArray]]
 type GalerkinAssembledForm = (
     BaseMatrix | Array | BlockArray | tuple[BaseMatrix, Array | BlockArray]

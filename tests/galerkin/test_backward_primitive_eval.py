@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import sympy as sp
 
 from jaxfun import Domain
-from jaxfun.galerkin import TensorProductSpace
+from jaxfun.galerkin import TensorProduct
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.ChebyshevU import ChebyshevU
 from jaxfun.galerkin.Fourier import Fourier
@@ -82,7 +82,7 @@ def test_directsum_backward_primitive_includes_boundary_lift() -> None:
 def test_tensorproduct_fourier_backward_primitive_matches_analytical() -> None:
     N = 24
     F = Fourier(N, domain=Domain(-1, 1))
-    V = TensorProductSpace((F, F))
+    V = TensorProduct(F, F)
     x, y = V.system.base_scalars()
     ue = sp.sin(sp.pi * x) * sp.sin(sp.pi * y)
     uh = project(ue, V)
@@ -106,7 +106,7 @@ def test_tensorproduct_fourier_backward_primitive_matches_analytical() -> None:
 def test_tensorproduct_fourier_backward_primitive_uses_fft_fast_path() -> None:
     N = 24
     F = Fourier(N, domain=Domain(-1, 1))
-    V = TensorProductSpace((F, F))
+    V = TensorProduct(F, F)
     c = _complex_coeffs(jax.random.PRNGKey(5), N * N).reshape((N, N))
     jaxpr = jax.make_jaxpr(lambda uhat: V.backward_primitive(uhat, k=(1, 0)))(c).jaxpr
 

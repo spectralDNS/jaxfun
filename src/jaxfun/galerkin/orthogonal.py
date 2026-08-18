@@ -494,31 +494,35 @@ class OrthogonalSpace(BaseSpace):
         u, j = trial
         z: Matrix | DiaMatrix | None = None
 
-        if self.domain_factor == 1:
-            z = self._matrices(i, trial, q)
+        if q == 0:
+            z = self._matrices(i, trial, q=0)
 
         else:
-            if q > 0:
-                x = self.system.base_scalars()[0]
-                poly_scale = self.map_expr_true_domain(x**q)
-                poly_ref = sp.expand(poly_scale)
-                coeffs = sp.Poly(poly_ref, x).all_coeffs()[::-1]
-                z_poly: list[Matrix | DiaMatrix] = []
-                _all_found = True
-                for _k, _ck in enumerate(coeffs):
-                    ck_f = float(_ck)
-                    if ck_f == 0.0:
-                        continue
-                    Mq = self._matrices(i, (u, j), q=_k)
-                    if Mq is None:
-                        _all_found = False
-                        break
-                    z_poly.append(ck_f * Mq)
-                if _all_found and z_poly:
-                    z = _addmats(cast(list[BaseMatrix], z_poly))
-
-            else:
-                z = self._matrices(i, trial, q=0)
+            # The precomputed matrices are given in the reference domain, so the
+            # physical x**q must be expanded in the reference coordinate first.
+            # Note that domain_factor == 1 does not imply an identity map, since
+            # a domain of unchanged length may still be shifted. A domain that
+            # is the reference domain simply expands to x**q itself.
+            x = self.system.base_scalars()[0]
+            poly_scale = self.map_expr_true_domain(x**q)
+            poly_ref = sp.expand(poly_scale)
+            coeffs = sp.Poly(poly_ref, x).all_coeffs()[::-1]
+            z_poly: list[Matrix | DiaMatrix] = []
+            _all_found = True
+            for _k, _ck in enumerate(coeffs):
+                if not _ck.is_number:  # symbolic domain: fall back to quadrature
+                    _all_found = False
+                    break
+                ck_f = float(_ck)
+                if ck_f == 0.0:
+                    continue
+                Mq = self._matrices(i, (u, j), q=_k)
+                if Mq is None:
+                    _all_found = False
+                    break
+                z_poly.append(Mq if ck_f == 1.0 else ck_f * Mq)
+            if _all_found and z_poly:
+                z = _addmats(cast(list[BaseMatrix], z_poly))
 
         if z is not None:
             df = float(self.domain_factor)

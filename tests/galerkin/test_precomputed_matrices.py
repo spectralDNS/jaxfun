@@ -22,11 +22,12 @@ import pytest
 from jaxfun.galerkin import FunctionSpace, TestFunction, TrialFunction, inner
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.ChebyshevU import ChebyshevU
+from jaxfun.galerkin.composite import Composite
 from jaxfun.galerkin.Fourier import Fourier
-from jaxfun.galerkin.Legendre import Legendre
+from jaxfun.galerkin.Legendre import Legendre, LGComposite
 from jaxfun.galerkin.Ultraspherical import Ultraspherical
 from jaxfun.la import BaseMatrix, DiaMatrix
-from jaxfun.utils.common import ulp
+from jaxfun.utils.common import n, ulp
 
 
 def _cheb(N: int) -> Chebyshev:
@@ -66,13 +67,15 @@ def _quad_matrix(space, dv: int, du: int, q: int = 0) -> jnp.ndarray:
     return A.todense()
 
 
-def _quad_matrix_pg(test_space, trial_space, du: int, q: int = 0) -> jnp.ndarray:
+def _quad_matrix_composite(
+    test_space, trial_space, du: int, q: int = 0, dv: int = 0
+) -> jnp.ndarray:
     """Compute integral matrix for PG test space via numerical quadrature."""
     v = TestFunction(test_space)
     u = TrialFunction(trial_space)
     x = test_space.system.x
     A = inner(
-        x**q * v * u.diff(x, du),
+        x**q * v.diff(x, dv) * u.diff(x, du),
         use_precomputed_matrices=False,
         kind="bilinear",
     )
@@ -279,7 +282,31 @@ class TestPoly5FirstDerivativeMatrixPGWithCoefficient:
             kind="bilinear",
         )
         assert M is not None
-        ref = _quad_matrix_pg(V, U, 1, q)
+        ref = _quad_matrix_composite(V, U, 1, q)
+        err = float(jnp.linalg.norm(M.todense() - ref))
+        scale = float(jnp.linalg.norm(M.todense()))
+        assert err / max(scale, 1.0) < ulp(100), (
+            f"N={N}: relative err {err / scale:.2e}"
+        )
+
+
+@pytest.mark.parametrize("space_fn", (Legendre,))
+class TestPoly5FirstDerivativeMatrixGWithCoefficient:
+    @pytest.mark.parametrize("N,q", [(6, 1), (8, 2)])
+    def test_values_match_quadrature(self, space_fn, N, q):
+        U = FunctionSpace(N, space_fn, bcs={"left": {"D": 0}, "right": {"D": 0}})
+        V = U.get_testspace(kind="G")
+        u = TrialFunction(U)
+        v = TestFunction(V)
+        x = U.system.x
+        M = inner(
+            x**q * v * u.diff(x, 1),
+            sparse=True,
+            use_precomputed_matrices=True,
+            kind="bilinear",
+        )
+        assert M is not None
+        ref = _quad_matrix_composite(V, U, 1, q)
         err = float(jnp.linalg.norm(M.todense() - ref))
         scale = float(jnp.linalg.norm(M.todense()))
         assert err / max(scale, 1.0) < ulp(100), (
@@ -302,6 +329,304 @@ class TestPoly5SecondDerivativeMatrixWithCoefficient:
         assert err / max(scale, 1.0) < ulp(100), (
             f"N={N}: relative err {err / max(scale, 1.0):.2e}"
         )
+
+
+@pytest.mark.parametrize("space_fn", (Legendre, Chebyshev))
+class TestPoly5SecondDerivativeMatrixPGWithCoefficient:
+    @pytest.mark.parametrize("N,q", [(6, 1), (8, 2)])
+    def test_values_match_quadrature(self, space_fn, N, q):
+        U = FunctionSpace(N, space_fn, bcs={"left": {"D": 0}, "right": {"D": 0}})
+        V = U.get_testspace(kind="PG")
+        u = TrialFunction(U)
+        v = TestFunction(V)
+        x = U.system.x
+        M = inner(
+            x**q * v * u.diff(x, 2),
+            sparse=True,
+            use_precomputed_matrices=True,
+            kind="bilinear",
+        )
+        assert M is not None
+        ref = _quad_matrix_composite(V, U, 2, q)
+        err = float(jnp.linalg.norm(M.todense() - ref))
+        scale = float(jnp.linalg.norm(M.todense()))
+        assert err / max(scale, 1.0) < ulp(100), (
+            f"N={N}: relative err {err / scale:.2e}"
+        )
+
+
+@pytest.mark.parametrize("space_fn", (Legendre,))
+class TestPoly5SecondDerivativeMatrixGWithCoefficient:
+    @pytest.mark.parametrize("N,q", [(6, 1), (8, 2)])
+    def test_values_match_quadrature(self, space_fn, N, q):
+        U = FunctionSpace(N, space_fn, bcs={"left": {"D": 0}, "right": {"D": 0}})
+        V = U.get_testspace(kind="G")
+        u = TrialFunction(U)
+        v = TestFunction(V)
+        x = U.system.x
+        M = inner(
+            x**q * v * u.diff(x, 2),
+            sparse=True,
+            use_precomputed_matrices=True,
+            kind="bilinear",
+        )
+        assert M is not None
+        ref = _quad_matrix_composite(V, U, 2, q)
+        err = float(jnp.linalg.norm(M.todense() - ref))
+        scale = float(jnp.linalg.norm(M.todense()))
+        assert err / max(scale, 1.0) < ulp(100), (
+            f"N={N}: relative err {err / scale:.2e}"
+        )
+
+
+class TestLegendreGalerkinCompositeSweep:
+    """Sweep (i, j, q) for the Dirichlet Legendre Galerkin composite.
+
+    Covers derivatives on the test function (i > 0) and mapped domains, both of
+    which the single-derivative tests above leave untested.
+    """
+
+    @pytest.mark.parametrize("domain", [(-1, 1), (0, 1), (-2, 2), (0, 2)])
+    @pytest.mark.parametrize("i,j", [(0, 0), (0, 1), (0, 2), (1, 0), (2, 0), (1, 1)])
+    @pytest.mark.parametrize("q", [0, 1, 2])
+    def test_values_match_quadrature(self, domain, i, j, q):
+        N = 8
+        U = FunctionSpace(
+            N, Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}}, domain=domain
+        )
+        V = U.get_testspace(kind="G")
+        u = TrialFunction(U)
+        v = TestFunction(V)
+        x = U.system.x
+        M = inner(
+            x**q * v.diff(x, i) * u.diff(x, j),
+            sparse=True,
+            use_precomputed_matrices=True,
+            kind="bilinear",
+        )
+        assert M is not None
+        ref = _quad_matrix_composite(V, U, j, q, dv=i)
+        err = float(jnp.linalg.norm(M.todense() - ref))
+        scale = float(jnp.linalg.norm(ref))
+        assert err / max(scale, 1.0) < ulp(100), (
+            f"({i},{j},q={q}) domain={domain}: relative err {err / max(scale, 1.0):.2e}"
+        )
+
+    @pytest.mark.parametrize("N", [12, 512])
+    @pytest.mark.parametrize("i,j", [(0, 0), (0, 1), (0, 2), (1, 0), (2, 0), (1, 1)])
+    @pytest.mark.parametrize("q", [0, 1, 2])
+    def test_stays_sparse(self, N, i, j, q):
+        """Precomputed matrices must not silently degrade to dense.
+
+        The bandwidth is N-independent, so a formulation that routes through a
+        dense intermediate shows up here as cancellation noise spilling into
+        hundreds of spurious diagonals at the larger N.
+        """
+        U = cast(
+            Composite,
+            FunctionSpace(N, Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}}),
+        )
+        M = U.matrices(i, (U, j), q=q)
+        assert isinstance(M, DiaMatrix), f"({i},{j},q={q}) gave {type(M).__name__}"
+        # 3 diagonals for the width-2 stencil, plus one per power of x
+        assert len(M.offsets) <= q + 3, (
+            f"N={N} ({i},{j},q={q}) has {len(M.offsets)} diagonals: {M.offsets}"
+        )
+
+    @pytest.mark.parametrize("N", [12, 512])
+    def test_stiffness_matrix_is_diagonal(self, N):
+        """<psi_m, psi_n''> = -(4k + 6) delta_mn, exactly, at any N."""
+        U = cast(
+            Composite,
+            FunctionSpace(N, Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}}),
+        )
+        M = U.matrices(0, (U, 2))
+        assert isinstance(M, DiaMatrix)
+        assert set(M.offsets) == {0}, f"N={N}: offsets {M.offsets}"
+        k = jnp.arange(U.num_dofs)
+        assert jnp.allclose(M.diagonal(0), -(4 * k + 6), atol=ulp(10))
+
+
+_BIHARMONIC = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
+_SIXTH_ORDER = {
+    "left": {"D": 0, "N": 0, "N2": 0},
+    "right": {"D": 0, "N": 0, "N2": 0},
+}
+
+
+class TestLegendreDerivativeStencils:
+    """Derivatives of a composite basis stay sparse, one diagonal fewer each time.
+
+    psi_k = sum_r c_r L_{k+r} differentiates to sum_s (2(k+s)+1) T_s L_{k+s} with
+    T_s the alternating tail sum, which telescopes only when the boundary
+    conditions make the tails below the stencil window vanish.
+    """
+
+    @pytest.mark.parametrize(
+        "bcs,expected",
+        [
+            ({"left": {"D": 0}, "right": {"D": 0}}, [(0, 2), (1,)]),
+            (_BIHARMONIC, [(0, 2, 4), (1, 3), (2,)]),
+            (_SIXTH_ORDER, [(0, 2, 4, 6), (1, 3, 5), (2, 4), (3,)]),
+        ],
+        ids=["dirichlet", "biharmonic", "sixth-order"],
+    )
+    def test_offsets(self, bcs, expected):
+        U = cast(LGComposite, FunctionSpace(20, Legendre, bcs=bcs))
+        assert [g.offsets for g in U.derivative_stencils] == expected
+
+    @pytest.mark.parametrize("p", [1, 2])
+    def test_matches_differentiated_basis(self, p):
+        """G^(p) must reproduce d^p/dx^p of the basis in the orthogonal basis."""
+        U = cast(LGComposite, FunctionSpace(12, Legendre, bcs=_BIHARMONIC))
+        G = U.derivative_stencils[p]
+        X = jnp.linspace(-1, 1, 17)
+        # G maps composite -> orthogonal coefficients of the p'th derivative
+        got = G.todense() @ U.orthogonal.evaluate_basis_derivative(X, 0).T
+        expected = U.evaluate_basis_derivative(X, p).T
+        assert jnp.allclose(got, expected, atol=ulp(1000)), (
+            f"p={p}: max err {float(jnp.abs(got - expected).max()):.2e}"
+        )
+
+
+class TestLegendreBiharmonic:
+    """The biharmonic space has a sparse second derivative, psi'' ~ L_{k+2}."""
+
+    @pytest.mark.parametrize("domain", [(-1, 1), (0, 2), (-2, 2)])
+    @pytest.mark.parametrize("i,j", [(0, 0), (0, 2), (2, 0), (2, 2), (0, 4), (4, 0)])
+    @pytest.mark.parametrize("q", [0, 1, 2])
+    def test_values_match_quadrature(self, domain, i, j, q):
+        U = FunctionSpace(14, Legendre, bcs=_BIHARMONIC, domain=domain)
+        V = U.get_testspace(kind="G")
+        u = TrialFunction(U)
+        v = TestFunction(V)
+        x = U.system.x
+        M = inner(
+            x**q * v.diff(x, i) * u.diff(x, j),
+            sparse=True,
+            use_precomputed_matrices=True,
+            kind="bilinear",
+        )
+        assert M is not None
+        ref = _quad_matrix_composite(V, U, j, q, dv=i)
+        err = float(jnp.linalg.norm(M.todense() - ref))
+        scale = float(jnp.linalg.norm(ref))
+        # Looser than elsewhere because the quadrature reference is the noisy
+        # side here: evaluating high derivatives of the basis at the quadrature
+        # points loses several digits in single precision.
+        assert err / max(scale, 1.0) < ulp(1000), (
+            f"({i},{j},q={q}) domain={domain}: relative err {err / max(scale, 1.0):.2e}"
+        )
+
+    @pytest.mark.parametrize("N", [16, 512])
+    def test_biharmonic_matrix_is_diagonal(self, N):
+        """<psi_m, psi_n''''> = <psi_m'', psi_n''> = 2(2k+3)^2(2k+5) delta_mn."""
+        U = cast(Composite, FunctionSpace(N, Legendre, bcs=_BIHARMONIC))
+        u = TrialFunction(U)
+        v = TestFunction(U)
+        x = U.system.x
+        M = inner(
+            v * u.diff(x, 4),
+            sparse=True,
+            use_precomputed_matrices=True,
+            kind="bilinear",
+        )
+        assert isinstance(M, DiaMatrix)
+        assert set(M.offsets) == {0}, f"N={N}: {len(M.offsets)} diagonals"
+        k = jnp.arange(U.num_dofs)
+        assert jnp.allclose(
+            M.diagonal(0), 2 * (2 * k + 3) ** 2 * (2 * k + 5), rtol=1e-6
+        )
+
+
+def test_rectangular_with_coefficient_falls_back():
+    """x**q across unequal mode counts must not use the truncated recursion.
+
+    A boundary space carries fewer modes than quadrature points, so the
+    recursion matrix must not be sized by the latter, and truncating it to
+    either mode range would drop the coupling x**q introduces.
+    """
+    assert Legendre(14).matrices(1, (Legendre(4), 0), q=1) is None
+    assert Legendre(14).matrices(0, (Legendre(4), 0), q=0) is not None
+
+
+@pytest.mark.parametrize(
+    "bcs",
+    [
+        {"left": {"D": 1}, "right": {"D": -2}},
+        {"left": {"D": 1, "N": 0}, "right": {"D": 0, "N": 2}},
+    ],
+    ids=["inhomogeneous-dirichlet", "inhomogeneous-biharmonic"],
+)
+@pytest.mark.parametrize("i,j,q", [(1, 0, 1), (2, 0, 1), (2, 0, 2), (0, 2, 1)])
+def test_inhomogeneous_bcs_with_coefficient(bcs, i, j, q):
+    """Inhomogeneous BCs add a rectangular boundary block; it must stay correct."""
+    U = FunctionSpace(14, Legendre, bcs=bcs)
+    u = TrialFunction(U)
+    v = TestFunction(U)
+    x = U.system.x
+    expr = x**q * v.diff(x, i) * u.diff(x, j)
+
+    def parts(A):
+        return [
+            jnp.asarray(p.todense() if hasattr(p, "todense") else p)
+            for p in (A if isinstance(A, tuple) else (A,))
+        ]
+
+    got = parts(inner(expr, sparse=True, use_precomputed_matrices=True))
+    ref = parts(inner(expr, use_precomputed_matrices=False))
+    assert len(got) == len(ref)
+    for a, b in zip(got, ref, strict=True):
+        err = float(jnp.linalg.norm(a - b))
+        assert err / max(float(jnp.linalg.norm(b)), 1.0) < ulp(100)
+
+
+class TestLegendreGalerkinCompositeScaledTestSpace:
+    """Test and trial spaces with different scalings must not be conflated."""
+
+    @pytest.mark.parametrize("i,j", [(0, 1), (0, 2), (1, 0), (2, 0)])
+    @pytest.mark.parametrize("q", [0, 1])
+    def test_values_match_quadrature(self, i, j, q):
+        N = 8
+        U = FunctionSpace(N, Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}})
+        V = U.get_testspace(kind="G", scaling=n + 1)
+        u = TrialFunction(U)
+        v = TestFunction(V)
+        x = U.system.x
+        M = inner(
+            x**q * v.diff(x, i) * u.diff(x, j),
+            sparse=True,
+            use_precomputed_matrices=True,
+            kind="bilinear",
+        )
+        assert M is not None
+        ref = _quad_matrix_composite(V, U, j, q, dv=i)
+        err = float(jnp.linalg.norm(M.todense() - ref))
+        scale = float(jnp.linalg.norm(ref))
+        assert err / max(scale, 1.0) < ulp(100), (
+            f"({i},{j},q={q}): relative err {err / max(scale, 1.0):.2e}"
+        )
+
+
+@pytest.mark.parametrize("domain", [(0, 2), (3, 5)])
+@pytest.mark.parametrize("q", [1, 2])
+def test_shifted_domain_with_coefficient(domain, q):
+    """x**q must be mapped to the reference domain even when domain_factor == 1.
+
+    A shifted domain of unchanged length has domain_factor 1 but a non-identity
+    map x -> x + c, so the fast path may not be keyed on the factor alone.
+    """
+    U = FunctionSpace(
+        8, Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}}, domain=domain
+    )
+    V = U.get_testspace(kind="G")
+    u = TrialFunction(U)
+    v = TestFunction(V)
+    x = U.system.x
+    M = inner(x**q * v * u, sparse=True, use_precomputed_matrices=True, kind="bilinear")
+    ref = _quad_matrix_composite(V, U, 0, q)
+    err = float(jnp.linalg.norm(M.todense() - ref))
+    assert err / max(float(jnp.linalg.norm(ref)), 1.0) < ulp(100)
 
 
 # ---------------------------------------------------------------------------

@@ -128,6 +128,7 @@ class BaseTime(Symbol):
 
     Attributes:
         _id: Tuple used for hashing / equality (system dimensional index).
+        _system: Reference back to the CoordSys.
         is_commutative: Always True for scalar symbols.
         is_symbol: Marker for SymPy.
         is_Symbol: Marker for SymPy.
@@ -139,9 +140,22 @@ class BaseTime(Symbol):
         obj = super().__new__(cls, "t")
         # The _id is used for equating purposes, and for hashing
         obj._id = (index,)
+        obj._system = sys
         return obj
 
+    def __getnewargs_ex__(self) -> tuple[tuple[CoordSys], dict]:
+        """Return the arguments __new__ needs, for copy and pickle.
+
+        Symbol reconstructs itself from its name, but __new__ takes the system
+        the time symbol belongs to. Without this, copy.deepcopy of anything
+        holding a BaseTime -- a time dependent boundary condition, say -- calls
+        __new__ with the string "t". Unlike BaseScalar, the system is not among
+        the SymPy args, so it has to be reported here.
+        """
+        return ((self._system,), {})
+
     _id: tuple[int, ...]
+    _system: CoordSys
 
     is_commutative = True
     is_symbol = True
@@ -1285,7 +1299,6 @@ class SubCoordSys:
         """
         assert system.dims > 1
         self._base_scalars = (system._base_scalars[index],)
-        # print(self._base_scalars)
         self._base_vectors = (system._base_vectors[index],)
         self._psi = (system._psi[index],)
         self._cartesian_xyz = [system._cartesian_xyz[index]]
@@ -1307,6 +1320,9 @@ class SubCoordSys:
     def base_scalars(self) -> tuple[BaseScalar]:
         """Return the tuple with the single base scalar."""
         return self._base_scalars
+
+    def base_time(self) -> BaseTime:
+        return self._parent.base_time()
 
     @property
     def rv(self) -> Expr:

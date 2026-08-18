@@ -22,7 +22,7 @@ from .cartesianproductspace import (
 )
 from .composite import Composite as Composite, DirectSum as DirectSum
 from .functionspace import FunctionSpace as FunctionSpace
-from .inner import inner as inner, inner_items as inner_items
+from .inner import inner as inner, inner_items as inner_items, project as project
 from .tensorproductspace import (
     DirectSumTPS as DirectSumTPS,
     TensorProduct as TensorProduct,

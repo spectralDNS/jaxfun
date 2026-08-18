@@ -241,7 +241,15 @@ class ChebyshevU(Jacobi):
         """
         A = None
         if q != 0:
-            A = self.A().power(q)
+            if self.N != trial[0].N:
+                # x**q couples modes across the two ranges, and a recursion
+                # matrix truncated to either range drops that coupling, so
+                # fall back to quadrature for rectangular matrices.
+                return None
+            # Size by N rather than num_quad_points: a space may hold more
+            # quadrature points than modes (a boundary space does), and A
+            # has to match the shape of the matrices it multiplies below.
+            A = self.A(self.N).power(q)
 
         u, j = trial
         if i == 0 and j == 0:

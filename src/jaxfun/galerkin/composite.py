@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Literal, overload
+from typing import TYPE_CHECKING, Literal, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -116,6 +116,11 @@ class BoundaryConditions(dict):
             for s in v:
                 bc[k][s] = 0
         return BoundaryConditions(bc)
+
+
+dirichlet = BoundaryConditions({"left": {"D": 0}, "right": {"D": 0}})
+neumann = BoundaryConditions({"left": {"N": 0}, "right": {"N": 0}})
+biharmonic = BoundaryConditions({"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}})
 
 
 class Composite(OrthogonalSpace):
@@ -252,8 +257,25 @@ class Composite(OrthogonalSpace):
         """Return max diagonal shift minus min shift (stencil width)."""
         return max(self.stencil) - min(self.stencil)
 
-    def stencil_to_diamatrix(self) -> DiaMatrix:
-        """Convert symbolic stencil to DiaMatrix."""
+    def stencil_to_diamatrix(
+        self,
+        stencil: dict[int, sp.Expr] | None = None,
+        shape: tuple[int, int] | None = None,
+    ) -> DiaMatrix:
+        """Convert a symbolic stencil to a DiaMatrix.
+
+        Args:
+            stencil: Diagonal shift -> expression in `n`. Defaults to this
+                basis's own stencil.
+            shape: Shape of the result. Defaults to the basis stencil's shape,
+                which is what maps composite coefficients to orthogonal ones.
+
+        Both are overridden by the derivative stencils, which share the basis
+        stencil's shape but carry their own, narrower, set of diagonals.
+        """
+        diagonals: dict = cast(dict, self.stencil) if stencil is None else stencil
+        if shape is None:
+            shape = (self.N - self.stencil_width(), self.N)
         k = jnp.arange(self.N - 1)
         return diags(
             [
@@ -262,10 +284,10 @@ class Composite(OrthogonalSpace):
                         n, val, modules=["jax", {"gamma": jax.scipy.special.gamma}]
                     )(k)
                 ).astype(float)
-                for val in self.stencil.values()
+                for val in diagonals.values()
             ],
-            tuple(int(key) for key in self.stencil),
-            shape=(self.N - self.stencil_width(), self.N),
+            tuple(int(key) for key in diagonals),
+            shape=shape,
         )
 
     @property

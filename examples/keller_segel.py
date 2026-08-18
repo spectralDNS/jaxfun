@@ -30,14 +30,12 @@
 # Both terms of the transported equation are divergences on a periodic domain,
 # so the total number of cells is conserved. The run reports the drift, which
 # turns out to be a good resolution diagnostic rather than a pure round-off
-# check: the chemotactic divergence is written out into products below, so the
-# discrete conservation is only as good as the aggregates are resolved. At
-# chi=10, T=60 the drift falls from 1.1e-07 at N=64 to 5.0e-11 at N=96 and
-# 7.2e-11 at N=128, i.e. it reaches the round-off floor once N=96 resolves the
-# aggregates. Pushing to chi=20 sharpens them past what N=64 can carry: u then
-# overshoots [0, 1] by 0.5% and the drift rises to 1.2e-04. That is genuinely
-# spatial -- cutting dt fourfold changes it in no digit, and padding the
-# dealiasing from 3N/2 to 3N changes only the fourth.
+# check. At chi=10, T=60 the drift falls from 1.1e-07 at N=64 to 5.0e-11 at
+# N=96 and 7.2e-11 at N=128, i.e. it reaches the round-off floor once N=96
+# resolves the aggregates. Pushing to chi=20 sharpens them past what N=64 can
+# carry: u then overshoots [0, 1] by 0.5% and the drift rises to 1.2e-04. That
+# is genuinely spatial -- cutting dt fourfold changes it in no digit, and
+# padding the dealiasing from 3N/2 to 3N changes only the fourth.
 #
 # REFERENCES
 #
@@ -54,12 +52,11 @@
 #   Jaeger & Luckhaus (1992), Trans. AMS 329, 819-824 -- the parabolic-elliptic
 #     system and its finite-time blow-up without volume filling.
 #
-# Authors, titles, venues and years are reliable; volume and page numbers are
-# worth checking before citing. The equations are from the literature, but G, D,
-# CHI and UBAR are tuned here for a resolved picture at N=96 and are not taken
-# from any of these papers. The sharp critical-mass results are for the
-# unscreened whole-plane problem (0 = lap(v) + u), so they explain why the
-# classical model blows up here without fixing a threshold for this version.
+# The equations are from the literature, but G, D, CHI and UBAR are tuned here
+# for a resolved picture at N=96 and are not taken from any of these papers. The
+# sharp critical-mass results are for the unscreened whole-plane problem
+# (0 = lap(v) + u), so they explain why the classical model blows up here
+# without fixing a threshold for this version.
 #
 # Spatial discretization: 2D Fourier Galerkin (spectral)
 # Time discretization: SystemIMEXRungeKutta (ARS443)

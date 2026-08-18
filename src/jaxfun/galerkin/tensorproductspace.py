@@ -185,15 +185,17 @@ class TensorProductSpace:
             Tuple (W0, W1, ...) each either 1D or broadcasted.
         """
         weights = []
+        kind = MeshKind(kind)
         N = tuple(
             self.basespaces[ax].num_quad_points if N is None else N[ax]
             for ax in range(len(self))
         )
         for ax, space in enumerate(self.basespaces):
+            n_ax = space.num_quad_points if N[ax] is None else cast(int, N[ax])
             if kind == MeshKind.QUADRATURE:
-                X = space.quad_points_and_weights(N[ax])[1]
+                X = space.quad_points_and_weights(n_ax)[1]
             else:
-                X = jnp.ones(N[ax])
+                X = jnp.ones(n_ax)
             weights.append(self.broadcast_to_ndims(X, ax) if broadcast else X)
         return tuple(weights)
 
@@ -209,7 +211,7 @@ class TensorProductSpace:
             N: Optional per-axis counts.
 
         Returns:
-            Array (M, dims) with Cartesian products of mesh points.
+            Array (M,) with the per-point weight (the product of per-axis weights).
         """
         mesh = self.mesh(kind, N, broadcast=False)
         return jnp.array(
@@ -221,14 +223,14 @@ class TensorProductSpace:
         kind: MeshKind | str = MeshKind.QUADRATURE,
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
-        """Return flattened list of all weight tuples.
+        """Return flattened quadrature weights for the tensor-product grid.
 
         Args:
             kind: Sampling kind.
             N: Optional per-axis counts.
 
         Returns:
-            Array (M, dims) with Cartesian products of weights.
+            Array (M,) with Cartesian products of weights.
         """
         weights = self.weights(kind, N, broadcast=False)
         return jnp.prod(

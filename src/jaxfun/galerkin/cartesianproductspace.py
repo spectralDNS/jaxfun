@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING, Any, Self, cast, overload
@@ -15,7 +16,11 @@ from jax import Array
 from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.composite import DirectSum
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
-from jaxfun.galerkin.tensorproductspace import TensorProductSpace, multiplication_sign
+from jaxfun.galerkin.tensorproductspace import (
+    DirectInstantiationWarning,
+    TensorProductSpace,
+    multiplication_sign,
+)
 from jaxfun.sharding import physical_sharding, spectral_sharding
 from jaxfun.typing import MeshKind, RankTag
 
@@ -26,7 +31,7 @@ type OneDimensionalSpace = OrthogonalSpace | DirectSum | CartesianProductSpace
 # creation to the CartesianProduct() factory — a Cartesian product space
 # should only ever result from the Cartesian product operation, not be
 # assembled by hand.
-_factory_token = object()
+_cartesianproduct_token = object()
 
 
 @overload
@@ -93,7 +98,7 @@ def CartesianProduct(
             *cast(list[OneDimensionalSpace], basespaces_list),
             name=name,
             rank=rank_tag,
-            _token=_factory_token,
+            _token=_cartesianproduct_token,
         )
     assert all(basespace.dims > 1 for basespace in basespaces_list)
     assert len({b.dims for b in basespaces_list}) == 1
@@ -103,13 +108,13 @@ def CartesianProduct(
             *cast(list[MultiDimensionalSpace], basespaces_list),
             name=name,
             rank=RankTag.VECTOR,
-            _token=_factory_token,
+            _token=_cartesianproduct_token,
         )
     return CartesianTensorProductSpace(
         *cast(list[MultiDimensionalSpace], basespaces_list),
         name=name,
         rank=rank_tag,
-        _token=_factory_token,
+        _token=_cartesianproduct_token,
     )
 
 
@@ -265,11 +270,13 @@ class CartesianTensorProductSpace(CartesianBaseSpace):
         rank: int | RankTag = RankTag.NONE,
         _token: object = None,
     ) -> None:
-        if _token is not _factory_token:
-            raise TypeError(
-                f"{type(self).__name__} must be created via CartesianProduct(), "
-                "not instantiated directly — a Cartesian product space is the "
-                "result of the Cartesian product operation."
+        if _token is not _cartesianproduct_token:
+            warnings.warn(
+                f"{type(self).__name__} should be created via CartesianProduct(), "
+                "not instantiated directly — a Cartesian product space is normally "
+                "the result of the Cartesian product operation.",
+                DirectInstantiationWarning,
+                stacklevel=2,
             )
         from jaxfun.galerkin import DirectSumTPS
 
@@ -423,11 +430,13 @@ class CartesianProductSpace(CartesianBaseSpace):
         rank: int | RankTag = RankTag.NONE,
         _token: object = None,
     ) -> None:
-        if _token is not _factory_token:
-            raise TypeError(
-                "CartesianProductSpace must be created via CartesianProduct(), "
-                "not instantiated directly — a Cartesian product space is the "
-                "result of the Cartesian product operation."
+        if _token is not _cartesianproduct_token:
+            warnings.warn(
+                "CartesianProductSpace should be created via CartesianProduct(), "
+                "not instantiated directly — a Cartesian product space is normally "
+                "the result of the Cartesian product operation.",
+                DirectInstantiationWarning,
+                stacklevel=2,
             )
         self.basespaces = list(basespaces)
         self.system: CoordSys = self.basespaces[0].system

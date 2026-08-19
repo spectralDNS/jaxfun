@@ -14,7 +14,7 @@ from sympy import Number
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import MeshKind, TestSpaceKind
-from jaxfun.utils.common import Domain, matmat, n
+from jaxfun.utils.common import Domain, cache_static, matmat, n
 
 if TYPE_CHECKING:
     from jaxfun.galerkin.cartesianproductspace import CartesianProductSpace
@@ -191,7 +191,6 @@ class Composite(OrthogonalSpace):
         self._mass_matrix: DiaMatrix = self._compute_mass_matrix()
         self._mass_matrix.lu_factor()
 
-    @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return quadrature nodes/weights (delegated to underlying basis)."""
         return self.orthogonal.quad_points_and_weights(N)
@@ -228,12 +227,10 @@ class Composite(OrthogonalSpace):
         P: Array = self.orthogonal.evaluate_basis_derivative(X, k)
         return self.apply_stencil_right(P)
 
-    @jax.jit(static_argnums=(0, 1))
+    @cache_static
     def vandermonde(self, N: int | None) -> Array:
         """Return (constrained) Vandermonde matrix at quadrature points X."""
-        X = self.quad_points_and_weights(N)[0]
-        P: Array = self.orthogonal.eval_basis_functions(X)
-        return self.apply_stencil_right(P)
+        return self.apply_stencil_right(self.orthogonal.vandermonde(N))
 
     @jax.jit(static_argnums=(0, 2))
     def eval_basis_function(self, X: float, i: int) -> float:
@@ -492,8 +489,7 @@ class BCGeneric(Composite):
             ]
         )
 
-    @jax.jit(static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int | None = None) -> Array:
+    def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Quadrature nodes/weights (override to enforce num_quad_points)."""
         return self.orthogonal.quad_points_and_weights(N)
 

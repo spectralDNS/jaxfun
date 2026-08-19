@@ -25,7 +25,7 @@ from jaxfun.galerkin import (
 )
 from jaxfun.galerkin.inner import project
 from jaxfun.sharding import physical_sharding, spectral_sharding
-from jaxfun.utils.common import ulp
+from jaxfun.utils.common import lambdify, ulp
 
 pytestmark = pytest.mark.spmd
 
@@ -152,3 +152,29 @@ def test_backward_primitive_tps_3d(domain):
         df = T.backward_primitive(uf.get_array(), (2, 1, 1))
         error = jnp.linalg.norm(df - du.backward())
         assert error < jnp.sqrt(ulp(100)), error
+
+
+def test_cached_basis_survives_shard_map() -> None:
+    """A cached array must not carry the shard_map mesh out with it.
+
+    `cache_static` evaluates eagerly, so a value first computed inside a
+    `shard_map` would otherwise be tagged with that mesh (`axis_types=Manual`)
+    and clash with ordinary arrays everywhere it was reused afterwards.
+    """
+    N = 8
+    F = FunctionSpace(N, Fourier.Fourier, name="F")
+    D = FunctionSpace(N, Legendre.Legendre, {"left": {"D": 0}, "right": {"D": 0}})
+    T = TensorProduct(F, D, name="T")
+    x, y = T.system.base_scalars()
+    uh = project(sp.sin(x) * (1 - y**2), T)
+
+    # Sharded, so the transform goes through shard_map and populates the caches
+    # for the padded point count from inside it.
+    pad = (2 * N, 2 * N)
+    uj = T.backward(jax.device_put(uh, spectral_sharding), N=pad)
+
+    # Now reuse the same cached quadrature points outside the shard_map, and mix
+    # the two. Before the fix this raised "Mesh for all inputs should be equal".
+    xj = T.mesh(N=pad, broadcast=True)
+    ue = lambdify((x, y), sp.sin(x) * (1 - y**2))(*xj)
+    assert jnp.linalg.norm(uj.real - ue) < ulp(100)

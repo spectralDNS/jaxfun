@@ -10,7 +10,7 @@ from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.composite import Composite, PGComposite
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TestSpaceKind
-from jaxfun.utils.common import Domain, jit_vmap
+from jaxfun.utils.common import Domain, cache_static, jit_vmap
 
 from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
@@ -146,7 +146,7 @@ class Chebyshev(Jacobi):
 
         return jnp.sum(xs, axis=0) + c[0]
 
-    @jax.jit(static_argnums=(0, 1))
+    @cache_static
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return Gauss-Chebyshev (first kind) nodes and weights.
 

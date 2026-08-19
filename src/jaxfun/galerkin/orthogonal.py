@@ -27,7 +27,7 @@ from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import BaseMatrix, DiaMatrix, Matrix, diags
 from jaxfun.typing import Array, MeshKind, RankTag
-from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
+from jaxfun.utils.common import Domain, cache_static, jacn, jit_vmap, lambdify
 
 if TYPE_CHECKING:
     from jaxfun.galerkin.cartesianproductspace import CartesianProductSpace
@@ -99,6 +99,18 @@ class OrthogonalSpace(BaseSpace):
         """Return default number of quadrature points."""
         return self._num_quad_points
 
+    @property
+    def _cache_key(self) -> tuple[int, ...]:
+        """Return the state that `cache_static` results depend on.
+
+        The memoized quantities (quadrature points and weights, Vandermonde
+        matrices) live in the reference domain, so they depend on the number of
+        basis functions and the default number of quadrature points and on
+        nothing else. Both are mutated after construction for the orthogonal
+        basis underlying a `BCGeneric`, so they have to be read at call time.
+        """
+        return (self.N, self.num_quad_points)
+
     @jit_vmap(in_axes=(0, None))
     def evaluate(self, x: float | Array, c: Array) -> Array:
         """Evaluate series sum_k c_k psi_k(x).
@@ -128,7 +140,7 @@ class OrthogonalSpace(BaseSpace):
         assert len(c) <= self.N, f"Coefficient length {len(c)} exceeds N={self.N}"
         return self.eval_basis_functions(X)[..., : len(c)] @ c
 
-    @jax.jit(static_argnums=(0, 1))
+    @cache_static
     def vandermonde(self, N: int | None) -> Array:
         r"""Return pseudo-Vandermonde matrix V_{m,k}=psi_k(X_m)
 
@@ -269,7 +281,9 @@ class OrthogonalSpace(BaseSpace):
         """Return vector of inner products <u, psi_i> (weighted)."""
         N: int = u.shape[0]
         Xj, wj = self.quad_points_and_weights(N)
-        Pi = self.eval_basis_functions(Xj)
+        Pi = self.vandermonde(N)  # == self.eval_basis_functions(Xj)
+        # sg reads self.system, which TensorProduct replaces after construction,
+        # so the weights must stay separate from the (cached) basis values.
         sg = self.system.sg / self.domain_factor
         if sp.sympify(sg).is_number:
             wj = wj * float(sg)

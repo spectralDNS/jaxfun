@@ -12,7 +12,7 @@ from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.composite import BCGeneric, Composite, PGComposite
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TestSpaceKind
-from jaxfun.utils.common import Domain, jit_vmap, n
+from jaxfun.utils.common import Domain, cache_static, jit_vmap, n
 from jaxfun.utils.fastgl import leggauss
 
 from .Jacobi import Jacobi
@@ -161,7 +161,7 @@ class Legendre(Jacobi):
         _, xs = jax.lax.scan(inner_loop, (x0, X), jnp.arange(2, self.N + 1))
         return jnp.sum(xs, axis=0) + c[0]
 
-    @jax.jit(static_argnums=(0, 1))
+    @cache_static
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return Gauss-Legendre quadrature nodes and weights.
 

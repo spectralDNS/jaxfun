@@ -1,11 +1,14 @@
 from collections.abc import Callable
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from scipy.fft import dst as scipy_dst
 
 from jaxfun.coordinates import CartCoordSys, x, y
+from jaxfun.galerkin import FunctionSpace
+from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.la import DiaMatrix
 from jaxfun.typing import Array, ArrayLike
 from jaxfun.utils import common
@@ -16,6 +19,80 @@ from jaxfun.utils.common import ulp
 def test_ulp(x: float) -> None:
     result = common.ulp(x)
     assert np.isclose(result, jnp.nextafter(x, x + 1) - x)
+
+
+class _Cached:
+    """Minimal stand-in for a space with `cache_static`-decorated methods."""
+
+    def __init__(self, n: int) -> None:
+        self.n = n
+        self.calls = 0
+
+    @property
+    def _cache_key(self) -> tuple[int, ...]:
+        return (self.n,)
+
+    @common.cache_static
+    def values(self, m: int | None = None) -> Array:
+        self.calls += 1
+        return jnp.arange(self.n if m is None else m, dtype=float)
+
+
+def test_cache_static_evaluates_once() -> None:
+    c = _Cached(4)
+    first = c.values()
+    assert c.calls == 1
+    assert jnp.array_equal(c.values(), first)
+    assert c.calls == 1
+
+
+def test_cache_static_keys_on_arguments() -> None:
+    c = _Cached(4)
+    assert c.values().shape == (4,)
+    assert c.values(6).shape == (6,)
+    assert c.calls == 2
+
+
+def test_cache_static_keys_on_instance_state() -> None:
+    # BCGeneric mutates the N of its orthogonal basis after construction, so a
+    # cache keyed on the arguments alone would go stale.
+    c = _Cached(4)
+    assert c.values().shape == (4,)
+    c.n = 6
+    assert c.values().shape == (6,)
+
+
+def test_cache_static_body_runs_once_across_traces() -> None:
+    # The body must not be re-executed (and so re-staged) on every trace, and no
+    # tracer may end up in the cache.
+    c = _Cached(4)
+
+    @jax.jit
+    def f(a: Array) -> Array:
+        return a * c.values()
+
+    f(jnp.ones(4))
+    f(jnp.ones((2, 4)))  # a second trace, different shape
+    assert c.calls == 1
+    assert all(isinstance(v, np.ndarray) for v in c.__dict__["_static_cache"].values())
+
+
+def test_cache_static_stages_a_constant_not_the_computation() -> None:
+    # The point of the cache: the jaxpr holds the finished array, not the loop
+    # that built it.
+    space = FunctionSpace(8, Legendre, name="D")
+    jaxpr = jax.make_jaxpr(space.backward)(jnp.ones(8))
+    assert not any(eqn.primitive.name == "scan" for eqn in jaxpr.eqns), jaxpr
+
+
+def test_clear_static_cache() -> None:
+    space = FunctionSpace(8, Legendre, name="D")
+    space.vandermonde(None)
+    assert space.__dict__.get("_static_cache")
+    space.clear_static_cache()
+    assert "_static_cache" not in space.__dict__
+    # and it repopulates on demand
+    assert space.vandermonde(None).shape == (8, 8)
 
 
 @pytest.mark.parametrize("k", [1, 2, 3])

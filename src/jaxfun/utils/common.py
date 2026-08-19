@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import sympy as sp
 from jax import Array
 from scipy.special import sph_harm_y
@@ -22,6 +23,7 @@ n = Symbol("n", integer=True)
 
 
 __all__ = (
+    "cache_static",
     "diff",
     "diffx",
     "Domain",
@@ -53,6 +55,53 @@ JAX_FUNCTION_BY_NAME: dict[str, Callable[..., Array]] = {
     "tan": jnp.tan,
     "tanh": jnp.tanh,
 }
+
+
+def cache_static[FuncT: Callable[..., Any]](func: FuncT) -> FuncT:
+    """Decorator that memoizes a method of which the result depends only on the
+    instance and hashable arguments.
+
+    Meant as a replacement for `jax.jit(static_argnums=...)` on methods taking no
+    array arguments. `jax.jit` inlines such a method into every enclosing trace, so
+    its entire subgraph is staged into the jaxpr (and constant folded by XLA) once
+    per compilation. This evaluates the body once and hands out the stored result
+    afterwards.
+
+    The body runs under `jax.ensure_compile_time_eval`, so it is evaluated eagerly
+    even when the caller is tracing: an enclosing jaxpr receives the finished
+    array as a constant rather than the computation that produced it, and no
+    tracer is ever stored in the cache.
+
+    Results are held on the host as numpy arrays and converted back on the way
+    out. A jax array remembers the mesh context it was created under, so one
+    first computed inside a `shard_map` would carry that mesh (`axis_types=Manual`)
+    into every later use outside it, and mixing it with an unsharded array then
+    fails. Going via the host drops that context, and the array handed back picks
+    up the caller's.
+
+    The cache lives on the instance, keyed by the arguments and by the instance's
+    `_cache_key` (empty when undefined), which spells out the state the result
+    depends on.
+
+    Args:
+        func: Method taking `self` plus hashable arguments only.
+    """
+
+    @wraps(func)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        cache: dict[Any, Any] = self.__dict__.setdefault("_static_cache", {})
+        key = (
+            func,  # identifies the decorated method within the instance's cache
+            getattr(self, "_cache_key", ()),
+            args,
+            tuple(sorted(kwargs.items())),
+        )
+        if key not in cache:
+            with jax.ensure_compile_time_eval():
+                cache[key] = jax.tree.map(np.asarray, func(self, *args, **kwargs))
+        return jax.tree.map(jnp.asarray, cache[key])
+
+    return cast(FuncT, wrapper)
 
 
 def jit_vmap[FuncT: Callable[..., Array]](

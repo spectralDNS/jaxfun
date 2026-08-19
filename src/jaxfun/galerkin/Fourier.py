@@ -6,7 +6,7 @@ from jax import Array
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, diags
 from jaxfun.typing import MeshKind
-from jaxfun.utils.common import Domain, jit_vmap
+from jaxfun.utils.common import Domain, cache_static, jit_vmap
 
 from .orthogonal import OrthogonalSpace
 
@@ -74,7 +74,7 @@ class Fourier(OrthogonalSpace):
         c0 = jnp.ones_like(X, dtype=complex) * c[0]
         return jax.lax.fori_loop(1, len(c), body_fun, c0)
 
-    @jax.jit(static_argnums=(0, 1))
+    @cache_static
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return equispaced quadrature points and uniform weights.
 

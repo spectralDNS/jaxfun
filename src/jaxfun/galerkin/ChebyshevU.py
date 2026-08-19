@@ -7,7 +7,7 @@ from sympy import Expr, Symbol
 from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.la import DiaMatrix, Matrix, diags
-from jaxfun.utils.common import Domain, dst, jit_vmap
+from jaxfun.utils.common import Domain, cache_static, dst, jit_vmap
 
 from .Jacobi import Jacobi
 
@@ -80,7 +80,7 @@ class ChebyshevU(Jacobi):
 
         return jnp.sum(xs, axis=0) + c[0]
 
-    @jax.jit(static_argnums=(0, 1))
+    @cache_static
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return Gauss-Chebyshev (second kind) nodes and weights.
 

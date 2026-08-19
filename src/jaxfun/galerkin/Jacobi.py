@@ -14,7 +14,7 @@ from sympy import Expr, Number, Symbol
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TriDiagMatrixFun
-from jaxfun.utils.common import Domain, jit_vmap, n
+from jaxfun.utils.common import Domain, cache_static, jit_vmap, n
 
 from .orthogonal import OrthogonalSpace
 
@@ -109,7 +109,7 @@ class Jacobi(OrthogonalSpace):
 
         return jnp.sum(xs, axis=0) + c[0] + c[1] * x1
 
-    @jax.jit(static_argnums=(0, 1))
+    @cache_static
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return Gauss-Jacobi quadrature nodes/weights.
 

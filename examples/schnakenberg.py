@@ -171,4 +171,5 @@ def update(frame: int):
 
 
 _anim = FuncAnimation(fig_anim, update, frames=len(times), interval=50, blit=False)
+_anim.save("schnakenberg.gif", writer="pillow", fps=24)
 plt.show()

@@ -10,7 +10,7 @@ import jax.core
 import jax.numpy as jnp
 import numpy as np
 from flax import nnx
-from jax import Array
+from jax import Array, shard_map
 from scipy import sparse as scipy_sparse
 
 from jaxfun.la.diamatrix import DiaMatrix, diakron
@@ -746,6 +746,7 @@ class TPMatricesWavenumberSolver:
         poly_offsets: tuple[int, ...] | None = None,
     ) -> None:
         from jaxfun.la.diamatrix import _lu_banded_no_pivot_kernel
+        from jaxfun.sharding import spectral_sharding
 
         self.poly_axis = poly_axis
         self.shape = shape
@@ -960,42 +961,66 @@ class TPMatricesWavenumberSolver:
             _inv_perm[_old_pos] = _new_pos
 
         if len(jax.devices()) > 1:
-            # One JIT per local device, each closing over that device's L/U
-            # slice.  All JITs are dispatched independently so XLA can
-            # schedule them concurrently across local devices.
             _n_total = len(jax.devices())
-            _n_local = jax.local_device_count()
             _n_F_per_device = _n_F // _n_total
             _fourier_shape_per_device = (
                 _fourier_shape[0] // _n_total,
             ) + _fourier_shape[1:]
 
-            # Factory avoids the Python late-binding closure pitfall.
-            # L/U are passed as explicit arguments (not closed over) so XLA
-            # treats them as dynamic values and skips constant-folding them.
-            def _make_device_jit(L_d: Array, U_d: Array):
-                @jax.jit
-                def _jit(L: Array, U: Array, rhs_d: Array) -> Array:
-                    rhs_2d = jnp.transpose(rhs_d, _axes_order).reshape(
-                        _n_F_per_device, _n_P
-                    )
-                    sol_2d = _vmap_fn(L, U, rhs_2d)
-                    sol_perm = sol_2d.reshape(_fourier_shape_per_device + (_n_P,))
-                    return jnp.transpose(sol_perm, _inv_perm)
+            # One logical array per factor, assembled from the per-device
+            # slices already built above. `shard_map` gives each device's
+            # kernel invocation only its own local slice of L, U and rhs, with
+            # no communication between devices (every wavenumber's banded
+            # solve is independent).
+            self._L_sharded = jax.make_array_from_single_device_arrays(
+                (_n_F,) + self._L_data_local.shape[1:],
+                spectral_sharding,
+                self._L_per_device,
+            )
+            self._U_sharded = jax.make_array_from_single_device_arrays(
+                (_n_F,) + self._U_data_local.shape[1:],
+                spectral_sharding,
+                self._U_per_device,
+            )
 
-                return partial(_jit, L_d, U_d)
+            def _shard_kernel(L: Array, U: Array, rhs_d: Array) -> Array:
+                rhs_2d = jnp.transpose(rhs_d, _axes_order).reshape(
+                    _n_F_per_device, _n_P
+                )
+                sol_2d = _vmap_fn(L, U, rhs_2d)
+                sol_perm = sol_2d.reshape(_fourier_shape_per_device + (_n_P,))
+                return jnp.transpose(sol_perm, _inv_perm)
 
-            self._local_solve_jits = [
-                _make_device_jit(self._L_per_device[d], self._U_per_device[d])
-                for d in range(_n_local)
-            ]
+            # Unlike a Python-level per-device dispatch (which needs a
+            # concrete array to call `.addressable_data()` on), `shard_map` is
+            # jit-composable: this works whether `rhs` is concrete or a tracer
+            # from an enclosing `jax.jit`, which is how the time integrators
+            # always call `solve` (`TimeStepper.solve`'s `fori_loop`,
+            # `IMEXRungeKutta.step`'s own `@jax.jit`).
+            self._solve_shard_map = jax.jit(
+                shard_map(
+                    _shard_kernel,
+                    mesh=spectral_sharding.mesh,
+                    in_specs=(
+                        spectral_sharding.spec,
+                        spectral_sharding.spec,
+                        spectral_sharding.spec,
+                    ),
+                    out_specs=spectral_sharding.spec,
+                    check_vma=False,
+                )
+            )
+
+            # The L/U data held here covers only this process's wavenumbers, so
+            # there is no whole-array solve to fall back on.
+            self._solve_jit = None
 
             # The L/U data held here covers only this process's wavenumbers, so
             # there is no whole-array solve to fall back on.
             self._solve_jit = None
 
         else:
-            self._local_solve_jits = None
+            self._solve_shard_map = None
 
             @jax.jit
             def _solve_jit(L: Array, U: Array, rhs: Array) -> Array:
@@ -1016,8 +1041,10 @@ class TPMatricesWavenumberSolver:
 
         In multi-process mode ``rhs`` must carry sharding ``P("k", None, None)``
         so that each process holds a contiguous block of Fourier wavenumber
-        rows.  The reshape, local vmap, and global assembly are all
-        communication-free.
+        rows.  The whole solve -- reshape, local vmap, sharded dispatch -- is
+        one compiled computation with no communication between devices, and it
+        composes with an enclosing ``jax.jit`` like any other array op, which
+        is how every time integrator actually calls it.
 
         Args:
             rhs: Right-hand side shaped ``self.shape``.
@@ -1025,31 +1052,9 @@ class TPMatricesWavenumberSolver:
         Returns:
             Solution with the same shape and sharding as ``rhs``.
         """
-        # `rhs.devices()` needs a concrete array, so a traced rhs (this solve
-        # called from inside a caller's jit, as the time integrators do) can
-        # only take the whole-array path.
-        if (
-            self._local_solve_jits is not None
-            and not isinstance(rhs, jax.core.Tracer)
-            and len(rhs.devices()) > 1
-        ):
-            # Dispatch one JIT per local device (JAX async — XLA schedules
-            # them concurrently).  Each JIT is communication-free and closes
-            # over its own L/U slice already placed on that device.
-            results = [
-                self._local_solve_jits[d](rhs.addressable_data(d))
-                for d in range(jax.local_device_count())
-            ]
-            return jax.make_array_from_single_device_arrays(
-                rhs.shape, rhs.sharding, results
-            )
-
-        if self._solve_jit is None:
-            raise SolverNotApplicable(
-                "The multi-device wavenumber solver holds only this process's "
-                "wavenumbers; it needs a concrete rhs sharded over all devices "
-                "and cannot be traced by an enclosing jit."
-            )
+        if self._solve_shard_map is not None:
+            return self._solve_shard_map(self._L_sharded, self._U_sharded, rhs)
+        assert self._solve_jit is not None  # __init__ always sets it in this branch
         return self._solve_jit(rhs)
 
 

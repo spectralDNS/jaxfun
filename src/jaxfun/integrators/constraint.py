@@ -18,7 +18,6 @@ from sympy.core.function import AppliedUndef
 
 from jaxfun.coordinates import get_system
 from jaxfun.galerkin import TestFunction, TrialFunction
-from jaxfun.galerkin.arguments import JAXFunction
 from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import project
 from jaxfun.la import BaseMatrix
@@ -31,14 +30,17 @@ from jaxfun.utils import (
 from jaxfun.utils.operator_tools import assemble_linear_term
 from jaxfun.utils.sympy_factoring import split_linear_nonlinear_terms
 
-from .base import (
+from ._utils import (
     FieldCoupling,
     SolverOptions,
-    _solve,
-    _validate_solver_options,
-    _warm_operator_solve_cache,
     apply_field_couplings,
     assemble_field_couplings,
+    coefficient_shape,
+    node_for,
+    physical_shape,
+    solve_with_options,
+    validate_solver_options,
+    warm_operator_solve_cache,
 )
 from .nonlinear import compile_field_evaluator, remove_test_function
 
@@ -103,7 +105,7 @@ class ConstraintSolver(nnx.Module):
         self._field_order = nnx.static(field_order)
         self._field_index = nnx.static(field_index)
         self._solver_options: SolverOptions = nnx.static(
-            _validate_solver_options(solver_options)
+            validate_solver_options(solver_options)
         )
 
         test, linear_expr, nonlinear_expr, coupling_exprs = (
@@ -111,7 +113,7 @@ class ConstraintSolver(nnx.Module):
         )
         self.trialspace = cast(ScalarSpaceType, own_trial.functionspace)
         self.testspace = cast(ScalarSpaceType, test.functionspace)
-        self._state_shape = self._coefficient_shape(self.trialspace)
+        self._state_shape = coefficient_shape(self.trialspace)
         self.linear_expr = linear_expr
         self.nonlinear_expr = nonlinear_expr
         self.has_nonlinear = bool(sp.sympify(nonlinear_expr) != 0)
@@ -212,31 +214,9 @@ class ConstraintSolver(nnx.Module):
         nonlinear = sp.expand(remove_test_function(nonlinear, test))
         return test, linear, nonlinear, couplings
 
-    @staticmethod
-    def _coefficient_shape(V: ScalarSpaceType) -> tuple[int, ...]:
-        """Return the coefficient-array shape for the given space."""
-        num_dofs = V.num_dofs
-        return num_dofs if isinstance(num_dofs, tuple) else (num_dofs,)
-
     def _node_for(self, trial: TrialFunction) -> AppliedUndef:
         """Return the shared JAXFunction node representing ``trial``."""
-        for field, node in self._fields:
-            if field == trial:
-                return node
-        V = cast(ScalarSpaceType, trial.functionspace)
-        return cast(
-            AppliedUndef,
-            JAXFunction(
-                jnp.zeros(self._coefficient_shape(V)), V, name=f"{trial.name}_jax"
-            ).doit(),
-        )
-
-    def _physical_shape(self, N: ScalarPadding) -> int | tuple[int | None, ...]:
-        if N is None:
-            N = self.testspace.shape
-            if self.testspace.dims == 1:
-                N = N[0]
-        return N
+        return node_for(self._fields, trial)
 
     def initial_coefficients(
         self, initial: sp.Expr | Array | None = None
@@ -260,7 +240,7 @@ class ConstraintSolver(nnx.Module):
         jitted step for the same reason `BaseIntegrator.setup` does: the solver
         picks its path by inspecting matrix values, which are tracers by then.
         """
-        _warm_operator_solve_cache(
+        warm_operator_solve_cache(
             self.operator, self._state_shape, self._solver_options
         )
 
@@ -276,7 +256,7 @@ class ConstraintSolver(nnx.Module):
         total = apply_field_couplings(self._couplings, states)
         if self._nonlinear_evaluator is not None:
             pointwise = self.testspace.scalar_product(
-                self._nonlinear_evaluator(states, self._physical_shape(N))
+                self._nonlinear_evaluator(states, physical_shape(self.testspace, N))
             )
             total = pointwise if total is None else total + pointwise
         if self.forcing is not None:
@@ -285,4 +265,4 @@ class ConstraintSolver(nnx.Module):
         if total is None:
             # Homogeneous: `operator @ u = 0`, so the field vanishes identically.
             return jnp.zeros(self._state_shape)
-        return _solve(self.operator, -total, self._solver_options)
+        return solve_with_options(self.operator, -total, self._solver_options)

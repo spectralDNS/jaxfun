@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import itertools
+import warnings
 from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, NoReturn, cast
@@ -33,6 +34,16 @@ if TYPE_CHECKING:
 
 
 IndivisibleError = ValueError
+
+# Sentinel restricting TensorProductSpace/DirectSumTPS creation to the
+# TensorProduct() factory (and this module's own derived-space helpers) \u2014
+# a tensor product space should only ever result from the tensor product
+# operation, not be assembled by hand.
+_tensorproduct_token = object()
+
+
+class DirectInstantiationWarning(UserWarning):
+    """Raised when a product space is instantiated directly, bypassing its factory."""
 
 
 class TensorProductSpace:
@@ -70,7 +81,17 @@ class TensorProductSpace:
         name: str = "TPS",
         leaf: CartesianTensorProductSpace | None = None,
         global_index: int = 0,
+        *,
+        _token: object = None,
     ) -> None:
+        if _token is not _tensorproduct_token:
+            warnings.warn(
+                "TensorProductSpace should be created via TensorProduct(), "
+                "not instantiated directly — a tensor product space is normally "
+                "the result of the tensor product operation.",
+                DirectInstantiationWarning,
+                stacklevel=2,
+            )
         from jaxfun.coordinates import CartCoordSys, x, y, z
 
         system = (
@@ -185,15 +206,17 @@ class TensorProductSpace:
             Tuple (W0, W1, ...) each either 1D or broadcasted.
         """
         weights = []
+        kind = MeshKind(kind)
         N = tuple(
             self.basespaces[ax].num_quad_points if N is None else N[ax]
             for ax in range(len(self))
         )
         for ax, space in enumerate(self.basespaces):
+            n_ax = space.num_quad_points if N[ax] is None else cast(int, N[ax])
             if kind == MeshKind.QUADRATURE:
-                X = space.quad_points_and_weights(N[ax])[1]
+                X = space.quad_points_and_weights(n_ax)[1]
             else:
-                X = jnp.ones(N[ax])
+                X = jnp.ones(n_ax)
             weights.append(self.broadcast_to_ndims(X, ax) if broadcast else X)
         return tuple(weights)
 
@@ -209,7 +232,7 @@ class TensorProductSpace:
             N: Optional per-axis counts.
 
         Returns:
-            Array (M, dims) with Cartesian products of mesh points.
+            Array (M,) with the per-point weight (the product of per-axis weights).
         """
         mesh = self.mesh(kind, N, broadcast=False)
         return jnp.array(
@@ -221,14 +244,14 @@ class TensorProductSpace:
         kind: MeshKind | str = MeshKind.QUADRATURE,
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
-        """Return flattened list of all weight tuples.
+        """Return flattened quadrature weights for the tensor-product grid.
 
         Args:
             kind: Sampling kind.
             N: Optional per-axis counts.
 
         Returns:
-            Array (M, dims) with Cartesian products of weights.
+            Array (M,) with Cartesian products of weights.
         """
         weights = self.weights(kind, N, broadcast=False)
         return jnp.prod(
@@ -377,7 +400,10 @@ class TensorProductSpace:
         """Return underlying orthogonal basis instance."""
         orthogonal_spaces = [space.get_orthogonal() for space in self.basespaces]
         return TensorProductSpace(
-            orthogonal_spaces, system=self.system, name=self.name + "o"
+            orthogonal_spaces,
+            system=self.system,
+            name=self.name + "o",
+            _token=_tensorproduct_token,
         )
 
     def backward(
@@ -602,11 +628,14 @@ def TensorProduct(
             space.basespaces[1].orthogonal.system = space.system
 
     if any(isinstance(s, DirectSum) for s in basespaces_list):
-        return DirectSumTPS(basespaces_list, system, name)
+        return DirectSumTPS(basespaces_list, system, name, _token=_tensorproduct_token)
 
     assert all(isinstance(s, OrthogonalSpace) for s in basespaces_list)
     return TensorProductSpace(
-        cast(list[OrthogonalSpace], basespaces_list), system, name
+        cast(list[OrthogonalSpace], basespaces_list),
+        system,
+        name,
+        _token=_tensorproduct_token,
     )
 
 
@@ -635,7 +664,17 @@ class DirectSumTPS(TensorProductSpace):
         name: str = "DSTPS",
         global_index: int = 0,
         leaf: CartesianTensorProductSpace | None = None,
+        *,
+        _token: object = None,
     ) -> None:
+        if _token is not _tensorproduct_token:
+            warnings.warn(
+                "DirectSumTPS should be created via TensorProduct(), "
+                "not instantiated directly — a tensor product space is normally "
+                "the result of the tensor product operation.",
+                DirectInstantiationWarning,
+                stacklevel=2,
+            )
         from jaxfun.galerkin.inner import project, project1D
 
         self.basespaces: list[OrthogonalSpace | DirectSum] = basespaces
@@ -819,6 +858,7 @@ class DirectSumTPS(TensorProductSpace):
                 f"{self.name}{i}",
                 leaf=self.leaf,
                 global_index=self.global_index,
+                _token=_tensorproduct_token,
             )
             for i, s in enumerate(tensorspaces)
         }

@@ -10,6 +10,7 @@ same-named-but-different-signature next to an unrelated public API member
 (`TimeStepper.solve`, `BaseMatrix.scale`).
 """
 
+import functools
 import inspect
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
@@ -53,6 +54,7 @@ def accepted_solve_options(cls: type) -> frozenset[str]:
     )
 
 
+@functools.cache
 def known_solve_options() -> frozenset[str]:
     """Return every solve option any `BaseMatrix` in `jaxfun.la` accepts."""
     names: set[str] = set()

@@ -128,17 +128,20 @@ class OrthogonalSpace(BaseSpace):
         assert len(c) <= self.N, f"Coefficient length {len(c)} exceeds N={self.N}"
         return self.eval_basis_functions(X)[..., : len(c)] @ c
 
-    @jax.jit(static_argnums=0)
-    def vandermonde(self, X: Array) -> Array:
-        r"""Return pseudo-Vandermonde matrix V_{m,k}=psi_k(X_m).
+    @jax.jit(static_argnums=(0, 1))
+    def vandermonde(self, N: int | None) -> Array:
+        r"""Return pseudo-Vandermonde matrix V_{m,k}=psi_k(X_m)
+
+        X_m are quadrature points in the reference domain
 
         Args:
-            X: 1D array of sample points (reference domain).
+            N: Number of quadrature points (defaults to self.num_quad_points).
 
         Returns:
-            Array shape (len(X), N) with basis values.
+            Array shape (N, self.N) with basis values.
         """
-        return self.evaluate_basis_derivative(X, 0)
+        X = self.quad_points_and_weights(N)[0]
+        return self.eval_basis_functions(X)
 
     @abstractmethod
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
@@ -223,8 +226,8 @@ class OrthogonalSpace(BaseSpace):
         Returns:
             Array of shape (N,) containing series evaluation at quadrature points.
         """
-        xj = self.mesh(kind=MeshKind.QUADRATURE, N=N)
-        return self.evaluate(xj, c)
+        P = self.vandermonde(N)
+        return P @ c
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward_primitive(
@@ -265,14 +268,14 @@ class OrthogonalSpace(BaseSpace):
     def scalar_product(self, u: Array) -> Array:
         """Return vector of inner products <u, psi_i> (weighted)."""
         N: int = u.shape[0]
-        xj, wj = self.quad_points_and_weights(N)
-        Pi = self.vandermonde(xj)  # shape (N, self.N)
+        Xj, wj = self.quad_points_and_weights(N)
+        Pi = self.eval_basis_functions(Xj)
         sg = self.system.sg / self.domain_factor
         if sp.sympify(sg).is_number:
             wj = wj * float(sg)
         else:
             x = self.system.base_scalars()[0]
-            sg = lambdify(x, self.map_expr_true_domain(sg))(xj)
+            sg = lambdify(x, self.map_expr_true_domain(sg))(Xj)
             wj = wj * sg
         return (u * wj) @ jnp.conj(Pi)  # Truncated to (self.N,)
 

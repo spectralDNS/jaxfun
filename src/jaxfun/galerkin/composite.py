@@ -228,10 +228,11 @@ class Composite(OrthogonalSpace):
         P: Array = self.orthogonal.evaluate_basis_derivative(X, k)
         return self.apply_stencil_right(P)
 
-    @jax.jit(static_argnums=0)
-    def vandermonde(self, X: Array) -> Array:
-        """Return (constrained) Vandermonde matrix at sample points X."""
-        P: Array = self.orthogonal.evaluate_basis_derivative(X, 0)
+    @jax.jit(static_argnums=(0, 1))
+    def vandermonde(self, N: int | None) -> Array:
+        """Return (constrained) Vandermonde matrix at quadrature points X."""
+        X = self.quad_points_and_weights(N)[0]
+        P: Array = self.orthogonal.eval_basis_functions(X)
         return self.apply_stencil_right(P)
 
     @jax.jit(static_argnums=(0, 2))

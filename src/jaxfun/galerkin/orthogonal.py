@@ -60,6 +60,25 @@ class OrthogonalSpace(BaseSpace):
 
     is_orthogonal = True
 
+    # Whether `backward` is a fast transform (FFT/DCT) rather than a matrix
+    # product with `vandermonde`. It decides how `backward_primitive` evaluates a
+    # derivative: a space with a fast transform differentiates in coefficient
+    # space and transforms once, while one without folds the differentiation into
+    # a cached derivative Vandermonde and pays a single matrix product either way.
+    # Set it to True in any subclass that overrides `backward` with a fast
+    # transform, or its derivatives will silently take the slower path.
+    has_fast_transform = False
+
+    # Whether the coefficient array holds only half of a Hermitian spectrum, the
+    # other half being implied by conjugate symmetry. Such a space represents a
+    # *real* field, and reconstructing it means adding the conjugate half back --
+    # which makes the expansion real-linear rather than complex-linear in the
+    # coefficients, so it cannot be written as a matrix product with
+    # `vandermonde`. `eval_reconstruction` folds the conjugate half into its
+    # weights and the caller takes the real part; `RFourier` is the one such
+    # space. Every other space leaves this False and the two agree.
+    is_hermitian_half = False
+
     def __init__(
         self,
         N: int,
@@ -138,7 +157,26 @@ class OrthogonalSpace(BaseSpace):
             Array of shape like X containing series evaluation.
         """
         assert len(c) <= self.N, f"Coefficient length {len(c)} exceeds N={self.N}"
-        return self.eval_basis_functions(X)[..., : len(c)] @ c
+        z = self.eval_reconstruction(X)[..., : len(c)] @ c
+        return z.real if self.is_hermitian_half else z
+
+    def eval_reconstruction(self, X: float | Array) -> Array:
+        """Return the values a coefficient vector is contracted against at X.
+
+        Equal to `eval_basis_functions` for every space whose expansion is
+        complex-linear in its coefficients, which is all of them except one
+        storing half a Hermitian spectrum (`is_hermitian_half`). There the
+        conjugate half is folded in as a per-mode weight and the contraction's
+        real part is the field -- see `RFourier`. Slicing the result to a
+        truncated coefficient vector stays correct, so callers may do that.
+
+        Args:
+            X: Evaluation point(s) in reference coordinates.
+
+        Returns:
+            Array of shape (..., N) to contract with the coefficients.
+        """
+        return self.eval_basis_functions(X)
 
     @cache_static
     def vandermonde(self, N: int | None) -> Array:
@@ -241,6 +279,33 @@ class OrthogonalSpace(BaseSpace):
         P = self.vandermonde(N)
         return P @ c
 
+    @cache_static
+    def vandermonde_derivative(self, k: int, N: int | None) -> Array:
+        r"""Return the pseudo-Vandermonde matrix of the k'th derivative.
+
+        ``V^{(k)}_{m,j} = d^k psi_j / dx^k`` at the quadrature points, in true
+        (not reference) coordinates, so that ``V^{(k)} @ c`` is the k'th
+        derivative of the series with coefficients ``c``.
+
+        Built by pushing the identity through `derivative_coeffs` -- the
+        recurrence stays the single definition of what differentiation means for
+        the basis -- and folding the resulting coefficient-space operator into
+        `vandermonde`. Memoized, so the recurrence runs once per (k, N) rather
+        than once per transform: it is a length-N sequential scan for the
+        polynomial bases, which costs more than the matrix product it precedes.
+
+        Args:
+            k: Derivative order.
+            N: Number of quadrature points (defaults to self.num_quad_points).
+
+        Returns:
+            Array of shape (N, self.N) with the k'th derivatives of the basis.
+        """
+        if k == 0:
+            return self.vandermonde(N)
+        D = jax.vmap(lambda e: self.derivative_coeffs(e, k))(jnp.eye(self.N))
+        return float(self.domain_factor**k) * (self.vandermonde(N) @ D.T)
+
     @jax.jit(static_argnums=(0, 2, 3))
     def backward_primitive(
         self,
@@ -257,8 +322,10 @@ class OrthogonalSpace(BaseSpace):
             N: Number of points. Must be >= self.num_quad_points, defaults to
                 self.num_quad_points.
         """
-        df = float(self.domain_factor**k)
-        return df * self.backward(self.derivative_coeffs(c, k), N=N)
+        if self.has_fast_transform:
+            df = float(self.domain_factor**k)
+            return df * self.backward(self.derivative_coeffs(c, k), N=N)
+        return self.vandermonde_derivative(k, N) @ c
 
     def mass_matrix(self) -> DiaMatrix:
         """Return diagonal mass matrix (orthogonality) in sparse format."""

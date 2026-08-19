@@ -1,0 +1,834 @@
+# Incompressible Navier-Stokes in a periodic channel
+#
+#   u_t + Grad(u)⋅u = -Grad(p) + nu*Div(Grad(u)) + f*i
+#   Div(u)          = 0
+#
+# on (x, y) in [0, Lx] x (-1, 1), periodic in x, no-slip walls, with a constant
+# streamwise body force f standing in for a driving pressure gradient. Fourier
+# along axis 0 and the polynomial (wall-normal) direction along axis 1, which is
+# jaxfun's convention and the order the multi-device sharding path requires.
+#
+# This is the velocity-only core of shenfun's Rayleigh-Benard formulation,
+# https://shenfun.readthedocs.io/en/latest/rayleighbenard.html. RayleighBenard.py
+# subclasses it and adds the temperature equation and its buoyancy coupling.
+#
+# PRESSURE ELIMINATION
+#
+# Applying Div(Grad(.)) to the y-momentum equation and substituting
+# Div(Grad(p)) = -Div(H), where H = (u.Grad)u, removes the pressure:
+#
+#   (Div(Grad(v)))_t = nu*Div(Grad(Div(Grad(v)))) + H_x,xy - H_y,xx
+#
+# with v = v_y = 0 at the walls -- a fourth-order equation whose mass operator is
+# the Laplacian. H is taken in rotational form H = (-v*w, u*w), w = v_x - u_y,
+# which leaves a Grad(|u|^2/2) absorbed into the (eliminated) pressure. A subclass
+# may add further explicit forcing to this equation -- buoyancy, in the Rayleigh-Benard
+# case.
+#
+# THE UNKNOWNS
+#
+#   v    wall-normal velocity   VB = F x B, biharmonic     transient, mass = Lap
+#   u    streamwise velocity    VD = F x D                 algebraic, continuity
+#   u0   mean flow, k = 0 only  1-D D1                     transient
+#
+# plus one transported scalar per subclass extension. Continuity
+# i*k*u_hat + v_hat_y = 0 determines u for every k except k = 0, where it
+# degenerates. There the x-momentum equation loses its pressure gradient outright
+# (dp/dx -> i*k*p_hat = 0) and closes the system on its own:
+#
+#   u0_t = nu*u0_yy - <H_x>_x + f
+#
+# u0 carries the entire mean profile: the Poiseuille base flow of a driven
+# channel, and in Rayleigh-Benard the "wind" driven from zero by the Reynolds
+# stress d<u v>/dy.
+#
+# WHY THIS IS A TAILORED SOLVER
+#
+# The u equation is algebraic for k != 0 and transient for k = 0, while
+# SystemIntegrator classifies a whole equation as one or the other. No symbolic
+# weak form can express the split, because a Fourier multiplier that is 1 at
+# k = 0 and 0 elsewhere is not a differential operator. So the stage loop is
+# written out here -- but composed from framework pieces rather than hand-rolled:
+# TimeStepper supplies the batched step driver, and one IMEXRungeKutta per
+# transient equation supplies the mass/stiffness split, the stage operators
+# (cached per distinct Butcher diagonal and factorized outside jit) and the
+# Butcher accumulation. Their weak forms carry no nonlinear terms at all; every
+# explicit term is computed here and handed to `stage()`, which takes its
+# nonlinear and linear caches as plain arrays.
+#
+# TWO PROPERTIES THAT COME OUT FOR FREE
+#
+# v_hat[k=0] stays exactly zero: every term on the v-equation right-hand side
+# carries at least one d/dx, and d/dx is a diagonal multiply by i*k that is
+# exactly 0 there. This is shenfun's u_hat[k,0] = 0 with no special handling.
+#
+# The continuity solve is pointwise exact, not merely a Galerkin projection:
+# v in VB makes v_y vanish at both walls, so v_y lies in VD exactly and the weak
+# equation has the pointwise solution as its unique Galerkin solution.
+#
+# THE k = 0 PIN
+#
+# The continuity operator is a single TPMatrix, diag(2*pi*i*k) x M_y, whose
+# Fourier entry at k = 0 is exactly zero. Pinning that row to the identity makes
+# the operator non-singular *and* turns the k = 0 row into a free slot: the solve
+# then returns u_hat[0] = M_y^-1 rhs[0], so setting rhs[0] = M_y @ u0 injects the
+# mean flow and leaves every other wavenumber bit-identical. Pinning the M x M
+# Fourier factor keeps the fast per-wavenumber banded solve; pinning the
+# flattened Kronecker matrix would destroy it.
+#
+# DEALIASING: FOURIER ONLY
+#
+# The Galerkin matrices are assembled exactly from the precomputed LGComposite
+# stencils, so quadrature error can only enter through the transform pair around
+# the pointwise products. Along Fourier that error is exact wrap-around -- mode
+# k1+k2 folds onto k1+k2-M at full amplitude -- so the 3/2 rule is mandatory.
+# Along Legendre it is instead a Gauss quadrature error: a product of two
+# degree-(N-1) fields needs exactness to degree 3N-3, while N Gauss points reach
+# only 2N-1. That error is not wrap-around; it scales with how far the product's
+# spectrum actually extends, so it vanishes as the run becomes resolved.
+#
+# Measured on a developed Ra=1e6-family field at 128 x 64 -- the change in the
+# nonlinear terms from dropping the Legendre padding, relative to their own size,
+# against the fraction of the temperature spectrum left in the top third:
+#
+#   Ra      spectrum tail    d(NL_v)     d(NL_u0)    d(NL_T)
+#   1e4     3.8e-07          5.3e-11     1.5e-11     3.6e-12
+#   1e5     1.2e-04          3.7e-04     2.6e-08     4.5e-06
+#   1e6     9.9e-04          1.0e-02     1.1e-04     1.9e-03
+#
+# So the Legendre padding buys nothing once a run is resolved (5e-11 at Ra=1e4)
+# and about 23% of the runtime, which is why it is off here. But it is not free
+# at the margin: at Ra=1e6 on this grid the run is only marginally resolved and
+# dropping it perturbs the v nonlinear term by 1%. Watch the `tail` diagnostic --
+# below ~1e-5 the padding is provably pointless, at 1e-3 it is not; past that,
+# raise M and N rather than trusting the answer.
+#
+# (The tail column reads lower than it did before the streamwise direction became
+# a half spectrum. The diagnostic used to take the first third of the *shifted*
+# full spectrum, which is |k| >= M/6 rather than the top third of the
+# wavenumbers; on a half spectrum the top third is the top third. Same states,
+# same d(NL) columns -- only the band the tail is measured over changed.)
+#
+# THE FIELDS ARE REAL, SO HALF THE SPECTRUM IS REDUNDANT
+#
+# Every physical field here is real, so its spectrum is Hermitian: the negative
+# wavenumbers are the conjugates of the positive ones and carry no information.
+# The streamwise direction is therefore `RFourier`, which stores only
+# k = 0, ..., M/2 and transforms with rfft/irfft. Nothing is approximated -- the
+# equations for -k are the conjugates of those for +k -- but everything downstream
+# runs on half the data: the banded per-wavenumber solves, the Butcher
+# accumulation, the stencils, and the wall-normal matrix products that dominate
+# the nonlinear term.
+#
+# The Nyquist mode is the one place a half spectrum is not simply the same thing
+# written down once. A real field cannot carry a phase there, d/dx of it is not
+# representable, and the operator matrices use the raw wavenumber while the
+# transforms zero it -- so the two conventions disagree unless it vanishes.
+# `_zero_nyquist` holds it at zero at every stage, and nothing is lost.
+#
+# RESOLUTION AND STEP SIZE ARE COUPLED
+#
+# Only the diffusive terms are implicit, so dt is limited by the advective
+# Courant number and has to come down roughly in step with the resolution -- and
+# it is the *wall-normal* resolution that binds, the Legendre spacing collapsing
+# like 1/N^2 at the walls. The `courant` diagnostic reports where a run stands;
+# past ~1 it diverges.
+#
+# CHOICE OF TABLEAU
+#
+# Any globally stiffly accurate IMEX tableau works -- ARS443, ARS222 and
+# IMEX_EULER; the Kennedy-Carpenter ARK family is only implicitly stiffly
+# accurate and is rejected. But advection is handled by the *explicit* table, so
+# the explicit part's imaginary-axis stability decides whether a scheme is usable
+# at all. Measured on the Orr-Sommerfeld growth rate below (Re=8000, T=50), as
+# relative error against linear theory:
+#
+#   dt            0.05        0.02        0.01
+#   ARS443        7.6e-06     5.1e-07     6.6e-08     3rd order
+#   ARS222        unstable    1.3e-05     3.0e-06     2nd order
+#   IMEX_EULER    diverges    diverges    diverges
+#
+# IMEX_EULER cannot integrate this problem at any step size: its explicit half is
+# forward Euler, whose stability region touches the imaginary axis only at the
+# origin, so pure advection is unconditionally unstable. ARS443 is the default.
+#
+# VERIFICATION (this file, run directly)
+#
+# The evolution of an Orr-Sommerfeld eigenmode superposed on plane Poiseuille
+# flow. The eigenmode of OrrSommerfeld_eigs.py grows at exactly alfa*Im(c), so
+# the measured growth rate of the wall-normal velocity is a sharp test of the
+# whole solver: advection, the biharmonic operator, continuity and the mean flow.
+#
+# Spatial discretization: Fourier x Legendre Galerkin (spectral)
+# Time discretization: any globally stiffly accurate IMEX Runge-Kutta tableau
+# ruff: noqa: E402
+import os
+import sys
+from enum import StrEnum
+from functools import partial
+from typing import Any, Literal, overload
+
+import jax
+
+# Before any jaxfun import, so nothing is built at the wrong precision. This is
+# not optional: the Orr-Sommerfeld eigenmode is seeded at amplitude 1e-7 on a
+# base flow of order 1, and in float32 the measured growth rate comes out
+# negative (-5.5e-04 against a theoretical +2.7e-03).
+jax.config.update("jax_enable_x64", True)
+
+import jax.numpy as jnp
+import sympy as sp
+from flax import nnx
+
+from jaxfun.galerkin import (
+    Fourier,
+    FunctionSpace,
+    Legendre,
+    TensorProduct,
+    TestFunction,
+    TrialFunction,
+)
+from jaxfun.galerkin.inner import project
+from jaxfun.integrators import ARS443, IMEXRungeKutta, IMEXTableau
+from jaxfun.integrators.base import TimeStepper
+from jaxfun.la import BaseMatrix, DiaMatrix, TPMatrix
+from jaxfun.operators import Constant, Div, Grad
+from jaxfun.typing import Array
+from jaxfun.utils.common import Domain
+from jaxfun.utils.operator_tools import assemble_linear_term
+
+# Heterogeneous keyword bundles, splatted into several different callees, so
+# they are annotated rather than left to infer a common value type.
+SOLVE: dict[str, Any] = {"auto_threshold": 100000}
+ASSEMBLE: dict[str, Any] = {"sparse": True, "sparse_tol": 1000}
+
+
+def linear_operator(expr: sp.Expr) -> BaseMatrix:
+    """Assemble one linear weak form into its operator.
+
+    `assemble_linear_term` returns None for a form that sympifies to zero and a
+    forcing vector alongside the operator. Every form here is a non-empty pure
+    operator, so this says that once instead of at each of the seven call sites.
+    """
+    A = assemble_linear_term(expr, **ASSEMBLE)[0]
+    assert A is not None, f"expected a non-empty linear form, got {expr}"
+    return A
+
+
+class VelocityKind(StrEnum):
+    SPECTRAL = "spectral"
+    PHYSICAL = "physical"
+    BOTH = "both"
+
+
+def snapshot_times(dt: float, steps: int, n_batches: int) -> Array:
+    """Return the times at which `TimeStepper.solve` records its snapshots.
+
+    Mirrors the batching in `TimeStepper.solve`: one snapshot at t=0, one per
+    completed batch, and -- when `n_batches` does not divide `steps` -- a final
+    one after the shorter remainder chunk. That last interval is *not* the same
+    length as the others, so a `linspace` over the snapshot count silently
+    mislabels the time axis and biases anything fitted against it.
+    """
+    count = min(n_batches, steps)
+    batch_len = steps // count
+    times = [i * batch_len * dt for i in range(count + 1)]
+    if steps - count * batch_len:
+        times.append(steps * dt)
+    return jnp.asarray(times)
+
+
+def growth_rate_of(values: Array, times: Array) -> float:
+    """Return the exponential growth rate fitted over the second half of a run.
+
+    `times` is truncated to the number of samples actually recorded, because
+    `TimeStepper.solve` stops early once the state goes non-finite -- a diverged
+    run therefore returns fewer snapshots than the batching predicts, and the
+    fit below then reports nan rather than a spurious rate.
+    """
+    times = times[: values.shape[0]]
+    half = values.shape[0] // 2
+    return float(jnp.polyfit(times[half:], jnp.log(values[half:]), 1)[0])
+
+
+class NavierStokes(TimeStepper[tuple[Array, ...]]):
+    """Incompressible Navier-Stokes in a periodic channel.
+
+    The state is `(v_hat, u0, *scalars)`: the wall-normal velocity, the mean
+    streamwise profile, and one array per transported scalar contributed by a
+    subclass. The streamwise velocity is never stored -- it is recomputed from v
+    and the mean flow at every stage by `velocity`, so it cannot drift out of
+    sync with them.
+
+    Subclasses extend the system through four hooks: `scalar_integrators`,
+    `scalar_initial`, `scalar_terms` and `buoyancy`. Everything else -- the
+    spaces, the velocity equations, the stage loop -- is shared.
+    """
+
+    def __init__(
+        self,
+        M: int,
+        N: int,
+        Lx: float,
+        nu: float,
+        *,
+        body_force: float = 0.0,
+        tableau: IMEXTableau = ARS443,
+        time: tuple[float, float] | None = None,
+        padding: tuple[int, int] | None = None,
+    ) -> None:
+        """Assemble the velocity spaces, operators and sub-integrators.
+
+        Args:
+            M: Number of Fourier modes along the periodic direction.
+            N: Number of Legendre modes along the wall-normal direction.
+            Lx: Width of the periodic box.
+            nu: Kinematic viscosity.
+            body_force: Constant streamwise forcing, standing in for a driving
+                pressure gradient. Being constant it has only a k=0 Fourier
+                component, so it enters the mean-flow equation alone.
+            tableau: Any *globally* stiffly accurate IMEX Runge-Kutta tableau,
+                so that the last stage is the accepted solution.
+            time: Optional default integration interval.
+            padding: Shape of real space. Only required if padding is used,
+                otherwise real shape defaults to M, N
+        """
+        if not tableau.is_stiffly_accurate:
+            raise ValueError(
+                "This solver takes the last stage as the accepted solution, so it "
+                "needs a globally stiffly accurate tableau (both the explicit and "
+                "the implicit table satisfying A[-1] == b). Try ARS443, ARS222 or "
+                "IMEX_EULER; the Kennedy-Carpenter ARK schemes are only implicitly "
+                "stiffly accurate and would need the final recombination."
+            )
+        self.time = time
+        self.tableau = nnx.static(tableau)
+        self.nu, self.Lx = nnx.static(nu), nnx.static(Lx)
+        self.nyquist = nnx.static(M // 2)
+        self.pad = nnx.static((M, N) if padding is None else padding)
+
+        hom = {"left": {"D": 0}, "right": {"D": 0}}
+        bih = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
+        F = FunctionSpace(M, Fourier.RFourier, domain=Domain(0, Lx), name="F")
+        D = FunctionSpace(N, Legendre.Legendre, bcs=hom, name="D")
+        B = FunctionSpace(N, Legendre.Legendre, bcs=bih, name="B")
+        VD = TensorProduct(F, D, name="VD")
+        VB = TensorProduct(F, B, name="VB")
+        # H and the scalar fluxes satisfy no boundary conditions, so they live in
+        # the orthogonal space; the products are truncated back to N by `forward`.
+        Wo = VD.get_orthogonal()
+        # The mean flow is genuinely one-dimensional: it is the k=0 mode alone,
+        # and at k=0 every 2-D operator reduces to its y-factor exactly.
+        D1 = VD.basespaces[1]
+        self.F = nnx.static(F)
+        # d/dx in coefficient space: the same multiplier `Fourier.derivative_coeffs`
+        # applies for a first derivative, kept here so the vorticity can be formed
+        # in coefficient space and ride along in the batched transform below.
+        self.ikx = nnx.data(
+            1j * F.wavenumbers(eliminate_highest_freq=True) * float(F.domain_factor)
+        )
+        self.system = nnx.static(VD.system)
+        # Assigned one at a time: a single unpacking would give all four the
+        # union of their types, and the spaces are not interchangeable.
+        self.VD, self.VB = nnx.static(VD), nnx.static(VB)
+        self.Wo, self.D1 = nnx.static(Wo), nnx.static(D1)
+
+        x, y = VD.system.base_scalars()
+        t = VD.system.base_time()
+        nu_c = Constant("nu", nu)
+
+        u = TrialFunction(VD, name="u")
+        w = TestFunction(VD, name="w")
+        v = TrialFunction(VB, name="v", transient=True)
+        q = TestFunction(VB, name="q")
+        g = TrialFunction(Wo, name="g")
+        u1 = TrialFunction(D1, name="u1", transient=True)
+        w1 = TestFunction(D1, name="w1")
+
+        # Purely linear weak forms: every explicit term is supplied by `step`.
+        eq_v = ((Div(Grad(v))).diff(t) - nu_c * Div(Grad(Div(Grad(v))))) * q
+        eq_0 = (u1.diff(t) - nu_c * u1.diff(y, 2)) * w1
+        opts: dict[str, Any] = {**ASSEMBLE, "solver_options": SOLVE, "tableau": tableau}
+        self.gv = nnx.data(
+            IMEXRungeKutta(eq_v, initial=jnp.zeros(VB.num_dofs, dtype=complex), **opts)
+        )
+        self.g0 = nnx.data(IMEXRungeKutta(eq_0, initial=jnp.zeros(D1.num_dofs), **opts))
+
+        A_div = linear_operator(u.diff(x, 1) * w)
+        assert isinstance(A_div, TPMatrix)
+        # The Fourier factor is what gets pinned below, and only a banded matrix
+        # can be: pinning the flattened Kronecker matrix would destroy the fast
+        # per-wavenumber solve.
+        A_kx = A_div.mats[0]
+        assert isinstance(A_kx, DiaMatrix)
+        assert float(jnp.abs(A_kx.diagonal(0)[0])) == 0.0, (
+            "the k=0 row of the continuity operator must be singular"
+        )
+        self.A_pin = nnx.data(
+            TPMatrix(
+                [A_kx.pin({0: 1.0}).matrix, A_div.mats[1]],
+                A_div.coefficient,
+                A_div.global_indices,
+            )
+        )
+        self.My = nnx.data(A_div.mats[1])
+        self.C_v = nnx.data(linear_operator(v.diff(y, 1) * w))
+        # v equation: + H_x,xy - H_y,xx
+        self.C_hx = nnx.data(linear_operator(g.diff(x, 1).diff(y, 1) * q))
+        self.C_hy = nnx.data(linear_operator(-g.diff(x, 2) * q))
+        # A constant force has only a k=0 component, so it lands entirely on u0.
+        self.f0 = nnx.data(
+            body_force * D1.scalar_product(jnp.ones(self.pad[1]))
+            if body_force
+            else None
+        )
+        # Volume of the domain in scalar-product units, for exact averages.
+        self.vol = nnx.static(float(Wo.scalar_product(jnp.ones(Wo.shape))[0, 0].real))
+
+    # -- extension points --------------------------------------------------
+
+    @property
+    def scalar_integrators(self) -> tuple[IMEXRungeKutta, ...]:
+        """Sub-integrators for transported scalars, appended to the state."""
+        return ()
+
+    def scalar_initial(self) -> tuple[Array, ...]:
+        """Initial coefficients for each transported scalar."""
+        return ()
+
+    def scalar_terms(
+        self, u_p: Array, v_p: Array, scalars: tuple[Array, ...]
+    ) -> tuple[Array, ...]:
+        """Explicit right-hand side of each transported scalar equation."""
+        return ()
+
+    def buoyancy(self, scalars: tuple[Array, ...]) -> Array | None:
+        """Extra explicit forcing on the wall-normal momentum equation."""
+        return None
+
+    def extra_diagnostics(self, state: tuple[Array, ...]) -> dict[str, float]:
+        """Diagnostics contributed by a subclass."""
+        return {}
+
+    # -- fields ------------------------------------------------------------
+
+    @property
+    def integrators(self) -> tuple[IMEXRungeKutta, ...]:
+        """Every sub-integrator, in state order."""
+        return (self.gv, self.g0) + self.scalar_integrators
+
+    def velocity(self, v_hat: Array, u0: Array) -> Array:
+        """Return the streamwise velocity: continuity for k != 0, u0 at k = 0."""
+        rhs = (-(self.C_v @ v_hat)).at[0].set(self.My @ (u0 + 0j))
+        return self.A_pin.solve(rhs)
+
+    # `kind` decides how many arrays come back, so it is spelled out per value:
+    # every caller unpacks a fixed number and would otherwise have to widen.
+    @overload
+    def velocity_from_state(
+        self,
+        state: tuple[Array, ...],
+        pad: tuple[int, int] | None = None,
+        kind: Literal[VelocityKind.SPECTRAL, VelocityKind.PHYSICAL] = ...,
+    ) -> tuple[Array, Array]: ...
+    @overload
+    def velocity_from_state(
+        self,
+        state: tuple[Array, ...],
+        pad: tuple[int, int] | None = None,
+        *,
+        kind: Literal[VelocityKind.BOTH],
+    ) -> tuple[Array, Array, Array, Array]: ...
+    def velocity_from_state(
+        self,
+        state: tuple[Array, ...],
+        pad: tuple[int, int] | None = None,
+        kind: VelocityKind = VelocityKind.PHYSICAL,
+    ) -> tuple[Array, Array] | tuple[Array, Array, Array, Array]:
+        v_hat, u0 = state[0], state[1]
+        u_hat = self.velocity(v_hat, u0)
+        if kind == VelocityKind.SPECTRAL:
+            return u_hat, v_hat
+        u_p = self.VD.backward(u_hat, N=pad)
+        v_p = self.VB.backward(v_hat, N=pad)
+        if kind == VelocityKind.PHYSICAL:
+            return u_p, v_p
+        return u_hat, v_hat, u_p, v_p
+
+    # The transform is split into its two directions so that the vorticity can be
+    # assembled in between: v_x and u_y need different wall-normal matrices, but
+    # they are only ever used as a difference, so subtracting them while x is
+    # still in coefficient space turns two streamwise transforms into one.
+    #
+    # That is the only reason these are not
+    #
+    #   u_p, v_p, vx_p = self.Wo.backward_batch(stack, N=self.pad)
+    #   uy_p           = self.Wo.backward_primitive(cu, k=(0, 1), N=self.pad)
+    #
+    # which is otherwise the same work in three lines. Measured on the
+    # Rayleigh-Benard configuration (128 x 64, 3/2 padded), that costs 2.85-3.04
+    # ms per step against 2.77 ms here -- the extra padded streamwise transform,
+    # 3-10%. Each half below is `RFourier`/`Legendre`'s own 1-D transform applied
+    # along its axis and batched over the fields, which is what
+    # `TensorProductSpace` would do internally, in the same axis order:
+    # wall-normal first, so the streamwise padding never inflates the matrix
+    # products.
+
+    def _wall_normal(self, *coeffs: Array, ky: int = 0) -> tuple[Array, ...]:
+        """Evaluate the wall-normal direction, leaving x in coefficient space.
+
+        Batched over `coeffs`: every field goes through the same Vandermonde --
+        `ky` picks which derivative of it -- so the matrix product runs once on
+        the stacked fields rather than once each. Fields wanting a different
+        `ky` need their own call; that is the only constraint on what can share
+        a batch.
+        """
+        nk, Nq = self.F.N, self.pad[1]
+        yspace = self.Wo.basespaces[1]
+        stacked = jnp.concatenate(coeffs, axis=0)
+        vals = jax.vmap(partial(yspace.backward_primitive, k=ky, N=Nq))(stacked)
+        return tuple(vals.reshape(len(coeffs), nk, Nq))
+
+    def _streamwise(self, *rows: Array) -> tuple[Array, ...]:
+        """Evaluate the streamwise direction: half spectrum -> real padded field."""
+        xback = partial(self.F.backward, N=self.pad[0])
+        return tuple(jax.vmap(jax.vmap(xback, in_axes=1, out_axes=1))(jnp.stack(rows)))
+
+    def _forward(self, *fields: Array) -> tuple[Array, ...]:
+        """Transform padded real fields back to orthogonal coefficient arrays.
+
+        The inverse of `_wall_normal` + `_streamwise`, batched the same way and
+        for the same reason.
+        """
+        nk = self.F.N
+        yspace = self.Wo.basespaces[1]
+        half = jax.vmap(jax.vmap(self.F.forward, in_axes=1, out_axes=1))(
+            jnp.stack(fields)
+        )
+        nf = half.shape[0]
+        return tuple(
+            jax.vmap(yspace.forward)(half.reshape(nf * nk, -1)).reshape(nf, nk, -1)
+        )
+
+    def explicit_terms(
+        self, u_hat: Array, v_hat: Array, scalars: tuple[Array, ...]
+    ) -> tuple[Array, Array, tuple[Array, ...]]:
+        """Return the explicit right-hand side of every transient equation.
+
+        Everything is evaluated on the 3/2-padded mesh and truncated back by the
+        forward transforms, which is what makes the quadratic products alias-free.
+
+        The fields are mapped to the *orthogonal* basis first. A `Composite`
+        transform is a banded stencil followed by the orthogonal Vandermonde, so
+        doing the stencils here leaves u, v and the vorticity sharing one
+        wall-normal matrix product despite living in three different composite
+        spaces -- which is what lets `_wall_normal` batch them.
+        """
+        cu = self.VD.to_orthogonal(u_hat)
+        cv = self.VB.to_orthogonal(v_hat)
+        u_c, v_c, vx_c = self._wall_normal(cu, cv, self.ikx[:, None] * cv)
+        (uy_c,) = self._wall_normal(cu, ky=1)
+        u_p, v_p, om = self._streamwise(u_c, v_c, vx_c - uy_c)
+        Hx, Hy = -v_p * om, u_p * om
+        hx, hy = self._forward(Hx, Hy)
+        NL_v = self.C_hx @ hx + self.C_hy @ hy
+        buoyancy = self.buoyancy(scalars)
+        if buoyancy is not None:
+            NL_v = NL_v + buoyancy
+        # A test function of y alone integrates x out, so the mean-flow forcing is
+        # the 1-D scalar product against the x-average of H_x. Taking that average
+        # directly -- rather than row 0 of the 2-D scalar product, which is the
+        # same thing times a Fourier normalisation -- avoids a padded FFT and
+        # M-1 unused Legendre scalar products, and leaves no constant to get wrong.
+        NL_0 = -self.D1.scalar_product(Hx.mean(axis=0))
+        if self.f0 is not None:
+            NL_0 = NL_0 + jnp.asarray(self.f0)
+        return NL_v, NL_0, self.scalar_terms(u_p, v_p, scalars)
+
+    # -- stepping ----------------------------------------------------------
+
+    @jax.jit(static_argnums=(0, 3))
+    def step(
+        self,
+        state: tuple[Array, ...],
+        dt: float,
+        N: tuple[int, ...] | None = None,
+    ) -> tuple[Array, ...]:
+        """Advance one IMEX Runge-Kutta step.
+
+        Each field's stage comes from its own `IMEXRungeKutta.stage`, which takes
+        the nonlinear and linear caches as plain arrays -- so the explicit terms
+        are computed here, in rotational form, rather than symbolically. The
+        constraint is solved between the implicit solves and the explicit
+        evaluation, so the streamwise velocity is never lagged: at every stage it
+        is the exact solution of continuity for that stage's v and u0.
+
+        The tableau is globally stiffly accurate (enforced in `__init__`), so the
+        last stage is the accepted solution and no final recombination is needed.
+        """
+        integrators = self.integrators
+        m = tuple(g.apply_mass(s) for g, s in zip(integrators, state, strict=True))
+        nl: list[list[Array | None]] = [[] for _ in integrators]
+        li: list[list[Array | None]] = [[] for _ in integrators]
+        stage = tuple(state)
+
+        for i in range(self.tableau.stages):
+            stage = self._zero_nyquist(
+                tuple(
+                    g.stage(i, m[k], dt, nl[k], li[k], g.linear_forcing)
+                    for k, g in enumerate(integrators)
+                )
+            )
+            vi, u0i, scalars = stage[0], stage[1], stage[2:]
+            ui = self.velocity(vi, u0i)
+            NL_v, NL_0, NL_s = self.explicit_terms(ui, vi, scalars)
+            for k, (g, value) in enumerate(
+                zip(integrators, (NL_v, NL_0) + NL_s, strict=True)
+            ):
+                nl[k].append(value)
+                li[k].append(g.linear_operator @ stage[k])
+
+        return stage
+
+    def _zero_nyquist(self, state: tuple[Array, ...]) -> tuple[Array, ...]:
+        """Return `state` with the Nyquist Fourier mode cleared.
+
+        The operators use the raw wavenumbers while `backward_primitive` zeroes
+        the Nyquist for odd derivatives, so leaving it populated would make the
+        two disagree there. A real field cannot carry a phase on that mode
+        either, so nothing is lost -- and with it held at zero the non-negative
+        wavenumbers determine the field outright, which is what `_wall_normal`
+        and `_forward` rely on.
+
+        Applied at every stage rather than once at the end of the step, so that
+        no stage is ever *evaluated* with a mode the two conventions disagree
+        about. u0 is 1-D and has no Fourier direction.
+        """
+        ny = self.nyquist
+        return (state[0].at[ny].set(0.0), state[1]) + tuple(
+            s.at[ny].set(0.0) for s in state[2:]
+        )
+
+    def setup(self, dt: float) -> None:
+        """Factorize every operator before time stepping starts.
+
+        The continuity operator has to be warmed here for the same reason the
+        stage operators do: the solver picks its path by inspecting concrete
+        matrix values, and inside the jitted step those are tracers.
+        """
+        for g in self.integrators:
+            g.setup(dt)
+        self.A_pin.solve(jnp.zeros(self.VD.num_dofs, dtype=complex))
+
+    def initial_coefficients(self, initial=None) -> tuple[Array, ...]:
+        """Return the state at rest, plus whatever the subclass contributes."""
+        if initial is not None:
+            return self._coerce_state(initial)
+        return (
+            jnp.zeros(self.VB.num_dofs, dtype=complex),
+            jnp.zeros(self.D1.num_dofs),
+        ) + self.scalar_initial()
+
+    def _coerce_state(self, state0) -> tuple[Array, ...]:
+        """Coerce a restart state into one coefficient array per field."""
+        v_hat, u0, *scalars = state0
+        return (
+            jnp.asarray(v_hat).reshape(self.VB.num_dofs).astype(complex),
+            jnp.asarray(u0).reshape(self.D1.num_dofs).real,
+        ) + tuple(
+            jnp.asarray(s).reshape(g.trialspace.num_dofs).astype(complex)
+            for g, s in zip(self.scalar_integrators, scalars, strict=True)
+        )
+
+    # -- diagnostics -------------------------------------------------------
+
+    def average(self, f: Array) -> Array:
+        """Return the exact volume average of a padded physical field."""
+        return self.Wo.scalar_product(f)[0, 0].real / self.vol
+
+    def courant(self, state: tuple[Array, ...], dt: float) -> float:
+        """Return the advective Courant number on the padded mesh.
+
+        Only the diffusive terms are implicit, so the step size is limited by
+        advection alone. The wall-normal spacing collapses like 1/N^2 near the
+        walls, but so does the wall-normal velocity, which is why the limit is
+        far milder than the raw mesh spacing suggests.
+        """
+        u_p, v_p = self.velocity_from_state(
+            state, pad=self.pad, kind=VelocityKind.PHYSICAL
+        )
+
+        xm, ym = self.VD.mesh(N=self.pad, broadcast=False)
+        dx = float(self.Lx) / xm.shape[0]
+        dy = jnp.abs(jnp.asarray(jnp.gradient(ym)))[None, :]
+        return float(dt * (jnp.abs(u_p) / dx + jnp.abs(v_p) / dy).max())
+
+    def diagnostics(self, state: tuple[Array, ...]) -> dict[str, float]:
+        """Return the structural checks, plus any the subclass adds."""
+        u0 = state[1]
+        pad = self.pad
+        u_hat, v_hat, u_p, v_p = self.velocity_from_state(
+            state, pad=pad, kind=VelocityKind.BOTH
+        )
+        div = self.VD.backward_primitive(
+            u_hat, k=(1, 0), N=pad
+        ) + self.VB.backward_primitive(v_hat, k=(0, 1), N=pad)
+        scale = max(float(jnp.abs(u_p).max()), float(jnp.abs(v_p).max()), 1e-300)
+        return {
+            "div": float(jnp.abs(div).max()) / scale,
+            "v[k=0]": float(jnp.abs(v_hat[0]).max()),
+            "u[k=0]-u0": float(jnp.abs(u_hat[0].real - u0).max()),
+            # No "imag" check: with a half spectrum every physical field comes
+            # out of `irfft` real by construction, so there is nothing to check.
+            "max|u|": float(jnp.abs(u_p).max()),
+            "max|v|": float(jnp.abs(v_p).max()),
+            # Physical, not the coefficient max: for Poiseuille this must read 1.
+            "max|u0|": float(jnp.abs(self.D1.backward(u0)).max()),
+        } | self.extra_diagnostics(state)
+
+
+# ---------------------------------------------------------------------------
+# Verification: growth of an Orr-Sommerfeld eigenmode on plane Poiseuille flow
+#
+# The base flow U(y) = 1 - y^2 is an exact steady solution of the mean-flow
+# equation once the body force balances its own diffusion: u0_t = nu*u0_yy + f
+# with u0_yy = -2 needs f = 2*nu. Superposing the least-stable Orr-Sommerfeld
+# eigenmode at an amplitude small enough to stay linear, the perturbation must
+# grow like exp(alfa*Im(c)*t) with c the eigenvalue.
+#
+# Only the wall-normal velocity needs seeding. The eigenmode is a streamfunction,
+# psi = phi(y)*exp(i*alfa*x), so v = -psi_x = -i*alfa*phi(y)*exp(i*alfa*x) and
+# phi lies in the biharmonic space exactly. The streamwise perturbation
+# u = psi_y = phi'(y)*exp(i*alfa*x) then has to come out of the continuity solve
+# on its own -- which is an independent check of it, run below.
+# ---------------------------------------------------------------------------
+RE, ALFA = 8000.0, 1.0
+EIGVAL_REF = 0.24707506017508621 + 0.0026644103710965817j
+
+
+def orr_sommerfeld_state(
+    solver: NavierStokes, amplitude: float, n_os: int = 100, t: float = 0.0
+) -> tuple[tuple[Array, ...], complex, Array]:
+    """Return the initial state, the eigenvalue, and phi' for cross-checking."""
+    from OrrSommerfeld_eigs import OrrSommerfeld
+
+    problem = OrrSommerfeld(alfa=ALFA, Re=RE, N=n_os)
+    eigvals, eigvectors = problem.solve()
+    xm, ym = solver.VB.mesh(broadcast=False)
+    eigval, phi, dphidy = problem.interp(ym, eigvals, eigvectors, eigval=1)
+    wave = jnp.exp(1j * ALFA * (xm - eigval * t))[:, None]
+    v_p = amplitude * (-1j * ALFA * phi[None, :] * wave).real
+    (yd,) = solver.D1.system.base_scalars()
+    return (
+        (solver.VB.forward(v_p), project(1 - yd**2, solver.D1)),
+        complex(eigval),
+        amplitude * (dphidy[None, :] * wave).real,
+    )
+
+
+def os_vel(
+    solver: NavierStokes, t: float, amplitude: float
+) -> tuple[Array, Array, complex]:
+    state, eigval, _ = orr_sommerfeld_state(solver, amplitude, 128, t)
+    u_p, v_p = solver.velocity_from_state(state, kind=VelocityKind.PHYSICAL)
+    return u_p, v_p, eigval
+
+
+def solution_error(
+    solver: NavierStokes, state: tuple[Array, ...], t: float, amplitude: float
+) -> tuple[Array, Array, Array, Array]:
+    "Compute same error metrics as Shenfun for comparison."
+    uh, vh, u, v = solver.velocity_from_state(state, kind=VelocityKind.BOTH)
+    ex, ey, eigval = os_vel(solver, t, amplitude)
+    w0, w1 = solver.VD.weights()
+    e2 = jnp.sum(w0 * w1 * ((u - ex) ** 2 + (v - ey) ** 2))
+    exact = jnp.exp(2 * jnp.imag(ALFA * eigval) * t)
+    xi, yj = solver.VD.mesh()
+    ux = 1 - yj**2
+    e1 = jnp.sum(w0 * w1 * ((u - ux) ** 2 + v**2))
+    ex, ey, eigval = os_vel(solver, 0.0, amplitude)
+    e0 = jnp.sum(w0 * w1 * ((ex - ux) ** 2 + ey**2))
+    return e0, e1, e2, exact
+
+
+def main() -> None:
+    """Evolve the eigenmode and compare its growth rate with linear theory."""
+    M, N = 32, 128
+    dt, t_end, amplitude = 0.02, 100.0, 1e-7
+    if "PYTEST" in os.environ:
+        M, N, t_end = 16, 48, 1.0
+    nu = 1.0 / RE
+    padding = (3 * M // 2, N)
+    solver = NavierStokes(
+        M,
+        N,
+        2 * float(sp.pi) / ALFA,
+        nu,
+        body_force=2 * nu,
+        time=(0.0, t_end),
+        padding=padding,
+    )
+    state0, eigval, u_expected = orr_sommerfeld_state(solver, amplitude, 128, 0.0)
+    print(f"Orr-Sommerfeld  Re={RE:g} alfa={ALFA:g}  M={M} N={N} dt={dt} T={t_end}")
+    print(f"  eigenvalue {eigval:.16f}")
+    print(f"  reference  {EIGVAL_REF:.16f}   diff {abs(eigval - EIGVAL_REF):.2e}")
+    # The streamwise perturbation is not seeded; continuity has to produce it.
+    # What is left over is the error of projecting the eigenfunction onto N
+    # Legendre modes, not of the continuity solve, so it converges spectrally
+    # and the tolerance has to track N. Measured (Re=8000, alfa=1):
+    #
+    #   N        48        64        96        128       160
+    #   rel err  1.7e-05   3.4e-08   1.0e-12   7.6e-12   2.2e-11
+    #
+    # i.e. it hits the round-off floor by N=96, limited by the eigenvector's own
+    # conditioning and the biharmonic mass solve inside `VB.forward`.
+    u_hat = solver.velocity(state0[0], jnp.zeros(solver.D1.num_dofs))
+    u_got = solver.VD.backward(u_hat).real
+    err = float(jnp.abs(u_got - u_expected).max() / jnp.abs(u_expected).max())
+    print(f"  continuity recovers u = phi'(y)*exp(i*alfa*x) to {err:.3e}")
+    assert err < (1e-9 if N >= 96 else 1e-3), (
+        "the continuity solve must reproduce the eigenmode's u"
+    )
+    d0 = solver.diagnostics(state0)
+    print("  initial " + "  ".join(f"{k}={v:.3e}" for k, v in d0.items()))
+    steps, batches = int(round(t_end / dt)), 50
+
+    snaps = solver.solve(
+        dt=dt,
+        state0=state0,
+        n_batches=batches,
+        return_batch_snapshots=True,
+        progress=True,
+    )
+    final = tuple(s[-1] for s in snaps)
+    d1 = solver.diagnostics(final)
+    print("  final   " + "  ".join(f"{k}={v:.3e}" for k, v in d1.items()))
+    print(f"  Courant = {solver.courant(final, dt):.2f}")
+    # The base flow has no wall-normal velocity, so |v| is pure perturbation.
+    rate = growth_rate_of(
+        jnp.abs(snaps[0]).max(axis=(1, 2)), snapshot_times(dt, steps, batches)
+    )
+    expected = ALFA * eigval.imag
+    print(f"\n  growth rate measured {rate:+.12f}")
+    print(
+        f"  linear theory        {expected:+.12f}   (rel error {abs(rate / expected - 1):.2e})"  # noqa: E501
+    )
+    assert d1["div"] < 1e-10, f"divergence not satisfied: {d1['div']:.3e}"
+    # Relative, not exact: the seeded eigenmode's k=0 Fourier component is
+    # analytically zero but comes out of the FFT at round-off, so k=0 starts at
+    # ~1e-24 rather than at 0. It is never *driven* -- every term on the v
+    # equation's right-hand side carries a d/dx -- so it only decays from there.
+    # RayleighBenard, which starts from v = 0 exactly, does hold it at exactly 0.
+    assert d1["v[k=0]"] < 1e-14 * d1["max|v|"], "the k=0 mode must not be driven"
+
+    e0, e1, e2, exact = solution_error(solver, final, t_end, amplitude)
+    assert abs(e1 / e0 - exact) < 1e-6
+    assert jnp.sqrt(e2) < 1e-11
+
+    if "PYTEST" not in os.environ:
+        assert abs(rate / expected - 1) < 0.01, "growth rate off by more than 1%"
+
+
+if __name__ == "__main__":
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    main()

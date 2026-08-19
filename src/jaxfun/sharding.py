@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import jax
+import jax.core
 from jax import shard_map
-from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, Sharding
 
 from jaxfun.typing import Array, ArrayFun
 
@@ -21,23 +22,42 @@ def get_transposed_sharding(sharding: NamedSharding) -> NamedSharding:
         raise ValueError(f"Provided {sharding} does not match spectral or physical.")
 
 
+def place(z: Array, sharding: Sharding | None) -> Array:
+    """Place ``z`` on ``sharding``, or return it unchanged when that is not possible.
+
+    A no-op for a traced array: a tracer carries no placement, and adding one to
+    a `device_put` result raises `Received incompatible devices`. The batched
+    transforms run their bodies under `vmap`, so every placement inside them
+    meets a tracer. Placement is a locality optimization, never a correctness
+    one, so skipping it there costs nothing but locality.
+    """
+    if sharding is None or isinstance(z, jax.core.Tracer):
+        return z
+    try:
+        return jax.device_put(z, sharding)
+    except ValueError:  # sharding does not divide the array evenly
+        return z
+
+
 def _build_local_apply_fn(dim: int, ax: int, fn: ArrayFun) -> ArrayFun:
     """Return a ``jax.jit(jax.vmap(...))`` that applies *fn* along *ax*.
 
     The resulting callable operates on a plain (non-sharded) local array,
     so JAX compiles it once and reuses the compiled binary on every call.
+
+    ``fn`` is a 1-D transform, so every other axis is mapped over: one `vmap`
+    per axis, wrapped smallest-index innermost. Each level then removes an index
+    larger than any the levels below it refer to, which is what keeps their
+    `in_axes` valid without renumbering.
+
+    ``dim`` is the rank of the arrays the result will be called with, which need
+    not be the dimensionality of the space -- a batched transform passes one
+    more, and `ax` is then the axis in the batched array.
     """
-    if dim == 2:
-        axi = dim - 1 - ax
-        return jax.jit(jax.vmap(fn, in_axes=axi, out_axes=axi))
-    ax0, ax1 = sorted(set(range(dim)) - {ax})
-    return jax.jit(
-        jax.vmap(
-            jax.vmap(fn, in_axes=ax0, out_axes=ax0),
-            in_axes=ax1,
-            out_axes=ax1,
-        )
-    )
+    out = fn
+    for other in sorted(set(range(dim)) - {ax}):
+        out = jax.vmap(out, in_axes=other, out_axes=other)
+    return jax.jit(out)
 
 
 def _apply_separable_spmd_shard_map(

@@ -536,6 +536,11 @@ class DirectSum:
 
     is_transient = False
     is_orthogonal = False
+    # A direct sum lifts boundary data, so both summands are built over a
+    # polynomial basis -- never a half spectrum, which is periodic and has no
+    # boundary to impose anything on. Mirrored from `OrthogonalSpace` because a
+    # `DirectSum` is not one.
+    is_hermitian_half = False
 
     def __init__(self, a: Composite, b: BCGeneric) -> None:
         assert isinstance(b, BCGeneric)

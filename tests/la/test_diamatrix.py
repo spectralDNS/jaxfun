@@ -918,6 +918,35 @@ class TestLU:
             )
 
 
+class TestDiagonalLUShortcut:
+    """`LUFactors.solve` divides directly when both factors are diagonal."""
+
+    def test_matches_dense_solve(self):
+        A = DiagonalMatrix(jnp.asarray([2.0, -3.0, 0.5, 4.0]))
+        b = jnp.asarray([1.0, 2.0, 3.0, 4.0])
+        expected = np.linalg.solve(np.asarray(A.todense()), np.asarray(b))
+        assert jnp.allclose(A.lu_factor().solve(b), jnp.asarray(expected))
+
+    @pytest.mark.parametrize("axis", (0, 1, -1))
+    def test_matches_dense_solve_batched(self, axis: int):
+        d = jnp.asarray([2.0, -3.0, 0.5, 4.0])
+        A = DiagonalMatrix(d)
+        b = jnp.asarray(np.random.rand(4, 4))
+        got = A.lu_factor().solve(b, axis=axis)
+        shape = [1, 1]
+        shape[axis % 2] = 4
+        assert jnp.allclose(got, b / d.reshape(tuple(shape)))
+
+    def test_banded_still_substitutes(self):
+        """The shortcut must not fire for a factorization with off-diagonals."""
+        _, A = _tridiag(6)
+        lu = A.lu_factor()
+        assert not (lu.L.is_diagonal and lu.U.is_diagonal)
+        b = jnp.asarray(np.random.rand(6))
+        expected = np.linalg.solve(np.asarray(A.todense()), np.asarray(b))
+        assert jnp.allclose(lu.solve(b), jnp.asarray(expected), atol=ulp(100))
+
+
 class TestGetRow:
     def test_first_row(self):
         a, A = _tridiag(5)
@@ -1168,6 +1197,36 @@ class TestPin:
         row0 = sys.matrix.get_row(0)
         expected = jnp.zeros(5).at[0].set(1.0)
         assert jnp.allclose(row0, expected)
+
+    def test_pin_keeps_bandwidth(self):
+        """Pinning replaces rows with identity rows, so it never widens the band.
+
+        A diagonal matrix is the one case where that is a change of *type*: it
+        stays diagonal, and `DiagonalMatrix` says so. Everything else keeps its
+        own class and its own offsets.
+        """
+        _, tri = _tridiag(6)
+        dia = DiagonalMatrix(jnp.arange(1.0, 7.0))
+        for A, expected_type in ((tri, DiaMatrix), (dia, DiagonalMatrix)):
+            pinned = A.pin({0: 1.0, 3: 2.0}).matrix
+            assert type(pinned) is expected_type
+            assert pinned.offsets == A.offsets
+            # and the pinned rows really are identity rows
+            reference = np.asarray(A.todense()).copy()
+            for i in (0, 3):
+                reference[i] = 0.0
+                reference[i, i] = 1.0
+            assert jnp.allclose(pinned.todense(), jnp.asarray(reference))
+
+    def test_pin_diagonal_solves(self):
+        """A pinned diagonal must solve like the dense system it stands for."""
+        A = DiagonalMatrix(jnp.arange(1.0, 7.0))
+        pinned = A.pin({0: 1.0, 3: 2.0})
+        b = jnp.asarray(np.linspace(0.3, 1.7, 6))
+        rhs = np.asarray(b).copy()
+        rhs[0], rhs[3] = 1.0, 2.0
+        expected = np.linalg.solve(np.asarray(pinned.matrix.todense()), rhs)
+        assert jnp.allclose(pinned.solve(b), jnp.asarray(expected))
 
     def test_pin_data_stays_on_device(self):
         """pin() must not force a device→host transfer; result should be a JAX array."""

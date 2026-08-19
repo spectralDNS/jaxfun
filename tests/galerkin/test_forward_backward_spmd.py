@@ -178,3 +178,55 @@ def test_cached_basis_survives_shard_map() -> None:
     xj = T.mesh(N=pad, broadcast=True)
     ue = lambdify((x, y), sp.sin(x) * (1 - y**2))(*xj)
     assert jnp.linalg.norm(uj.real - ue) < ulp(100)
+
+
+def test_backward_batch_refuses_sharded() -> None:
+    """`backward_batch` must refuse sharded input rather than fail obscurely.
+
+    `_apply_separable_spmd_shard_map` identifies each axis's role by position
+    against a fixed-rank spec, which a batch axis shifts. Without the check the
+    vmap would instead die on `c.devices()` being called on a traced array.
+    """
+    N = 8
+    F = FunctionSpace(N, Fourier.Fourier, name="F")
+    D = FunctionSpace(N, Legendre.Legendre, {"left": {"D": 0}, "right": {"D": 0}})
+    T = TensorProduct(F, D, name="T")
+    x, y = T.system.base_scalars()
+    uh = jax.device_put(project(sp.sin(x) * (1 - y**2), T), spectral_sharding)
+
+    # Unbatched is unaffected: it still goes down the sharded path.
+    assert T.backward(uh).shape == T.mesh(broadcast=False)[0].shape[:1] + (N,)
+    with pytest.raises(NotImplementedError, match="sharded coefficients"):
+        T.backward_batch(jnp.stack([uh, uh]))
+
+
+@pytest.mark.parametrize(
+    "method", ("backward", "backward_primitive", "forward", "scalar_product")
+)
+def test_batch_refuses_sharded(method: str) -> None:
+    """Every batched transform must refuse sharded input, not fail obscurely."""
+    N = 8
+    F = FunctionSpace(N, Fourier.Fourier, name="F")
+    D = FunctionSpace(N, Legendre.Legendre, {"left": {"D": 0}, "right": {"D": 0}})
+    T = TensorProduct(F, D, name="T")
+    x, y = T.system.base_scalars()
+    uh = jax.device_put(project(sp.sin(x) * (1 - y**2), T), spectral_sharding)
+    spectral = method.startswith("backward")
+    arg = uh if spectral else jax.device_put(T.backward(uh), physical_sharding)
+    kwargs = {"k": (1, 0)} if method == "backward_primitive" else {}
+    with pytest.raises(NotImplementedError, match="does not handle sharded"):
+        getattr(T, method + "_batch")(jnp.stack([arg, arg]), **kwargs)
+
+
+def test_direct_sum_batch_needs_single_device() -> None:
+    """A DirectSum cannot batch at all while sharding is active -- say so clearly."""
+    N = 8
+    F = FunctionSpace(N, Fourier.Fourier, name="F")
+    Tb = FunctionSpace(N, Legendre.Legendre, {"left": {"D": 1}, "right": {"D": 0}})
+    VT = TensorProduct(F, Tb, name="VT")
+    x, y = VT.system.base_scalars()
+    c = project(sp.sin(x) * (1 - y**2), VT)
+    with pytest.raises(NotImplementedError, match="single-device host"):
+        VT.backward_batch(jnp.stack([c, c]))
+    with pytest.raises(NotImplementedError, match="single-device host"):
+        VT.backward_primitive_batch(jnp.stack([c, c]), k=(1, 0))

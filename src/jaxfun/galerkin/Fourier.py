@@ -38,6 +38,9 @@ class Fourier(OrthogonalSpace):
 
     """
 
+    # `backward` is an FFT/DCT, so derivatives stay in coefficient space.
+    has_fast_transform = True
+
     def __init__(
         self,
         N: int,
@@ -118,7 +121,9 @@ class Fourier(OrthogonalSpace):
     @jax.jit(static_argnums=(0, 2))
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
         """Return k-th derivative Vandermonde."""
-        v = self.wavenumbers(eliminate_highest_freq=k % 2 and self.N % 2 == 0)
+        # `wavenumbers` decides for itself whether there is a Nyquist mode to
+        # eliminate, which is not the same test in every Fourier layout.
+        v = self.wavenumbers(eliminate_highest_freq=bool(k % 2))
         y = self.eval_basis_functions(X)
         z = (1j * v) ** k * y
         return z
@@ -254,11 +259,163 @@ class Fourier(OrthogonalSpace):
         if q != 0:
             return None
         u, j = trial
-        assert isinstance(u, Fourier), (
-            "Trial spaces must be Fourier for Fourier matrices"
+        assert (
+            isinstance(u, Fourier)
+            and u.is_hermitian_half is self.is_hermitian_half
+            and u.N == self.N
+        ), (
+            "Trial spaces must be Fourier spaces of the same kind and size as the "
+            "test space (both full spectrum or both half) for Fourier matrices"
         )
         k = (1j * self.wavenumbers()) ** j * (-1j * u.wavenumbers()) ** i
         if (i + j) % 2 == 0:
             k = k.real
         diagonal = k * 2 * jnp.pi
         return diags([diagonal], offsets=(0,), shape=(self.N, u.N))
+
+
+class RFourier(Fourier):
+    r"""Real-to-complex Fourier basis: the non-negative half of the spectrum.
+
+    A real periodic field has a Hermitian spectrum, ``c_{-k} = conj(c_k)``, so
+    the negative wavenumbers carry no information. This space stores only
+    ``k = 0, 1, ..., N/2`` -- ``N/2 + 1`` coefficients for ``N`` quadrature
+    points -- and transforms with `rfft`/`irfft`. The coefficients are exactly
+    the ones `Fourier` holds at those wavenumbers, so every operator matrix is
+    `Fourier`'s restricted to them: the equations for ``-k`` are the conjugates
+    of the ones for ``+k`` and are dropped as redundant, not approximated away.
+
+    Halving the spectrum halves the linear algebra and the wall-normal
+    transforms of a Fourier x polynomial solver, which is the point.
+
+    Args:
+        N: Even number of quadrature points. The number of coefficients is
+            ``N // 2 + 1``, so `RFourier(N)` and `Fourier(N)` resolve the same
+            physical field -- pass the same `N` when swapping one for the other.
+        domain: Physical domain (defaults to [0, 2π]).
+        system: Optional coordinate system.
+        name: Space name (default "RFourier").
+        fun_str: Symbol stem for basis functions (default "E").
+
+    Two consequences of storing half a spectrum are worth knowing:
+
+    The reconstruction is real-linear, not complex-linear: it adds the conjugate
+    half back, so it is ``Re(sum_k w_k c_k E_k(x))`` with ``w_0 = w_{N/2} = 1``
+    and ``w_k = 2`` in between, and *no* matrix ``V`` satisfies
+    ``backward(c) == V @ c``. `vandermonde` therefore holds the basis functions
+    used to assemble matrices and to take scalar products, and is not what
+    `backward` inverts; `eval_reconstruction` carries the weights instead.
+
+    The Nyquist mode is only well defined at zero. A real field cannot carry a
+    phase there, ``d/dx`` of it is not representable (`derivative_coeffs` zeroes
+    it, as `Fourier` does), and padding it to a finer mesh is ambiguous -- this
+    space splits it evenly, `Fourier` does not split it at all, and the two
+    disagree unless it vanishes. Hold it at zero and everything is exact.
+
+    One practical consequence of the odd-looking ``N/2 + 1``: the multi-device
+    transform shards the spectral axis, so that count -- not `N` -- is what has
+    to divide by the number of devices. ``RFourier(14)`` shards over two devices,
+    ``RFourier(16)`` does not.
+    """
+
+    is_hermitian_half = True
+
+    def __init__(
+        self,
+        N: int,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
+        name: str = "RFourier",
+        fun_str: str = "E",
+    ) -> None:
+        assert N % 2 == 0, "RFourier must use an even number of quadrature points"
+        domain = Domain(0, 2 * sp.pi) if domain is None else domain
+        OrthogonalSpace.__init__(
+            self, N // 2 + 1, domain=domain, system=system, name=name, fun_str=fun_str
+        )
+        # Set after the base constructor, which sizes the quadrature by the
+        # number of coefficients -- the one place where the two differ here.
+        self._num_quad_points = N
+
+    @jax.jit(static_argnums=(0, 1, 2))
+    def wavenumbers(
+        self, N: int | None = None, eliminate_highest_freq: bool = False
+    ) -> Array:
+        """Return the non-negative wavenumbers 0, 1, ..., N/2.
+
+        Args:
+            N: Number of modes (None -> self.N).
+            eliminate_highest_freq: Zero the Nyquist wavenumber, which is the
+                last one -- but only when the full spectrum is asked for, since
+                a truncated one does not reach it.
+
+        Returns:
+            Integer array of length N.
+        """
+        N = self.N if N is None else N
+        k = jnp.arange(N)
+        return k.at[-1].set(0) if eliminate_highest_freq and N == self.N else k
+
+    @cache_static
+    def hermitian_weights(self) -> Array:
+        """Return how many times each stored mode appears in the real field.
+
+        Twice for every wavenumber whose conjugate partner was dropped, once for
+        the two that are their own partners: k = 0 and the Nyquist.
+        """
+        return jnp.full(self.N, 2.0).at[0].set(1.0).at[-1].set(1.0)
+
+    def eval_reconstruction(self, X: float | Array) -> Array:
+        """Return the weighted basis values whose real part rebuilds the field."""
+        return self.eval_basis_functions(X) * self.hermitian_weights()
+
+    @jax.jit(static_argnums=(0, 2))
+    def backward(self, c: Array, N: int | None = None) -> Array:
+        """Inverse real FFT (possibly padded) to physical space.
+
+        Args:
+            c: Coefficient array of non-negative wavenumbers.
+            N: Number of physical points. If it exceeds the transform length of
+                `c`, the high wavenumbers are zero-padded.
+
+        Returns:
+            Real samples on the quadrature mesh, norm="forward".
+        """
+        n: int = self.num_quad_points if N is None else N
+        assert n // 2 + 1 >= len(c), (
+            "Backward transform only supports padding, not truncation"
+        )
+        return jnp.fft.irfft(c, n=n, norm="forward")
+
+    @jax.jit(static_argnums=0)
+    def scalar_product(self, c: Array) -> Array:
+        """Return inner products <c, E_k> for k >= 0 via forward real FFT.
+
+        Args:
+            c: Real physical samples, at least self.num_quad_points of them.
+
+        Returns:
+            Coefficients scaled by 2π / domain_factor, truncated to self.N.
+        """
+        assert not jnp.iscomplexobj(c), (
+            "RFourier represents real fields; pass real samples (a complex array "
+            "whose imaginary part is zero still has to be taken .real explicitly)"
+        )
+        out = jnp.fft.rfft(c, norm="forward") * 2 * jnp.pi / float(self.domain_factor)
+        return out[: self.N]
+
+    @jax.jit(static_argnums=0)
+    def forward(self, c: Array) -> Array:
+        """Forward real FFT (physical -> spectral), truncated to self.N modes.
+
+        Args:
+            c: Real physical samples, at least self.num_quad_points of them.
+        """
+        assert len(c) >= self.num_quad_points, (
+            "Forward transform only supports truncation, not padding"
+        )
+        assert not jnp.iscomplexobj(c), (
+            "RFourier represents real fields; pass real samples (a complex array "
+            "whose imaginary part is zero still has to be taken .real explicitly)"
+        )
+        return jnp.fft.rfft(c, norm="forward")[: self.N]

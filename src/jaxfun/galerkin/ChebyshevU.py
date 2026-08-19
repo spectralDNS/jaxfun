@@ -32,6 +32,9 @@ class ChebyshevU(Jacobi):
         **kw: Extra keyword args passed to parent Jacobi constructor.
     """
 
+    # `backward` is an FFT/DCT, so derivatives stay in coefficient space.
+    has_fast_transform = True
+
     def __init__(
         self,
         N: int,

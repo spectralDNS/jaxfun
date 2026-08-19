@@ -1,6 +1,5 @@
 """Base abstractions for time integrators on Galerkin coefficient spaces."""
 
-import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
@@ -13,12 +12,10 @@ from flax import nnx
 from sympy.core.function import AppliedUndef
 
 from jaxfun.coordinates import get_system
-from jaxfun.galerkin import TensorProductSpace, TestFunction, TrialFunction
-from jaxfun.galerkin.arguments import JAXFunction
+from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import project
 from jaxfun.la import BaseMatrix, IdentityMatrix, ZeroMatrix
-from jaxfun.la.matrixprotocol import SolverNotApplicable
 from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
 from jaxfun.utils import (
     get_time_independent,
@@ -30,178 +27,20 @@ from jaxfun.utils import (
 from jaxfun.utils.operator_tools import assemble_linear_term
 from jaxfun.utils.sympy_factoring import time_derivative_as_operator
 
+from ._utils import (
+    FieldCoupling,
+    SolverOptions,
+    apply_field_couplings,
+    assemble_field_couplings,
+    boundary_values,
+    coefficient_shape,
+    node_for,
+    physical_shape,
+    solve_with_options,
+    validate_solver_options,
+    warm_operator_solve_cache,
+)
 from .nonlinear import compile_field_evaluator, remove_test_function
-
-type SolverOptions = tuple[tuple[str, Any], ...]
-
-
-def _accepted_solve_options(cls: type) -> frozenset[str]:
-    """Return the keyword-only options ``cls.solve`` declares.
-
-    Operators differ in what they can be tuned with -- `TPMatrices.solve` picks
-    between factored and Kronecker paths, `DiaMatrix.solve` between banded and
-    dense, and `Matrix.solve` has nothing to pick -- so each one is offered only
-    the options it names.
-    """
-    solve = getattr(cls, "solve", None)
-    if solve is None:
-        return frozenset()
-    try:
-        params = inspect.signature(solve).parameters
-    except (TypeError, ValueError):  # pragma: no cover - builtin/C signatures
-        return frozenset()
-    return frozenset(
-        name
-        for name, param in params.items()
-        if param.kind is inspect.Parameter.KEYWORD_ONLY
-    )
-
-
-def known_solve_options() -> frozenset[str]:
-    """Return every solve option any `BaseMatrix` in `jaxfun.la` accepts."""
-    names: set[str] = set()
-    pending: list[type] = [BaseMatrix]
-    seen: set[type] = set()
-    while pending:
-        cls = pending.pop()
-        if cls in seen:
-            continue
-        seen.add(cls)
-        pending.extend(cls.__subclasses__())
-        names |= _accepted_solve_options(cls)
-    return frozenset(names)
-
-
-def _validate_solver_options(options: Mapping[str, Any] | None) -> SolverOptions:
-    """Normalize user solver options into a hashable, order-independent tuple.
-
-    A mapping cannot be stored as `nnx.static` state: static fields are compared
-    (and hashed) on every jit cache lookup. Sorted pairs also make two integrators
-    configured the same way compare equal regardless of how the mapping was
-    written.
-
-    Raises:
-        ValueError: if an option is one no operator in `jaxfun.la` accepts. The
-            options are filtered per operator when used, so an unrecognized name
-            would otherwise be silently dropped everywhere.
-    """
-    if not options:
-        return ()
-    known = known_solve_options()
-    unknown = sorted(set(options) - known)
-    if unknown:
-        raise ValueError(
-            f"Unknown solver option(s): {', '.join(unknown)}. "
-            f"Accepted options are: {', '.join(sorted(known))}."
-        )
-    return tuple(sorted(options.items()))
-
-
-def _solve(op: BaseMatrix, rhs: Array, options: SolverOptions = ()) -> Array:
-    """Solve ``op x = rhs``, passing on the options `op` knows what to do with."""
-    if not options:
-        return op.solve(rhs)
-    accepted = _accepted_solve_options(type(op))
-    return op.solve(rhs, **{k: v for k, v in options if k in accepted})
-
-
-def _warm_operator_solve_cache(
-    op: BaseMatrix,
-    shape: tuple[int, ...] | None = None,
-    options: SolverOptions = (),
-) -> None:
-    """Warm native solver caches for operators that support factorization.
-
-    Everything a solver decides by inspecting matrix *values* -- which
-    factorization applies, a sparsity reordering, the factors themselves -- has
-    to happen here, while the matrices are still concrete. Inside the jitted
-    step there is no second chance: the arrays are tracers by then.
-
-    Args:
-        op: Operator whose solve caches should be populated.
-        shape: Coefficient shape of the right-hand sides `op` will be solving.
-            When given, an operator with no applicable factored solver is warmed
-            by running one throwaway solve, which fills the caches of whichever
-            fallback path `solve` settles on.
-        options: Solver options, passed on so that the warming solve takes the
-            same path the stepping solves will.
-    """
-    lu_factor = getattr(op, "lu_factor", None)
-    if lu_factor is not None:
-        try:
-            lu_factor()
-            return
-        except (SolverNotApplicable, ValueError, TypeError, RuntimeError):
-            pass
-    if shape is None:
-        return
-    try:
-        _solve(op, jnp.zeros(shape), options)
-    except (SolverNotApplicable, ValueError, TypeError, RuntimeError):
-        return
-
-
-type FieldCoupling = tuple[int, BaseMatrix, Array | None]
-
-
-def assemble_field_couplings(
-    coupling_exprs: Mapping[Any, sp.Expr],
-    node_for: Callable[[Any], AppliedUndef],
-    field_order: tuple[AppliedUndef, ...] | None,
-    *,
-    sparse: bool,
-    sparse_tol: int,
-) -> tuple[FieldCoupling, ...]:
-    """Assemble linear couplings into `(field slot, operator, forcing)` triples.
-
-    Each expression is bilinear in the test function and one foreign field, so
-    `inner` assembles it as an operator between the two spaces -- rectangular
-    when they differ in size. Applying that is what replaces evaluating the term
-    pointwise on the padded mesh.
-    """
-    if not coupling_exprs:
-        return ()
-    if field_order is None:
-        raise ValueError(
-            "Linear couplings to other fields need `field_order`, to know which "
-            "entry of the state tuple each field is."
-        )
-    out: list[FieldCoupling] = []
-    for field, expr in coupling_exprs.items():
-        operator, forcing = assemble_linear_term(
-            expr, sparse=sparse, sparse_tol=sparse_tol
-        )
-        if operator is None:  # pragma: no cover - a coupling always assembles one
-            raise ValueError(f"Coupling term in {field} assembled no operator: {expr}")
-        out.append((field_order.index(node_for(field)), operator, forcing))
-    return tuple(out)
-
-
-def apply_field_couplings(
-    couplings: Sequence[FieldCoupling], uh: IntegratorState
-) -> Array | None:
-    """Sum every coupling operator applied to its field; None when there are none."""
-    total: Array | None = None
-    for slot, operator, forcing in couplings:
-        term = operator @ cast(tuple[Array, ...], uh)[slot]
-        if forcing is not None:
-            term = term + jnp.asarray(forcing)
-        total = term if total is None else total + term
-    return total
-
-
-def _boundary_values(space) -> list[sp.Expr]:
-    """Return the boundary values of every BC-carrying factor of ``space``.
-
-    A `Composite`/`DirectSum` holds its own boundary conditions, while a tensor
-    product space delegates to its 1D factors.
-    """
-    bcs = getattr(space, "bcs", None)
-    if bcs is not None:
-        return [sp.sympify(val) for val in bcs.orderedvals()]
-    if isinstance(space, TensorProductSpace):
-        return [val for factor in space for val in _boundary_values(factor)]
-    return []
 
 
 class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
@@ -406,7 +245,7 @@ class BaseIntegrator(TimeStepper[Array]):
         self._field_order = nnx.static(field_order)
         self._field_index = nnx.static(field_index)
         self._solver_options: SolverOptions = nnx.static(
-            _validate_solver_options(solver_options)
+            validate_solver_options(solver_options)
         )
 
         test, trial, mass_expr, linear_expr, nonlinear_expr, coupling_exprs = (
@@ -414,7 +253,7 @@ class BaseIntegrator(TimeStepper[Array]):
         )
         self.trialspace = cast(ScalarSpaceType, trial.functionspace)
         self.testspace = cast(ScalarSpaceType, test.functionspace)
-        self._state_shape = self._coefficient_shape(self.trialspace)
+        self._state_shape = coefficient_shape(self.trialspace)
         self.mass_expr = mass_expr
         self.linear_expr = linear_expr
         self.nonlinear_expr = nonlinear_expr
@@ -437,7 +276,7 @@ class BaseIntegrator(TimeStepper[Array]):
         self.mass_operator: BaseMatrix = nnx.data(mass_operator)
         self.mass_diag: Array | None = nnx.data(self.mass_operator.diagonal_or_none())
         if self.mass_diag is None:
-            _warm_operator_solve_cache(
+            warm_operator_solve_cache(
                 self.mass_operator, self._state_shape, self._solver_options
             )
 
@@ -478,7 +317,7 @@ class BaseIntegrator(TimeStepper[Array]):
         tensor-product space each 1D factor carries its own boundary values,
         which are allowed to depend on the remaining coordinates.
         """
-        values = _boundary_values(self.trialspace)
+        values = boundary_values(self.trialspace)
         if not values:
             raise ValueError(
                 "Time-derivative operator assembly produced forcing, but the "
@@ -491,19 +330,6 @@ class BaseIntegrator(TimeStepper[Array]):
                 "Time-dependent boundary conditions are not supported by the "
                 f"integrators, got {transient}"
             )
-
-    @staticmethod
-    def _coefficient_shape(V: ScalarSpaceType) -> tuple[int, ...]:
-        """Return the coefficient-array shape for the given space."""
-        num_dofs = V.num_dofs
-        return num_dofs if isinstance(num_dofs, tuple) else (num_dofs,)
-
-    def _physical_shape(self, N: ScalarPadding) -> int | tuple[int | None, ...]:
-        if N is None:
-            N = self.testspace.shape
-            if self.testspace.dims == 1:
-                N = N[0]
-        return N
 
     def _extract_equation_terms(
         self, equation: sp.Expr
@@ -571,16 +397,7 @@ class BaseIntegrator(TimeStepper[Array]):
 
     def _node_for(self, trial: TrialFunction) -> AppliedUndef:
         """Return the shared JAXFunction node representing ``trial``."""
-        for field, node in self._fields:
-            if field == trial:
-                return node
-        V = cast(ScalarSpaceType, trial.functionspace)
-        return cast(
-            AppliedUndef,
-            JAXFunction(
-                jnp.zeros(self._coefficient_shape(V)), V, name=f"{trial.name}_jax"
-            ).doit(),
-        )
+        return node_for(self._fields, trial)
 
     def _setup_nonlinear_evaluator(self, trial: TrialFunction) -> None:
         """Compile the nonlinear physical-space evaluator for the trial field."""
@@ -626,12 +443,12 @@ class BaseIntegrator(TimeStepper[Array]):
 
     def apply_mass_inverse(self, rhs: Array) -> Array:
         """Apply the inverse mass operator to a coefficient-space right-hand side."""
-        return _solve(self.mass_operator, rhs, self._solver_options)
+        return solve_with_options(self.mass_operator, rhs, self._solver_options)
 
     def _no_nonlinear(self, uh: IntegratorState) -> Array:
         """Return a zero nonlinear contribution shaped like the test space."""
         own = uh[self._field_index] if isinstance(uh, tuple) else uh
-        return jnp.zeros(self._coefficient_shape(self.testspace), dtype=own.dtype)
+        return jnp.zeros(coefficient_shape(self.testspace), dtype=own.dtype)
 
     def nonlinear_rhs(self, uh: IntegratorState, N: ScalarPadding = None) -> Array:
         """Return the nonlinear contribution in coefficient space.
@@ -651,7 +468,7 @@ class BaseIntegrator(TimeStepper[Array]):
         if not self.has_nonlinear:
             return self._no_nonlinear(uh)
         assert self._nonlinear_evaluator is not None
-        M = self._physical_shape(N)
+        M = physical_shape(self.testspace, N)
         return self.testspace.forward(self._nonlinear_evaluator(uh, M))
 
     def nonlinear_rhs_scalar_product(
@@ -669,7 +486,7 @@ class BaseIntegrator(TimeStepper[Array]):
         total = apply_field_couplings(self._couplings, uh)
         if self.has_nonlinear:
             assert self._nonlinear_evaluator is not None
-            M = self._physical_shape(N)
+            M = physical_shape(self.testspace, N)
             pointwise = self.testspace.scalar_product(self._nonlinear_evaluator(uh, M))
             total = pointwise if total is None else total + pointwise
         return self._no_nonlinear(uh) if total is None else total

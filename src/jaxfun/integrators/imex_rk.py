@@ -11,7 +11,8 @@ from flax import nnx
 from jaxfun.la import BaseMatrix
 from jaxfun.typing import Array, ScalarPadding
 
-from .base import BaseIntegrator, _solve, _warm_operator_solve_cache
+from ._utils import solve_with_options, warm_operator_solve_cache
+from .base import BaseIntegrator
 from .system import SystemIntegrator
 from .tableau import IMEXTableau
 
@@ -44,7 +45,7 @@ class IMEXRungeKutta(BaseIntegrator):
         ops: list[BaseMatrix] = []
         for a_ii in tableau.distinct_diagonal_coeffs:
             op = self.mass_operator - dt * a_ii * self.linear_operator
-            _warm_operator_solve_cache(op, self._state_shape, self._solver_options)
+            warm_operator_solve_cache(op, self._state_shape, self._solver_options)
             ops.append(op)
         self._stage_operators: tuple[BaseMatrix, ...] = nnx.data(tuple(ops))
 
@@ -85,7 +86,7 @@ class IMEXRungeKutta(BaseIntegrator):
 
         if a_ii == 0.0:
             return self.apply_mass_inverse(rhs)
-        return _solve(self._stage_operator(a_ii), rhs, self._solver_options)
+        return solve_with_options(self._stage_operator(a_ii), rhs, self._solver_options)
 
     @jax.jit(static_argnums=(0, 3))
     def step(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:

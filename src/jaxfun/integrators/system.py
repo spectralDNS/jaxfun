@@ -20,98 +20,22 @@ import sympy as sp
 from flax import nnx
 from sympy.core.function import AppliedUndef
 
-from jaxfun.coordinates import get_system
 from jaxfun.galerkin import TrialFunction
 from jaxfun.galerkin.arguments import JAXFunction
-from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
-from jaxfun.utils import get_time_independent, split_time_derivative_terms
+from jaxfun.utils import get_time_independent
 
-from .base import BaseIntegrator, TimeStepper, apply_field_couplings
+from ._utils import (
+    apply_field_couplings,
+    coefficient_shape,
+    constrained_trial,
+    mesh_axes,
+    scale_real,
+    transient_trial,
+)
+from .base import BaseIntegrator, TimeStepper
 from .constraint import ConstraintSolver
 from .nonlinear import compile_coupled_nonlinear_evaluator
-
-
-def _transient_trial(equation: sp.Expr) -> TrialFunction | None:
-    """Return the transient field an equation is the evolution equation for.
-
-    The time-derivative term identifies it unambiguously; every other field
-    appearing in the equation belongs to a different equation of the system.
-    Returns None for a *constraint* equation, which has no time derivative and
-    is solved for its field rather than integrated.
-    """
-    t = get_system(equation).base_time()
-    lhs, _ = split_time_derivative_terms(equation, t)
-    if sp.sympify(lhs) == 0:
-        return None
-    _, trial = get_basisfunctions(lhs)
-    if not isinstance(trial, TrialFunction):
-        raise ValueError(
-            "The time-derivative term must contain exactly one TrialFunction. "
-            "Equations coupled through their time derivatives are not supported."
-        )
-    return trial
-
-
-def _own_trial(equation: sp.Expr) -> TrialFunction:
-    """Return the transient field an equation evolves, requiring there to be one."""
-    trial = _transient_trial(equation)
-    if trial is None:
-        raise ValueError(
-            "Time integrators require a first-order time derivative in the weak form"
-        )
-    return trial
-
-
-def _constrained_trial(
-    equation: sp.Expr, transient: Sequence[TrialFunction]
-) -> TrialFunction:
-    """Return the field a constraint equation determines.
-
-    A constraint carries no time derivative to name its field, so it is the one
-    trial function in the equation that no evolution equation already owns.
-    """
-    _, trials = get_basisfunctions(equation)
-    found = trials if isinstance(trials, set) else {trials}
-    owned = {get_time_independent(u) for u in transient}
-    candidates = {
-        u
-        for u in found
-        if isinstance(u, TrialFunction) and get_time_independent(u) not in owned
-    }
-    if len(candidates) != 1:
-        names = ", ".join(sorted(str(u) for u in candidates)) or "none"
-        raise ValueError(
-            "A constraint equation must be solvable for exactly one field of its "
-            f"own -- a TrialFunction no other equation evolves -- but found {names}. "
-            "Add an evolution equation for the extra fields, or drop them."
-        )
-    return get_time_independent(candidates.pop())
-
-
-def _coefficient_shape(V: ScalarSpaceType) -> tuple[int, ...]:
-    """Return the coefficient-array shape for the given space."""
-    num_dofs = V.num_dofs
-    return num_dofs if isinstance(num_dofs, tuple) else (num_dofs,)
-
-
-def _scale(array: Array, coefficient: complex) -> Array:
-    """Multiply by a constant, keeping a real coefficient real.
-
-    A Python `complex` would otherwise promote a real coefficient array to
-    complex and silently double its memory traffic.
-    """
-    if coefficient.imag == 0.0:
-        return coefficient.real * array
-    return coefficient * array
-
-
-def _mesh_axes(V: ScalarSpaceType, N: ScalarPadding) -> tuple[Array, ...]:
-    """Return the per-axis quadrature mesh of ``V`` evaluated with padding ``N``."""
-    if V.dims == 1:
-        return (cast(Array, V.mesh(N=cast(int, N))),)  # ty: ignore[invalid-argument-type]
-    mesh = V.mesh(N=N, broadcast=False)  # ty: ignore[invalid-argument-type,unknown-argument]
-    return cast(tuple[Array, ...], mesh)
 
 
 class FieldRegistry:
@@ -139,7 +63,7 @@ class FieldRegistry:
                 AppliedUndef,
                 JAXFunction(
                     jnp.zeros(
-                        _coefficient_shape(cast(ScalarSpaceType, u.functionspace))
+                        coefficient_shape(cast(ScalarSpaceType, u.functionspace))
                     ),
                     u.functionspace,
                     name=f"{u.name}_jax",
@@ -236,7 +160,7 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
             raise ValueError("A system needs at least one equation")
 
         self.time = time
-        transient = tuple(_transient_trial(eq) for eq in equations)
+        transient = tuple(transient_trial(eq) for eq in equations)
         if all(u is None for u in transient):
             raise ValueError(
                 "A system needs at least one equation with a time derivative; "
@@ -244,7 +168,7 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
             )
         evolved = tuple(u for u in transient if u is not None)
         trials = tuple(
-            u if u is not None else _constrained_trial(eq, evolved)
+            u if u is not None else constrained_trial(eq, evolved)
             for eq, u in zip(equations, transient, strict=True)
         )
 
@@ -401,7 +325,9 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
                 # Added, not assigned: an equation may have both an assembled
                 # coupling and a term that has to be evaluated pointwise.
                 results[k] = results[k] + (
-                    projected if coefficient == 1.0 else _scale(projected, coefficient)
+                    projected
+                    if coefficient == 1.0
+                    else scale_real(projected, coefficient)
                 )
         return tuple(results)
 
@@ -463,7 +389,7 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
                     f"{label} has {V.dims} dimensions, expected {reference.dims}."
                 )
             for axis, (mesh, ref_mesh) in enumerate(
-                zip(_mesh_axes(V, N), _mesh_axes(reference, N), strict=True)
+                zip(mesh_axes(V, N), mesh_axes(reference, N), strict=True)
             ):
                 if not bool(jnp.allclose(mesh, ref_mesh)):
                     raise NotImplementedError(

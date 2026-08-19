@@ -1,6 +1,6 @@
 """Compilation helpers for nonlinear physical-space integrator terms."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -15,8 +15,8 @@ from jaxfun.galerkin.arguments import (
     is_jaxfunc_leaf,
     is_jaxfunc_primitive,
 )
-from jaxfun.typing import Array, ScalarPadding, ScalarSpaceType
-from jaxfun.utils import JAX_FUNCTION_BY_NAME, lambdify
+from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
+from jaxfun.utils import JAX_FUNCTION_BY_NAME, lambdify, normalize_explicit
 
 type NodeValueCache = dict[sp.Basic, Array]
 type NodeEvaluator = Callable[[NodeValueCache, ScalarPadding], Array]
@@ -24,11 +24,18 @@ type NodeEvaluator = Callable[[NodeValueCache, ScalarPadding], Array]
 
 @dataclass(frozen=True)
 class NonlinearCompileContext:
-    """Static data required to compile nonlinear SymPy expressions."""
+    """Static data required to compile nonlinear SymPy expressions.
+
+    An expression may depend on several JAXFunctions -- one per field of a
+    coupled system. Each field is evaluated through its own function space,
+    resolved from the leaf node itself, so `functionspace` is only the space
+    used to evaluate static (purely spatial) subexpressions on the quadrature
+    mesh.
+    """
 
     spatial_symbols: tuple[sp.Symbol, ...]
     functionspace: ScalarSpaceType
-    jaxfunction: AppliedUndef
+    jaxfunctions: tuple[AppliedUndef, ...]
 
 
 class NonlinearCompiler:
@@ -39,6 +46,14 @@ class NonlinearCompiler:
         self.context = context
         self._compiled: dict[sp.Basic, NodeEvaluator] = {}
         self._static: dict[tuple[sp.Basic, ScalarPadding], Array] = {}
+        # SymPy rebuilds nodes during `doit`/`expand`, and a rebuilt leaf loses the
+        # instance attribute the evaluator mutates (it would silently read the
+        # stale class-level array instead). Rebuilt leaves still compare and hash
+        # equal to the originals, so map them back to the objects we own.
+        self._registry: dict[sp.Basic, JAXFunction[ScalarSpaceType]] = {
+            node: cast(JAXFunction[ScalarSpaceType], node)
+            for node in context.jaxfunctions
+        }
 
     def compile(self, expr: sp.Expr) -> NodeEvaluator:
         """Compile a nonlinear SymPy expression into a cached evaluator."""
@@ -87,9 +102,15 @@ class NonlinearCompiler:
         return self.memoize(node, self.compile_lambdified(node, child_eval))
 
     def compile_primitive(self, node: sp.Basic) -> NodeEvaluator:
-        """Compile a primitive field or spatial derivative evaluation."""
-        space = self.context.functionspace
-        jaxf = cast(JAXFunction[ScalarSpaceType], self.context.jaxfunction)
+        """Compile a primitive field or spatial derivative evaluation.
+
+        The field is resolved from the node itself rather than from the compile
+        context, so an expression coupling several fields evaluates each one
+        through its own function space.
+        """
+        leaf = node if is_jaxfunc_leaf(node) else cast(sp.Derivative, node).expr
+        jaxf = self._registry.get(leaf, cast(JAXFunction[ScalarSpaceType], leaf))
+        space = jaxf.functionspace
         if is_jaxfunc_leaf(node):
 
             def evaluate_leaf(
@@ -116,7 +137,7 @@ class NonlinearCompiler:
         if sum(derivative_counts) == 0:
             raise ValueError("Derivative order is zero in all spatial coordinates")
         derivative_order: int | tuple[int, ...]
-        if self.context.functionspace.dims == 1:
+        if space.dims == 1:
             derivative_order = int(derivative_counts[0])
         else:
             derivative_order = derivative_counts
@@ -278,21 +299,130 @@ def contains_jaxfunction(expr: sp.Basic) -> bool:
 def compile_nonlinear_evaluator(
     expr: sp.Expr,
     functionspace: ScalarSpaceType,
-    jaxfunction: AppliedUndef,
-) -> Callable[[Array, ScalarPadding], Array]:
-    """Compile a nonlinear physical-space evaluator for coefficient states."""
+    jaxfunction: AppliedUndef | tuple[AppliedUndef, ...],
+) -> Callable[[Array | tuple[Array, ...], ScalarPadding], Array]:
+    """Compile a nonlinear physical-space evaluator for coefficient states.
+
+    Args:
+        expr: Nonlinear physical-space expression in one or more JAXFunctions.
+        functionspace: Space used to evaluate static (purely spatial) factors.
+        jaxfunction: The JAXFunction the expression depends on, or a tuple of
+            them for a system of coupled equations. The returned evaluator takes
+            a matching tuple of coefficient arrays in the same order.
+    """
+    multi = isinstance(jaxfunction, tuple)
+    nodes = cast(
+        tuple[JAXFunction[ScalarSpaceType], ...],
+        jaxfunction if multi else (jaxfunction,),
+    )
     context = NonlinearCompileContext(
         spatial_symbols=tuple(functionspace.system.base_scalars()),
         functionspace=functionspace,
-        jaxfunction=jaxfunction,
+        jaxfunctions=cast(tuple[AppliedUndef, ...], nodes),
     )
     compiled = NonlinearCompiler(context).compile(expr)
-    jaxfunction: JAXFunction[ScalarSpaceType] = cast(
-        JAXFunction[ScalarSpaceType], jaxfunction
-    )
 
-    def evaluate(uh: Array, N: ScalarPadding = None) -> Array:
-        jaxfunction.array = uh
+    def evaluate(uh: Array | tuple[Array, ...], N: ScalarPadding = None) -> Array:
+        arrays = cast(tuple[Array, ...], uh) if multi else (cast(Array, uh),)
+        for node, array in zip(nodes, arrays, strict=True):
+            node.array = array
         return compiled({}, N)
+
+    return evaluate
+
+
+def compile_field_evaluator(
+    nonlinear_expr: sp.Expr,
+    own_trial: TrialFunction,
+    explicit_trials: Sequence[TrialFunction],
+    node_for: Callable[[TrialFunction], AppliedUndef],
+    functionspace: ScalarSpaceType,
+    field_order: tuple[AppliedUndef, ...] | None = None,
+) -> tuple[sp.Expr, AppliedUndef, Callable[[IntegratorState, ScalarPadding], Array]]:
+    """Substitute every field of a nonlinear term by its node, then compile it.
+
+    Shared by the evolution equations and the constraint equations of a system:
+    both need every TrialFunction -- their own and the foreign ones they are
+    coupled to -- replaced by the system's shared JAXFunction nodes before the
+    term can be evaluated in physical space.
+
+    Args:
+        nonlinear_expr: Nonlinear part of a weak form, test function removed.
+        own_trial: The equation's own field, time-independent.
+        explicit_trials: Fields of the other equations, lagged into this term.
+        node_for: Resolves a field to the shared node representing it.
+        functionspace: Space used to evaluate static (purely spatial) factors.
+        field_order: Global field order the compiled evaluator takes its
+            coefficient tuple in. `None` for a standalone scalar equation, whose
+            evaluator then takes that one field's coefficients directly.
+
+    Returns:
+        The substituted expression, the node standing for `own_trial`, and the
+        compiled evaluator.
+    """
+    jaxfunction = node_for(own_trial)
+    nonlinear_expr = replace_trial_with_jaxfunction(
+        nonlinear_expr, own_trial, jaxfunction
+    )
+    for item in normalize_explicit(explicit_trials):
+        foreign = cast(TrialFunction, item)
+        nonlinear_expr = replace_trial_with_jaxfunction(
+            nonlinear_expr, foreign, node_for(foreign)
+        )
+    if nonlinear_expr.atoms(TrialFunction):
+        raise ValueError(
+            "Nonlinear term still contains TrialFunctions after substitution: "
+            f"{nonlinear_expr}. This usually means a coupled field was not "
+            "declared through `explicit_trials`."
+        )
+    evaluator = compile_nonlinear_evaluator(
+        nonlinear_expr,
+        functionspace,
+        field_order if field_order is not None else jaxfunction,
+    )
+    return nonlinear_expr, jaxfunction, evaluator
+
+
+def compile_coupled_nonlinear_evaluator(
+    exprs: Sequence[sp.Expr],
+    functionspace: ScalarSpaceType,
+    jaxfunctions: tuple[AppliedUndef, ...],
+) -> Callable[[tuple[Array, ...], ScalarPadding], tuple[Array, ...]]:
+    """Compile several nonlinear expressions that share their field evaluations.
+
+    Compiling the equations of a system together, through one `NonlinearCompiler`
+    and one per-call value cache, means work common to several equations is done
+    once per evaluation instead of once per equation. The backward transform of
+    each field is the expensive part: the equations of a reaction-diffusion
+    system all read the same fields, so sharing removes a transform per field per
+    equation beyond the first.
+
+    Args:
+        exprs: One nonlinear physical-space expression per equation.
+        functionspace: Space used to evaluate static (purely spatial) factors.
+            All fields must share its quadrature mesh, since the expressions are
+            evaluated pointwise.
+        jaxfunctions: The system's shared JAXFunction nodes, in global field
+            order. The returned evaluator takes a matching tuple of coefficient
+            arrays and returns one physical-space array per expression.
+    """
+    context = NonlinearCompileContext(
+        spatial_symbols=tuple(functionspace.system.base_scalars()),
+        functionspace=functionspace,
+        jaxfunctions=jaxfunctions,
+    )
+    # One compiler for all equations, so equal subexpressions compile to the
+    # *same* memoizing evaluator object and therefore share a cache entry.
+    compiler = NonlinearCompiler(context)
+    compiled = tuple(compiler.compile(expr) for expr in exprs)
+    nodes = cast(tuple[JAXFunction[ScalarSpaceType], ...], jaxfunctions)
+
+    def evaluate(uh: tuple[Array, ...], N: ScalarPadding = None) -> tuple[Array, ...]:
+        for node, array in zip(nodes, uh, strict=True):
+            node.array = array
+        # Fresh per call and shared across the equations within it: reusing a
+        # cache across calls would serve values computed from an earlier stage.
+        cache: NodeValueCache = {}
+        return tuple(evaluator(cache, N) for evaluator in compiled)
 
     return evaluate

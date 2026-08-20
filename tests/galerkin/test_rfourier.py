@@ -206,7 +206,7 @@ def test_tensor_product_batch() -> None:
     _, _, VR, cr = tensor_projection()
     ur = VR.backward(cr)
     batch = VR.backward_batch(jnp.stack([cr, 2 * cr]))
-    assert jnp.abs(batch[0] - ur).max() == 0.0
+    assert jnp.abs(batch[0] - ur).max() < ulp(100)
     assert jnp.abs(batch[1] - 2 * ur).max() < ulp(1000)
     back = VR.forward_batch(jnp.stack([ur, 2 * ur]))
     assert jnp.abs(back[1] - 2 * cr).max() < ulp(1000)

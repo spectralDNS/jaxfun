@@ -6,7 +6,6 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, cast, overload
 
 import jax
-import jax.core
 import jax.numpy as jnp
 import numpy as np
 from flax import nnx
@@ -1010,10 +1009,6 @@ class TPMatricesWavenumberSolver:
                     check_vma=False,
                 )
             )
-
-            # The L/U data held here covers only this process's wavenumbers, so
-            # there is no whole-array solve to fall back on.
-            self._solve_jit = None
 
             # The L/U data held here covers only this process's wavenumbers, so
             # there is no whole-array solve to fall back on.

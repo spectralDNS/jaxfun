@@ -1137,12 +1137,12 @@ class DirectSumTPS(TensorProductSpace):
         """
         return self.from_orthogonal(self.orthogonal._apply_forward(u))
 
-    def scalar_product(self, c: Array) -> NoReturn:  # ty:ignore[invalid-method-override]
+    def scalar_product(self, u: Array) -> NoReturn:
         raise RuntimeError(
             "Scalar product requires homogeneous test space (call on get_homogeneous())"
         )
 
-    def scalar_product_batch(self, c: Array) -> NoReturn:  # ty:ignore[invalid-method-override]
+    def scalar_product_batch(self, u: Array) -> NoReturn:
         raise RuntimeError(
             "Scalar product requires homogeneous test space (call on get_homogeneous())"
         )

@@ -92,40 +92,48 @@
 # Fourier factor keeps the fast per-wavenumber banded solve; pinning the
 # flattened Kronecker matrix would destroy it.
 #
-# DEALIASING: FOURIER ONLY
+# DEALIASING: 3/2 IN FOURIER, NONE IN THE WALL-NORMAL
 #
 # The matrices are assembled exactly from the precomputed composite stencils, so
 # quadrature error can only enter through the transform pair around the pointwise
-# products. Along Fourier that error is exact wrap-around -- mode k1+k2 folds onto
-# k1+k2-M at full amplitude -- so the 3/2 rule is mandatory. Along the wall-normal
-# polynomial it is instead a Gauss quadrature error: a product of two degree-(N-1)
-# fields needs exactness to degree 3N-3, while N Gauss points reach only 2N-1.
-# That error is not wrap-around; it scales with how far the product's spectrum
-# actually extends, so it vanishes as the run becomes resolved. This argument is
-# about the quadrature, not the basis, so it holds for Chebyshev as it does for
-# Legendre; the table was measured on Legendre.
+# products. Both directions alias there. A quadratic product of two fields that
+# fill the grid has twice the bandwidth, and neither the M-point FFT nor the
+# N-point Gauss quadrature can carry the excess; it folds back onto the retained
+# modes. Measured at N=32, as the amplitude with which an unrepresentable mode m
+# lands on a retained one:
 #
-# Measured on a developed Ra=1e6-family field at 128 x 64 -- the change in the
-# nonlinear terms from dropping the wall-normal padding, relative to their own
-# size, against the fraction of the temperature spectrum left in the top third:
+#   Fourier     exact fold at amplitude 1: mode k1+k2 lands on k1+k2-M
+#   Chebyshev   exact fold at amplitude 1: T_{2N-j} is -T_j on the Gauss points
+#   Legendre    no exact fold: 0.97 at m=N+1, falling to 0.1-0.2 and spread over
+#               several modes by m=2N
+#
+# So this is not a Fourier-only problem, and the wall-normal direction is not
+# spared by using a Gauss quadrature rather than an FFT -- under Chebyshev the
+# fold is exactly as clean and exactly as full-amplitude as Fourier's. Nor is the
+# 3/2 rule mandatory in the streamwise direction: in every direction the size of
+# the error is set by how much of the product's spectrum actually reaches the
+# fold, so a run with nothing left at the top of either spectrum aliases in
+# neither, padded or not.
+#
+# What the asymmetric setting here rests on is measurement and cost, not
+# principle. Measured on a developed Ra=1e6-family field at 128 x 64 under
+# Legendre -- the change in the nonlinear terms from dropping the wall-normal
+# padding, relative to their own size, against the fraction of the temperature
+# spectrum left in the top third:
 #
 #   Ra      spectrum tail    d(NL_v)     d(NL_u0)    d(NL_T)
 #   1e4     3.8e-07          5.3e-11     1.5e-11     3.6e-12
 #   1e5     1.2e-04          3.7e-04     2.6e-08     4.5e-06
 #   1e6     9.9e-04          1.0e-02     1.1e-04     1.9e-03
 #
-# So the wall-normal padding buys nothing once resolved (5e-11 at Ra=1e4)
-# and about 23% of the runtime, which is why it is off here. But it is not free
-# at the margin: at Ra=1e6 on this grid the run is only marginally resolved and
-# dropping it perturbs the v nonlinear term by 1%. Watch the `tail` diagnostic --
-# below ~1e-5 the padding is provably pointless, at 1e-3 it is not; past that,
-# raise M and N rather than trusting the answer.
-#
-# (The tail column reads lower than it did before the streamwise direction became
-# a half spectrum. The diagnostic used to take the first third of the *shifted*
-# full spectrum, which is |k| >= M/6 rather than the top third of the
-# wavenumbers; on a half spectrum the top third is the top third. Same states,
-# same d(NL) columns -- only the band the tail is measured over changed.)
+# Dropping the wall-normal padding buys about 23% of the runtime and costs 5e-11
+# once the run is resolved, which is why it is off here. It is not free at the
+# margin: at Ra=1e6 on this grid the run is only marginally resolved and dropping
+# it perturbs the v nonlinear term by 1%. The streamwise 3/2 rule is kept because
+# it is cheap, not because a resolved run needs it. Either way the guard is the
+# `tail` diagnostic -- below ~1e-5 padding is pointless in both directions, at
+# 1e-3 it is not; past that, raise M and N rather than trusting the answer. Those
+# numbers are Legendre, and have not been remeasured for Chebyshev.
 #
 # THE FIELDS ARE REAL, SO HALF THE SPECTRUM IS REDUNDANT
 #
@@ -327,8 +335,7 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
 
     Incompressible Navier-Stokes in a periodic channel, pressure eliminated into
     a fourth-order equation for the wall-normal velocity after Kim, Moin & Moser
-    (JFM 177:133-166, 1987). See the module header for why the method rather than
-    the equations names the class.
+    (JFM 177:133-166, 1987).
 
     The state is `(v_hat, u0, *scalars)`: the wall-normal velocity, the mean
     streamwise profile, and one array per transported scalar contributed by a

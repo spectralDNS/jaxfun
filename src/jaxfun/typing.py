@@ -93,6 +93,39 @@ type Loss_Tuple = (
 )
 
 
+class PolynomialKind(StrEnum):
+    LEGENDRE = "legendre"
+    L = "legendre"
+    CHEBYSHEV = "chebyshev"
+    C = "chebyshev"
+    CHEBYSHEVU = "chebyshevu"
+    U = "chebyshevu"
+    JACOBI = "jacobi"
+    J = "jacobi"
+
+    @classmethod
+    def coerce(cls, value: str | PolynomialKind) -> PolynomialKind:
+        """Accept a value, member name, or short alias and return the canonical member.
+
+        Examples::
+
+            PolynomialKind.coerce("legendre")  # -> LEGENDRE  (value lookup)
+            PolynomialKind.coerce("L")  # -> LEGENDRE  (name lookup)
+            PolynomialKind.coerce("LEGENDRE")  # -> LEGENDRE  (name lookup)
+            PolynomialKind.coerce("C")  # -> CHEBYSHEV  (name lookup)
+        """
+        if isinstance(value, cls):
+            return value
+        try:
+            return cls[value]  # by name: "L"/"LEGENDRE", "C"/"CHEBYSHEV", ...
+        except KeyError:
+            pass
+        try:
+            return cls(value)  # by value: "legendre", "chebyshev", ...
+        except ValueError:
+            raise ValueError(f"{value!r} is not a valid {cls.__name__}") from None
+
+
 class SampleMethod(StrEnum):
     UNIFORM = "uniform"
     LEGENDRE = "legendre"

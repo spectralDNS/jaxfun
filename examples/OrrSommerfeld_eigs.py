@@ -16,6 +16,8 @@ import jax
 if __name__ == "__main__":
     jax.config.update("jax_enable_x64", True)
 
+jax.config.update("jax_default_matmul_precision", "highest")
+
 from functools import cached_property
 from typing import cast
 
@@ -37,6 +39,7 @@ from jaxfun.galerkin import (
 from jaxfun.la import BaseMatrix
 
 x = sp.Symbol("x", real=True)
+n = sp.Symbol("n", integer=True)
 
 
 @nnx.dataclass
@@ -75,7 +78,13 @@ class OrrSommerfeld:
     @cached_property
     def functionspace(self):
         bcs = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
-        return FunctionSpace(self.N, Legendre.Legendre, bcs=bcs)
+        return FunctionSpace(
+            self.N,
+            Legendre.Legendre,
+            bcs=bcs,
+            scaling=sp.sqrt(2 * (2 * n + 5)) * (2 * n + 3),
+            name="V",
+        )
 
     def assemble(self) -> tuple[Array, Array]:
         V = self.functionspace
@@ -154,7 +163,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Orr Sommerfeld parameters")
     parser.add_argument(
-        "--N", type=int, default=120, help="Number of discretization points"
+        "--N", type=int, default=100, help="Number of discretization points"
     )
     parser.add_argument("--Re", default=8000.0, type=float, help="Reynolds number")
     parser.add_argument("--alfa", default=1.0, type=float, help="Parameter")

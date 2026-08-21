@@ -273,7 +273,7 @@ class Chebyshev(Jacobi):
             Coefficient array of length self.N.
         """
         n: int = len(u)
-        assert len(u) >= self.N, "Only truncation supported for forward transform"
+        assert n >= self.N, "Only truncation supported for forward transform"
         sign = (-1) ** jnp.arange(n)
         uh = jax.scipy.fft.dct(u, n=n)
         uh = uh * jnp.pi * sign / n / 2 / self.domain_factor

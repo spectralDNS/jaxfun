@@ -347,6 +347,7 @@ class OrthogonalSpace(BaseSpace):
     def scalar_product(self, u: Array) -> Array:
         """Return vector of inner products <u, psi_i> (weighted)."""
         N: int = u.shape[0]
+        assert N >= self.N, "Only truncation supported for forward transform"
         Xj, wj = self.quad_points_and_weights(N)
         Pi = self.vandermonde(N)  # == self.eval_basis_functions(Xj)
         # sg reads self.system, which TensorProduct replaces after construction,

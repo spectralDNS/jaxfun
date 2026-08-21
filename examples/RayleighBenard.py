@@ -35,18 +35,24 @@
 #
 # Only the diffusive terms are implicit, so dt is limited by the advective
 # Courant number and has to come down roughly in step with the wall-normal
-# resolution. Measured at Ra = 1e6, Pr = 0.7, to t = 20:
+# resolution, about like 1/N^2. Measured at Ra = 1e6, Pr = 0.7, to t = 20:
 #
 #   128 x  64   dt = 0.025     runs
 #   192 x  96   dt = 0.025     diverges     (so does 128 x 96: it is N that binds)
 #   192 x  96   dt = 0.0125    runs
 #   192 x  96   dt = 0.00625   runs, identical to dt = 0.0125 (Nu, max|u| to 4 sf)
 #
+# Those were measured on Legendre; the limit is the advective Courant number, so
+# it is a property of the node spacing rather than of the basis, and Chebyshev
+# behaves the same. Note that a run past the limit does not merely give a wrong
+# answer -- it goes to NaN, and a NaN run is faster than a healthy one, so never
+# read a timing off a run you have not checked with `jnp.isfinite`.
+#
 # so the failure at dt = 0.025 is a stability limit, not an accuracy one -- half
 # the step is already time-converged. The defaults below (128 x 64, dt = 0.025)
 # are shenfun's for this problem. They leave the top third of the temperature
 # spectrum at ~6e-3 of its peak, which is marginal rather than comfortable: it is
-# also the regime where skipping the Legendre dealiasing stops being free (see
+# also the regime where skipping the wall-normal dealiasing stops being free (see
 # "DEALIASING" in NavierStokes.py). Raise both M, N and lower dt together if you
 # need a converged Nusselt number -- at these defaults it reads 14.7 +- 5.4,
 # where the spread is genuine turbulent fluctuation, not drift.
@@ -60,7 +66,27 @@
 # `critical_rayleigh` measures it. The velocity solver itself is verified
 # separately, and more sharply, by the Orr-Sommerfeld run in NavierStokes.py.
 #
-# Spatial discretization: Fourier x Legendre Galerkin (spectral)
+# THE TEMPERATURE FOLLOWS THE VELOCITY'S BASIS
+#
+# `polynomial` and `kind` are forwarded to `NavierStokes` and reused for T, so
+# the whole solver stays in one basis. Two places where that
+# has to be got right, both silent if wrong:
+#
+#   * T carries a wall-normal second derivative, so under Petrov-Galerkin it
+#     needs a test space of its own, exactly as the v equation does. Without one
+#     the Chebyshev diffusion operator goes from 4 diagonals to N/2 of them.
+#   * Buoyancy is a right-hand side of the *v* equation, so `C_T` is tested
+#     against `self.PB` -- whatever the v equation itself uses -- not against
+#     `self.VB`. Under Galerkin those are the same object; under PG they are not.
+#
+# See "CHOICE OF BASIS AND TEST SPACE" in NavierStokes.py for which pairings are
+# worth using. The crossover is higher here than for the velocity alone, because
+# the temperature adds transforms but also one more banded solve: measured with
+# dt scaled as 1/N^2 and every run verified finite, Chebyshev-PG against
+# Legendre-Galerkin at M=128 runs 0.72x at N=64, 0.79x at N=128, 1.03x at N=256
+# and 1.50x at N=512.
+#
+# Spatial discretization: Fourier x (Legendre Galerkin | Chebyshev Petrov-Galerkin)
 # Time discretization: any globally stiffly accurate IMEX Runge-Kutta tableau
 # ruff: noqa: E402
 import os
@@ -92,16 +118,15 @@ from NavierStokes import (
 from jaxfun.galerkin import (
     DirectSumTPS,
     FunctionSpace,
-    Legendre,
     TensorProduct,
     TestFunction,
-    TrialFunction as Trial,
+    TrialFunction,
 )
 from jaxfun.integrators import ARS443, IMEXRungeKutta, IMEXTableau
 from jaxfun.operators import Constant, Div, Grad
-from jaxfun.typing import Array
+from jaxfun.typing import Array, PolynomialKind, TestSpaceKind
 
-M, N = 128, 64  # Fourier modes (x), Legendre modes (y)
+M, N = 128, 64  # Fourier modes (x), wall-normal modes (y)
 LX = 2 * float(sp.pi)  # periodic box width
 RA, PR = 1e6, 0.7
 DT, T_END = 0.025, 60.0
@@ -110,6 +135,12 @@ SEED = 0
 AMPLITUDE = 1e-3  # initial temperature perturbation
 TABLEAU = ARS443
 CRITICAL = True  # run the linear-stability verification
+# Wall-normal basis and test space, forwarded to NavierStokes and reused for the
+# temperature. Pair CHEBYSHEV with PG and LEGENDRE with GALERKIN -- see "CHOICE
+# OF BASIS" in NavierStokes.py. Chebyshev wins above N ~ 256 here; below that
+# Legendre is faster (0.72x at 128 x 64, 1.50x at 128 x 512).
+POLYNOMIAL = PolynomialKind.CHEBYSHEV
+KIND = TestSpaceKind.PETROV_GALERKIN
 
 if "PYTEST" in os.environ:
     M, N, T_END, N_SNAPSHOTS, CRITICAL = 16, 16, 0.2, 2, False
@@ -136,12 +167,14 @@ class RayleighBenard(NavierStokes):
         tableau: IMEXTableau = TABLEAU,
         time: tuple[float, float] | None = None,
         padding: tuple[int, int] | None = None,
+        polynomial: PolynomialKind = PolynomialKind.LEGENDRE,
+        kind: TestSpaceKind = TestSpaceKind.GALERKIN,
     ) -> None:
         """Assemble the velocity solver, then the temperature on top of it.
 
         Args:
             M: Number of Fourier modes along the periodic direction.
-            N: Number of Legendre modes along the wall-normal direction.
+            N: Number of wall-normal modes.
             Lx: Width of the periodic box.
             Ra: Rayleigh number.
             Pr: Prandtl number.
@@ -151,15 +184,29 @@ class RayleighBenard(NavierStokes):
                 stability check) instead of broadband noise.
             tableau: Any globally stiffly accurate IMEX Runge-Kutta tableau.
             time: Optional default integration interval.
+            padding: Shape of real space, as in `NavierStokes`.
+            polynomial: Wall-normal basis, passed straight through to
+                `NavierStokes` and reused for the temperature.
+            kind: GALERKIN or PETROV_GALERKIN, likewise.
         """
         nu = float((Pr / Ra) ** 0.5)
-        super().__init__(M, N, Lx, nu, tableau=tableau, time=time, padding=padding)
+        super().__init__(
+            M,
+            N,
+            Lx,
+            nu,
+            tableau=tableau,
+            time=time,
+            padding=padding,
+            polynomial=polynomial,
+            kind=kind,
+        )
         self.Ra, self.Pr = nnx.static(Ra), nnx.static(Pr)
         self.amplitude = nnx.static(amplitude)
         self.seed, self.mode = nnx.static(seed), nnx.static(mode)
 
         bcT = {"left": {"D": 1}, "right": {"D": 0}}
-        Tb = FunctionSpace(N, Legendre.Legendre, bcs=bcT, name="Tb")
+        Tb = FunctionSpace(N, self.polspace, bcs=bcT, name="Tb")
         VT = TensorProduct(self.F, Tb, system=self.system, name="VT")
         # The wall values are inhomogeneous, so VT is a direct sum of the
         # homogeneous space and the Dirichlet lifting -- which is what
@@ -167,13 +214,31 @@ class RayleighBenard(NavierStokes):
         assert isinstance(VT, DirectSumTPS)
         self.VT = nnx.static(VT)
 
+        # The temperature carries a wall-normal second derivative, so under
+        # Petrov-Galerkin it needs a test space of its own for the same reason
+        # the v equation does. `DirectSum.get_testspace` forwards to the
+        # homogeneous summand, which is the only part a test function sees --
+        # the lifting is trial-side data.
+        if self.testkind is TestSpaceKind.PETROV_GALERKIN:
+            PT = TensorProduct(
+                self.F,
+                Tb.get_testspace("PG", name="TbP"),
+                system=self.system,
+                name="PT",
+            )
+        else:
+            PT = VT
+
         x, y = self.system.base_scalars()
         t = self.system.base_time()
         kappa = Constant("kappa", float(1.0 / (Ra * Pr) ** 0.5))
-        Tt = Trial(VT, name="T", transient=True)
-        s = TestFunction(VT, name="s")
-        q = TestFunction(self.VB, name="q")
-        g = Trial(self.Wo, name="g")
+        Tt = TrialFunction(VT, name="T", transient=True)
+        s = TestFunction(PT, name="s")
+        # Buoyancy is a right-hand side of the *v* equation, so it has to be
+        # tested against whatever the v equation is tested against -- self.PB,
+        # which is self.VB under Galerkin and the PG test space otherwise.
+        q = TestFunction(self.PB, name="q")
+        g = TrialFunction(self.Wo, name="g")
 
         eq_T = (Tt.diff(t) - kappa * Div(Grad(Tt))) * s
         self.gT = nnx.data(
@@ -294,7 +359,17 @@ def growth_rate(Ra: float, Lx: float, *, m: int = 8, n: int = 32) -> float:
     the second half of the run, once the initial transient has decayed onto the
     least-stable eigenfunction.
     """
-    solver = RayleighBenard(m, n, Lx, Ra, PR, amplitude=1e-6, mode=1)
+    solver = RayleighBenard(
+        m,
+        n,
+        Lx,
+        Ra,
+        PR,
+        amplitude=1e-6,
+        mode=1,
+        polynomial=POLYNOMIAL,
+        kind=KIND,
+    )
     dt, steps, batches = 0.05, 2000, 40
     snaps = solver.solve(
         dt=dt,
@@ -346,7 +421,17 @@ def main() -> None:
     """Integrate the convection problem, verify it, and plot the result."""
     print(f"M={M} N={N} Ra={RA:g} Pr={PR} dt={DT} T={T_END}")
     padding = (3 * M // 2, N)
-    solver = RayleighBenard(M, N, LX, RA, PR, time=(0.0, T_END), padding=padding)
+    solver = RayleighBenard(
+        M,
+        N,
+        LX,
+        RA,
+        PR,
+        time=(0.0, T_END),
+        padding=padding,
+        polynomial=POLYNOMIAL,
+        kind=KIND,
+    )
     print(
         f"  dofs: v {solver.VB.num_dofs} T {solver.VT.num_dofs} u0 {solver.D1.num_dofs}"
     )

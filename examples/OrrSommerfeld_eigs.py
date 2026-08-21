@@ -8,7 +8,7 @@ Using Shen's biharmonic basis
 # ruff: noqa: E402
 import jax
 
-# Only as a script. NavierStokes.py imports this module for its eigenmode, and
+# Only as a script. ChannelFlow2D.py imports this module for its eigenmode, and
 # by then jaxfun has been imported and traced: flipping the global precision at
 # that point leaves float32 constants (jaxfun's Gauss-Legendre tables) in the
 # same graph as float64 ones. The eigenvalue assertion below needs float64, so

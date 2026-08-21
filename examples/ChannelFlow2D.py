@@ -1,4 +1,4 @@
-# Incompressible Navier-Stokes in a periodic channel
+# Incompressible Navier-Stokes in a periodic channel, two-dimensional
 #
 #   u_t + Grad(u)⋅u = -Grad(p) + nu*Div(Grad(u)) + f*i
 #   Div(u)          = 0
@@ -7,6 +7,22 @@
 # streamwise body force f standing in for a driving pressure gradient. Fourier
 # along axis 0 and the polynomial (wall-normal) direction along axis 1, which is
 # jaxfun's convention and the order the multi-device sharding path requires.
+#
+# The class is named KMM2D after the method rather than after the equations,
+# which is what distinguishes it: eliminating the pressure into a fourth-order
+# equation for the wall-normal velocity, carrying the k=0 mean flow as its own
+# one-dimensional problem, and recovering the streamwise velocity from
+# continuity. That formulation is
+#
+#   Kim J, Moin P, Moser R. Turbulence statistics in fully developed channel
+#   flow at low Reynolds number. Journal of Fluid Mechanics. 1987;177:133-166.
+#   doi:10.1017/S0022112087000892
+#
+# The 2D is part of the method, not just the geometry: in two dimensions the
+# elimination closes on the wall-normal velocity alone, where in three it also
+# needs an equation for the wall-normal vorticity. Do not read the name as "the
+# Navier-Stokes solver" -- DrivenCavity.py solves the same equations by an
+# unrelated method.
 #
 # This is the velocity-only core of shenfun's Rayleigh-Benard formulation,
 # https://shenfun.readthedocs.io/en/latest/rayleighbenard.html. RayleighBenard.py
@@ -194,8 +210,8 @@
 # IMEX_EULER; the Kennedy-Carpenter ARK family is only implicitly stiffly
 # accurate and is rejected. But advection is handled by the *explicit* table, so
 # the explicit part's imaginary-axis stability decides whether a scheme is usable
-# at all. Measured on the Orr-Sommerfeld growth rate below (Re=8000, T=50), as
-# relative error against linear theory:
+# at all. Measured on the Orr-Sommerfeld growth rate of OrrSommerfeld.py
+# (Re=8000, T=50), as relative error against linear theory:
 #
 #   dt            0.05        0.02        0.01
 #   ARS443        7.6e-06     5.1e-07     6.6e-08     3rd order
@@ -206,28 +222,28 @@
 # forward Euler, whose stability region touches the imaginary axis only at the
 # origin, so pure advection is unconditionally unstable. ARS443 is the default.
 #
-# VERIFICATION (this file, run directly)
+# VERIFICATION (not here -- this module has no entry point of its own)
 #
-# The evolution of an Orr-Sommerfeld eigenmode superposed on plane Poiseuille
-# flow. The eigenmode of OrrSommerfeld_eigs.py grows at exactly alfa*Im(c), so
-# the measured growth rate of the wall-normal velocity is a sharp test of the
-# whole solver: advection, the biharmonic operator, continuity and the mean flow.
+# Two demos drive this solver and check it against theory: OrrSommerfeld.py
+# evolves an eigenmode on plane Poiseuille flow and compares its growth rate
+# with linear stability theory, which exercises advection, the biharmonic
+# operator, continuity and the mean flow at once; RayleighBenard.py subclasses
+# it and checks the onset of convection.
 #
 # Spatial discretization: Fourier x (Legendre Galerkin | Chebyshev Petrov-Galerkin)
 # Time discretization: any globally stiffly accurate IMEX Runge-Kutta tableau
 # ruff: noqa: E402
-import os
-import sys
 from enum import StrEnum
 from functools import partial
 from typing import Any, Literal, cast, overload
 
 import jax
 
-# Before any jaxfun import, so nothing is built at the wrong precision. This is
-# not optional: the Orr-Sommerfeld eigenmode is seeded at amplitude 1e-7 on a
-# base flow of order 1, and in float32 the measured growth rate comes out
-# negative (-5.5e-04 against a theoretical +2.7e-03).
+# Before any jaxfun import, so nothing is built at the wrong precision. Kept here
+# rather than left to the demos because an importer that forgets gets float32
+# silently: OrrSommerfeld.py seeds its eigenmode at amplitude 1e-7 on a base flow
+# of order 1, and in float32 the growth rate it measures comes out negative
+# (-5.5e-04 against a theoretical +2.7e-03).
 jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
@@ -243,7 +259,6 @@ from jaxfun.galerkin import (
     TrialFunction,
 )
 from jaxfun.galerkin.composite import PGComposite
-from jaxfun.galerkin.inner import project
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.integrators import ARS443, IMEXRungeKutta, IMEXTableau
 from jaxfun.integrators.base import TimeStepper
@@ -307,8 +322,13 @@ def growth_rate_of(values: Array, times: Array) -> float:
     return float(jnp.polyfit(times[half:], jnp.log(values[half:]), 1)[0])
 
 
-class NavierStokes(TimeStepper[tuple[Array, ...]]):
-    """Incompressible Navier-Stokes in a periodic channel.
+class KMM2D(TimeStepper[tuple[Array, ...]]):
+    """Kim-Moin-Moser channel flow in two dimensions.
+
+    Incompressible Navier-Stokes in a periodic channel, pressure eliminated into
+    a fourth-order equation for the wall-normal velocity after Kim, Moin & Moser
+    (JFM 177:133-166, 1987). See the module header for why the method rather than
+    the equations names the class.
 
     The state is `(v_hat, u0, *scalars)`: the wall-normal velocity, the mean
     streamwise profile, and one array per transported scalar contributed by a
@@ -782,165 +802,3 @@ class NavierStokes(TimeStepper[tuple[Array, ...]]):
             # Physical, not the coefficient max: for Poiseuille this must read 1.
             "max|u0|": float(jnp.abs(self.D1.backward(u0)).max()),
         } | self.extra_diagnostics(state)
-
-
-# ---------------------------------------------------------------------------
-# Verification: growth of an Orr-Sommerfeld eigenmode on plane Poiseuille flow
-#
-# The base flow U(y) = 1 - y^2 is an exact steady solution of the mean-flow
-# equation once the body force balances its own diffusion: u0_t = nu*u0_yy + f
-# with u0_yy = -2 needs f = 2*nu. Superposing the least-stable Orr-Sommerfeld
-# eigenmode at an amplitude small enough to stay linear, the perturbation must
-# grow like exp(alfa*Im(c)*t) with c the eigenvalue.
-#
-# Only the wall-normal velocity needs seeding. The eigenmode is a streamfunction,
-# psi = phi(y)*exp(i*alfa*x), so v = -psi_x = -i*alfa*phi(y)*exp(i*alfa*x) and
-# phi lies in the biharmonic space exactly. The streamwise perturbation
-# u = psi_y = phi'(y)*exp(i*alfa*x) then has to come out of the continuity solve
-# on its own -- which is an independent check of it, run below.
-# ---------------------------------------------------------------------------
-
-
-def orr_sommerfeld_state(
-    solver: NavierStokes,
-    Re: float,
-    alfa: float,
-    amplitude: float,
-    n_os: int = 100,
-    t: float = 0.0,
-) -> tuple[tuple[Array, ...], complex, Array]:
-    """Return the initial state, the eigenvalue, and phi' for cross-checking."""
-    # A sibling module, not an installed one: this file is importable from
-    # anywhere (RayleighBenard subclasses it), so put examples/ on the path here
-    # rather than relying on the caller's sys.path.
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from OrrSommerfeld_eigs import OrrSommerfeld
-
-    problem = OrrSommerfeld(alfa=alfa, Re=Re, N=n_os)
-    eigvals, eigvectors = problem.solve()
-    xm, ym = solver.VB.mesh(broadcast=False)
-    eigval, phi, dphidy = problem.interp(ym, eigvals, eigvectors, eigval=1)
-    wave = jnp.exp(1j * alfa * (xm - eigval * t))[:, None]
-    v_p = amplitude * (-1j * alfa * phi[None, :] * wave).real
-    (yd,) = solver.D1.system.base_scalars()
-    return (
-        (solver.VB.forward(v_p), project(1 - yd**2, solver.D1)),
-        complex(eigval),
-        amplitude * (dphidy[None, :] * wave).real,
-    )
-
-
-def os_vel(
-    solver: NavierStokes, t: float, Re: float, alfa: float, amplitude: float
-) -> tuple[Array, Array, complex]:
-    state, eigval, _ = orr_sommerfeld_state(solver, Re, alfa, amplitude, 128, t)
-    u_p, v_p = solver.velocity_from_state(state, kind=VelocityKind.PHYSICAL)
-    return u_p, v_p, eigval
-
-
-def solution_error(
-    solver: NavierStokes,
-    state: tuple[Array, ...],
-    t: float,
-    Re: float,
-    alfa: float,
-    amplitude: float,
-) -> tuple[Array, Array, Array, Array]:
-    "Compute same error metrics as Shenfun for comparison."
-    uh, vh, u, v = solver.velocity_from_state(state, kind=VelocityKind.BOTH)
-    ex, ey, eigval = os_vel(solver, t, Re, alfa, amplitude)
-    w0, w1 = solver.VD.weights()
-    e2 = jnp.sum(w0 * w1 * ((u - ex) ** 2 + (v - ey) ** 2))
-    exact = jnp.exp(2 * jnp.imag(alfa * eigval) * t)
-    xi, yj = solver.VD.mesh()
-    ux = 1 - yj**2
-    e1 = jnp.sum(w0 * w1 * ((u - ux) ** 2 + v**2))
-    ex, ey, eigval = os_vel(solver, 0.0, Re, alfa, amplitude)
-    e0 = jnp.sum(w0 * w1 * ((ex - ux) ** 2 + ey**2))
-    return e0, e1, e2, exact
-
-
-def main() -> None:
-    """Evolve the eigenmode and compare its growth rate with linear theory."""
-    M, N = 32, 128
-    RE, ALFA = 8000.0, 1.0
-    dt, t_end, amplitude = 0.02, 100.0, 1e-7
-    if "PYTEST" in os.environ:
-        M, N, t_end = 16, 48, 1.0
-    nu = 1.0 / RE
-    padding = (3 * M // 2, N)
-    solver = NavierStokes(
-        M,
-        N,
-        2 * float(sp.pi) / ALFA,
-        nu,
-        body_force=2 * nu,
-        time=(0.0, t_end),
-        padding=padding,
-        kind=TestSpaceKind.G,
-        polynomial=PolynomialKind.LEGENDRE,
-    )
-    state0, eigval, u_expected = orr_sommerfeld_state(
-        solver, RE, ALFA, amplitude, 100, 0.0
-    )
-    print(f"Orr-Sommerfeld  Re={RE:g} alfa={ALFA:g}  M={M} N={N} dt={dt} T={t_end}")
-    print(f"  eigenvalue {eigval:.16f}")
-    # The streamwise perturbation is not seeded; continuity has to produce it.
-    # What is left over is the error of projecting the eigenfunction onto N
-    # wall-normal modes, not of the continuity solve, so it converges spectrally
-    # and the tolerance has to track N. Measured (Re=8000, alfa=1):
-    #
-    #   N        48        64        96        128       160
-    #   rel err  1.7e-05   3.4e-08   1.0e-12   7.6e-12   2.2e-11
-    #
-    # i.e. it hits the round-off floor by N=96, limited by the eigenvector's own
-    # conditioning and the biharmonic mass solve inside `VB.forward`.
-    u_hat = solver.velocity(state0[0], jnp.zeros(solver.D1.num_dofs))
-    u_got = solver.VD.backward(u_hat).real
-    err = float(jnp.abs(u_got - u_expected).max() / jnp.abs(u_expected).max())
-    print(f"  continuity recovers u = phi'(y)*exp(i*alfa*x) to {err:.3e}")
-    assert err < (1e-8 if N >= 96 else 1e-3), (
-        "the continuity solve must reproduce the eigenmode's u"
-    )
-    d0 = solver.diagnostics(state0)
-    print("  initial " + "  ".join(f"{k}={v:.3e}" for k, v in d0.items()))
-    steps, batches = int(round(t_end / dt)), 50
-
-    snaps = solver.solve(
-        dt=dt,
-        state0=state0,
-        n_batches=batches,
-        return_batch_snapshots=True,
-        progress=True,
-    )
-    final = tuple(s[-1] for s in snaps)
-    d1 = solver.diagnostics(final)
-    print("  final   " + "  ".join(f"{k}={v:.3e}" for k, v in d1.items()))
-    print(f"  Courant = {solver.courant(final, dt):.2f}")
-    # The base flow has no wall-normal velocity, so |v| is pure perturbation.
-    rate = growth_rate_of(
-        jnp.abs(snaps[0]).max(axis=(1, 2)), snapshot_times(dt, steps, batches)
-    )
-    expected = ALFA * eigval.imag
-    print(f"\n  growth rate measured {rate:+.12f}")
-    print(
-        f"  linear theory        {expected:+.12f}   (rel error {abs(rate / expected - 1):.2e})"  # noqa: E501
-    )
-    assert d1["div"] < 1e-10, f"divergence not satisfied: {d1['div']:.3e}"
-    # Relative, not exact: the seeded eigenmode's k=0 Fourier component is
-    # analytically zero but comes out of the FFT at round-off, so k=0 starts at
-    # ~1e-24 rather than at 0. It is never *driven* -- every term on the v
-    # equation's right-hand side carries a d/dx -- so it only decays from there.
-    # RayleighBenard, which starts from v = 0 exactly, does hold it at exactly 0.
-    assert d1["v[k=0]"] < 1e-14 * d1["max|v|"], "the k=0 mode must not be driven"
-
-    e0, e1, e2, exact = solution_error(solver, final, t_end, RE, ALFA, amplitude)
-    assert abs(e1 / e0 - exact) < 1e-6
-    assert jnp.sqrt(e2) < 1e-11
-
-    if "PYTEST" not in os.environ:
-        assert abs(rate / expected - 1) < 0.01, "growth rate off by more than 1%"
-
-
-if __name__ == "__main__":
-    main()

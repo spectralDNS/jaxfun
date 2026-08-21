@@ -8,7 +8,7 @@
 # T(+1) = 0, with nu = sqrt(Pr/Ra) and kappa = 1/sqrt(Ra*Pr). Gravity acts along
 # -y, so the buoyancy term drives the wall-normal (y) momentum equation.
 #
-# NavierStokes.py carries the whole velocity formulation -- the pressure-free
+# ChannelFlow2D.py carries the whole velocity formulation -- the pressure-free
 # fourth-order equation for v, the continuity solve for u, the k=0 mean flow, and
 # the stage loop. See its header for all of that. This file adds only what makes
 # the problem Rayleigh-Benard, through the four extension hooks:
@@ -53,7 +53,7 @@
 # are shenfun's for this problem. They leave the top third of the temperature
 # spectrum at ~6e-3 of its peak, which is marginal rather than comfortable: it is
 # also the regime where skipping the wall-normal dealiasing stops being free (see
-# "DEALIASING" in NavierStokes.py). Raise both M, N and lower dt together if you
+# "DEALIASING" in ChannelFlow2D.py). Raise both M, N and lower dt together if you
 # need a converged Nusselt number -- at these defaults it reads 14.7 +- 5.4,
 # where the spread is genuine turbulent fluctuation, not drift.
 #
@@ -64,11 +64,11 @@
 # Ra_eff = Ra*H^3 = 8*Ra, so the classical rigid-rigid result Ra_c = 1707.762 at
 # a_c = 3.117 predicts neutral stability at Ra = 213.47 and Lx = 4.0316 here.
 # `critical_rayleigh` measures it. The velocity solver itself is verified
-# separately, and more sharply, by the Orr-Sommerfeld run in NavierStokes.py.
+# separately, and more sharply, by the Orr-Sommerfeld run in OrrSommerfeld.py.
 #
 # THE TEMPERATURE FOLLOWS THE VELOCITY'S BASIS
 #
-# `polynomial` and `kind` are forwarded to `NavierStokes` and reused for T, so
+# `polynomial` and `kind` are forwarded to `KMM2D` and reused for T, so
 # the whole solver stays in one basis. Two places where that
 # has to be got right, both silent if wrong:
 #
@@ -79,7 +79,7 @@
 #     against `self.PB` -- whatever the v equation itself uses -- not against
 #     `self.VB`. Under Galerkin those are the same object; under PG they are not.
 #
-# See "CHOICE OF BASIS AND TEST SPACE" in NavierStokes.py for which pairings are
+# See "CHOICE OF BASIS AND TEST SPACE" in ChannelFlow2D.py for which pairings are
 # worth using. The crossover is higher here than for the velocity alone, because
 # the temperature adds transforms but also one more banded solve: measured with
 # dt scaled as 1/N^2 and every run verified finite, Chebyshev-PG against
@@ -99,21 +99,21 @@ import time
 import jax
 
 # Before any jaxfun import: the verification below resolves growth rates against
-# an O(1) base flow, which float32 cannot separate. See NavierStokes.py.
+# an O(1) base flow, which float32 cannot separate. See ChannelFlow2D.py.
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
-from flax import nnx
-from matplotlib.animation import FuncAnimation
-from NavierStokes import (
+from ChannelFlow2D import (
     ASSEMBLE,
+    KMM2D,
     SOLVE,
-    NavierStokes,
     growth_rate_of,
     linear_operator,
     snapshot_times,
 )
+from flax import nnx
+from matplotlib.animation import FuncAnimation
 
 from jaxfun.galerkin import (
     DirectSumTPS,
@@ -135,9 +135,9 @@ SEED = 0
 AMPLITUDE = 1e-3  # initial temperature perturbation
 TABLEAU = ARS443
 CRITICAL = True  # run the linear-stability verification
-# Wall-normal basis and test space, forwarded to NavierStokes and reused for the
+# Wall-normal basis and test space, forwarded to KMM2D and reused for the
 # temperature. Pair CHEBYSHEV with PG and LEGENDRE with GALERKIN -- see "CHOICE
-# OF BASIS" in NavierStokes.py. Chebyshev wins above N ~ 256 here; below that
+# OF BASIS" in ChannelFlow2D.py. Chebyshev wins above N ~ 256 here; below that
 # Legendre is faster (0.72x at 128 x 64, 1.50x at 128 x 512).
 POLYNOMIAL = PolynomialKind.CHEBYSHEV
 KIND = TestSpaceKind.PETROV_GALERKIN
@@ -146,11 +146,11 @@ if "PYTEST" in os.environ:
     M, N, T_END, N_SNAPSHOTS, CRITICAL = 16, 16, 0.2, 2, False
 
 
-class RayleighBenard(NavierStokes):
+class RayleighBenard(KMM2D):
     """Rayleigh-Benard convection: Navier-Stokes plus a buoyant temperature.
 
     The state is `(v_hat, u0, T_hat)` -- the velocity pair inherited from
-    `NavierStokes`, with the temperature appended as its transported scalar.
+    `KMM2D`, with the temperature appended as its transported scalar.
     """
 
     def __init__(
@@ -184,9 +184,9 @@ class RayleighBenard(NavierStokes):
                 stability check) instead of broadband noise.
             tableau: Any globally stiffly accurate IMEX Runge-Kutta tableau.
             time: Optional default integration interval.
-            padding: Shape of real space, as in `NavierStokes`.
+            padding: Shape of real space, as in `KMM2D`.
             polynomial: Wall-normal basis, passed straight through to
-                `NavierStokes` and reused for the temperature.
+                `KMM2D` and reused for the temperature.
             kind: GALERKIN or PETROV_GALERKIN, likewise.
         """
         nu = float((Pr / Ra) ** 0.5)
@@ -260,7 +260,7 @@ class RayleighBenard(NavierStokes):
         self.C_ux = nnx.data(linear_operator(-g.diff(x, 1) * s))
         self.C_uy = nnx.data(linear_operator(-g.diff(y, 1) * s))
 
-    # -- NavierStokes extension hooks --------------------------------------
+    # -- KMM2D extension hooks ---------------------------------------------
 
     @property
     def scalar_integrators(self) -> tuple[IMEXRungeKutta, ...]:

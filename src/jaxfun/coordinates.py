@@ -123,12 +123,19 @@ def get_system(a: sp.Expr) -> CoordSys:
 class BaseTime(Symbol):
     """Symbol representing (physical) time for a coordinate system.
 
-    This is a lightweight wrapper around a SymPy Symbol named ``t`` that
-    participates in differentiation and hashing with a system-specific id.
+    A SymPy Symbol named ``t``. The time axis itself is the same one whatever
+    curvilinear system the spatial dimensions use, and `Symbol` compares and
+    hashes on the name, so time symbols from different systems are equal,
+    interchangeable under substitution and collapse in a set. Only `_id`
+    distinguishes them, and it is not a claim that the axes differ: it is the
+    position time occupies among a system's variables, `base_scalars() +
+    (base_time(),)`, so it is `sys.dims` -- one past the last spatial index.
+    `jaxfun.pinns.loss` reads it as an axis index into a Jacobian. Drop the
+    system from here once that index comes from the variable list instead.
 
     Attributes:
-        _id: Tuple used for hashing / equality (system dimensional index).
-        _system: Reference back to the CoordSys.
+        _id: Tuple holding that position (the system's dimension count).
+        _system: Reference back to the CoordSys, for `__getnewargs_ex__`.
         is_commutative: Always True for scalar symbols.
         is_symbol: Marker for SymPy.
         is_Symbol: Marker for SymPy.
@@ -137,8 +144,20 @@ class BaseTime(Symbol):
 
     def __new__(cls, sys: CoordSys) -> Self:
         index: int = _sympify(sys.dims)
-        obj = super().__new__(cls, "t")
-        # The _id is used for equating purposes, and for hashing
+        # `Symbol.__new__` is memoized on the name alone, and every time symbol
+        # is named "t", so it would hand back one shared object for every
+        # system -- and `_id` below, being set after construction, would then
+        # hold whichever system's dimension count was set last, retroactively
+        # for every holder of an earlier one. That is an observable wrong
+        # answer, not merely untidy: `pinns.loss` indexes a Jacobian with it.
+        # `__xnew__` is the same constructor without that cache, so each system
+        # gets its own instance to annotate.
+        #
+        # Equality is unaffected and deliberately so: `Symbol` compares and
+        # hashes on the name, so time symbols from different systems remain
+        # equal, hash alike, collapse in a set and substitute for one another.
+        # Only identity, and with it the ownership of `_id`, separates.
+        obj = super().__xnew__(cls, "t")
         obj._id = (index,)
         obj._system = sys
         return obj

@@ -44,7 +44,9 @@ IndivisibleError = ValueError
 _tensorproduct_token = object()
 
 
-def _cheapest_first(shape: tuple[int, ...], sizes: tuple[int, ...]) -> tuple[int, ...]:
+def _cheapest_first(
+    shape: tuple[int, ...], sizes: tuple[int, ...], last: int | None = None
+) -> tuple[int, ...]:
     """Return the axes of a separable transform ordered cheapest-first.
 
     Each axis maps ``shape[ax]`` points to ``sizes[ax]``, and applying one costs
@@ -56,8 +58,60 @@ def _cheapest_first(shape: tuple[int, ...], sizes: tuple[int, ...]) -> tuple[int
     Fourier and none along the polynomial direction, evaluating the polynomial
     direction first runs its (dense, and by far the more expensive) matrix
     product on 2/3 as many rows.
+
+    Args:
+        shape: Current extent of each axis.
+        sizes: Extent each axis is transformed to.
+        last: Axis forced to the end regardless of cost. The axes only commute
+            while every one of them is complex-linear, which a half-spectrum
+            axis is not: its `irfft` returns a real array, so running it before
+            the other axes have been transformed discards the imaginary parts
+            still carrying their information. The result is silently wrong
+            rather than an error, so the pin is not an optimisation.
     """
-    return tuple(sorted(range(len(sizes)), key=lambda ax: sizes[ax] / shape[ax]))
+    order = sorted(range(len(sizes)), key=lambda ax: sizes[ax] / shape[ax])
+    if last is not None:
+        order = [ax for ax in order if ax != last] + [last]
+    return tuple(order)
+
+
+def _validate_hermitian_axis(
+    basespaces: Sequence[OrthogonalSpace | DirectSum],
+) -> int | None:
+    """Return the index of the half-spectrum axis, checking there is at most one.
+
+    A real field's spectrum is Hermitian under a *joint* reflection of every
+    axis, `c[-k, -l] = conj(c[k, l])`, which pairs half the coefficients with
+    the other half and lets exactly one axis be stored half. Halving two would
+    keep one quadrant of four and drop two that nothing determines.
+
+    The axis is additionally required to be the first, which is what both
+    orderings assume: the forward transform runs in axis order and the real
+    `rfft` has to consume the array while it is still real, and the sharded
+    paths transform the unsharded axes first, `physical_sharding` splitting
+    axis 1 and `spectral_sharding` axis 0.
+    """
+    axes = [i for i, space in enumerate(basespaces) if space.is_hermitian_half]
+    if not axes:
+        return None
+    if len(axes) > 1:
+        names = ", ".join(basespaces[i].name for i in axes)
+        raise ValueError(
+            f"at most one axis may store half a Hermitian spectrum, got {len(axes)} "
+            f"({names}). A real field's spectrum is Hermitian under a joint "
+            "reflection of all axes, so halving one axis already uses up the "
+            "symmetry; halving a second would drop coefficients nothing "
+            "determines. Keep one and make the rest ordinary Fourier spaces."
+        )
+    if axes[0] != 0:
+        raise ValueError(
+            f"a half-spectrum axis must be the first axis, but "
+            f"{basespaces[axes[0]].name} is axis {axes[0]}. The forward transform "
+            "has to reach it while the "
+            "array is still real, and the sharded paths assume the same order. "
+            "Put it first in the tensor product."
+        )
+    return 0
 
 
 class DirectInstantiationWarning(UserWarning):
@@ -118,6 +172,7 @@ class TensorProductSpace:
             else system
         )
         self.basespaces: list[OrthogonalSpace] = list(basespaces)
+        self._hermitian_axis = _validate_hermitian_axis(self.basespaces)
         self.name = name
         self.system: CoordSys = system
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
@@ -155,15 +210,26 @@ class TensorProductSpace:
         return all(space.is_orthogonal for space in self.basespaces)
 
     @property
+    def hermitian_axis(self) -> int | None:
+        """Return the axis storing half of a Hermitian spectrum, or None.
+
+        At most one axis may store half, and it has to be the first -- see the
+        check in `__init__`. The index matters because the axes of a separable
+        transform stop commuting once one of them is a half spectrum, so both
+        the forward and the backward orderings have to place it.
+        """
+        return self._hermitian_axis
+
+    @property
     def is_hermitian_half(self) -> bool:
-        """Return True if any axis stores only half of a Hermitian spectrum.
+        """Return True if an axis stores only half of a Hermitian spectrum.
 
         One such axis is enough to make the whole field real and its
         reconstruction real-linear: the dropped coefficients are the conjugates
         of kept ones under a *joint* reflection of every axis, so folding them
         back weights that axis alone and the result's real part is the field.
         """
-        return any(space.is_hermitian_half for space in self.basespaces)
+        return self._hermitian_axis is not None
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -379,7 +445,7 @@ class TensorProductSpace:
             return _apply_separable_spmd_shard_map(
                 c, fns, spectral_sharding, self._spmd_local_fn_cache
             )
-        for ax in _cheapest_first(c.shape, nq):
+        for ax in _cheapest_first(c.shape, nq, self.hermitian_axis):
             c = fns[ax](c)
         return c
 
@@ -534,7 +600,7 @@ class TensorProductSpace:
         on a traced array.
         """
         fns = self._backward_fns(nq)
-        for ax in _cheapest_first(c.shape, nq):
+        for ax in _cheapest_first(c.shape, nq, self.hermitian_axis):
             c = fns[ax](c)
         return c
 
@@ -605,6 +671,9 @@ class TensorProductSpace:
 
         Kept apart from `scalar_product` so `scalar_product_batch` can `vmap`
         it: the sharding test reads `u.devices()`, unavailable on a tracer.
+
+        In axis order, for the same reason as `_apply_forward`: a half-spectrum
+        axis takes an `rfft` and has to see the array while it is still real.
         """
         for fn in self._scalar_product_fns():
             u = fn(u)
@@ -660,7 +729,13 @@ class TensorProductSpace:
         return self._spmd_local_fn_cache[cache_key]
 
     def _apply_forward(self, u: Array) -> Array:
-        """Apply every axis's forward transform to a local (unsharded) array."""
+        """Apply every axis's forward transform to a local (unsharded) array.
+
+        In axis order, which is not arbitrary when an axis stores half a
+        Hermitian spectrum: its `rfft` only accepts a real array, so it has to
+        run before any other axis has made the array complex. `__init__` pins
+        such an axis to index 0, so iterating forwards is what that requires.
+        """
         for fn in self._forward_fns():
             u = fn(u)
         return u
@@ -753,7 +828,7 @@ class TensorProductSpace:
     ) -> Array:
         """Apply every axis's derivative transform to a local (unsharded) array."""
         fns = self._backward_primitive_fns(k, nq)
-        for ax in _cheapest_first(c.shape, nq):
+        for ax in _cheapest_first(c.shape, nq, self.hermitian_axis):
             c = fns[ax](c)
         return c
 
@@ -794,10 +869,53 @@ class TensorProductSpace:
         return place(z, sharding)
 
 
+def _halve_leading_fourier(
+    basespaces: Sequence[OrthogonalSpace | DirectSum],
+) -> list[OrthogonalSpace | DirectSum]:
+    """Return `basespaces` with the leading Fourier axis stored as a half spectrum.
+
+    `RFourier(N)` and `Fourier(N)` resolve the same field, so the swap is in
+    place: same quadrature points, same domain, same name, half the
+    coefficients. Only the first axis is swapped even when several are Fourier,
+    because a real field's spectrum is Hermitian under a *joint* reflection of
+    every axis and halving one spends that symmetry -- see
+    `_validate_hermitian_axis`.
+    """
+    from .Fourier import Fourier, RFourier
+
+    out = list(basespaces)
+    head = out[0] if out else None
+    if isinstance(head, RFourier):
+        return out  # already halved; asking twice is not an error
+    if not isinstance(head, Fourier):
+        where = [i for i, sp_ in enumerate(out) if isinstance(sp_, Fourier)]
+        raise ValueError(
+            "real=True stores one Fourier axis as half a Hermitian spectrum, so "
+            "the first axis has to be Fourier"
+            + (
+                f", but it is {type(head).__name__} and the Fourier axis is "
+                f"{where[0]}. Put the Fourier space first in the tensor product."
+                if where
+                else f", but got {type(head).__name__} and no axis is Fourier."
+            )
+        )
+    return [
+        RFourier(
+            head.num_quad_points,
+            domain=head.domain,
+            system=head.system,
+            name=head.name,
+            fun_str=head.fun_str,
+        ),
+        *out[1:],
+    ]
+
+
 def TensorProduct(
     *basespaces: OrthogonalSpace | DirectSum,
     system: CoordSys | None = None,
     name: str = "T",
+    real: bool = False,
 ) -> TensorProductSpace | DirectSumTPS:
     """Factory returning TensorProductSpace or DirectSumTPS.
 
@@ -811,11 +929,23 @@ def TensorProduct(
         *basespaces: 1D BaseSpace / DirectSum instances.
         system: Optional global coordinate system.
         name: Base name for the tensor product space(s).
+        real: Whether the fields expanded in this space are real. If they are,
+            the leading Fourier axis is stored as `RFourier` -- the
+            non-negative half of its Hermitian spectrum -- which halves the
+            coefficients, the per-wavenumber linear algebra and the transforms
+            along every other axis. Declared rather than detected: the
+            coefficient count differs between the two, and it is read at
+            construction to size operators and initial conditions, long before
+            any field exists to inspect. Passing a complex field to a space
+            built with `real=True` raises from the forward transform.
 
     Returns:
         Instance of TensorProductSpace or DirectSumTPS.
     """
     from jaxfun.coordinates import CartCoordSys, x, y, z
+
+    if real:
+        basespaces = tuple(_halve_leading_fourier(basespaces))
 
     system = (
         CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[len(basespaces)])
@@ -889,6 +1019,7 @@ class DirectSumTPS(TensorProductSpace):
         from jaxfun.galerkin.inner import project, project1D
 
         self.basespaces: list[OrthogonalSpace | DirectSum] = basespaces
+        self._hermitian_axis = _validate_hermitian_axis(self.basespaces)
         self.system = system
         self.name = name
         self.bndvals: dict[tuple[OrthogonalSpace, ...], Array] = {}

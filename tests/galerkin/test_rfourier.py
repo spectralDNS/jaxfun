@@ -302,3 +302,159 @@ def test_sharded_transform_round_trip() -> None:
     x, y = V_odd.system.base_scalars()
     with pytest.raises(ValueError, match="divisible"):
         V_odd.backward(project(sp.sin(2 * sp.pi * x / LX) * (1 - y**2), V_odd))
+
+
+# ---------------------------------------------------------------------------
+# The half axis constrains the tensor product: at most one, and it must be
+# first, and the separable transforms have to keep it in the right place.
+# ---------------------------------------------------------------------------
+def test_two_half_axes_are_rejected() -> None:
+    """Two `RFourier` axes would drop coefficients nothing determines.
+
+    A real field's spectrum is Hermitian under a joint reflection of every axis,
+    which pairs half the coefficients with the other half exactly once. Halving
+    one axis spends that symmetry; halving a second keeps one quadrant of four
+    and throws away two the first has no relation to.
+    """
+    R = [
+        FunctionSpace(M, RFourier, domain=Domain(0, LX), name=f"R{i}") for i in range(2)
+    ]
+    with pytest.raises(ValueError, match="at most one axis"):
+        TensorProduct(*R, name="Vrr")
+
+
+def test_half_axis_must_come_first() -> None:
+    """`Fourier x RFourier` is valid mathematically but not supported here.
+
+    It is what `rfft2` does. But the forward transform runs in axis order, so
+    the leading complex axis would make the array complex before the `rfft`
+    sees it, and the sharded paths make the same assumption. Refused at
+    construction rather than left to fail inside a transform.
+    """
+    F = FunctionSpace(M, Fourier, domain=Domain(0, LX), name="Ff")
+    R = FunctionSpace(M, RFourier, domain=Domain(0, LX), name="Rf")
+    with pytest.raises(ValueError, match="must be the first axis"):
+        TensorProduct(F, R, name="Vfr")
+
+
+@pytest.mark.parametrize("pad", [None, (M, 3 * M // 2), (M, 2 * M), (M, 3 * M)])
+def test_backward_keeps_the_half_axis_last(pad: tuple[int, int] | None) -> None:
+    """Padding the other axis must not reorder the transforms.
+
+    `backward` orders axes cheapest-first, and a half axis grows by about 2x
+    (N/2 + 1 -> N), so it lands last on cost alone for as long as the other
+    axis is padded by less than that. It must land last for *correctness*:
+    `irfft` returns a real array, so running it first discards the imaginary
+    parts still carrying the other axis's information -- silently, with no
+    error. Padding the second axis by 2x or more is what used to flip the order.
+    """
+    Vr = TensorProduct(
+        FunctionSpace(M, RFourier, domain=Domain(0, LX), name="Rb"),
+        FunctionSpace(M, Fourier, domain=Domain(0, LX), name="Fb"),
+        name="Vrb",
+    )
+    Vf = TensorProduct(
+        FunctionSpace(M, Fourier, domain=Domain(0, LX), name="Ff2"),
+        FunctionSpace(M, Fourier, domain=Domain(0, LX), name="Ff3"),
+        name="Vff",
+    )
+    # Periodic on [0, LX) and well below Nyquist in both directions: the
+    # comparison is between two representations of the *same* interpolant, so
+    # any content at Nyquist would compare their differing conventions for it
+    # rather than the axis ordering this test is about.
+    g = jnp.linspace(0, LX, M, endpoint=False)
+    xx, yy = jnp.meshgrid(g, g, indexing="ij")
+    kx, ky = 2 * jnp.pi * xx / LX, 2 * jnp.pi * yy / LX
+    u = jnp.sin(2 * kx) * jnp.cos(3 * ky) + 0.5 * jnp.cos(kx + 2 * ky) + 1.3
+
+    got = Vr.backward(Vr.forward(u), N=pad).real
+    ref = Vf.backward(Vf.forward(u), N=pad).real
+    assert jnp.abs(got - ref).max() < ulp(1000) * max(1.0, float(jnp.abs(ref).max()))
+
+
+def test_hermitian_axis_index() -> None:
+    """`hermitian_axis` names the axis; `is_hermitian_half` stays the predicate."""
+    hom = {"left": {"D": 0}, "right": {"D": 0}}
+    D = FunctionSpace(12, Legendre.Legendre, bcs=hom, name="Dh")
+    Vr = TensorProduct(
+        FunctionSpace(M, RFourier, domain=Domain(0, LX), name="Rh"), D, name="Vrh"
+    )
+    Vf = TensorProduct(
+        FunctionSpace(M, Fourier, domain=Domain(0, LX), name="Fh"), D, name="Vfh"
+    )
+    assert Vr.hermitian_axis == 0
+    assert Vr.is_hermitian_half
+    assert Vf.hermitian_axis is None
+    assert not Vf.is_hermitian_half
+
+
+# ---------------------------------------------------------------------------
+# `real=True`: the user declares the field real, the factory does the rest.
+# ---------------------------------------------------------------------------
+def test_real_flag_halves_the_leading_fourier_axis() -> None:
+    """`real=True` swaps `Fourier` for `RFourier` in place, and nothing else."""
+    hom = {"left": {"D": 0}, "right": {"D": 0}}
+
+    def build(real: bool) -> TensorProductSpace:
+        return TensorProduct(
+            FunctionSpace(M, Fourier, domain=Domain(0, LX), name="Fr"),
+            FunctionSpace(12, Legendre.Legendre, bcs=hom, name="Dr"),
+            name="Vr" + str(real),
+            real=real,
+        )
+
+    Vr, Vf = build(True), build(False)
+    assert Vr.hermitian_axis == 0
+    assert Vf.hermitian_axis is None
+    assert Vr.num_dofs == (M // 2 + 1, Vf.num_dofs[1])
+    # Same field, same physical mesh: only the storage differs.
+    assert Vr.shape == Vf.shape
+    x, y = Vr.system.base_scalars()
+    f = sp.sin(2 * sp.pi * x / LX) * (1 - y**2)
+    u = Vr.backward(project(f, Vr))
+    assert not jnp.iscomplexobj(u)
+    xf, yf = Vf.system.base_scalars()
+    ref = Vf.backward(project(sp.sin(2 * sp.pi * xf / LX) * (1 - yf**2), Vf)).real
+    assert jnp.abs(u - ref).max() < ulp(1000)
+
+
+def test_real_flag_halves_only_one_of_two_fourier_axes() -> None:
+    """Fourier x Fourier keeps the second axis whole: one joint symmetry, one axis."""
+    V = TensorProduct(
+        FunctionSpace(M, Fourier, domain=Domain(0, LX), name="F1"),
+        FunctionSpace(M, Fourier, domain=Domain(0, LX), name="F2"),
+        name="Vff2",
+        real=True,
+    )
+    assert V.hermitian_axis == 0
+    assert V.num_dofs == (M // 2 + 1, M)
+
+
+def test_real_flag_is_idempotent() -> None:
+    """Asking for a half spectrum that is already there is not an error."""
+    V = TensorProduct(
+        FunctionSpace(M, RFourier, domain=Domain(0, LX), name="Ri"),
+        FunctionSpace(M, Fourier, domain=Domain(0, LX), name="Fi"),
+        name="Vri",
+        real=True,
+    )
+    assert V.hermitian_axis == 0
+    assert V.num_dofs == (M // 2 + 1, M)
+
+
+@pytest.mark.parametrize("second_is_fourier", [True, False])
+def test_real_flag_needs_fourier_first(second_is_fourier: bool) -> None:
+    """The half axis has to be first, so `real=True` refuses to reorder for you."""
+    hom = {"left": {"D": 0}, "right": {"D": 0}}
+    second = (
+        FunctionSpace(M, Fourier, domain=Domain(0, LX), name="Fn")
+        if second_is_fourier
+        else FunctionSpace(12, Legendre.Legendre, bcs=hom, name="Dn2")
+    )
+    with pytest.raises(ValueError, match="first axis has to be Fourier"):
+        TensorProduct(
+            FunctionSpace(12, Legendre.Legendre, bcs=hom, name="Dn1"),
+            second,
+            name="Vbad",
+            real=True,
+        )

@@ -139,9 +139,10 @@
 #
 # Every physical field here is real, so its spectrum is Hermitian: the negative
 # wavenumbers are the conjugates of the positive ones and carry no information.
-# The streamwise direction is therefore `RFourier`, which stores only
-# k = 0, ..., M/2 and transforms with rfft/irfft. Nothing is approximated -- the
-# equations for -k are the conjugates of those for +k -- but everything downstream
+# The streamwise direction is therefore built with `TensorProduct(..., real=True)`,
+# which stores only k = 0, ..., M/2 and transforms with rfft/irfft. Nothing is
+# approximated -- the equations for -k are the conjugates of those for +k -- but
+# everything downstream
 # runs on half the data: the banded per-wavenumber solves, the Butcher
 # accumulation, the stencils, and the wall-normal matrix products that dominate
 # the nonlinear term.
@@ -411,11 +412,19 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
 
         hom = {"left": {"D": 0}, "right": {"D": 0}}
         bih = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
-        F = FunctionSpace(M, Fourier.RFourier, domain=Domain(0, Lx), name="F")
+        F = FunctionSpace(M, Fourier.Fourier, domain=Domain(0, Lx), name="F")
         D = FunctionSpace(N, polspace, bcs=hom, name="D")
         B = FunctionSpace(N, polspace, bcs=bih, name="B")
-        VD = TensorProduct(F, D, name="VD")
-        VB = TensorProduct(F, B, name="VB")
+        # real=True: every field here is a velocity or a scalar, so the
+        # streamwise spectrum is Hermitian and only its non-negative half is
+        # stored -- see "THE FIELDS ARE REAL" in the header.
+        VD = TensorProduct(F, D, name="VD", real=True)
+        VB = TensorProduct(F, B, name="VB", real=True)
+        # `real=True` substituted the half spectrum, so take the streamwise space
+        # back from the product rather than keeping the full one built above:
+        # `self.ikx` below is its wavenumbers, and a half spectrum has M/2 + 1 of
+        # them rather than M.
+        F = cast(Fourier.RFourier, VD.basespaces[0])
 
         # Convection H and the scalar fluxes satisfy no boundary conditions, so they
         # live in the orthogonal space.

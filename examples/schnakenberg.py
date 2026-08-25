@@ -56,7 +56,7 @@ if "PYTEST" in os.environ:
     n_states = 4
 
 F = Fourier(N, Domain(0, G))
-V = TensorProduct(F, F, name="V")
+V = TensorProduct(F, F, name="V", real=True)
 w = TestFunction(V, name="w")
 u = TrialFunction(V, name="u", transient=True)
 q = TestFunction(V, name="q")

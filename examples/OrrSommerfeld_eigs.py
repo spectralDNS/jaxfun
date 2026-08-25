@@ -28,6 +28,7 @@ from jax import Array
 from matplotlib import pyplot as plt
 
 from jaxfun.galerkin import (
+    Composite,
     FunctionSpace,
     JAXFunction,
     Legendre,
@@ -49,42 +50,42 @@ class OrrSommerfeld:
     N: int = 80
     verbose: bool = False
 
-    def interp(self, y, eigvals, eigvectors, eigval=1):
-        """Interpolate solution eigenvector and it's derivative onto y
+    def interp(
+        self, y: Array, eigvals: Array, eigvectors: Array, eigval: int = 1
+    ) -> tuple[int, Array, Array]:
+        """Interpolate solution eigenvector and its derivative onto y
 
         Args:
-            y : array
-                Interpolation points
-            eigvals : array
-                All computed eigenvalues
-            eigvectors : array
-                All computed eigenvectors
-            eigval : int, optional
-                The chosen eigenvalue, ranked with descending imaginary
+            y : Interpolation points
+            eigvals : All computed eigenvalues
+            eigvectors : All computed eigenvectors
+            eigval : The chosen eigenvalue, ranked with descending imaginary
                 part. The largest imaginary part is 1, the second
                 largest is 2, etc.
         """
-        nx, eigval = self.get_eigval(eigval, eigvals, self.verbose)
+        z = self.get_eigval(eigval, eigvals, self.verbose)
+        nx, eigval = z[0].item(), z[1].item()
         SB = self.functionspace
         x = SB.system.x
         ev = jnp.squeeze(eigvectors[:, nx])
         phi_hat = JAXFunction(ev, SB, "phi")
-        phi = phi_hat(y)
+        phi: Array = phi_hat(y)
         P = SB.get_orthogonal()
         dphi = project(phi_hat.diff(x), P)
         dphidy = P.evaluate(y, dphi)
         return eigval, phi, dphidy
 
     @cached_property
-    def functionspace(self):
+    def functionspace(self) -> Composite:
         bcs = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
-        return FunctionSpace(
+        V = FunctionSpace(
             self.N,
             Legendre.Legendre,
             bcs=bcs,
             scaling=sp.sqrt(2 * (2 * n + 5)) * (2 * n + 3),
             name="V",
         )
+        return cast(Composite, V)
 
     def assemble(self) -> tuple[Array, Array]:
         V = self.functionspace
@@ -124,7 +125,7 @@ class OrrSommerfeld:
 
         return A.todense(), B.todense()
 
-    def solve(self):
+    def solve(self) -> tuple[Array, Array]:
         """Solve the Orr-Sommerfeld eigenvalue problem"""
         if self.verbose:
             print("Solving the Orr-Sommerfeld eigenvalue problem...")
@@ -133,27 +134,27 @@ class OrrSommerfeld:
         return jnp.linalg.eig(jnp.linalg.inv(B) @ A)
 
     @staticmethod
-    def get_eigval(nx, eigvals, verbose=False):
+    def get_eigval(
+        nx: int, eigvals: Array, verbose: bool = False
+    ) -> tuple[Array, Array]:
         """Get the chosen eigenvalue
 
         Parameters
         ----------
-            nx : int
-                The chosen eigenvalue. nx=1 corresponds to the one with the
+            nx : The chosen eigenvalue. nx=1 corresponds to the one with the
                 largest imaginary part, nx=2 the second largest etc.
-            eigvals : array
-                Computed eigenvalues
-            verbose : bool, optional
-                Print the value of the chosen eigenvalue. Default is False.
+            eigvals : Computed eigenvalues
+            verbose : Print the value of the chosen eigenvalue. Default is False.
 
         """
+        nx: Array = jnp.atleast_1d(jnp.array(nx))
         indices = jnp.argsort(jnp.imag(eigvals))
-        indi = indices[-1 * jnp.array(nx)]
+        indi = indices[-1 * nx]
         eigval = eigvals[indi]
         if verbose:
             ev = list(eigval) if jnp.ndim(eigval) else [eigval]
-            indi = list(indi) if jnp.ndim(indi) else [indi]
-            for i, (e, v) in enumerate(zip(ev, indi)):
+            indv = list(indi) if jnp.ndim(indi) else [indi]
+            for i, (e, v) in enumerate(zip(ev, indv)):
                 print(f"Eigenvalue {i + 1} ({v}) = {e:2.16e}")
         return indi, eigval
 
@@ -182,7 +183,7 @@ if __name__ == "__main__":
     d = z.get_eigval(1, evals, args.verbose)
 
     if args.Re == 8000.0 and args.alfa == 1.0 and args.N > 80:
-        assert abs(d[1] - (0.24707506017508621 + 0.0026644103710965817j)) < 1e-12
+        assert abs(d[1] - (0.24707506017499 + 0.002664410371114j)) < 1e-12
 
     if plot:
         plt.figure()

@@ -34,6 +34,8 @@ if "PYTEST" in os.environ:
 
 dt = T / steps
 
+# Note: Using complex Fourier basis because it's faster than real RFourier for my
+# MacBook Pro M3. RFourier may be faster on a different architecture.
 V = Fourier(N, Domain(-1, 1))
 v = TestFunction(V, name="v")
 u = TrialFunction(V, name="u", transient=True)

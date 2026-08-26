@@ -41,7 +41,7 @@ if "PYTEST" in os.environ:
 dt = T / steps
 
 F = Fourier(N, Domain(-1, 1))
-V = TensorProduct(F, F, name="V")
+V = TensorProduct(F, F, name="V", real=True)
 v = TestFunction(V, name="v")
 u = TrialFunction(V, name="u", transient=True)
 
@@ -68,21 +68,14 @@ states = integrator.solve(
 )
 times = jnp.linspace(0.0, T, states.shape[0])
 
-
-@jax.jit
-def backward_saved_states(coefficients):
-    # Batch the spectral->physical transforms to avoid Python dispatch per frame.
-    return jax.vmap(lambda uhat: V.backward(uhat).real)(coefficients)
-
-
 if "PYTEST" in os.environ:
-    u0_phys = V.backward(states[0]).real
-    uT_phys = V.backward(states[-1]).real
+    u0_phys = V.backward(states[0])
+    uT_phys = V.backward(states[-1])
     assert jnp.isfinite(uT_phys).all()
     assert float(jnp.linalg.norm(uT_phys - u0_phys)) > 1e-8
     sys.exit(0)
 
-states_phys = backward_saved_states(states)
+states_phys = V.backward_batch(states)
 x_plot, y_plot = V.mesh(broadcast=False)
 
 fig, axes = plt.subplots(1, 3, figsize=(14, 4), constrained_layout=True)

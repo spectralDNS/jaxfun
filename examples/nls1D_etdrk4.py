@@ -21,7 +21,7 @@ from matplotlib.animation import FuncAnimation
 
 from jaxfun import Domain
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
-from jaxfun.galerkin.Fourier import Fourier as space
+from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.integrators import ETDRK4
 
@@ -54,7 +54,7 @@ elif "NLS_FAST" in os.environ:
 
 dt = T / steps
 
-V = FunctionSpace(N, space, domain=Domain(-L, L), name="V", fun_str="E")
+V = FunctionSpace(N, Fourier, domain=Domain(-L, L), name="V", fun_str="E")
 v = TestFunction(V, name="v")
 psi = TrialFunction(V, name="psi", transient=True)
 

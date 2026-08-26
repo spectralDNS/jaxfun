@@ -95,8 +95,8 @@ times = jnp.linspace(0.0, T, u_hats.shape[0])
 
 
 x_plot, y_plot = V.mesh(broadcast=False)
-u_states = V.backward_batch(u_hats).real
-v_states = V.backward_batch(v_hats).real
+u_states = V.backward_batch(u_hats)
+v_states = V.backward_batch(v_hats)
 
 if "PYTEST" in os.environ:
     assert u_hats.shape == (n_states + 1,) + V.num_dofs

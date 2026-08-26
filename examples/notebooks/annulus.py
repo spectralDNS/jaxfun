@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.19.11"
+__generated_with = "0.23.15"
 app = marimo.App()
 
 
@@ -69,7 +69,7 @@ def _(mo):
 def _(get_CoordSys, sp):
     _r, _theta = sp.symbols("r,theta", real=True, positive=True)
     C = get_CoordSys(
-        "C", sp.Lambda((_r, _theta), (_r * sp.cos(_theta), _r * sp.sin(_theta)))
+        "C", sp.Lambda((_theta, _r), (_r * sp.cos(_theta), _r * sp.sin(_theta)))
     )
     return (C,)
 
@@ -94,13 +94,15 @@ def _(C, Domain, Fourier, FunctionSpace, Legendre, TensorProduct, sp):
         fun_str="phi",
     )
     F = FunctionSpace(20, Fourier.Fourier, name="F", fun_str="E")
-    P = TensorProduct(R, F, system=C, name="P")
+    P = TensorProduct(F, R, system=C, name="P", real=True)
     return (P,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    Note that we place the Fourier space along the first axis in order to use the real Hermitian symmetry of the Fourier coefficients.
+
     To implement Helmholtz' equation we need test and trial functions for the tensor product space
     """)
     return
@@ -147,14 +149,14 @@ def _(mo):
     Notice that $\phi_k(r)$ is component $k$ of the trial functions of the radial coordinate and $E_l(\theta)=\exp(\imath \underline{l} \theta)$ is component $l$ of the complex exponentials. (We defined the function names "phi" and "E" when creating the spaces.) The trial function is actually an expansion
 
     $$
-    u(x, y) = U(r, \theta) = \sum_{k=0}^{N-3}\sum_{l=0}^{N-1} \hat{u}_{kl} \phi_{k}(r) \exp(\imath \underline{l} \theta)
+    u(x, y) = U(\theta, r) = \sum_{k=0}^{N-1}\sum_{l=0}^{N-3} \hat{u}_{kl} \exp(\imath \underline{k} \theta) \phi_{l}(r)
     $$
 
     where
 
     $$
-    \underline{l} = \begin{cases} l, \quad &\text{if} \, l < N/2 \\
-    -(N-l) \quad &\text{if} \, l \ge N/2
+    \underline{k} = \begin{cases} k, \quad &\text{if} \, k < N/2 \\
+    -(N-l) \quad &\text{if} \, k \ge N/2
     \end{cases}
     $$
 
@@ -197,7 +199,7 @@ def _(mo):
 
 @app.cell
 def _(C, eq):
-    r, theta = C.base_scalars()
+    theta, r = C.base_scalars()
     C.simplify((r**2 * eq).doit())
     return
 
@@ -333,7 +335,7 @@ def _(P, plt, uh):
     uj = P.evaluate_mesh(uh, kind="uniform", N=(100, 100))
     fig = plt.figure(figsize=(8, 6))
     ax = fig.gca()
-    ax.contourf(xc, yc, uj.real, 50)
+    ax.contourf(xc, yc, uj, 50)
     plt.axis("equal")
     plt.show()
     return

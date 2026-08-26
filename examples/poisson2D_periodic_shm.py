@@ -29,11 +29,11 @@ from jaxfun.utils.common import lambdify, ulp
 
 ue = (1 - y**2) * (sp.cos(2 * x)) * sp.exp(sp.cos(sp.pi * y))
 
-M, N = 60, 20
+M, N = 60, 22
 bcs = {"left": {"D": ue.subs(y, -1)}, "right": {"D": ue.subs(y, 1)}}
 D = FunctionSpace(M, Legendre, bcs, name="D", fun_str="psi")
 F = FunctionSpace(N, Fourier, name="F", fun_str="E")
-T = TensorProduct(F, D, name="T")
+T = TensorProduct(F, D, name="T", real=True)
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 

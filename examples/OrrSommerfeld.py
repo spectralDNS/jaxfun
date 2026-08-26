@@ -29,6 +29,7 @@ import jax
 # a theoretical +2.7e-03). It has to sit at column 0 -- tests/test_demos.py finds
 # the float64-only demos by looking for exactly that.
 jax.config.update("jax_enable_x64", True)
+# jax.config.update("jax_num_cpu_devices", 2) # Requires M // 2 + 1 % num devices == 0
 
 import jax.numpy as jnp
 import sympy as sp
@@ -38,7 +39,7 @@ from OrrSommerfeld_eigs import OrrSommerfeld
 from jaxfun.galerkin.inner import project
 from jaxfun.typing import Array, PolynomialKind, TestSpaceKind
 
-M, N = 32, 128  # Fourier modes (x), wall-normal modes (y)
+M, N = 32, 128  # M // 2 + 1 must be divisible by the number of devices
 RE, ALFA = 8000.0, 1.0  # Reynolds number, streamwise wavenumber
 DT, T_END = 0.02, 100.0
 AMPLITUDE = 1e-7  # eigenmode amplitude; small enough that the dynamics stay linear

@@ -20,9 +20,7 @@
 #
 # The 2D is part of the method, not just the geometry: in two dimensions the
 # elimination closes on the wall-normal velocity alone, where in three it also
-# needs an equation for the wall-normal vorticity. Do not read the name as "the
-# Navier-Stokes solver" -- DrivenCavity.py solves the same equations by an
-# unrelated method.
+# needs an equation for the wall-normal vorticity.
 #
 # This is the velocity-only core of shenfun's Rayleigh-Benard formulation,
 # https://shenfun.readthedocs.io/en/latest/rayleighbenard.html. RayleighBenard.py
@@ -31,7 +29,7 @@
 # PRESSURE ELIMINATION
 #
 # Applying Div(Grad(.)) to the y-momentum equation and substituting
-# Div(Grad(p)) = -Div(H), where H = (u.Grad)u, removes the pressure:
+# Div(Grad(p)) = -Div(H), where H = Grad(u)⋅u, removes the pressure:
 #
 #   (Div(Grad(v)))_t = nu*Div(Grad(Div(Grad(v)))) + H_x,xy - H_y,xx
 #
@@ -142,10 +140,9 @@
 # The streamwise direction is therefore built with `TensorProduct(..., real=True)`,
 # which stores only k = 0, ..., M/2 and transforms with rfft/irfft. Nothing is
 # approximated -- the equations for -k are the conjugates of those for +k -- but
-# everything downstream
-# runs on half the data: the banded per-wavenumber solves, the Butcher
-# accumulation, the stencils, and the wall-normal matrix products that dominate
-# the nonlinear term.
+# everything downstream runs on half the data: the banded per-wavenumber solves,
+# the Butcher accumulation, the stencils, and the wall-normal matrix products
+# that dominate the nonlinear term.
 #
 # The Nyquist mode is the one place a half spectrum is not simply the same thing
 # written down once. A real field cannot carry a phase there, d/dx of it is not
@@ -211,7 +208,10 @@
 # Courant number and has to come down roughly in step with the resolution -- and
 # it is the *wall-normal* resolution that binds, the Gauss node spacing collapsing
 # like 1/N^2 at the walls for every basis offered here. The `courant` diagnostic
-# reports where a run stands; past ~1 it diverges.
+# reports where a run stands. It reads ~1 at the stability boundary -- measured
+# on Orr-Sommerfeld, 0.76 runs and 1.15 diverges -- but that threshold is
+# calibrated to the 3/2 padding and to ARS443 rather than being a property of
+# the method; see the diagnostic's own docstring.
 #
 # CHOICE OF TABLEAU
 #
@@ -415,15 +415,10 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         F = FunctionSpace(M, Fourier.Fourier, domain=Domain(0, Lx), name="F")
         D = FunctionSpace(N, polspace, bcs=hom, name="D")
         B = FunctionSpace(N, polspace, bcs=bih, name="B")
-        # real=True: every field here is a velocity or a scalar, so the
-        # streamwise spectrum is Hermitian and only its non-negative half is
-        # stored -- see "THE FIELDS ARE REAL" in the header.
         VD = TensorProduct(F, D, name="VD", real=True)
         VB = TensorProduct(F, B, name="VB", real=True)
-        # `real=True` substituted the half spectrum, so take the streamwise space
-        # back from the product rather than keeping the full one built above:
-        # `self.ikx` below is its wavenumbers, and a half spectrum has M/2 + 1 of
-        # them rather than M.
+        # `real=True` substituted the half spectrum, which has M/2 + 1 of
+        # wavenumbers rather than M.
         F = cast(Fourier.RFourier, VD.basespaces[0])
 
         # Convection H and the scalar fluxes satisfy no boundary conditions, so they
@@ -450,14 +445,8 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
             1j * F.wavenumbers(eliminate_highest_freq=True) * float(F.domain_factor)
         )
         self.system = nnx.static(VD.system)
-        # Assigned one at a time: a single unpacking would give all four the
-        # union of their types, and the spaces are not interchangeable.
         self.VD, self.VB = nnx.static(VD), nnx.static(VB)
         self.Wo, self.D1 = nnx.static(Wo), nnx.static(D1)
-        # The test spaces and the basis choice, kept for subclasses. A subclass
-        # that adds an equation has to build its spaces the same way or its
-        # operators stop being banded, and anything it feeds into the v equation
-        # has to be tested against the same `PB` the v equation itself uses.
         self.PB, self.P1 = nnx.static(PB), nnx.static(P1)
         self.polspace = nnx.static(polspace)
         self.testkind = nnx.static(kind)
@@ -487,9 +476,7 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
 
         A_div = linear_operator(u.diff(x, 1) * w)
         assert isinstance(A_div, TPMatrix)
-        # The Fourier factor is what gets pinned below, and only a banded matrix
-        # can be: pinning the flattened Kronecker matrix would destroy the fast
-        # per-wavenumber solve.
+
         A_kx = A_div.mats[0]
         assert isinstance(A_kx, DiaMatrix)
         assert float(jnp.abs(A_kx.diagonal(0)[0])) == 0.0, (
@@ -557,8 +544,6 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         rhs = (-(self.C_v @ v_hat)).at[0].set(self.My @ (u0 + 0j))
         return self.A_pin.solve(rhs)
 
-    # `kind` decides how many arrays come back, so it is spelled out per value:
-    # every caller unpacks a fixed number and would otherwise have to widen.
     @overload
     def velocity_from_state(
         self,
@@ -609,27 +594,27 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
     # wall-normal first, so the streamwise padding never inflates the matrix
     # products.
 
-    def _wall_normal(self, *coeffs: Array, ky: int = 0) -> tuple[Array, ...]:
+    def _wall_normal(self, *coeffs: Array, ky: int = 0) -> Array:
         """Evaluate the wall-normal direction, leaving x in coefficient space.
 
-        Batched over `coeffs`: every field goes through the same Vandermonde --
-        `ky` picks which derivative of it -- so the matrix product runs once on
-        the stacked fields rather than once each. Fields wanting a different
-        `ky` need their own call; that is the only constraint on what can share
-        a batch.
+        Batched over `coeffs`: every field goes through the same Vandermonde
+        (for Legendre) -- `ky` picks which derivative of it -- so the matrix
+        product runs once on the stacked fields rather than once each. Fields
+        wanting a different `ky` need their own call; that is the only constraint
+        on what can share a batch.
         """
         nk, Nq = self.F.N, self.pad[1]
         yspace = self.Wo.basespaces[1]
         stacked = jnp.concatenate(coeffs, axis=0)
         vals = jax.vmap(partial(yspace.backward_primitive, k=ky, N=Nq))(stacked)
-        return tuple(vals.reshape(len(coeffs), nk, Nq))
+        return vals.reshape(len(coeffs), nk, Nq)
 
-    def _streamwise(self, *rows: Array) -> tuple[Array, ...]:
+    def _streamwise(self, *rows: Array) -> Array:
         """Evaluate the streamwise direction: half spectrum -> real padded field."""
         xback = partial(self.F.backward, N=self.pad[0])
-        return tuple(jax.vmap(jax.vmap(xback, in_axes=1, out_axes=1))(jnp.stack(rows)))
+        return jax.vmap(jax.vmap(xback, in_axes=1, out_axes=1))(jnp.stack(rows))
 
-    def _forward(self, *fields: Array) -> tuple[Array, ...]:
+    def _forward(self, *fields: Array) -> Array:
         """Transform padded real fields back to orthogonal coefficient arrays.
 
         The inverse of `_wall_normal` + `_streamwise`, batched the same way and
@@ -641,17 +626,15 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
             jnp.stack(fields)
         )
         nf = half.shape[0]
-        return tuple(
-            jax.vmap(yspace.forward)(half.reshape(nf * nk, -1)).reshape(nf, nk, -1)
-        )
+        return jax.vmap(yspace.forward)(half.reshape(nf * nk, -1)).reshape(nf, nk, -1)
 
     def explicit_terms(
         self, u_hat: Array, v_hat: Array, scalars: tuple[Array, ...]
     ) -> tuple[Array, Array, tuple[Array, ...]]:
         """Return the explicit right-hand side of every transient equation.
 
-        Everything is evaluated on the 3/2-padded mesh and truncated back by the
-        forward transforms, which is what makes the quadratic products alias-free.
+        Everything is evaluated on the padded mesh and truncated back by the
+        forward transforms.
 
         The fields are mapped to the *orthogonal* basis first. A `Composite`
         transform is a banded stencil followed by the orthogonal Vandermonde, so
@@ -670,12 +653,7 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         buoyancy = self.buoyancy(scalars)
         if buoyancy is not None:
             NL_v = NL_v + buoyancy
-        # A test function of y alone integrates x out, so the mean-flow forcing is
-        # the 1-D scalar product against the x-average of H_x. Taking that average
-        # directly -- rather than row 0 of the 2-D scalar product, which is the
-        # same thing times a Fourier normalisation -- avoids a padded FFT and
-        # M-1 unused wall-normal scalar products, and leaves no constant to get wrong.
-        NL_0 = self.G @ hx.real[0]
+        NL_0 = self.G @ hx.real[0]  # Scalar product y-dir (-w1, hx.real[0])
         if self.f0 is not None:
             NL_0 = NL_0 + jnp.asarray(self.f0)
         return NL_v, NL_0, self.scalar_terms(u_p, v_p, scalars)
@@ -693,10 +671,10 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
 
         Each field's stage comes from its own `IMEXRungeKutta.stage`, which takes
         the nonlinear and linear caches as plain arrays -- so the explicit terms
-        are computed here, in rotational form, rather than symbolically. The
-        constraint is solved between the implicit solves and the explicit
-        evaluation, so the streamwise velocity is never lagged: at every stage it
-        is the exact solution of continuity for that stage's v and u0.
+        are computed here, in rotational form. The constraint is solved between
+        the implicit solves and the explicit evaluation, so the streamwise velocity
+        is never lagged: at every stage it is the exact solution of continuity for
+        that stage's v and u0.
 
         The tableau is globally stiffly accurate (enforced in `__init__`), so the
         last stage is the accepted solution and no final recombination is needed.
@@ -785,9 +763,23 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         """Return the advective Courant number on the padded mesh.
 
         Only the diffusive terms are implicit, so the step size is limited by
-        advection alone. The wall-normal spacing collapses like 1/N^2 near the
-        walls, but so does the wall-normal velocity, which is why the limit is
-        far milder than the raw mesh spacing suggests.
+        advection alone. This is the finite-difference form, dt*(|u|/dx +
+        |v|/dy), and neither term is the spectral criterion:
+
+        Along Fourier the operator is i*k*u, so what binds is dt*|u|*k_max,
+        larger than dt*|u|/dx by k_max*dx = 2*pi/3 under the 3/2 padding. ARS443's
+        explicit half is stable to about 2 on the imaginary axis, so the two
+        factors very nearly cancel and this number reads ~1 at the boundary
+        (0.76 runs, 1.15 diverges). Drop the padding and dx becomes Lx/M, the
+        factor becomes pi, and the threshold moves to ~0.6: it is calibrated to
+        this configuration, not derived.
+
+        Along the wall-normal direction 1/dy understates the stiffness rather
+        than overstating it -- the derivative matrix has norm 3.1x (Legendre) to
+        4.6x (Chebyshev) the reciprocal of the smallest spacing, the point
+        clustering not being what sets it. What keeps that direction from
+        binding is that |v| is small where the points are dense, which is a
+        property of the flow and not of the discretization.
         """
         u_p, v_p = self.velocity_from_state(
             state, pad=self.pad, kind=VelocityKind.PHYSICAL

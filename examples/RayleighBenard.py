@@ -1,6 +1,6 @@
 # Rayleigh-Benard convection in a periodic channel
 #
-#   u_t + (u.Grad)u = -Grad(p) + nu*Div(Grad(u)) + T*j
+#   u_t + Grad(u)⋅u = -Grad(p) + nu*Div(Grad(u)) + T*j
 #   T_t + Div(u*T)  = kappa*Div(Grad(T))
 #   Div(u)          = 0
 #

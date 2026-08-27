@@ -53,7 +53,7 @@ M, N = 32, 128  # Fourier modes (x), wall-normal modes (y)
 # up to a multiple of the device count itself. The padding is empty, so a power
 # of two here buys the fast FFT without costing anything to distribute.
 RE, ALFA = 8000.0, 1.0  # Reynolds number, streamwise wavenumber
-DT, T_END = 0.02, 0.2
+DT, T_END = 0.02, 100.0
 AMPLITUDE = 1e-7  # eigenmode amplitude; small enough that the dynamics stay linear
 N_OS = 100  # modes in the Orr-Sommerfeld eigenproblem itself
 # Wall-normal basis and test space, as in RayleighBenard.py. See "CHOICE OF BASIS

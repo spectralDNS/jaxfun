@@ -258,6 +258,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
+from jax import shard_map
 
 from jaxfun import galerkin
 from jaxfun.galerkin import (
@@ -273,7 +274,11 @@ from jaxfun.integrators import ARS443, IMEXRungeKutta, IMEXTableau
 from jaxfun.integrators.base import TimeStepper
 from jaxfun.la import BaseMatrix, DiaMatrix, TPMatrix
 from jaxfun.operators import Constant, Div, Grad
-from jaxfun.typing import Array, PolynomialKind, TestSpaceKind
+from jaxfun.sharding import (
+    batched_physical_sharding,
+    batched_spectral_sharding,
+)
+from jaxfun.typing import Array, PolynomialKind, ScalarPadding, TestSpaceKind
 from jaxfun.utils.common import Domain
 from jaxfun.utils.operator_tools import assemble_linear_term
 
@@ -409,7 +414,6 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         self.nu, self.Lx = nnx.static(nu), nnx.static(Lx)
         self.nyquist = nnx.static(M // 2)
         self.pad = nnx.static((M, N) if padding is None else padding)
-
         hom = {"left": {"D": 0}, "right": {"D": 0}}
         bih = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
         F = FunctionSpace(M, Fourier.Fourier, domain=Domain(0, Lx), name="F")
@@ -417,9 +421,24 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         B = FunctionSpace(N, polspace, bcs=bih, name="B")
         VD = TensorProduct(F, D, name="VD", real=True)
         VB = TensorProduct(F, B, name="VB", real=True)
-        # `real=True` substituted the half spectrum, which has M/2 + 1 of
-        # wavenumbers rather than M.
+        # `real=True` substituted the half spectrum, which stores M/2 + 1
+        # wavenumbers rather than M, plus whatever padding the device count
+        # needs to split them.
         F = cast(Fourier.RFourier, VD.basespaces[0])
+
+        # Whether the transforms below take their distributed path. Decided
+        # once, from sizes rather than from any array's placement, so the
+        # single-device path is chosen at construction and the code that runs
+        # there is unchanged. Both conditions are what `lax.all_to_all(tiled=
+        # True)` needs of the two axes it swaps: the stored wavenumber count on
+        # the way out, the dealiased quadrature count on the way in. The first
+        # is `RFourier`'s job and always holds; the second is this solver's, and
+        # a padding that fails it keeps the local path -- losing parallelism,
+        # not correctness.
+        n_dev = len(jax.devices())
+        self.sharded = nnx.static(
+            n_dev > 1 and F.N % n_dev == 0 and self.pad[1] % n_dev == 0
+        )
 
         # Convection H and the scalar fluxes satisfy no boundary conditions, so they
         # live in the orthogonal space.
@@ -489,6 +508,7 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
                 A_div.global_indices,
             )
         )
+
         self.My = nnx.data(A_div.mats[1])
         self.C_v = nnx.data(linear_operator(v.diff(y, 1) * w))
         # v equation: + H_x,xy - H_y,xx
@@ -594,6 +614,29 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
     # wall-normal first, so the streamwise padding never inflates the matrix
     # products.
 
+    # HOW THE THREE ARE DISTRIBUTED
+    #
+    # Each carries its own sharding, and they compose into the two-phase shape a
+    # separable transform wants -- the wall-normal direction evaluated while the
+    # wavenumbers are split, the streamwise direction while the *quadrature
+    # points* are split instead, and one `all_to_all` to swap which is which:
+    #
+    #   _wall_normal   k-sharded -> k-sharded    no communication
+    #   _streamwise    k-sharded -> y-sharded    one all_to_all
+    #   _forward       y-sharded -> k-sharded    one all_to_all
+    #
+    # The pointwise products in between are elementwise on y-sharded arrays, so
+    # they need nothing. That is also what lets `scalar_terms` stay exactly as it
+    # is: it is handed y-sharded physical fields and calls these same three, so a
+    # subclass never sees the distinction.
+    #
+    # The alternative -- letting the compiler partition these automatically --
+    # does not work, because `_streamwise` and `_forward` transform *along* the
+    # split axis. GSPMD resolves that by gathering the whole Fourier axis onto
+    # every device at every stage, which is not a distribution of the work at
+    # all: measured at M=34, N=128 it left 8 all-gathers in one step and ran 2.1x
+    # slower than one device.
+
     def _wall_normal(self, *coeffs: Array, ky: int = 0) -> Array:
         """Evaluate the wall-normal direction, leaving x in coefficient space.
 
@@ -602,31 +645,102 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         product runs once on the stacked fields rather than once each. Fields
         wanting a different `ky` need their own call; that is the only constraint
         on what can share a batch.
+
+        Communicates nothing -- every wavenumber's wall-normal transform is
+        independent -- but still goes through `shard_map` when distributed. The
+        batching is why: folding the fields into the wavenumber axis is a
+        concatenation *along the split axis*, which the compiler would have to
+        resolve by redistributing. Inside the kernel the same concatenation is
+        local, and the arithmetic is the one big matrix product it is on one
+        device.
         """
-        nk, Nq = self.F.N, self.pad[1]
+        Nq = self.pad[1]
         yspace = self.Wo.basespaces[1]
-        stacked = jnp.concatenate(coeffs, axis=0)
-        vals = jax.vmap(partial(yspace.backward_primitive, k=ky, N=Nq))(stacked)
-        return vals.reshape(len(coeffs), nk, Nq)
+        yback = jax.vmap(partial(yspace.backward_primitive, k=ky, N=Nq))
+        nf = len(coeffs)
+
+        def local(c: Array) -> Array:
+            nk = c.shape[1]
+            return yback(c.reshape(nf * nk, -1)).reshape(nf, nk, Nq)
+
+        stacked = jnp.stack(coeffs)
+        if not self.sharded:
+            return local(stacked)
+        return shard_map(
+            local,
+            mesh=batched_spectral_sharding.mesh,
+            in_specs=(batched_spectral_sharding.spec,),
+            out_specs=batched_spectral_sharding.spec,
+            check_vma=False,
+        )(stacked)
 
     def _streamwise(self, *rows: Array) -> Array:
-        """Evaluate the streamwise direction: half spectrum -> real padded field."""
+        """Evaluate the streamwise direction: half spectrum -> real padded field.
+
+        Where the layout turns over when distributed. The `all_to_all` trades
+        this device's share of the wavenumbers for its share of the quadrature
+        points, after which the wavenumber axis is complete and the inverse
+        transform along it is an ordinary local one. The result is split along
+        the wall-normal direction instead, which is what the pointwise products
+        downstream want and what `_forward` expects back.
+        """
         xback = partial(self.F.backward, N=self.pad[0])
-        return jax.vmap(jax.vmap(xback, in_axes=1, out_axes=1))(jnp.stack(rows))
+        local = jax.vmap(jax.vmap(xback, in_axes=1, out_axes=1))
+        stacked = jnp.stack(rows)
+        if not self.sharded:
+            return local(stacked)
+
+        def kernel(c: Array) -> Array:
+            # (nf, k_local, Nq) -> (nf, k, Nq_local)
+            c = jax.lax.all_to_all(
+                c, axis_name="k", split_axis=2, concat_axis=1, tiled=True
+            )
+            return local(c)
+
+        return shard_map(
+            kernel,
+            mesh=batched_spectral_sharding.mesh,
+            in_specs=(batched_spectral_sharding.spec,),
+            out_specs=batched_physical_sharding.spec,
+            check_vma=False,
+        )(stacked)
 
     def _forward(self, *fields: Array) -> Array:
         """Transform padded real fields back to orthogonal coefficient arrays.
 
         The inverse of `_wall_normal` + `_streamwise`, batched the same way and
-        for the same reason.
+        for the same reason, and turning the layout back over the same way: the
+        streamwise transform first, while its axis is still whole, then one
+        `all_to_all` back to split wavenumbers, then the wall-normal transform,
+        local again.
         """
-        nk = self.F.N
         yspace = self.Wo.basespaces[1]
-        half = jax.vmap(jax.vmap(self.F.forward, in_axes=1, out_axes=1))(
-            jnp.stack(fields)
-        )
-        nf = half.shape[0]
-        return jax.vmap(yspace.forward)(half.reshape(nf * nk, -1)).reshape(nf, nk, -1)
+        xforward = jax.vmap(jax.vmap(self.F.forward, in_axes=1, out_axes=1))
+        yforward = jax.vmap(yspace.forward)
+        nf = len(fields)
+
+        def to_coefficients(half: Array) -> Array:
+            nk = half.shape[1]
+            return yforward(half.reshape(nf * nk, -1)).reshape(nf, nk, -1)
+
+        stacked = jnp.stack(fields)
+        if not self.sharded:
+            return to_coefficients(xforward(stacked))
+
+        def kernel(c: Array) -> Array:
+            half = xforward(c)  # (nf, Mx, Nq_local) -> (nf, k, Nq_local)
+            half = jax.lax.all_to_all(
+                half, axis_name="k", split_axis=1, concat_axis=2, tiled=True
+            )  # -> (nf, k_local, Nq)
+            return to_coefficients(half)
+
+        return shard_map(
+            kernel,
+            mesh=batched_physical_sharding.mesh,
+            in_specs=(batched_physical_sharding.spec,),
+            out_specs=batched_spectral_sharding.spec,
+            check_vma=False,
+        )(stacked)
 
     def explicit_terms(
         self, u_hat: Array, v_hat: Array, scalars: tuple[Array, ...]
@@ -660,12 +774,12 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
 
     # -- stepping ----------------------------------------------------------
 
-    @jax.jit(static_argnums=(0, 3))
-    def step(
+    def _step_impl(
         self,
         state: tuple[Array, ...],
         dt: float,
-        N: tuple[int, ...] | None = None,
+        N: ScalarPadding = None,
+        /,
     ) -> tuple[Array, ...]:
         """Advance one IMEX Runge-Kutta step.
 
@@ -722,8 +836,8 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
             s.at[ny].set(0.0) for s in state[2:]
         )
 
-    def setup(self, dt: float) -> None:
-        """Factorize every operator before time stepping starts.
+    def _setup_impl(self, dt: float) -> None:
+        """Factorize every operator before time steppipng starts.
 
         The continuity operator has to be warmed here for the same reason the
         stage operators do: the solver picks its path by inspecting concrete

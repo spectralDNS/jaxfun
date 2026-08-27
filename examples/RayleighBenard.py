@@ -101,6 +101,15 @@ import jax
 # Before any jaxfun import: the verification below resolves growth rates against
 # an O(1) base flow, which float32 cannot separate. See ChannelFlow2D.py.
 jax.config.update("jax_enable_x64", True)
+
+# Likewise before any jaxfun import, and for a related reason: `jaxfun.sharding`
+# builds its device mesh at import time, so the other processes' devices have to
+# be visible by then. A no-op without mpi4py or on a single rank, which is what
+# keeps this demo an ordinary script.
+from spmd_bootstrap import echo, initialize_distributed, is_leader, to_host
+
+initialize_distributed()
+
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
@@ -250,10 +259,16 @@ class RayleighBenard(KMM2D):
                 **ASSEMBLE,
             )
         )
-        assert (
-            self.gT.linear_forcing is None
-            or float(jnp.abs(jnp.asarray(self.gT.linear_forcing)).max()) == 0.0
-        ), "the Dirichlet lifting is linear, so its Laplacian must vanish"
+        # The lifting is linear in y, so its Laplacian is analytically zero and
+        # contributes no forcing. Numerically it is zero only to round-off, and
+        # only exactly zero when the streamwise FFT is: at M = 128 this is 0.0,
+        # at M = 126 it is 3e-18 and at M = 130 it is 2e-17, against a field of
+        # order one. Test it as round-off rather than as an identity, so that
+        # the assertion does not depend on M being a power of two.
+        forcing = self.gT.linear_forcing
+        assert forcing is None or float(jnp.abs(jnp.asarray(forcing)).max()) < 1e-14, (
+            "the Dirichlet lifting is linear, so its Laplacian must vanish"
+        )
 
         # Buoyancy into the v equation, and -Div(u*T) into the T equation.
         self.C_T = nnx.data(linear_operator(Tt.diff(x, 2) * q))
@@ -332,7 +347,11 @@ class RayleighBenard(KMM2D):
         # under-resolved boundary layer, and is the first thing to look at if the
         # run misbehaves. It reads 1.0 on the initial condition by construction,
         # the perturbation being broadband noise.
-        mag = jnp.abs(T_hat)
+        # Only the wavenumbers, never the padding `RFourier` stores after them:
+        # those rows are structurally zero, so leaving them in would push the
+        # window off the top of the real spectrum and read a smaller tail on
+        # more devices than on one.
+        mag = jnp.abs(T_hat)[: self.F.n_real]
         m3, n3 = mag.shape[0] // 3, mag.shape[1] // 3
         # The streamwise spectrum is stored half, ordered 0 .. M/2, so its top
         # third is simply its tail -- no fftshift to bring the two halves together.
@@ -393,22 +412,22 @@ def critical_rayleigh() -> None:
     perturbing the box width in both directions, which must reduce the rate --
     Lx_c is where the neutral curve is at its minimum.
     """
-    print(f"\nlinear stability at Lx = {LX_C_PREDICTED:.4f} (a_c = 3.117 / H)")
+    echo(f"\nlinear stability at Lx = {LX_C_PREDICTED:.4f} (a_c = 3.117 / H)")
     ras = [RA_C_PREDICTED * f for f in (0.96, 0.98, 1.0, 1.02, 1.04)]
     rates = [growth_rate(Ra, LX_C_PREDICTED) for Ra in ras]
     for Ra, rate in zip(ras, rates, strict=True):
-        print(f"  Ra = {Ra:9.4f}   growth rate = {rate:+.9f}")
+        echo(f"  Ra = {Ra:9.4f}   growth rate = {rate:+.9f}")
     slope, intercept = jnp.polyfit(jnp.asarray(ras), jnp.asarray(rates), 1)
     Ra_c = float(-intercept / slope)
     neutral = rates[len(rates) // 2]
-    print(f"  rate at the predicted Ra_c   = {neutral:+.3e}  (must vanish)")
-    print(
+    echo(f"  rate at the predicted Ra_c   = {neutral:+.3e}  (must vanish)")
+    echo(
         f"  neutral from the fit: Ra_c = {Ra_c:.4f} -> Ra_c*H^3 = {8 * Ra_c:.3f}"
         f"   linear theory 1707.762  ({100 * abs(8 * Ra_c / 1707.762 - 1):.3f}% off)"
     )
     for f in (0.85, 1.15):
         rate = growth_rate(RA_C_PREDICTED, LX_C_PREDICTED * f)
-        print(f"  Lx = {LX_C_PREDICTED * f:.4f}   rate = {rate:+.9f}  (must decay)")
+        echo(f"  Lx = {LX_C_PREDICTED * f:.4f}   rate = {rate:+.9f}  (must decay)")
         assert rate < neutral, "Lx_c must minimise the neutral curve"
     assert abs(neutral) < 1e-5, f"not neutral at the predicted Ra_c: {neutral:+.3e}"
     assert abs(8 * Ra_c / 1707.762 - 1) < 5e-3, f"Ra_c off by {8 * Ra_c:.2f}"
@@ -419,7 +438,7 @@ def critical_rayleigh() -> None:
 # ---------------------------------------------------------------------------
 def main() -> None:
     """Integrate the convection problem, verify it, and plot the result."""
-    print(f"M={M} N={N} Ra={RA:g} Pr={PR} dt={DT} T={T_END}")
+    echo(f"M={M} N={N} Ra={RA:g} Pr={PR} dt={DT} T={T_END}")
     padding = (3 * M // 2, N)
     solver = RayleighBenard(
         M,
@@ -432,23 +451,26 @@ def main() -> None:
         polynomial=POLYNOMIAL,
         kind=KIND,
     )
-    print(
+    echo(
         f"  dofs: v {solver.VB.num_dofs} T {solver.VT.num_dofs} u0 {solver.D1.num_dofs}"
     )
 
     d0 = solver.diagnostics(solver.initial_coefficients())
-    print("  initial " + "  ".join(f"{k}={v:.3e}" for k, v in d0.items()))
+    echo("  initial " + "  ".join(f"{k}={v:.3e}" for k, v in d0.items()))
 
     _t = time.time()
     snaps = solver.solve(
-        dt=DT, n_batches=N_SNAPSHOTS, return_batch_snapshots=True, progress=True
+        dt=DT,
+        n_batches=N_SNAPSHOTS,
+        return_batch_snapshots=True,
+        progress=is_leader(),
     )
-    print(f"  run {time.time() - _t:.1f}s")
+    echo(f"  run {time.time() - _t:.1f}s")
 
     final: tuple[Array, Array, Array] = (snaps[0][-1], snaps[1][-1], snaps[2][-1])
     d1 = solver.diagnostics(final)
-    print("  final   " + "  ".join(f"{k}={v:.3e}" for k, v in d1.items()))
-    print(f"  Courant = {solver.courant(final, DT):.2f}  (advection is explicit)")
+    echo("  final   " + "  ".join(f"{k}={v:.3e}" for k, v in d1.items()))
+    echo(f"  Courant = {solver.courant(final, DT):.2f}  (advection is explicit)")
 
     # Nu fluctuates, so the number worth comparing against another code is a time
     # average taken once the flow is statistically steady -- here the second half.
@@ -457,7 +479,7 @@ def main() -> None:
     )
     q = len(nus) // 4
     every = max(1, len(nus) // 12)
-    print("  Nu(t) " + " ".join(f"{float(v):.1f}" for v in nus[::every]))
+    echo("  Nu(t) " + " ".join(f"{float(v):.1f}" for v in nus[::every]))
     line = (
         f"  Nu = {float(nus[2 * q :].mean()):.3f} +- {float(nus[2 * q :].std()):.3f}"
         f"  over t > {T_END / 2:g}"
@@ -469,7 +491,7 @@ def main() -> None:
             f"   [3rd quarter {float(nus[2 * q : 3 * q].mean()):.2f},"
             f" 4th {float(nus[3 * q :].mean()):.2f}]"
         )
-    print(line)
+    echo(line)
 
     assert d1["div"] < 1e-10, f"divergence not satisfied: {d1['div']:.3e}"
     # Exactly zero, unlike the Orr-Sommerfeld run: the fluid starts at rest, so v is
@@ -487,11 +509,36 @@ def main() -> None:
     # ---------------------------------------------------------------------------
     # Plots
     # ---------------------------------------------------------------------------
-    times = jnp.linspace(0.0, T_END, snaps[0].shape[0])
-    T_phys = solver.VT.backward_batch(snaps[2])
-    x_plot, y_plot = solver.VT.mesh(broadcast=False)
+    # VT carries the inhomogeneous wall temperatures, so it is a direct sum, and
+    # a direct sum declines to batch while sharding is active: the boundary
+    # lifting it adds in is placed on the space's sharding, which the batch axis
+    # has no counterpart for. Plotting is a one-off, so transforming snapshot by
+    # snapshot there costs nothing worth avoiding. Indexed rather than iterated:
+    # a global array spanning another process's devices refuses `__iter__`.
+    n_snaps = snaps[2].shape[0]
+    T_phys = (
+        solver.VT.backward_batch(snaps[2])
+        if len(jax.devices()) == 1
+        else jnp.stack([solver.VT.backward(snaps[2][i]) for i in range(n_snaps)])
+    )
     u_final = solver.VD.backward(solver.velocity(final[0], final[1]))
     v_final = solver.VB.backward(final[0])
+    x_plot, y_plot = solver.VT.mesh(broadcast=False)
+
+    # Matplotlib reads these element by element, which a distributed array
+    # cannot serve, so they have to come back to the host first. That gather is
+    # a *collective* -- every process has to reach it -- which is why it happens
+    # here and the rank-0 guard comes after it rather than before.
+    T_phys, u_final, v_final, x_plot, y_plot = to_host(
+        (T_phys, u_final, v_final, x_plot, y_plot)
+    )
+
+    # Every process ran the same solve, so only one should draw anything or
+    # write the animation out.
+    if not is_leader():
+        return
+
+    times = jnp.linspace(0.0, T_END, snaps[0].shape[0])
 
     fig, axes = plt.subplots(2, 1, figsize=(9, 7), constrained_layout=True)
     c1 = axes[0].contourf(x_plot, y_plot, T_phys[-1].T, levels=40, cmap="RdBu_r")

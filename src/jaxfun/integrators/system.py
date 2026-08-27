@@ -476,7 +476,7 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
             out[slot] = jnp.zeros(c._state_shape)
         return self.resolve_constraints(tuple(out))
 
-    def setup(self, dt: float) -> None:
+    def _setup_impl(self, dt: float) -> None:
         """Precompute step-size-dependent data for every equation."""
         for g in self.integrators:
             g.setup(dt)

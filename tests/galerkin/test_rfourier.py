@@ -269,39 +269,101 @@ def test_poisson_solve_matches_full_spectrum() -> None:
 
 
 @pytest.mark.spmd
-def test_sharded_transform_round_trip() -> None:
-    """A half spectrum shards like any other -- when its length divides.
+@pytest.mark.parametrize("n", [14, 16, 128], ids=["divides", "odd", "power-of-two"])
+def test_sharded_transform_round_trip(n: int) -> None:
+    """A half spectrum shards whatever its length, because it pads itself.
 
-    What has to divide by the device count is the coefficient count, N/2 + 1,
-    not N. `RFourier(14)` gives 8 and shards over two devices; `RFourier(16)`
-    gives 9 and does not, which is what the second half of this checks.
+    What has to divide by the device count is the coefficient count, not `N`.
+    `RFourier(16)` stores 9 wavenumbers and no device count above one divides
+    that -- so it stores padding after them instead, and it is the padded count
+    that is split. `N = 128` is the case that motivated it: a power of two for
+    the FFT, and 65 wavenumbers, which nothing divides.
     """
     import jax
 
     if jax.device_count() < 2:
         pytest.skip("needs at least 2 devices")
 
-    hom = {"left": {"D": 0}, "right": {"D": 0}}
+    Fx = FunctionSpace(n, RFourier, domain=Domain(0, LX), name="Fs")
+    D = FunctionSpace(12, Legendre.Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    V = TensorProduct(Fx, D, name="Vs")
 
-    def build(n: int) -> TensorProductSpace:
-        Fx = FunctionSpace(n, RFourier, domain=Domain(0, LX), name="Fs")
-        D = FunctionSpace(12, Legendre.Legendre, bcs=hom, name="Ds")
-        return TensorProduct(Fx, D, name="Vs")
+    assert Fx.n_real == n // 2 + 1
+    assert Fx.N % jax.device_count() == 0, "the stored axis has to split"
+    assert Fx.N - Fx.n_real < jax.device_count(), "no more padding than needed"
 
-    divides = 2 * (jax.device_count() * 4 - 1)  # N/2 + 1 == 4 * device_count
-    V = build(divides)
     x, y = V.system.base_scalars()
     c = project(sp.sin(2 * sp.pi * x / LX) * (1 - y**2), V)
     u = V.backward(c)
     assert not jnp.iscomplexobj(u)
     assert jnp.abs(V.forward(u) - c).max() < ulp(1000)
+    # The padding carries no field: it starts at zero and no transform fills it.
+    # Summed rather than maxed so the unpadded case, which is a legitimate one,
+    # reduces an empty slice instead of raising.
+    assert jnp.abs(c[Fx.n_real :]).sum() == 0.0
+    assert jnp.abs(V.forward(u)[Fx.n_real :]).sum() == 0.0
 
-    # Two more quadrature points is one more coefficient, which no device count
-    # above one divides any more.
-    V_odd = build(divides + 2)
-    x, y = V_odd.system.base_scalars()
-    with pytest.raises(ValueError, match="divisible"):
-        V_odd.backward(project(sp.sin(2 * sp.pi * x / LX) * (1 - y**2), V_odd))
+
+@pytest.mark.spmd
+def test_padding_stays_empty_through_a_nonlinear_solve() -> None:
+    """A whole time loop must leave the padding at zero, not just a projection.
+
+    The invariant is structural -- a scalar product zero-fills the padding, a
+    Fourier operator is diagonal and cannot move anything into it, and a solve
+    whose right-hand side is zero there returns zero -- but every one of those
+    three is an implementation detail of a different file, so the composition is
+    worth pinning down. The nonlinear term is what makes it a real test: it goes
+    out to the padded quadrature mesh and back at every stage.
+    """
+    import jax
+
+    from jaxfun.integrators import ARS443, IMEXRungeKutta
+    from jaxfun.operators import Constant
+
+    if jax.device_count() < 2:
+        pytest.skip("needs at least 2 devices")
+
+    Fx = FunctionSpace(32, RFourier, domain=Domain(0, LX), name="Fx")
+    D = FunctionSpace(16, Legendre.Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    V = TensorProduct(Fx, D, name="Vn")
+    assert Fx.n_extra, "32 gives 17 wavenumbers, which no device count here divides"
+
+    x, y = V.system.base_scalars()
+    t = V.system.base_time()
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u", transient=True)
+    stepper = IMEXRungeKutta(
+        v * (u.diff(t) - Constant("nu", 0.5) * Div(Grad(u))) + v * u**2,
+        tableau=ARS443,
+        initial=sp.cos(2 * sp.pi * x / LX) * (1 - y**2),
+        sparse=True,
+    )
+    u0 = jnp.asarray(stepper.initial_coefficients())
+    assert jnp.abs(u0[Fx.n_real :]).sum() == 0.0
+
+    uh = stepper.solve(dt=1e-3, steps=20, state0=u0, n_batches=2, progress=False)
+    assert jnp.isfinite(uh).all()
+    assert jnp.abs(jnp.asarray(uh)[Fx.n_real :]).max() < ulp(100)
+
+
+@pytest.mark.spmd
+def test_unpadded_indivisible_axis_is_refused() -> None:
+    """Padding off and a count that does not divide is an error, not a fallback.
+
+    Running the transform on one device instead would be correct and silently
+    half the speed, which is the one outcome worth refusing.
+    """
+    import jax
+
+    if jax.device_count() < 2:
+        pytest.skip("needs at least 2 devices")
+
+    Fx = RFourier(16, domain=Domain(0, LX), name="Fs", n_extra=0)
+    D = FunctionSpace(12, Legendre.Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    V = TensorProduct(Fx, D, name="Vs")
+    assert Fx.N == 9
+    with pytest.raises(ValueError, match="does not divide"):
+        V.backward(jnp.zeros(V.num_dofs, dtype=complex))
 
 
 # ---------------------------------------------------------------------------

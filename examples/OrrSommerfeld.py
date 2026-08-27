@@ -29,7 +29,15 @@ import jax
 # a theoretical +2.7e-03). It has to sit at column 0 -- tests/test_demos.py finds
 # the float64-only demos by looking for exactly that.
 jax.config.update("jax_enable_x64", True)
-# jax.config.update("jax_num_cpu_devices", 2) # Requires M // 2 + 1 % num devices == 0
+# jax.config.update("jax_num_cpu_devices", 2)
+
+# Likewise before any jaxfun import, and for a related reason: `jaxfun.sharding`
+# builds its device mesh at import time, so the other processes' devices have to
+# be visible by then. A no-op without mpi4py or on a single rank, which is what
+# keeps this demo an ordinary script.
+from spmd_bootstrap import echo, initialize_distributed, is_leader
+
+initialize_distributed()
 
 import jax.numpy as jnp
 import sympy as sp
@@ -39,9 +47,13 @@ from OrrSommerfeld_eigs import OrrSommerfeld
 from jaxfun.galerkin.inner import project
 from jaxfun.typing import Array, PolynomialKind, TestSpaceKind
 
-M, N = 32, 128  # M // 2 + 1 must be divisible by the number of devices
+M, N = 32, 128  # Fourier modes (x), wall-normal modes (y)
+# Any M runs on any number of devices: the half spectrum stores M // 2 + 1
+# coefficients, which is odd for every power-of-two M, and `RFourier` pads that
+# up to a multiple of the device count itself. The padding is empty, so a power
+# of two here buys the fast FFT without costing anything to distribute.
 RE, ALFA = 8000.0, 1.0  # Reynolds number, streamwise wavenumber
-DT, T_END = 0.02, 100.0
+DT, T_END = 0.02, 0.2
 AMPLITUDE = 1e-7  # eigenmode amplitude; small enough that the dynamics stay linear
 N_OS = 100  # modes in the Orr-Sommerfeld eigenproblem itself
 # Wall-normal basis and test space, as in RayleighBenard.py. See "CHOICE OF BASIS
@@ -107,7 +119,7 @@ def solution_error(
     return e0, e1, e2, exact
 
 
-def main() -> None:
+def main() -> KMM2D:
     """Evolve the eigenmode and compare its growth rate with linear theory."""
     dt, t_end, amplitude = DT, T_END, AMPLITUDE
     nu = 1.0 / RE
@@ -126,8 +138,8 @@ def main() -> None:
     state0, eigval, u_expected = orr_sommerfeld_state(
         solver, RE, ALFA, amplitude, N_OS, 0.0
     )
-    print(f"Orr-Sommerfeld  Re={RE:g} alfa={ALFA:g}  M={M} N={N} dt={dt} T={t_end}")
-    print(f"  eigenvalue {eigval:.16f}")
+    echo(f"Orr-Sommerfeld  Re={RE:g} alfa={ALFA:g}  M={M} N={N} dt={dt} T={t_end}")
+    echo(f"  eigenvalue {eigval:.16f}")
     # The streamwise perturbation is not seeded; continuity has to produce it.
     # What is left over is the error of projecting the eigenfunction onto N
     # wall-normal modes, not of the continuity solve, so it converges spectrally
@@ -141,12 +153,12 @@ def main() -> None:
     u_hat = solver.velocity(state0[0], jnp.zeros(solver.D1.num_dofs))
     u_got = solver.VD.backward(u_hat).real
     err = float(jnp.abs(u_got - u_expected).max() / jnp.abs(u_expected).max())
-    print(f"  continuity recovers u = phi'(y)*exp(i*alfa*x) to {err:.3e}")
+    echo(f"  continuity recovers u = phi'(y)*exp(i*alfa*x) to {err:.3e}")
     assert err < (1e-8 if N >= 96 else 1e-3), (
         "the continuity solve must reproduce the eigenmode's u"
     )
     d0 = solver.diagnostics(state0)
-    print("  initial " + "  ".join(f"{k}={v:.3e}" for k, v in d0.items()))
+    echo("  initial " + "  ".join(f"{k}={v:.3e}" for k, v in d0.items()))
     steps, batches = int(round(t_end / dt)), 50
 
     snaps = solver.solve(
@@ -154,19 +166,19 @@ def main() -> None:
         state0=state0,
         n_batches=batches,
         return_batch_snapshots=True,
-        progress=True,
+        progress=is_leader(),
     )
     final = tuple(s[-1] for s in snaps)
     d1 = solver.diagnostics(final)
-    print("  final   " + "  ".join(f"{k}={v:.3e}" for k, v in d1.items()))
-    print(f"  Courant = {solver.courant(final, dt):.2f}")
+    echo("  final   " + "  ".join(f"{k}={v:.3e}" for k, v in d1.items()))
+    echo(f"  Courant = {solver.courant(final, dt):.2f}")
     # The base flow has no wall-normal velocity, so |v| is pure perturbation.
     rate = growth_rate_of(
         jnp.abs(snaps[0]).max(axis=(1, 2)), snapshot_times(dt, steps, batches)
     )
     expected = ALFA * eigval.imag
-    print(f"\n  growth rate measured {rate:+.12f}")
-    print(
+    echo(f"\n  growth rate measured {rate:+.12f}")
+    echo(
         f"  linear theory        {expected:+.12f}   (rel error {abs(rate / expected - 1):.2e})"  # noqa: E501
     )
     assert d1["div"] < 1e-10, f"divergence not satisfied: {d1['div']:.3e}"
@@ -184,6 +196,8 @@ def main() -> None:
     if "PYTEST" not in os.environ:
         assert abs(rate / expected - 1) < 0.01, "growth rate off by more than 1%"
 
+    return solver
+
 
 if __name__ == "__main__":
-    main()
+    solver = main()

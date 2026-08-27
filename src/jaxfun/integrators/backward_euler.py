@@ -15,7 +15,7 @@ class BackwardEuler(BaseIntegrator):
     _system_diag: Array | None = None
     _system_operator = None
 
-    def setup(self, dt: float) -> None:
+    def _setup_impl(self, dt: float) -> None:
         """Precompute the implicit system matrix for the given step size."""
         self._system_diag = None
         self._system_operator = None
@@ -29,7 +29,7 @@ class BackwardEuler(BaseIntegrator):
             self._system_operator, self._state_shape, self._solver_options
         )
 
-    def step(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:
+    def _step_impl(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:
         """Advance one backward-Euler step in coefficient space."""
         rhs = self.apply_mass(u_hat)
         if self.linear_forcing is not None:

@@ -3,7 +3,6 @@
 from collections.abc import Sequence
 from typing import cast
 
-import jax
 import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
@@ -39,7 +38,7 @@ class IMEXRungeKutta(BaseIntegrator):
         super().__init__(equation, initial=initial, time=time, **params)
         self.tableau = nnx.static(tableau)
 
-    def setup(self, dt: float) -> None:
+    def _setup_impl(self, dt: float) -> None:
         """Precompute one implicit system operator per distinct diagonal coefficient."""
         tableau: IMEXTableau = self.tableau
         ops: list[BaseMatrix] = []
@@ -88,8 +87,7 @@ class IMEXRungeKutta(BaseIntegrator):
             return self.apply_mass_inverse(rhs)
         return solve_with_options(self._stage_operator(a_ii), rhs, self._solver_options)
 
-    @jax.jit(static_argnums=(0, 3))
-    def step(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:
+    def _step_impl(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:
         """Advance one IMEX Runge-Kutta step in coefficient space.
 
         Three final-combination paths, selected by `tableau`'s (static)
@@ -193,8 +191,7 @@ class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
         )
         self.tableau = nnx.static(tableau)
 
-    @jax.jit(static_argnums=(0, 3))
-    def step(
+    def _step_impl(
         self, u_hats: tuple[Array, ...], dt: float, N: ScalarPadding = None
     ) -> tuple[Array, ...]:
         """Advance every field one IMEX Runge-Kutta step in coefficient space.

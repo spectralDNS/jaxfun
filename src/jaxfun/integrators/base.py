@@ -16,6 +16,7 @@ from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import project
 from jaxfun.la import BaseMatrix, IdentityMatrix, ZeroMatrix
+from jaxfun.sharding import pin_state, replicate
 from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
 from jaxfun.utils import (
     get_time_independent,
@@ -55,7 +56,35 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
     time: tuple[float, float] | None
 
     @abstractmethod
-    def step(self, u_hat: StateT, dt: float, N: ScalarPadding = None) -> StateT: ...
+    def _step_impl(
+        self, u_hat: StateT, dt: float, N: ScalarPadding = None, /
+    ) -> StateT:
+        """Advance the state one step -- the traceable body of a step.
+
+        Deliberately *not* jitted, so that it can be traced from inside an
+        enclosing computation. `_advance` is the only jit boundary: `step` asks
+        it for one step and `solve` for a batch, so the two cannot drift into
+        compiling different things, which they previously did.
+
+        Positional-only, because `_advance` is the only caller and the state
+        is not the same thing in every subclass -- one array for a scalar
+        equation, one per field for a system. Binding the parameter names would
+        make every subclass answer to `u_hat`.
+        """
+        ...
+
+    def step(self, u_hat: StateT, dt: float, N: ScalarPadding = None) -> StateT:
+        """Advance the state one step, as one compiled computation.
+
+        A batch of one, so that a single step and a whole `solve` go through
+        exactly the same machinery. They used to have separate jit entry points,
+        and on more than one device the combination was fatal: whichever
+        compiled first left an entry the other could not execute.
+
+        `dt` is static, so a sweep over step sizes recompiles once per value.
+        See `_advance` for why it has to be.
+        """
+        return _advance(self, u_hat, dt, 1, N)
 
     @abstractmethod
     def initial_coefficients(self, initial=None) -> StateT:
@@ -72,7 +101,30 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
         ...
 
     def setup(self, dt: float) -> None:
-        """Precompute step-size-dependent coefficients before time stepping."""
+        """Precompute step-size-dependent coefficients before time stepping.
+
+        Idempotent for a given `dt`, and that is load-bearing, not just thrifty.
+        `_setup_impl` *replaces* operators, and the integrator is a static jit
+        argument keyed by identity -- so a rebuild behind an already-compiled
+        `_advance` leaves the cache holding an executable built around the old
+        arrays. It hits, because the key is the same object. On one device the
+        old arrays are embedded constants of equal value and nothing is visibly
+        wrong; on more than one they are hoisted into the executable's argument
+        list, the caller supplies the new ones, and PJRT aborts the process over
+        the count. Not rebuilding is the fix for both.
+
+        Re-setting up at a *different* `dt` is still allowed and still rebuilds;
+        that is a real change of operator, and `dt` is part of `_advance`'s jit
+        key, so it compiles afresh.
+        """
+        dt = float(dt)
+        if getattr(self, "_setup_dt", None) == dt:
+            return
+        self._setup_impl(dt)
+        self._setup_dt = dt
+
+    def _setup_impl(self, dt: float) -> None:
+        """Build whatever depends on the step size. Nothing, by default."""
         ...
 
     def resolve_time(
@@ -141,10 +193,6 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
                 return u_hat
             return jax.tree.map(lambda x: jnp.expand_dims(x, axis=0), u_hat)
 
-        def inner_n_steps(i: int, u_hat: StateT) -> StateT:
-            u_hat = self.step(u_hat, dt, N)
-            return u_hat
-
         batch_count = min(n_batches, n_steps)
 
         batch_len = n_steps // batch_count
@@ -159,7 +207,7 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
             else r_batch
         )
         for _ in iterator:
-            u_hat = jax.lax.fori_loop(0, batch_len, inner_n_steps, u_hat)
+            u_hat = _advance(self, u_hat, dt, batch_len, N)
             if return_batch_snapshots:
                 states.append(u_hat)
             if any(
@@ -170,7 +218,7 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
                 break
 
         if remainder and not diverged:
-            u_hat = jax.lax.fori_loop(0, remainder, inner_n_steps, u_hat)
+            u_hat = _advance(self, u_hat, dt, remainder, N)
             if return_batch_snapshots:
                 states.append(u_hat)
 
@@ -178,6 +226,56 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
             return jax.tree.map(lambda *xs: jnp.stack(xs), *states)
 
         return u_hat
+
+
+@jax.jit(static_argnums=(0, 2, 4))
+def _advance[StateT: IntegratorState](
+    stepper: TimeStepper[StateT],
+    u_hat: StateT,
+    dt: float,
+    n_steps: int,
+    N: ScalarPadding = None,
+) -> StateT:
+    """Advance `n_steps` steps as a single compiled computation.
+
+    `stepper` is static -- hashed by identity, not flattened -- so every array
+    it holds reaches the trace as a constant XLA can fold, which measures a few
+    percent faster than passing the integrator in as a traced pytree.
+
+    Constants are only safe because no operator holds an array spanning devices
+    this process cannot address -- JAX refuses to close over one of those, and
+    that refusal is exactly what used to break the multi-process runs. Keeping
+    them addressable is `_replicated_factors`'s job, in `jaxfun.la.tpmatrix`.
+    They also have to stay *replicated*, which is what `pin_state` around the
+    loop carry secures; see there.
+
+    `n_steps` is *traced*, so this compiles exactly once per `(stepper, dt, N)`
+    and the loop is a `while_loop` over a dynamic bound. Static would let XLA
+    see the trip count, but it also gives the jit cache more than one entry
+    keyed on a static `stepper`, and on a multi-device mesh a *hit* on such an
+    entry aborts the process inside PJRT ("Execution supplied 1 arguments but
+    compiled program expected 10") -- a dispatch collision, not anything about
+    this loop. One entry cannot collide. Reproduce with `n_steps` static and
+    JAX 0.11: call at 1, at 10, then at 10 again; the third call dies.
+
+    Call it positionally. `static_argnums` has no effect on an argument passed
+    by keyword, so `_advance(..., N=N)` makes `N` traced where `_advance(..., N)`
+    makes it static -- two different signatures for the same call, and on more
+    than one device the second one to run dies in PJRT over the argument count.
+
+    `dt` is static for a subtler reason. Left traced it is a rank-0 parameter,
+    and GSPMD propagates a sharding onto it from the sharded arrays it is
+    multiplied into: `P("k")` on a scalar, which JAX then cannot apply
+    (`IndexError` out of `_to_xla_hlo_sharding`). Static, it is a compile-time
+    constant no propagation can reach, and `dt * a_ij` folds into the Butcher
+    coefficients as a bonus. A `solve` uses one step size throughout, so nothing
+    recompiles that would not have anyway.
+    """
+
+    def body(_i: int, u: StateT) -> StateT:
+        return pin_state(stepper._step_impl(u, dt, N))
+
+    return jax.lax.fori_loop(0, n_steps, body, pin_state(u_hat))
 
 
 class BaseIntegrator(TimeStepper[Array]):
@@ -286,7 +384,9 @@ class BaseIntegrator(TimeStepper[Array]):
         if linear_operator is None:
             linear_operator = ZeroMatrix(self._state_shape)
         self.linear_operator: BaseMatrix = nnx.data(linear_operator)
-        self.linear_forcing: Array | None = nnx.data(linear_forcing)
+        # Replicated, not sharded: this is stored on the integrator and so is
+        # reached through `_advance`'s closure. See `replicate`.
+        self.linear_forcing: Array | None = nnx.data(replicate(linear_forcing))
         self.linear_diag: Array | None = nnx.data(
             self.linear_operator.diagonal_or_none()
         )

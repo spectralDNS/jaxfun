@@ -312,10 +312,13 @@ class RFourier(Fourier):
     space splits it evenly, `Fourier` does not split it at all, and the two
     disagree unless it vanishes. Hold it at zero and everything is exact.
 
-    One practical consequence of the odd-looking ``N/2 + 1``: the multi-device
-    transform shards the spectral axis, so that count -- not `N` -- is what has
-    to divide by the number of devices. ``RFourier(14)`` shards over two devices,
-    ``RFourier(16)`` does not.
+    The odd-looking ``N/2 + 1`` is what the multi-device transform has to split,
+    and it is odd exactly when ``N`` is a power of two -- so the FFT-friendly
+    sizes and the shardable ones would be almost disjoint. `n_extra` closes that
+    gap: the axis stores ``N/2 + 1 + n_extra`` coefficients, the last `n_extra`
+    of which are structurally zero, and it is the padded count that has to
+    divide. It defaults to whatever the current device count needs, which is
+    nothing at all on one device.
     """
 
     is_hermitian_half = True
@@ -327,47 +330,93 @@ class RFourier(Fourier):
         system: CoordSys | None = None,
         name: str = "RFourier",
         fun_str: str = "E",
+        n_extra: int | None = None,
     ) -> None:
         assert N % 2 == 0, "RFourier must use an even number of quadrature points"
         domain = Domain(0, 2 * sp.pi) if domain is None else domain
+        self.n_real = N // 2 + 1
+        if n_extra is None:
+            n_extra = -self.n_real % len(jax.devices())
+        assert n_extra >= 0, "n_extra pads the axis, it cannot truncate it"
         OrthogonalSpace.__init__(
-            self, N // 2 + 1, domain=domain, system=system, name=name, fun_str=fun_str
+            self,
+            self.n_real + n_extra,
+            domain=domain,
+            system=system,
+            name=name,
+            fun_str=fun_str,
         )
         # Set after the base constructor, which sizes the quadrature by the
         # number of coefficients -- the one place where the two differ here.
         self._num_quad_points = N
 
+    @property
+    def n_extra(self) -> int:
+        """How many stored coefficients are padding rather than wavenumbers."""
+        return self.N - self.n_real
+
     @jax.jit(static_argnums=(0, 1, 2))
     def wavenumbers(
         self, N: int | None = None, eliminate_highest_freq: bool = False
     ) -> Array:
-        """Return the non-negative wavenumbers 0, 1, ..., N/2.
+        """Return the non-negative wavenumbers 0, 1, ..., N/2, then the padding.
+
+        Padding rows repeat the Nyquist wavenumber rather than taking 0. Any
+        value is mathematically harmless -- their coefficients are zero, so
+        every derivative of them is zero whatever the wavenumber says -- but the
+        choice decides whether the operator *block* for a padding row is
+        invertible. At 0 it is the k=0 block, which is singular for a pure
+        Laplacian on a fully periodic space, and the padding rows would come
+        back NaN from a solve that the real rows survive. At the Nyquist they
+        are ordinary interior blocks and solve to zero.
 
         Args:
             N: Number of modes (None -> self.N).
             eliminate_highest_freq: Zero the Nyquist wavenumber, which is the
-                last one -- but only when the full spectrum is asked for, since
-                a truncated one does not reach it.
+                last real one -- but only when the full spectrum is asked for,
+                since a truncated one does not reach it.
 
         Returns:
             Integer array of length N.
         """
         N = self.N if N is None else N
         k = jnp.arange(N)
-        return k.at[-1].set(0) if eliminate_highest_freq and N == self.N else k
+        if N == self.N:
+            k = k.at[self.n_real :].set(self.n_real - 1)
+            if eliminate_highest_freq:
+                # The Nyquist row only. The padding keeps its wavenumber for the
+                # same reason it was given a nonzero one at all: zeroing it here
+                # would make an odd-derivative operator singular on those rows.
+                k = k.at[self.n_real - 1].set(0)
+        return k
 
     @cache_static
     def hermitian_weights(self) -> Array:
         """Return how many times each stored mode appears in the real field.
 
         Twice for every wavenumber whose conjugate partner was dropped, once for
-        the two that are their own partners: k = 0 and the Nyquist.
+        the two that are their own partners: k = 0 and the Nyquist. Zero for the
+        padding, which makes those rows the zero function rather than a second
+        copy of a wavenumber the space already carries -- so a padding
+        coefficient could not perturb a reconstruction even if one were somehow
+        nonzero.
         """
-        return jnp.full(self.N, 2.0).at[0].set(1.0).at[-1].set(1.0)
+        w = jnp.full(self.N, 2.0).at[0].set(1.0).at[self.n_real - 1].set(1.0)
+        return w.at[self.n_real :].set(0.0)
 
     def eval_reconstruction(self, X: float | Array) -> Array:
         """Return the weighted basis values whose real part rebuilds the field."""
         return self.eval_basis_functions(X) * self.hermitian_weights()
+
+    def _to_stored(self, out: Array) -> Array:
+        """Truncate an `rfft` result to the wavenumbers, then zero the padding.
+
+        Truncating to `self.N` directly would be wrong whenever the input was
+        dealiased: an `rfft` of a finer mesh returns more than `n_real`
+        coefficients, and the surplus would land in the padding slots as real
+        content instead of being discarded.
+        """
+        return jnp.pad(out[: self.n_real], (0, self.n_extra))
 
     @jax.jit(static_argnums=(0, 2))
     def backward(self, c: Array, N: int | None = None) -> Array:
@@ -382,10 +431,12 @@ class RFourier(Fourier):
             Real samples on the quadrature mesh, norm="forward".
         """
         n: int = self.num_quad_points if N is None else N
-        assert n // 2 + 1 >= len(c), (
+        assert n // 2 + 1 >= self.n_real, (
             "Backward transform only supports padding, not truncation"
         )
-        return jnp.fft.irfft(c, n=n, norm="forward")
+        # The padding rows are not wavenumbers -- `irfft` would read them as
+        # ones -- so they come off before the transform, not after it.
+        return jnp.fft.irfft(c[: self.n_real], n=n, norm="forward")
 
     @jax.jit(static_argnums=0)
     def scalar_product(self, c: Array) -> Array:
@@ -402,7 +453,7 @@ class RFourier(Fourier):
             "whose imaginary part is zero still has to be taken .real explicitly)"
         )
         out = jnp.fft.rfft(c, norm="forward") * 2 * jnp.pi / float(self.domain_factor)
-        return out[: self.N]
+        return self._to_stored(out)
 
     @jax.jit(static_argnums=0)
     def forward(self, c: Array) -> Array:
@@ -418,4 +469,4 @@ class RFourier(Fourier):
             "RFourier represents real fields; pass real samples (a complex array "
             "whose imaginary part is zero still has to be taken .real explicitly)"
         )
-        return jnp.fft.rfft(c, norm="forward")[: self.N]
+        return self._to_stored(jnp.fft.rfft(c, norm="forward"))

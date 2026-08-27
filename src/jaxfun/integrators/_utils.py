@@ -25,6 +25,7 @@ from jaxfun.galerkin.arguments import JAXFunction
 from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.la import BaseMatrix
 from jaxfun.la.matrixprotocol import SolverNotApplicable
+from jaxfun.sharding import replicate
 from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
 from jaxfun.utils import get_time_independent, split_time_derivative_terms
 from jaxfun.utils.operator_tools import assemble_linear_term
@@ -117,6 +118,15 @@ def warm_operator_solve_cache(
     to happen here, while the matrices are still concrete. Inside the jitted
     step there is no second chance: the arrays are tracers by then.
 
+    Only `SolverNotApplicable` is swallowed, and only because it is the
+    designed signal that this operator has no factored solver and should fall
+    back on a plainer path. Anything else is a real failure and has to surface
+    *here*, where it happened. Swallowed, it does not go away: the cache is
+    left cold, the factorization is retried from inside the jitted step, and
+    what reaches the user is a `TracerBoolConversionError` thousands of lines
+    from the cause. That is how an ordinary "9 wavenumbers do not divide across
+    2 devices" mistake used to present itself.
+
     Args:
         op: Operator whose solve caches should be populated.
         shape: Coefficient shape of the right-hand sides `op` will be solving.
@@ -131,13 +141,13 @@ def warm_operator_solve_cache(
         try:
             lu_factor()
             return
-        except (SolverNotApplicable, ValueError, TypeError, RuntimeError):
+        except (SolverNotApplicable, NotImplementedError):
             pass
     if shape is None:
         return
     try:
         solve_with_options(op, jnp.zeros(shape), options)
-    except (SolverNotApplicable, ValueError, TypeError, RuntimeError):
+    except (SolverNotApplicable, NotImplementedError):
         return
 
 
@@ -173,7 +183,8 @@ def assemble_field_couplings(
         )
         if operator is None:  # pragma: no cover - a coupling always assembles one
             raise ValueError(f"Coupling term in {field} assembled no operator: {expr}")
-        out.append((field_order.index(node_for(field)), operator, forcing))
+        # Replicated for the same reason as `BaseIntegrator.linear_forcing`.
+        out.append((field_order.index(node_for(field)), operator, replicate(forcing)))
     return tuple(out)
 
 

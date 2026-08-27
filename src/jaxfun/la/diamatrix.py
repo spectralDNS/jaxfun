@@ -1597,6 +1597,16 @@ class DiagonalMatrix(DiaMatrix):
         shape[axis] = diagonal.shape[0]
         return diagonal.reshape(tuple(shape)) * x
 
+    def rmatvec(self, x: Array, axis: int = -1) -> Array:
+        """Multiply ``x @ A`` contracting ``axis`` of ``x``.
+
+        A diagonal matrix is its own transpose, so this is the elementwise
+        product :meth:`matvec` performs, and delegates to it. Overridden so a
+        single diagonal does not take the banded path, which pads ``x`` by
+        ``m - 1`` on each side of the contracted axis.
+        """
+        return self.matvec(x, axis=axis)
+
     def lu_solve(
         self,
         b: Array,

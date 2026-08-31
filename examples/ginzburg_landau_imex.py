@@ -71,14 +71,8 @@ states = integrator.solve(
 )
 times = jnp.linspace(0.0, T, states.shape[0])
 
-
-@jax.jit
-def backward_saved_states(coefficients):
-    return jax.vmap(lambda u_hat: V.backward(u_hat).real)(coefficients)
-
-
+u_states = V.backward_batch(states).real
 x_plot, y_plot = V.mesh(broadcast=False)
-u_states = backward_saved_states(states)
 
 if "PYTEST" in os.environ:
     assert states.shape == (n_states + 1,) + V.num_dofs

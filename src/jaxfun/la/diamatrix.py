@@ -1410,7 +1410,19 @@ class DiaMatrix(BaseMatrix):
     def pin(
         self, constraints: dict[int, float] | tuple[tuple[int, float], ...]
     ) -> PinnedDiaMatrix:
-        """Return a :class:`PinnedSystem` with the given DOFs fixed."""
+        """Return a :class:`PinnedSystem` with the given DOFs fixed.
+
+        Args:
+            constraints: Mapping from DOF index to pinned value, e.g.
+                ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0}``.  Negative indices are supported
+                (Python-style, relative to ``n``).  Positive indices must be in
+                ``[0, n)``, otherwise :exc:`IndexError` is raised.
+                Alternatively, a tuple of ``(row_index, value)`` pairs can be provided.
+
+        Returns:
+            :class:`PinnedDiaMatrix` whose :meth:`~PinnedDiaMatrix.solve` method
+            modifies the RHS and solves in one call.
+        """
         from jaxfun.la.pinned import PinnedDiaMatrix
 
         if isinstance(constraints, dict):
@@ -1603,6 +1615,32 @@ class DiagonalMatrix(DiaMatrix):
             L=DiagonalMatrix(jnp.ones_like(self.diagonal())),
             U=self,
             shape=self.shape,
+        )
+
+    def pin(
+        self, constraints: dict[int, float] | tuple[tuple[int, float], ...]
+    ) -> PinnedDiaMatrix:
+        """Return a :class:`PinnedDiaMatrix` with the given DOFs fixed.
+
+        Args:
+            constraints: Mapping from DOF index to pinned value, e.g.
+                ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0}``.  Negative indices are supported
+                (Python-style, relative to ``n``).  Positive indices must be in
+                ``[0, n)``, otherwise :exc:`IndexError` is raised.
+                Alternatively, a tuple of ``(row_index, value)`` pairs can be provided.
+
+        Returns:
+            :class:`PinnedDiaMatrix` whose :meth:`~PinnedDiaMatrix.solve` method
+            modifies the RHS and solves in one call.
+        """
+        from jaxfun.la.pinned import PinnedDiaMatrix
+
+        if isinstance(constraints, dict):
+            constraints = tuple(sorted(constraints.items()))
+        norm_constraints, _, data = self._pin(constraints)
+        return PinnedDiaMatrix(
+            DiagonalMatrix(data[0]),
+            tuple((int(i), float(j)) for i, j in norm_constraints),
         )
 
     @property
@@ -1900,6 +1938,14 @@ class LUFactors(nnx.Pytree):
         Returns:
             Solution array with the same shape as ``b``.
         """
+        if self.perm is None and self.L.is_diagonal and self.U.is_diagonal:
+            # Nothing to substitute: L is the unit diagonal and U carries the
+            # matrix itself, so the solve is a division. Worth taking here rather
+            # than leaving it to `_backward_substitution`, which reaches the same
+            # divide only after moving the solved axis to the front and reversing
+            # it twice -- for a divide that shuffling is the whole cost.
+            return _solve_diagonal(self.U.diagonal(), b, axis)
+
         n = self.shape[0]
 
         if b.ndim == 1:

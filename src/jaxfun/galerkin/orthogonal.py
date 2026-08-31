@@ -27,7 +27,7 @@ from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import BaseMatrix, DiaMatrix, Matrix, diags
 from jaxfun.typing import Array, MeshKind, RankTag
-from jaxfun.utils.common import Domain, jacn, jit_vmap, lambdify
+from jaxfun.utils.common import Domain, cache_static, jacn, jit_vmap, lambdify
 
 if TYPE_CHECKING:
     from jaxfun.galerkin.cartesianproductspace import CartesianProductSpace
@@ -59,6 +59,25 @@ class OrthogonalSpace(BaseSpace):
     """
 
     is_orthogonal = True
+
+    # Whether `backward` is a fast transform (FFT/DCT) rather than a matrix
+    # product with `vandermonde`. It decides how `backward_primitive` evaluates a
+    # derivative: a space with a fast transform differentiates in coefficient
+    # space and transforms once, while one without folds the differentiation into
+    # a cached derivative Vandermonde and pays a single matrix product either way.
+    # Set it to True in any subclass that overrides `backward` with a fast
+    # transform, or its derivatives will silently take the slower path.
+    has_fast_transform = False
+
+    # Whether the coefficient array holds only half of a Hermitian spectrum, the
+    # other half being implied by conjugate symmetry. Such a space represents a
+    # *real* field, and reconstructing it means adding the conjugate half back --
+    # which makes the expansion real-linear rather than complex-linear in the
+    # coefficients, so it cannot be written as a matrix product with
+    # `vandermonde`. `eval_reconstruction` folds the conjugate half into its
+    # weights and the caller takes the real part; `RFourier` is the one such
+    # space. Every other space leaves this False and the two agree.
+    is_hermitian_half = False
 
     def __init__(
         self,
@@ -99,6 +118,18 @@ class OrthogonalSpace(BaseSpace):
         """Return default number of quadrature points."""
         return self._num_quad_points
 
+    @property
+    def _cache_key(self) -> tuple[int, ...]:
+        """Return the state that `cache_static` results depend on.
+
+        The memoized quantities (quadrature points and weights, Vandermonde
+        matrices) live in the reference domain, so they depend on the number of
+        basis functions and the default number of quadrature points and on
+        nothing else. Both are mutated after construction for the orthogonal
+        basis underlying a `BCGeneric`, so they have to be read at call time.
+        """
+        return (self.N, self.num_quad_points)
+
     @jit_vmap(in_axes=(0, None))
     def evaluate(self, x: float | Array, c: Array) -> Array:
         """Evaluate series sum_k c_k psi_k(x).
@@ -126,19 +157,41 @@ class OrthogonalSpace(BaseSpace):
             Array of shape like X containing series evaluation.
         """
         assert len(c) <= self.N, f"Coefficient length {len(c)} exceeds N={self.N}"
-        return self.eval_basis_functions(X)[..., : len(c)] @ c
+        z = self.eval_reconstruction(X)[..., : len(c)] @ c
+        return z.real if self.is_hermitian_half else z
 
-    @jax.jit(static_argnums=0)
-    def vandermonde(self, X: Array) -> Array:
-        r"""Return pseudo-Vandermonde matrix V_{m,k}=psi_k(X_m).
+    def eval_reconstruction(self, X: float | Array) -> Array:
+        """Return the values a coefficient vector is contracted against at X.
+
+        Equal to `eval_basis_functions` for every space whose expansion is
+        complex-linear in its coefficients, which is all of them except one
+        storing half a Hermitian spectrum (`is_hermitian_half`). There the
+        conjugate half is folded in as a per-mode weight and the contraction's
+        real part is the field -- see `RFourier`. Slicing the result to a
+        truncated coefficient vector stays correct, so callers may do that.
 
         Args:
-            X: 1D array of sample points (reference domain).
+            X: Evaluation point(s) in reference coordinates.
 
         Returns:
-            Array shape (len(X), N) with basis values.
+            Array of shape (..., N) to contract with the coefficients.
         """
-        return self.evaluate_basis_derivative(X, 0)
+        return self.eval_basis_functions(X)
+
+    @cache_static
+    def vandermonde(self, N: int | None) -> Array:
+        r"""Return pseudo-Vandermonde matrix V_{m,k}=psi_k(X_m)
+
+        X_m are quadrature points in the reference domain
+
+        Args:
+            N: Number of quadrature points (defaults to self.num_quad_points).
+
+        Returns:
+            Array shape (N, self.N) with basis values.
+        """
+        X = self.quad_points_and_weights(N)[0]
+        return self.eval_basis_functions(X)
 
     @abstractmethod
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
@@ -223,8 +276,35 @@ class OrthogonalSpace(BaseSpace):
         Returns:
             Array of shape (N,) containing series evaluation at quadrature points.
         """
-        xj = self.mesh(kind=MeshKind.QUADRATURE, N=N)
-        return self.evaluate(xj, c)
+        P = self.vandermonde(N)
+        return P @ c
+
+    @cache_static
+    def vandermonde_derivative(self, k: int, N: int | None) -> Array:
+        r"""Return the pseudo-Vandermonde matrix of the k'th derivative.
+
+        ``V^{(k)}_{m,j} = d^k psi_j / dx^k`` at the quadrature points, in true
+        (not reference) coordinates, so that ``V^{(k)} @ c`` is the k'th
+        derivative of the series with coefficients ``c``.
+
+        Built by pushing the identity through `derivative_coeffs` -- the
+        recurrence stays the single definition of what differentiation means for
+        the basis -- and folding the resulting coefficient-space operator into
+        `vandermonde`. Memoized, so the recurrence runs once per (k, N) rather
+        than once per transform: it is a length-N sequential scan for the
+        polynomial bases, which costs more than the matrix product it precedes.
+
+        Args:
+            k: Derivative order.
+            N: Number of quadrature points (defaults to self.num_quad_points).
+
+        Returns:
+            Array of shape (N, self.N) with the k'th derivatives of the basis.
+        """
+        if k == 0:
+            return self.vandermonde(N)
+        D = jax.vmap(lambda e: self.derivative_coeffs(e, k))(jnp.eye(self.N))
+        return float(self.domain_factor**k) * (self.vandermonde(N) @ D.T)
 
     @jax.jit(static_argnums=(0, 2, 3))
     def backward_primitive(
@@ -242,8 +322,10 @@ class OrthogonalSpace(BaseSpace):
             N: Number of points. Must be >= self.num_quad_points, defaults to
                 self.num_quad_points.
         """
-        df = float(self.domain_factor**k)
-        return df * self.backward(self.derivative_coeffs(c, k), N=N)
+        if self.has_fast_transform:
+            df = float(self.domain_factor**k)
+            return df * self.backward(self.derivative_coeffs(c, k), N=N)
+        return self.vandermonde_derivative(k, N) @ c
 
     def mass_matrix(self) -> DiaMatrix:
         """Return diagonal mass matrix (orthogonality) in sparse format."""
@@ -265,14 +347,17 @@ class OrthogonalSpace(BaseSpace):
     def scalar_product(self, u: Array) -> Array:
         """Return vector of inner products <u, psi_i> (weighted)."""
         N: int = u.shape[0]
-        xj, wj = self.quad_points_and_weights(N)
-        Pi = self.vandermonde(xj)  # shape (N, self.N)
+        assert N >= self.N, "Only truncation supported for forward transform"
+        Xj, wj = self.quad_points_and_weights(N)
+        Pi = self.vandermonde(N)  # == self.eval_basis_functions(Xj)
+        # sg reads self.system, which TensorProduct replaces after construction,
+        # so the weights must stay separate from the (cached) basis values.
         sg = self.system.sg / self.domain_factor
         if sp.sympify(sg).is_number:
             wj = wj * float(sg)
         else:
             x = self.system.base_scalars()[0]
-            sg = lambdify(x, self.map_expr_true_domain(sg))(xj)
+            sg = lambdify(x, self.map_expr_true_domain(sg))(Xj)
             wj = wj * sg
         return (u * wj) @ jnp.conj(Pi)  # Truncated to (self.N,)
 
@@ -494,31 +579,35 @@ class OrthogonalSpace(BaseSpace):
         u, j = trial
         z: Matrix | DiaMatrix | None = None
 
-        if self.domain_factor == 1:
-            z = self._matrices(i, trial, q)
+        if q == 0:
+            z = self._matrices(i, trial, q=0)
 
         else:
-            if q > 0:
-                x = self.system.base_scalars()[0]
-                poly_scale = self.map_expr_true_domain(x**q)
-                poly_ref = sp.expand(poly_scale)
-                coeffs = sp.Poly(poly_ref, x).all_coeffs()[::-1]
-                z_poly: list[Matrix | DiaMatrix] = []
-                _all_found = True
-                for _k, _ck in enumerate(coeffs):
-                    ck_f = float(_ck)
-                    if ck_f == 0.0:
-                        continue
-                    Mq = self._matrices(i, (u, j), q=_k)
-                    if Mq is None:
-                        _all_found = False
-                        break
-                    z_poly.append(ck_f * Mq)
-                if _all_found and z_poly:
-                    z = _addmats(cast(list[BaseMatrix], z_poly))
-
-            else:
-                z = self._matrices(i, trial, q=0)
+            # The precomputed matrices are given in the reference domain, so the
+            # physical x**q must be expanded in the reference coordinate first.
+            # Note that domain_factor == 1 does not imply an identity map, since
+            # a domain of unchanged length may still be shifted. A domain that
+            # is the reference domain simply expands to x**q itself.
+            x = self.system.base_scalars()[0]
+            poly_scale = self.map_expr_true_domain(x**q)
+            poly_ref = sp.expand(poly_scale)
+            coeffs = sp.Poly(poly_ref, x).all_coeffs()[::-1]
+            z_poly: list[Matrix | DiaMatrix] = []
+            _all_found = True
+            for _k, _ck in enumerate(coeffs):
+                if not _ck.is_number:  # symbolic domain: fall back to quadrature
+                    _all_found = False
+                    break
+                ck_f = float(_ck)
+                if ck_f == 0.0:
+                    continue
+                Mq = self._matrices(i, (u, j), q=_k)
+                if Mq is None:
+                    _all_found = False
+                    break
+                z_poly.append(Mq if ck_f == 1.0 else ck_f * Mq)
+            if _all_found and z_poly:
+                z = _addmats(cast(list[BaseMatrix], z_poly))
 
         if z is not None:
             df = float(self.domain_factor)

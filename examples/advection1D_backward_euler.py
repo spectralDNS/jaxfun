@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import sympy as sp
 
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
-from jaxfun.galerkin.Fourier import Fourier as space
+from jaxfun.galerkin.Fourier import RFourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.integrators import BackwardEuler
 from jaxfun.operators import Constant
@@ -31,7 +31,7 @@ T = 5
 steps = 20000
 dt = T / steps
 
-V = FunctionSpace(N, space, name="V", fun_str="E")
+V = FunctionSpace(N, RFourier, name="V", fun_str="E")
 v = TestFunction(V, name="v")
 u = TrialFunction(V, name="u", transient=True)
 
@@ -51,7 +51,7 @@ integrator = BackwardEuler(
 uhat_T = integrator.solve(dt=dt, steps=steps)
 
 xj = V.mesh()
-u_num = V.backward(uhat_T).real
+u_num = V.backward(uhat_T)
 u_ex = sp.sin(x - c.val * T)
 u_ex_j = lambdify(x, u_ex)(xj)
 

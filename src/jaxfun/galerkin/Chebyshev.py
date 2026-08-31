@@ -10,7 +10,7 @@ from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.composite import Composite, PGComposite
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TestSpaceKind
-from jaxfun.utils.common import Domain, jit_vmap
+from jaxfun.utils.common import Domain, cache_static, jit_vmap
 
 from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
@@ -62,6 +62,9 @@ class Chebyshev(Jacobi):
         fun_str: Symbol stem for basis functions (default "T").
         **kw: Extra keyword args passed to parent Jacobi constructor.
     """
+
+    # `backward` is an FFT/DCT, so derivatives stay in coefficient space.
+    has_fast_transform = True
 
     def __init__(
         self,
@@ -146,7 +149,7 @@ class Chebyshev(Jacobi):
 
         return jnp.sum(xs, axis=0) + c[0]
 
-    @jax.jit(static_argnums=(0, 1))
+    @cache_static
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return Gauss-Chebyshev (first kind) nodes and weights.
 
@@ -270,7 +273,7 @@ class Chebyshev(Jacobi):
             Coefficient array of length self.N.
         """
         n: int = len(u)
-        assert len(u) >= self.N, "Only truncation supported for forward transform"
+        assert n >= self.N, "Only truncation supported for forward transform"
         sign = (-1) ** jnp.arange(n)
         uh = jax.scipy.fft.dct(u, n=n)
         uh = uh * jnp.pi * sign / n / 2 / self.domain_factor
@@ -428,7 +431,15 @@ class Chebyshev(Jacobi):
 
         A = None
         if q != 0:
-            A = self.A().power(q)
+            if self.N != trial[0].N:
+                # x**q couples modes across the two ranges, and a recursion
+                # matrix truncated to either range drops that coupling, so
+                # fall back to quadrature for rectangular matrices.
+                return None
+            # Size by N rather than num_quad_points: a space may hold more
+            # quadrature points than modes (a boundary space does), and A
+            # has to match the shape of the matrices it multiplies below.
+            A = self.A(self.N).power(q)
 
         if i == 0 and j == 0:
             M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))

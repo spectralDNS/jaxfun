@@ -45,18 +45,25 @@ def jspace(request: pytest.FixtureRequest) -> type[Jacobi]:
     return request.param
 
 
+@pytest.mark.parametrize("num_quad_points", (None, 16))
 @pytest.mark.parametrize("space", (Legendre, Chebyshev))
 def test_vandermonde(
-    space: type[Legendre] | type[Chebyshev], x: jnp.ndarray, xn: np.ndarray, N: int
+    space: type[Legendre] | type[Chebyshev], N: int, num_quad_points: int | None
 ) -> None:
+    # vandermonde evaluates at the quadrature points, and num_quad_points may
+    # differ from the number of basis functions (padding).
     V = space(N)
+    Xn = np.array(V.quad_points_and_weights(num_quad_points)[0])
     np_res = {
-        "Legendre": np.polynomial.legendre.legvander(xn, N - 1),
-        "Chebyshev": np.polynomial.chebyshev.chebvander(xn, N - 1),
+        "Legendre": np.polynomial.legendre.legvander(Xn, N - 1),
+        "Chebyshev": np.polynomial.chebyshev.chebvander(Xn, N - 1),
     }[space.__name__]
-    jax_res = V.vandermonde(x)
+    jax_res = V.vandermonde(num_quad_points)
+    assert jax_res.shape == (num_quad_points or N, N)
     diff = jnp.linalg.norm(jnp.array(np_res) - jax_res)
-    assert diff < ulp(10.0)
+    # Same tolerance as test_evaluate_basis_derivative at k=0: a Frobenius norm
+    # over the whole matrix, so it has to leave room for the accumulation.
+    assert diff < ulp(100.0)
 
 
 @pytest.mark.parametrize("k", (0, 1, 2, 3))

@@ -37,3 +37,7 @@ class BaseSpace:
         self.name = name
         self.fun_str = fun_str
         self.system: CoordSys = CartCoordSys("N", (x,)) if system is None else system
+
+    def clear_static_cache(self) -> None:
+        """Drop everything memoized by `cache_static` on this space."""
+        self.__dict__.pop("_static_cache", None)

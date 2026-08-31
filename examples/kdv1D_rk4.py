@@ -34,6 +34,8 @@ if "PYTEST" in os.environ:
 
 dt = T / steps
 
+# Note: Using complex Fourier basis because it's faster than real RFourier for my
+# MacBook Pro M3. RFourier may be faster on a different architecture.
 V = Fourier(N, Domain(-1, 1))
 v = TestFunction(V, name="v")
 u = TrialFunction(V, name="u", transient=True)
@@ -69,12 +71,12 @@ if "PYTEST" in os.environ:
     assert jnp.isfinite(u_num).all()
     sys.exit(0)
 
-states_phys = jnp.array([V.backward(uhat).real for uhat in states])
+states_phys = jax.jit(jax.vmap(V.backward))(states).real
 
 fig, ax = plt.subplots()
 (line,) = ax.plot(xj, states_phys[0], "b")
 ax.set_xlim(xj.min(), xj.max())
-ax.set_ylim(states_phys.min() * 1.2, states_phys.max() * 1.2)  # ty:ignore[invalid-argument-type]
+ax.set_ylim(states_phys.min() * 1.2, states_phys.max() * 1.2)
 ax.set_xlabel("x")
 ax.set_ylabel("u(x,t)")
 ax.set_title("1D KdV equation (ETDRK4)")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Literal, overload
+from typing import TYPE_CHECKING, Literal, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -14,7 +14,7 @@ from sympy import Number
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import MeshKind, TestSpaceKind
-from jaxfun.utils.common import Domain, matmat, n
+from jaxfun.utils.common import Domain, cache_static, matmat, n
 
 if TYPE_CHECKING:
     from jaxfun.galerkin.cartesianproductspace import CartesianProductSpace
@@ -118,6 +118,11 @@ class BoundaryConditions(dict):
         return BoundaryConditions(bc)
 
 
+dirichlet = BoundaryConditions({"left": {"D": 0}, "right": {"D": 0}})
+neumann = BoundaryConditions({"left": {"N": 0}, "right": {"N": 0}})
+biharmonic = BoundaryConditions({"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}})
+
+
 class Composite(OrthogonalSpace):
     """Composite basis enforcing boundary conditions via a stencil.
 
@@ -186,7 +191,6 @@ class Composite(OrthogonalSpace):
         self._mass_matrix: DiaMatrix = self._compute_mass_matrix()
         self._mass_matrix.lu_factor()
 
-    @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return quadrature nodes/weights (delegated to underlying basis)."""
         return self.orthogonal.quad_points_and_weights(N)
@@ -223,11 +227,10 @@ class Composite(OrthogonalSpace):
         P: Array = self.orthogonal.evaluate_basis_derivative(X, k)
         return self.apply_stencil_right(P)
 
-    @jax.jit(static_argnums=0)
-    def vandermonde(self, X: Array) -> Array:
-        """Return (constrained) Vandermonde matrix at sample points X."""
-        P: Array = self.orthogonal.evaluate_basis_derivative(X, 0)
-        return self.apply_stencil_right(P)
+    @cache_static
+    def vandermonde(self, N: int | None) -> Array:
+        """Return (constrained) Vandermonde matrix at quadrature points X."""
+        return self.apply_stencil_right(self.orthogonal.vandermonde(N))
 
     @jax.jit(static_argnums=(0, 2))
     def eval_basis_function(self, X: float, i: int) -> float:
@@ -252,8 +255,25 @@ class Composite(OrthogonalSpace):
         """Return max diagonal shift minus min shift (stencil width)."""
         return max(self.stencil) - min(self.stencil)
 
-    def stencil_to_diamatrix(self) -> DiaMatrix:
-        """Convert symbolic stencil to DiaMatrix."""
+    def stencil_to_diamatrix(
+        self,
+        stencil: dict[int, sp.Expr] | None = None,
+        shape: tuple[int, int] | None = None,
+    ) -> DiaMatrix:
+        """Convert a symbolic stencil to a DiaMatrix.
+
+        Args:
+            stencil: Diagonal shift -> expression in `n`. Defaults to this
+                basis's own stencil.
+            shape: Shape of the result. Defaults to the basis stencil's shape,
+                which is what maps composite coefficients to orthogonal ones.
+
+        Both are overridden by the derivative stencils, which share the basis
+        stencil's shape but carry their own, narrower, set of diagonals.
+        """
+        diagonals: dict = cast(dict, self.stencil) if stencil is None else stencil
+        if shape is None:
+            shape = (self.N - self.stencil_width(), self.N)
         k = jnp.arange(self.N - 1)
         return diags(
             [
@@ -262,10 +282,10 @@ class Composite(OrthogonalSpace):
                         n, val, modules=["jax", {"gamma": jax.scipy.special.gamma}]
                     )(k)
                 ).astype(float)
-                for val in self.stencil.values()
+                for val in diagonals.values()
             ],
-            tuple(int(key) for key in self.stencil),
-            shape=(self.N - self.stencil_width(), self.N),
+            tuple(int(key) for key in diagonals),
+            shape=shape,
         )
 
     @property
@@ -469,8 +489,7 @@ class BCGeneric(Composite):
             ]
         )
 
-    @jax.jit(static_argnums=(0, 1))
-    def quad_points_and_weights(self, N: int | None = None) -> Array:
+    def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Quadrature nodes/weights (override to enforce num_quad_points)."""
         return self.orthogonal.quad_points_and_weights(N)
 
@@ -517,6 +536,11 @@ class DirectSum:
 
     is_transient = False
     is_orthogonal = False
+    # A direct sum lifts boundary data, so both summands are built over a
+    # polynomial basis -- never a half spectrum, which is periodic and has no
+    # boundary to impose anything on. Mirrored from `OrthogonalSpace` because a
+    # `DirectSum` is not one.
+    is_hermitian_half = False
 
     def __init__(self, a: Composite, b: BCGeneric) -> None:
         assert isinstance(b, BCGeneric)

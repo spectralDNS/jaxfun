@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from functools import cached_property
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -9,7 +12,7 @@ from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.composite import BCGeneric, Composite, PGComposite
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TestSpaceKind
-from jaxfun.utils.common import Domain, jit_vmap, lambdify, n
+from jaxfun.utils.common import Domain, cache_static, jit_vmap, n
 from jaxfun.utils.fastgl import leggauss
 
 from .Jacobi import Jacobi
@@ -37,6 +40,42 @@ def _dense_derivative_matrix(
     test_modes: int, trial_modes: int, derivative: int
 ) -> Matrix:
     return Matrix(_dense_derivative_matrix_data(test_modes, trial_modes, derivative))
+
+
+def _differentiate_stencil(stencil: dict[int, sp.Expr]) -> dict[int, sp.Expr] | None:
+    r"""Return the stencil of the derivative of a composite Legendre basis.
+
+    A composite basis function :math:`\psi_k = \sum_r c_r L_{k+r}` has, by the
+    Legendre identity :math:`L'_m = \sum_{p=m-1,m-3,\ldots} (2p+1) L_p`,
+
+    .. math::
+        \psi'_k = \sum_{s \ge 0} (2(k+s)+1)\, T_s\, L_{k+s}, \qquad
+        T_s = \sum_{r > s,\; r - s \text{ odd}} c_r .
+
+    That inner sum runs all the way down to :math:`L_0`, so the derivative is
+    only sparse if the tails below the stencil window vanish, i.e.
+    :math:`T_{-1} = T_{-2} = 0`. Homogeneous boundary conditions are exactly
+    what makes them vanish, and every derivative then narrows the stencil by
+    one diagonal.
+
+    Args:
+        stencil: Ordered dict of diagonal shift -> expression in n.
+
+    Returns:
+        Stencil dict of the derivative, or None if it is not sparse.
+    """
+    offsets = sorted(stencil)
+
+    def tail(s: int) -> sp.Expr:
+        terms = [sp.sympify(stencil[r]) for r in offsets if r > s and (r - s) % 2]
+        return sp.simplify(sp.Add(*terms))
+
+    if tail(-1) != 0 or tail(-2) != 0:
+        return None
+    derivative = {
+        s: sp.simplify((2 * (n + s) + 1) * tail(s)) for s in range(offsets[-1])
+    }
+    return {s: c for s, c in derivative.items() if c != 0} or None
 
 
 class Legendre(Jacobi):
@@ -122,7 +161,7 @@ class Legendre(Jacobi):
         _, xs = jax.lax.scan(inner_loop, (x0, X), jnp.arange(2, self.N + 1))
         return jnp.sum(xs, axis=0) + c[0]
 
-    @jax.jit(static_argnums=(0, 1))
+    @cache_static
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return Gauss-Legendre quadrature nodes and weights.
 
@@ -244,7 +283,15 @@ class Legendre(Jacobi):
         )
         A = None
         if q != 0:
-            A = self.A().power(q)
+            if self.N != trial[0].N:
+                # x**q couples modes across the two ranges, and a recursion
+                # matrix truncated to either range drops that coupling, so
+                # fall back to quadrature for rectangular matrices.
+                return None
+            # Size by N rather than num_quad_points: a space may hold more
+            # quadrature points than modes (a boundary space does), and A
+            # has to match the shape of the matrices it multiplies below.
+            A = self.A(self.N).power(q)
 
         if i == 0 and j == 0:
             M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
@@ -289,7 +336,30 @@ class LGComposite(Composite):
         S: Sparse (DiaMatrix) stencil matrix for test functions.
         ST: Pre-computed transpose of S for efficiency.
         scaling: Scaling expression applied to user stencil.
+        derivative_stencils: Stencils of the derivatives of the basis.
     """
+
+    @cached_property
+    def derivative_stencils(self) -> tuple[DiaMatrix, ...]:
+        r"""Return stencils of :math:`\psi^{(p)}` for p = 0, 1, ...
+
+        Entry p maps composite coefficients to coefficients of the p'th
+        derivative in the orthogonal basis, :math:`\psi_k^{(p)} = \sum_l
+        G^{(p)}_{kl} L_l`, with entry 0 being the basis stencil S itself.
+
+        Derivatives of the orthogonal basis are dense, but for a basis with
+        homogeneous boundary conditions the composite ones telescope down to a
+        few diagonals, one fewer for every derivative (see
+        :func:`_differentiate_stencil`). The tuple ends where they stop being
+        sparse, which is after as many derivatives as there are boundary
+        conditions at each end.
+        """
+        stencils = [self.S]
+        stencil = _differentiate_stencil(cast(dict, self.stencil))
+        while stencil is not None:
+            stencils.append(self.stencil_to_diamatrix(stencil, shape=self.S.shape))
+            stencil = _differentiate_stencil(stencil)
+        return tuple(stencils)
 
     def get_testspace(
         self,
@@ -378,119 +448,47 @@ class LGComposite(Composite):
         if self.num_dofs != u.num_dofs:  # only fast paths for square matrices.
             return None
 
-        if self.bcs == {"left": {"D": 0}, "right": {"D": 0}}:
-            # Not implementing i=j=0 case since mass matrix in orthogonal basis is
-            # diagonal and thus computation is fast via orthogonal basis path.
-            if (
-                (i == 0 and j in (1, 2))
-                or (j == 0 and i in (1, 2))
-                or (i == 1 and j == 1)
-            ):
-                M = self.num_dofs
-                k = jnp.arange(M)
-                if self.scaling is not None:
-                    s_test = jnp.ones(M) * lambdify(n, self.scaling)(k)
-                else:
-                    s_test = jnp.ones(M)
-                if u.scaling is not None:
-                    s_trial = jnp.ones(M) * lambdify(n, u.scaling)(k)
-                else:
-                    s_trial = jnp.ones(M)
-            else:
+        if not isinstance(u, LGComposite):
+            return None
+
+        # Both bases are sums over the orthogonal basis, psi_m^(i) = sum_k
+        # G^(i)_{mk} L_k, so the matrix is G^(i) @ D @ G^(j).T with D the
+        # orthogonal <x**q L_m, L_n>. All factors are sparse, so the products
+        # never touch a dense intermediate. Note the use of the private
+        # _matrices, since the public matrices() applies the domain factor and
+        # maps x**q to the reference domain, both of which are already taken
+        # care of by the matrices() wrapper calling this method.
+        Gt, Gu = self.derivative_stencils, u.derivative_stencils
+
+        if i < len(Gt) and j < len(Gu):
+            D = self.orthogonal._matrices(0, (u.orthogonal, 0), q=q)
+            if D is None:
                 return None
+            return Gt[i] @ D @ Gu[j].T
 
-            if i == 0 and j == 1:
-                if q == 0:
-                    return diags(
-                        [
-                            -2 / (s_test[1:] * s_trial[:-1]),
-                            2 / (s_test[:-1] * s_trial[1:]),
-                        ],
-                        offsets=(-1, 1),
-                        shape=(M, M),
-                    )
-                elif q == 1:
-                    diag0 = (
-                        -2
-                        * (2 * k + 3)
-                        / ((2 * k + 1) * (2 * k + 5))
-                        / (s_test * s_trial)
-                    )
-                    return diags(
-                        [
-                            -2 * k[2:] / (2 * k[2:] + 1) / (s_test[2:] * s_trial[:-2]),
-                            diag0,
-                            2
-                            * (k[:-2] + 3)
-                            / (2 * k[:-2] + 5)
-                            / (s_test[:-2] * s_trial[2:]),
-                        ],
-                        offsets=(-2, 0, 2),
-                        shape=(M, M),
-                    )
-                return None  # q >= 2: fall back to quadrature
+        # Derivatives beyond the sparse stencils are integrated by parts onto
+        # the side that still has one. psi^(p) vanishes at both boundaries for
+        # p < len(G) - 1, which is what kills the boundary term:
+        #   <x**q psi^(i), phi^(j)> = -q <x**(q-1) psi^(i), phi^(j-1)>
+        #                              - <x**q psi^(i+1), phi^(j-1)>
+        #   <x**q psi^(i), phi^(j)> = -q <x**(q-1) psi^(i-1), phi^(j)>
+        #                              - <x**q psi^(i-1), phi^(j+1)>
+        if j >= len(Gu) and i + 1 < len(Gt):
+            A = self._matrices(i + 1, (u, j - 1), q=q)
+            B = None if q == 0 else self._matrices(i, (u, j - 1), q=q - 1)
+        elif i >= len(Gt) and j + 1 < len(Gu):
+            A = self._matrices(i - 1, (u, j + 1), q=q)
+            B = None if q == 0 else self._matrices(i - 1, (u, j), q=q - 1)
+        else:
+            return None  # boundary terms do not vanish: use quadrature
 
-            elif i == 1 and j == 0:
-                A = self._matrices(0, (u, 1), q=q)
-                if A is None:
-                    return None
-                return A.T
-
-            elif i == 0 and j == 2:
-                if q == 0:
-                    return diags(
-                        [-(4 * k + 6) / (s_test * s_trial)], offsets=(0,), shape=(M, M)
-                    )
-
-                elif q == 1:
-                    return diags(
-                        [
-                            -2 * k[1:] / (s_test[1:] * s_trial[:-1]),
-                            -2 * (k[:-1] + 3) / (s_test[:-1] * s_trial[1:]),
-                        ],
-                        offsets=(-1, 1),
-                        shape=(M, M),
-                    )
-
-                elif q == 2:
-                    diag0 = (
-                        -2
-                        * (2 * k + 3)
-                        * (2 * k**2 + 6 * k + 1)
-                        / ((2 * k + 1) * (2 * k + 5))
-                        / (s_test * s_trial)
-                    )
-                    return diags(
-                        [
-                            -2
-                            * k[2:]
-                            * (k[2:] - 1)
-                            / (2 * k[2:] + 1)
-                            / (s_test[2:] * s_trial[:-2]),
-                            diag0,
-                            -2
-                            * (k[:-2] + 3)
-                            * (k[:-2] + 4)
-                            / (2 * k[:-2] + 5)
-                            / (s_test[:-2] * s_trial[2:]),
-                        ],
-                        offsets=(-2, 0, 2),
-                        shape=(M, M),
-                    )
-
-                return None  # q >= 3: fall back to quadrature
-
-            elif i == 2 and j == 0:
-                A = self._matrices(0, (u, 2), q=q)
-                if A is None:
-                    return None
-                return A.T
-
-            elif i == 1 and j == 1:
-                A = self._matrices(0, (u, 2), q=q)
-                if A is None:
-                    return None
-                return -A
+        if A is None:
+            return None
+        if q == 0:
+            return -A
+        if B is None:
+            return None
+        return -A - q * B
 
         return None
 

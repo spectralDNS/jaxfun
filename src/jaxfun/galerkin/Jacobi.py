@@ -14,7 +14,7 @@ from sympy import Expr, Number, Symbol
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TriDiagMatrixFun
-from jaxfun.utils.common import Domain, jit_vmap, n
+from jaxfun.utils.common import Domain, cache_static, jit_vmap, n
 
 from .orthogonal import OrthogonalSpace
 
@@ -109,7 +109,7 @@ class Jacobi(OrthogonalSpace):
 
         return jnp.sum(xs, axis=0) + c[0] + c[1] * x1
 
-    @jax.jit(static_argnums=(0, 1))
+    @cache_static
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return Gauss-Jacobi quadrature nodes/weights.
 
@@ -566,7 +566,15 @@ class Jacobi(OrthogonalSpace):
         assert isinstance(u, Jacobi), "Trial space must be Jacobi for Jacobi matrices"
         A = None
         if q != 0:
-            A = self.A().power(q)
+            if self.N != trial[0].N:
+                # x**q couples modes across the two ranges, and a recursion
+                # matrix truncated to either range drops that coupling, so
+                # fall back to quadrature for rectangular matrices.
+                return None
+            # Size by N rather than num_quad_points: a space may hold more
+            # quadrature points than modes (a boundary space does), and A
+            # has to match the shape of the matrices it multiplies below.
+            A = self.A(self.N).power(q)
         if i == 0 and j == 0:
             M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
             return M if A is None else A.T @ M

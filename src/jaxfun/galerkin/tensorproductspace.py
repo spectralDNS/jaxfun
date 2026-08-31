@@ -8,6 +8,7 @@ from functools import partial
 from typing import TYPE_CHECKING, NoReturn, cast
 
 import jax
+import jax.core
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array, shard_map
@@ -18,9 +19,10 @@ from jaxfun.sharding import (
     _apply_separable_spmd_shard_map,
     _build_local_apply_fn,
     physical_sharding,
+    place,
     spectral_sharding,
 )
-from jaxfun.typing import MeshKind, RankTag
+from jaxfun.typing import ArrayFun, MeshKind, RankTag
 from jaxfun.utils.common import jit_vmap, lambdify
 
 from .composite import BCGeneric, BoundaryConditions, Composite, DirectSum
@@ -40,6 +42,76 @@ IndivisibleError = ValueError
 # a tensor product space should only ever result from the tensor product
 # operation, not be assembled by hand.
 _tensorproduct_token = object()
+
+
+def _cheapest_first(
+    shape: tuple[int, ...], sizes: tuple[int, ...], last: int | None = None
+) -> tuple[int, ...]:
+    """Return the axes of a separable transform ordered cheapest-first.
+
+    Each axis maps ``shape[ax]`` points to ``sizes[ax]``, and applying one costs
+    the work along it times the *current* extent of every other axis. The axes
+    commute, so doing the ones that shrink the array before the ones that grow it
+    is the same arithmetic on smaller operands.
+
+    It matters whenever the padding is not uniform. With the 3/2 rule along
+    Fourier and none along the polynomial direction, evaluating the polynomial
+    direction first runs its (dense, and by far the more expensive) matrix
+    product on 2/3 as many rows.
+
+    Args:
+        shape: Current extent of each axis.
+        sizes: Extent each axis is transformed to.
+        last: Axis forced to the end regardless of cost. The axes only commute
+            while every one of them is complex-linear, which a half-spectrum
+            axis is not: its `irfft` returns a real array, so running it before
+            the other axes have been transformed discards the imaginary parts
+            still carrying their information. The result is silently wrong
+            rather than an error, so the pin is not an optimisation.
+    """
+    order = sorted(range(len(sizes)), key=lambda ax: sizes[ax] / shape[ax])
+    if last is not None:
+        order = [ax for ax in order if ax != last] + [last]
+    return tuple(order)
+
+
+def _validate_hermitian_axis(
+    basespaces: Sequence[OrthogonalSpace | DirectSum],
+) -> int | None:
+    """Return the index of the half-spectrum axis, checking there is at most one.
+
+    A real field's spectrum is Hermitian under a *joint* reflection of every
+    axis, `c[-k, -l] = conj(c[k, l])`, which pairs half the coefficients with
+    the other half and lets exactly one axis be stored half. Halving two would
+    keep one quadrant of four and drop two that nothing determines.
+
+    The axis is additionally required to be the first, which is what both
+    orderings assume: the forward transform runs in axis order and the real
+    `rfft` has to consume the array while it is still real, and the sharded
+    paths transform the unsharded axes first, `physical_sharding` splitting
+    axis 1 and `spectral_sharding` axis 0.
+    """
+    axes = [i for i, space in enumerate(basespaces) if space.is_hermitian_half]
+    if not axes:
+        return None
+    if len(axes) > 1:
+        names = ", ".join(basespaces[i].name for i in axes)
+        raise ValueError(
+            f"at most one axis may store half a Hermitian spectrum, got {len(axes)} "
+            f"({names}). A real field's spectrum is Hermitian under a joint "
+            "reflection of all axes, so halving one axis already uses up the "
+            "symmetry; halving a second would drop coefficients nothing "
+            "determines. Keep one and make the rest ordinary Fourier spaces."
+        )
+    if axes[0] != 0:
+        raise ValueError(
+            f"a half-spectrum axis must be the first axis, but "
+            f"{basespaces[axes[0]].name} is axis {axes[0]}. The forward transform "
+            "has to reach it while the "
+            "array is still real, and the sharded paths assume the same order. "
+            "Put it first in the tensor product."
+        )
+    return 0
 
 
 class DirectInstantiationWarning(UserWarning):
@@ -100,6 +172,7 @@ class TensorProductSpace:
             else system
         )
         self.basespaces: list[OrthogonalSpace] = list(basespaces)
+        self._hermitian_axis = _validate_hermitian_axis(self.basespaces)
         self.name = name
         self.system: CoordSys = system
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
@@ -135,6 +208,28 @@ class TensorProductSpace:
     def is_orthogonal(self) -> bool:
         """Return True if underlying bases are all orthogonal."""
         return all(space.is_orthogonal for space in self.basespaces)
+
+    @property
+    def hermitian_axis(self) -> int | None:
+        """Return the axis storing half of a Hermitian spectrum, or None.
+
+        At most one axis may store half, and it has to be the first -- see the
+        check in `__init__`. The index matters because the axes of a separable
+        transform stop commuting once one of them is a half spectrum, so both
+        the forward and the backward orderings have to place it.
+        """
+        return self._hermitian_axis
+
+    @property
+    def is_hermitian_half(self) -> bool:
+        """Return True if an axis stores only half of a Hermitian spectrum.
+
+        One such axis is enough to make the whole field real and its
+        reconstruction real-linear: the dropped coefficients are the conjugates
+        of kept ones under a *joint* reflection of every axis, so folding them
+        back weights that axis alone and the result's real part is the field.
+        """
+        return self._hermitian_axis is not None
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -295,6 +390,26 @@ class TensorProductSpace:
             u = space.map_expr_reference_domain(u)
         return u
 
+    def _resolve_quad_points(self, N: tuple[int | None, ...] | None) -> tuple[int, ...]:
+        """Resolve the per-axis quadrature counts a transform was asked for.
+
+        `None` means "that axis's default", and it may appear either as the whole
+        argument or as a single entry of it. Both are filled in here rather than
+        left to the 1-D transforms, because the result is what the cache key and
+        the axis ordering are built from, and neither can work with a `None`.
+
+        Args:
+            N: Per-axis counts, any of which may be None, or None for all of them.
+
+        Returns:
+            One int per axis.
+        """
+        resolved: list[int] = []
+        for ax in range(len(self)):
+            n = None if N is None else N[ax]
+            resolved.append(self.basespaces[ax].num_quad_points if n is None else n)
+        return tuple(resolved)
+
     def evaluate_mesh(
         self,
         c: Array,
@@ -313,27 +428,25 @@ class TensorProductSpace:
             Array of evaluated field values with broadcast shape.
         """
         kind = MeshKind(kind)
-        N = tuple(
-            self.basespaces[ax].num_quad_points if N is None else N[ax]
-            for ax in range(len(self))
-        )
-        cache_key = ("evaluate_mesh", kind, N)
+        nq = self._resolve_quad_points(N)
+        cache_key = ("evaluate_mesh", kind, nq)
         if cache_key not in self._spmd_local_fn_cache:
             self._spmd_local_fn_cache[cache_key] = tuple(
                 _build_local_apply_fn(
                     len(self),
                     ax,
-                    partial(self.basespaces[ax].evaluate_mesh, kind=kind, N=N[ax]),
+                    partial(self.basespaces[ax].evaluate_mesh, kind=kind, N=nq[ax]),
                 )
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
         if self._spectral_sharding and len(c.devices()) > 1:
+            # Orders the axes itself, so `fns` stays indexed by axis.
             return _apply_separable_spmd_shard_map(
                 c, fns, spectral_sharding, self._spmd_local_fn_cache
             )
-        for fn in fns:
-            c = fn(c)
+        for ax in _cheapest_first(c.shape, nq, self.hermitian_axis):
+            c = fns[ax](c)
         return c
 
     @jit_vmap(in_axes=(0, None), static_argnums=(0,), ndim=1)
@@ -342,11 +455,12 @@ class TensorProductSpace:
         dim = len(self)
         T = self.basespaces
         C = [
-            T[i].eval_basis_functions(T[i].map_reference_domain(x[i]))
+            T[i].eval_reconstruction(T[i].map_reference_domain(x[i]))
             for i in range(dim)
         ]
         path = "i,j,ij" if dim == 2 else "i,j,k,ijk"
-        return jnp.einsum(path, *C, c)
+        z = jnp.einsum(path, *C, c)
+        return z.real if self.is_hermitian_half else z
 
     def evaluate(self, x: Array, c: Array) -> Array:
         """Evaluate expansion at scattered points.
@@ -363,7 +477,7 @@ class TensorProductSpace:
             T = self.basespaces
 
             C = [
-                T[i].eval_basis_functions(T[i].map_reference_domain(x[:, i]))
+                T[i].eval_reconstruction(T[i].map_reference_domain(x[:, i]))
                 for i in range(dim)
             ]
 
@@ -392,7 +506,8 @@ class TensorProductSpace:
 
                 self._spmd_local_fn_cache[cache_key] = jax.jit(_jitted)
 
-            return self._spmd_local_fn_cache[cache_key](c, C[0], *C[1:])
+            z = self._spmd_local_fn_cache[cache_key](c, C[0], *C[1:])
+            return z.real if self.is_hermitian_half else z
 
         return self._evaluate_single_device(x, c)
 
@@ -419,28 +534,74 @@ class TensorProductSpace:
 
         Returns:
             Array of backward transform values on quadrature mesh.
+
+        See `backward_batch` for transforming several coefficient arrays at once.
         """
-        N = tuple(
-            self.basespaces[ax].num_quad_points if N is None else N[ax]
-            for ax in range(len(self))
-        )
-        cache_key = ("backward", N)
+        nq = self._resolve_quad_points(N)
+        if self._spectral_sharding and len(c.devices()) > 1:
+            # Orders the axes itself, so the transforms stay indexed by axis.
+            return _apply_separable_spmd_shard_map(
+                c, self._backward_fns(nq), spectral_sharding, self._spmd_local_fn_cache
+            )
+        return self._apply_backward(c, nq)
+
+    def backward_batch(
+        self,
+        c: Array,
+        N: tuple[int | None, ...] | None = None,
+    ) -> Array:
+        """Backward transform of several coefficient arrays at once.
+
+        Args:
+            c: Coefficient arrays stacked along one leading batch axis.
+            N: Optional per-axis counts, as for `backward`.
+
+        Returns:
+            The transformed fields, batch axis first.
+
+        Worth using whenever several fields are transformed together: `vmap`
+        turns each per-axis transform into one batched matrix product, which
+        keeps the arithmetic intensity up where a product per field does not.
+        The result is identical to transforming them one at a time -- this is
+        purely how the same arithmetic is issued.
+
+        Raises:
+            NotImplementedError: if `c` is sharded across devices. Nothing about
+                the transform prevents that -- a batch axis rides along
+                replicated while the space axes keep their sharding -- but
+                `_apply_separable_spmd_shard_map` identifies each axis's role by
+                position against a fixed-rank spec, which a batch axis shifts.
+        """
+        if self._spectral_sharding and len(c.devices()) > 1:
+            raise NotImplementedError(
+                "backward_batch does not handle sharded coefficients yet. "
+                "Transform the fields one at a time with backward()."
+            )
+        nq = self._resolve_quad_points(N)
+        return jax.vmap(lambda ci: self._apply_backward(ci, nq))(c)
+
+    def _backward_fns(self, nq: tuple[int, ...]) -> tuple[ArrayFun, ...]:
+        """Return the cached per-axis backward transforms, indexed by axis."""
+        cache_key = ("backward", nq)
         if cache_key not in self._spmd_local_fn_cache:
             self._spmd_local_fn_cache[cache_key] = tuple(
                 _build_local_apply_fn(
-                    len(self),
-                    ax,
-                    partial(self.basespaces[ax].backward, N=N[ax]),
+                    len(self), ax, partial(self.basespaces[ax].backward, N=nq[ax])
                 )
                 for ax in range(len(self))
             )
-        fns = self._spmd_local_fn_cache[cache_key]
-        if self._spectral_sharding and len(c.devices()) > 1:
-            return _apply_separable_spmd_shard_map(
-                c, fns, spectral_sharding, self._spmd_local_fn_cache
-            )
-        for fn in fns:
-            c = fn(c)
+        return self._spmd_local_fn_cache[cache_key]
+
+    def _apply_backward(self, c: Array, nq: tuple[int, ...]) -> Array:
+        """Apply every axis's backward transform to a local (unsharded) array.
+
+        Kept apart from `backward` so that `backward_batch` can `vmap` it: the
+        sharding test in `backward` reads `c.devices()`, which is not available
+        on a traced array.
+        """
+        fns = self._backward_fns(nq)
+        for ax in _cheapest_first(c.shape, nq, self.hermitian_axis):
+            c = fns[ax](c)
         return c
 
     def scalar_product(self, u: Array) -> Array:
@@ -451,23 +612,70 @@ class TensorProductSpace:
 
         Returns:
             Array of inner products along each axis.
+
+        See `scalar_product_batch` for several arrays at once.
         """
+        u = self._weight_by_metric(u)
+        if self._physical_sharding and len(u.devices()) > 1:
+            return _apply_separable_spmd_shard_map(
+                u,
+                self._scalar_product_fns(),
+                physical_sharding,
+                self._spmd_local_fn_cache,
+            )
+        return self._apply_scalar_product(u)
+
+    def scalar_product_batch(self, u: Array) -> Array:
+        """Inner products of several arrays at once.
+
+        Args:
+            u: Input arrays stacked along one leading batch axis.
+
+        Returns:
+            The inner products, batch axis first.
+
+        The batched counterpart of `scalar_product`; see `backward_batch` for
+        what batching buys and why sharding is excluded.
+
+        Raises:
+            NotImplementedError: if `u` is sharded across devices.
+        """
+        if self._physical_sharding and len(u.devices()) > 1:
+            raise NotImplementedError(
+                "scalar_product_batch does not handle sharded arrays yet. "
+                "Take the inner products one at a time with scalar_product()."
+            )
+        return jax.vmap(
+            lambda ui: self._apply_scalar_product(self._weight_by_metric(ui))
+        )(u)
+
+    def _weight_by_metric(self, u: Array) -> Array:
+        """Weight by the metric determinant, when the system has a non-unit one."""
         sg = self.system.sg
-        if sg != 1:
-            sg = lambdify(self.system.base_scalars(), sg)(*self.mesh())
-            u = u * sg
+        if sg == 1:
+            return u
+        return u * lambdify(self.system.base_scalars(), sg)(*self.mesh())
+
+    def _scalar_product_fns(self) -> tuple[ArrayFun, ...]:
+        """Return the cached per-axis scalar products, indexed by axis."""
         cache_key = ("scalar_product",)
         if cache_key not in self._spmd_local_fn_cache:
             self._spmd_local_fn_cache[cache_key] = tuple(
                 _build_local_apply_fn(len(self), ax, self.basespaces[ax].scalar_product)
                 for ax in range(len(self))
             )
-        fns = self._spmd_local_fn_cache[cache_key]
-        if self._physical_sharding and len(u.devices()) > 1:
-            return _apply_separable_spmd_shard_map(
-                u, fns, physical_sharding, self._spmd_local_fn_cache
-            )
-        for fn in fns:
+        return self._spmd_local_fn_cache[cache_key]
+
+    def _apply_scalar_product(self, u: Array) -> Array:
+        """Apply every axis's scalar product to a local (unsharded) array.
+
+        Kept apart from `scalar_product` so `scalar_product_batch` can `vmap`
+        it: the sharding test reads `u.devices()`, unavailable on a tracer.
+
+        In axis order, for the same reason as `_apply_forward`: a half-spectrum
+        axis takes an `rfft` and has to see the array while it is still real.
+        """
+        for fn in self._scalar_product_fns():
             u = fn(u)
         return u
 
@@ -479,19 +687,56 @@ class TensorProductSpace:
 
         Returns:
             Array of forward transform values.
+
+        See `forward_batch` for transforming several arrays at once.
         """
+        if self._physical_sharding and len(u.devices()) > 1:
+            return _apply_separable_spmd_shard_map(
+                u, self._forward_fns(), physical_sharding, self._spmd_local_fn_cache
+            )
+        return self._apply_forward(u)
+
+    def forward_batch(self, u: Array) -> Array:
+        """Forward transform of several arrays at once.
+
+        Args:
+            u: Input arrays stacked along one leading batch axis.
+
+        Returns:
+            The transformed arrays, batch axis first.
+
+        The batched counterpart of `forward`; see `backward_batch` for what
+        batching buys and why sharding is excluded.
+
+        Raises:
+            NotImplementedError: if `u` is sharded across devices.
+        """
+        if self._physical_sharding and len(u.devices()) > 1:
+            raise NotImplementedError(
+                "forward_batch does not handle sharded arrays yet. "
+                "Transform them one at a time with forward()."
+            )
+        return jax.vmap(self._apply_forward)(u)
+
+    def _forward_fns(self) -> tuple[ArrayFun, ...]:
+        """Return the cached per-axis forward transforms, indexed by axis."""
         cache_key = ("forward",)
         if cache_key not in self._spmd_local_fn_cache:
             self._spmd_local_fn_cache[cache_key] = tuple(
                 _build_local_apply_fn(len(self), ax, self.basespaces[ax].forward)
                 for ax in range(len(self))
             )
-        fns = self._spmd_local_fn_cache[cache_key]
-        if self._physical_sharding and len(u.devices()) > 1:
-            return _apply_separable_spmd_shard_map(
-                u, fns, physical_sharding, self._spmd_local_fn_cache
-            )
-        for fn in fns:
+        return self._spmd_local_fn_cache[cache_key]
+
+    def _apply_forward(self, u: Array) -> Array:
+        """Apply every axis's forward transform to a local (unsharded) array.
+
+        In axis order, which is not arbitrary when an axis stores half a
+        Hermitian spectrum: its `rfft` only accepts a real array, so it has to
+        run before any other axis has made the array complex. `__init__` pins
+        such an axis to index 0, so iterating forwards is what that requires.
+        """
+        for fn in self._forward_fns():
             u = fn(u)
         return u
 
@@ -510,12 +755,59 @@ class TensorProductSpace:
 
         Returns:
             Array of backward primitive values on tensor-product mesh.
+
+        See `backward_primitive_batch` for several coefficient arrays at once.
         """
-        N = tuple(
-            self.basespaces[ax].num_quad_points if N is None else N[ax]
-            for ax in range(len(self))
-        )
-        cache_key = ("backward_primitive", k, N)
+        nq = self._resolve_quad_points(N)
+        if self._spectral_sharding and len(c.devices()) > 1:
+            # Orders the axes itself, so the transforms stay indexed by axis.
+            return _apply_separable_spmd_shard_map(
+                c,
+                self._backward_primitive_fns(k, nq),
+                spectral_sharding,
+                self._spmd_local_fn_cache,
+            )
+        return self._apply_backward_primitive(c, k, nq)
+
+    def backward_primitive_batch(
+        self,
+        c: Array,
+        k: tuple[int, ...],
+        N: tuple[int | None, ...] | None = None,
+    ) -> Array:
+        """Evaluate a derivative of several coefficient arrays at once.
+
+        Args:
+            c: Coefficient arrays stacked along one leading batch axis.
+            k: Tuple of derivative orders along each axis, shared by the batch.
+            N: Optional per-axis counts, as for `backward_primitive`.
+
+        Returns:
+            The evaluated fields, batch axis first.
+
+        The batched counterpart of `backward_primitive`; see `backward_batch`
+        for what batching buys and why sharding is excluded. `k` is shared, so
+        fields wanting different derivative orders need separate calls -- along
+        a polynomial axis each order is a different Vandermonde, which is
+        exactly what a batch has to hold fixed.
+
+        Raises:
+            NotImplementedError: if `c` is sharded across devices.
+        """
+        if self._spectral_sharding and len(c.devices()) > 1:
+            raise NotImplementedError(
+                "backward_primitive_batch does not handle sharded coefficients "
+                "yet. Transform the fields one at a time with "
+                "backward_primitive()."
+            )
+        nq = self._resolve_quad_points(N)
+        return jax.vmap(lambda ci: self._apply_backward_primitive(ci, k, nq))(c)
+
+    def _backward_primitive_fns(
+        self, k: tuple[int, ...], nq: tuple[int, ...]
+    ) -> tuple[ArrayFun, ...]:
+        """Return the cached per-axis derivative transforms, indexed by axis."""
+        cache_key = ("backward_primitive", k, nq)
         if cache_key not in self._spmd_local_fn_cache:
             self._spmd_local_fn_cache[cache_key] = tuple(
                 _build_local_apply_fn(
@@ -524,18 +816,20 @@ class TensorProductSpace:
                     partial(
                         self.basespaces[ax].backward_primitive,
                         k=k[ax],
-                        N=N[ax],
+                        N=nq[ax],
                     ),
                 )
                 for ax in range(len(self))
             )
-        fns = self._spmd_local_fn_cache[cache_key]
-        if self._spectral_sharding and len(c.devices()) > 1:
-            return _apply_separable_spmd_shard_map(
-                c, fns, spectral_sharding, self._spmd_local_fn_cache
-            )
-        for fn in fns:
-            c = fn(c)
+        return self._spmd_local_fn_cache[cache_key]
+
+    def _apply_backward_primitive(
+        self, c: Array, k: tuple[int, ...], nq: tuple[int, ...]
+    ) -> Array:
+        """Apply every axis's derivative transform to a local (unsharded) array."""
+        fns = self._backward_primitive_fns(k, nq)
+        for ax in _cheapest_first(c.shape, nq, self.hermitian_axis):
+            c = fns[ax](c)
         return c
 
     def to_orthogonal(self, c: Array) -> Array:
@@ -553,12 +847,8 @@ class TensorProductSpace:
         for i, Si in enumerate(S):
             z = Si.rmatvec(z, axis=i)
 
-        if sharding:  # return sharded if possible, otherwise fallback to replicated
-            try:
-                return jax.device_put(z, sharding)
-            except IndivisibleError:
-                pass
-        return z
+        # Sharded if possible, otherwise replicated -- and never under a trace.
+        return place(z, sharding)
 
     def from_orthogonal(self, c: Array) -> Array:
         """Return coefficients c mapped from underlying orthogonal basis.
@@ -575,18 +865,57 @@ class TensorProductSpace:
         for i, (Pi, Si) in enumerate(P):
             z = Pi.solve(Si.matvec(z, axis=i), axis=i)
 
-        if sharding:  # return sharded if possible, otherwise fallback to replicated
-            try:
-                return jax.device_put(z, sharding)
-            except IndivisibleError:
-                pass
-        return z
+        # Sharded if possible, otherwise replicated -- and never under a trace.
+        return place(z, sharding)
+
+
+def _halve_leading_fourier(
+    basespaces: Sequence[OrthogonalSpace | DirectSum],
+) -> list[OrthogonalSpace | DirectSum]:
+    """Return `basespaces` with the leading Fourier axis stored as a half spectrum.
+
+    `RFourier(N)` and `Fourier(N)` resolve the same field, so the swap is in
+    place: same quadrature points, same domain, same name, half the
+    coefficients. Only the first axis is swapped even when several are Fourier,
+    because a real field's spectrum is Hermitian under a *joint* reflection of
+    every axis and halving one spends that symmetry -- see
+    `_validate_hermitian_axis`.
+    """
+    from .Fourier import Fourier, RFourier
+
+    out = list(basespaces)
+    head = out[0] if out else None
+    if isinstance(head, RFourier):
+        return out  # already halved; asking twice is not an error
+    if not isinstance(head, Fourier):
+        where = [i for i, sp_ in enumerate(out) if isinstance(sp_, Fourier)]
+        raise ValueError(
+            "real=True stores one Fourier axis as half a Hermitian spectrum, so "
+            "the first axis has to be Fourier"
+            + (
+                f", but it is {type(head).__name__} and the Fourier axis is "
+                f"{where[0]}. Put the Fourier space first in the tensor product."
+                if where
+                else f", but got {type(head).__name__} and no axis is Fourier."
+            )
+        )
+    return [
+        RFourier(
+            head.num_quad_points,
+            domain=head.domain,
+            system=head.system,
+            name=head.name,
+            fun_str=head.fun_str,
+        ),
+        *out[1:],
+    ]
 
 
 def TensorProduct(
     *basespaces: OrthogonalSpace | DirectSum,
     system: CoordSys | None = None,
     name: str = "T",
+    real: bool = False,
 ) -> TensorProductSpace | DirectSumTPS:
     """Factory returning TensorProductSpace or DirectSumTPS.
 
@@ -600,11 +929,23 @@ def TensorProduct(
         *basespaces: 1D BaseSpace / DirectSum instances.
         system: Optional global coordinate system.
         name: Base name for the tensor product space(s).
+        real: Whether the fields expanded in this space are real. If they are,
+            the leading Fourier axis is stored as `RFourier` -- the
+            non-negative half of its Hermitian spectrum -- which halves the
+            coefficients, the per-wavenumber linear algebra and the transforms
+            along every other axis. Declared rather than detected: the
+            coefficient count differs between the two, and it is read at
+            construction to size operators and initial conditions, long before
+            any field exists to inspect. Passing a complex field to a space
+            built with `real=True` raises from the forward transform.
 
     Returns:
         Instance of TensorProductSpace or DirectSumTPS.
     """
     from jaxfun.coordinates import CartCoordSys, x, y, z
+
+    if real:
+        basespaces = tuple(_halve_leading_fourier(basespaces))
 
     system = (
         CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[len(basespaces)])
@@ -678,6 +1019,7 @@ class DirectSumTPS(TensorProductSpace):
         from jaxfun.galerkin.inner import project, project1D
 
         self.basespaces: list[OrthogonalSpace | DirectSum] = basespaces
+        self._hermitian_axis = _validate_hermitian_axis(self.basespaces)
         self.system = system
         self.name = name
         self.bndvals: dict[tuple[OrthogonalSpace, ...], Array] = {}
@@ -878,11 +1220,60 @@ class DirectSumTPS(TensorProductSpace):
     ) -> Array:
         return self.orthogonal.backward(self.to_orthogonal(c), N=N)
 
+    def _apply_backward(self, c: Array, nq: tuple[int, ...]) -> Array:
+        """Lift the boundary values, then transform in the orthogonal space.
+
+        The same redirection `backward` makes, as the hook `backward_batch`
+        vmaps over -- a direct sum keeps no transform cache of its own.
+        """
+        return self.orthogonal._apply_backward(self.to_orthogonal(c), nq)
+
+    def _require_local_batch(self, what: str) -> None:
+        """Refuse batching while sharding is active.
+
+        Lifting the boundary values adds the field to a boundary contribution
+        that `to_orthogonal` has already placed on the space's sharding, and a
+        traced array carries no placement to match it against. A plain tensor
+        product space does no such mixing, so it batches replicated arrays on a
+        multi-device host quite happily; a direct sum cannot.
+        """
+        if self._spectral_sharding:
+            raise NotImplementedError(
+                f"{what} on a DirectSum space needs a single-device host: the "
+                "boundary lifting is placed on the space's sharding, which a "
+                "traced array cannot carry. Transform the fields one at a time."
+            )
+
+    def backward_batch(
+        self,
+        c: Array,
+        N: tuple[int | None, ...] | None = None,
+    ) -> Array:
+        self._require_local_batch("backward_batch")
+        return super().backward_batch(c, N=N)
+
+    def forward_batch(self, u: Array) -> Array:
+        self._require_local_batch("forward_batch")
+        return super().forward_batch(u)
+
     def forward(self, u: Array) -> Array:
         d = self.orthogonal.forward(u)
         return self.from_orthogonal(d)
 
-    def scalar_product(self, c: Array) -> NoReturn:  # ty:ignore[invalid-method-override]
+    def _apply_forward(self, u: Array) -> Array:
+        """Transform in the orthogonal space, then take the lifting back out.
+
+        The same redirection `forward` makes, as the hook `forward_batch` vmaps
+        over -- a direct sum keeps no transform cache of its own.
+        """
+        return self.from_orthogonal(self.orthogonal._apply_forward(u))
+
+    def scalar_product(self, u: Array) -> NoReturn:
+        raise RuntimeError(
+            "Scalar product requires homogeneous test space (call on get_homogeneous())"
+        )
+
+    def scalar_product_batch(self, u: Array) -> NoReturn:
         raise RuntimeError(
             "Scalar product requires homogeneous test space (call on get_homogeneous())"
         )
@@ -905,6 +1296,25 @@ class DirectSumTPS(TensorProductSpace):
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
         return self.orthogonal.backward_primitive(self.to_orthogonal(c), k=k, N=N)
+
+    def backward_primitive_batch(
+        self,
+        c: Array,
+        k: tuple[int, ...],
+        N: tuple[int | None, ...] | None = None,
+    ) -> Array:
+        self._require_local_batch("backward_primitive_batch")
+        return super().backward_primitive_batch(c, k, N=N)
+
+    def _apply_backward_primitive(
+        self, c: Array, k: tuple[int, ...], nq: tuple[int, ...]
+    ) -> Array:
+        """Lift the boundary values, then differentiate in the orthogonal space.
+
+        The same redirection `backward_primitive` makes, as the hook
+        `backward_primitive_batch` vmaps over.
+        """
+        return self.orthogonal._apply_backward_primitive(self.to_orthogonal(c), k, nq)
 
     def to_orthogonal(self, c: Array) -> Array:
         result = self.get_homogeneous().to_orthogonal(c)
@@ -936,9 +1346,7 @@ class DirectSumTPS(TensorProductSpace):
                 ai,
                 [(0, c.shape[i] - ai.shape[i]) for i in range(c.ndim)],
             )
-        # ensure replicated result is on same sharding as c
-        try:
-            result = c + jax.device_put(result, c.sharding)
-        except IndivisibleError:
-            result = c + result
+        # Match c's sharding where there is one to match; a traced c has none.
+        target = None if isinstance(c, jax.core.Tracer) else c.sharding
+        result = c + place(result, target)
         return self.get_homogeneous().from_orthogonal(result)

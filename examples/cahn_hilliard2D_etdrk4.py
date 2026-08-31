@@ -109,13 +109,7 @@ states = integrator.solve(
 )
 times = jnp.linspace(0.0, T, states.shape[0])
 
-
-@jax.jit
-def backward_saved_states(coefficients):
-    return jax.vmap(lambda u_hat: V.backward(u_hat).real)(coefficients)
-
-
-u_states = backward_saved_states(states)
+u_states = V.backward_batch(states).real
 mean_history = jnp.mean(u_states, axis=(1, 2))
 mean_drift = float(jnp.max(jnp.abs(mean_history - mean_history[0])))
 relative_change = float(

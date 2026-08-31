@@ -97,7 +97,7 @@ if "PYTEST" in os.environ:
     n_states = 4
 
 F = Fourier(N, Domain(0, G))
-V = TensorProduct(F, F, name="V")
+V = TensorProduct(F, F, name="V", real=True)
 w = TestFunction(V, name="w")
 q = TestFunction(V, name="q")
 u = TrialFunction(V, name="u", transient=True)
@@ -136,15 +136,9 @@ u_hats, v_hats = integrator.solve(
 
 times = jnp.linspace(0.0, T, u_hats.shape[0])
 
-
-@jax.jit
-def backward_saved_states(coefficients):
-    return jax.vmap(lambda u_hat: V.backward(u_hat).real)(coefficients)
-
-
 x_plot, y_plot = V.mesh(broadcast=False)
-u_states = backward_saved_states(u_hats)
-v_states = backward_saved_states(v_hats)
+u_states = V.backward_batch(u_hats)
+v_states = V.backward_batch(v_hats)
 
 # Cell count, conserved by the transported equation. See the note at the top:
 # the drift is a resolution diagnostic, and sits at the round-off floor once the

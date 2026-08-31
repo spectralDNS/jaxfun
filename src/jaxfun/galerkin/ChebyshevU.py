@@ -7,7 +7,7 @@ from sympy import Expr, Symbol
 from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.la import DiaMatrix, Matrix, diags
-from jaxfun.utils.common import Domain, dst, jit_vmap
+from jaxfun.utils.common import Domain, cache_static, dst, jit_vmap
 
 from .Jacobi import Jacobi
 
@@ -31,6 +31,9 @@ class ChebyshevU(Jacobi):
         fun_str: Symbol stem for basis functions (default "U").
         **kw: Extra keyword args passed to parent Jacobi constructor.
     """
+
+    # `backward` is an FFT/DCT, so derivatives stay in coefficient space.
+    has_fast_transform = True
 
     def __init__(
         self,
@@ -80,7 +83,7 @@ class ChebyshevU(Jacobi):
 
         return jnp.sum(xs, axis=0) + c[0]
 
-    @jax.jit(static_argnums=(0, 1))
+    @cache_static
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return Gauss-Chebyshev (second kind) nodes and weights.
 
@@ -241,7 +244,15 @@ class ChebyshevU(Jacobi):
         """
         A = None
         if q != 0:
-            A = self.A().power(q)
+            if self.N != trial[0].N:
+                # x**q couples modes across the two ranges, and a recursion
+                # matrix truncated to either range drops that coupling, so
+                # fall back to quadrature for rectangular matrices.
+                return None
+            # Size by N rather than num_quad_points: a space may hold more
+            # quadrature points than modes (a boundary space does), and A
+            # has to match the shape of the matrices it multiplies below.
+            A = self.A(self.N).power(q)
 
         u, j = trial
         if i == 0 and j == 0:

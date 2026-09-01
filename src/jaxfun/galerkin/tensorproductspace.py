@@ -552,12 +552,14 @@ class TensorProductSpace:
         and only the quadrature count is ever split, so `N - 2` may be any
         number at all.
 
-        Raises rather than quietly running on one device when a required extent
-        does not divide. The transform is the last component that used to fall
-        back silently; `_check_shardable` in the wavenumber solver and the
-        placement in `inner.py` both refuse the same configuration, and a
-        transform that halves its own throughput without saying so is a worse
-        outcome than an error naming the fix.
+        Failing either one means running locally, which costs the parallelism
+        and nothing else -- with one exception. A half spectrum stores
+        `N // 2 + 1` coefficients, odd for every power-of-two `N`, and
+        `RFourier` pads that up to a multiple of the device count precisely so
+        the leading axis can be split. A half-spectrum space whose leading axis
+        still does not divide is therefore a request the library was asked to
+        satisfy and could not, rather than a size that happens not to suit, so
+        that one case raises instead of degrading quietly.
 
         Args:
             sharding: `self._spectral_sharding` or `self._physical_sharding` --
@@ -570,27 +572,25 @@ class TensorProductSpace:
         if sharding is None:
             return False
         n = len(jax.devices())
+
+        if self.is_hermitian_half and self.num_dofs[0] % n:
+            raise IndivisibleError(
+                f"{self.name}: the half spectrum stores {self.num_dofs[0]} "
+                f"coefficients on its leading axis, which {n} devices cannot "
+                "divide, so it cannot be split. `RFourier` pads that count up to "
+                "a multiple of the device count by default -- reaching this means "
+                "the padding was turned off with `n_extra`, or the space was "
+                "built before the other processes' devices were visible."
+            )
+
         spec = sharding.spec
         sharded = [
             ax for ax in range(len(in_shape)) if ax < len(spec) and spec[ax] is not None
         ]
         unsharded = [ax for ax in range(len(in_shape)) if ax not in sharded]
-        required = {"split across devices": in_shape[sharded[0]]}
-        if out_shape is not None:
-            required["split by the transpose"] = out_shape[unsharded[0]]
-
-        bad = {role: extent for role, extent in required.items() if extent % n}
-        if bad:
-            detail = ", ".join(f"{extent} ({role})" for role, extent in bad.items())
-            raise IndivisibleError(
-                f"{self.name}: {detail} does not divide by {n} devices, so this "
-                "transform cannot be distributed. A half spectrum stores "
-                "N // 2 + 1 coefficients, which is odd for every power-of-two N "
-                "-- pass `n_extra` to RFourier (or to TensorProduct(real=True)) "
-                "to pad it up to a multiple of the device count, which is what "
-                "it does by default. Otherwise choose sizes that divide."
-            )
-        return True
+        if in_shape[sharded[0]] % n:
+            return False
+        return out_shape is None or out_shape[unsharded[0]] % n == 0
 
     def backward(
         self,

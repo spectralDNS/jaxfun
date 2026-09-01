@@ -22,20 +22,44 @@ it, deferred to call time, long after the ordering above stops mattering.)
 
 None of it is needed for several devices in a *single* process -- several GPUs
 on one node, or `JAX_NUM_CPU_DEVICES=2`. JAX sees those without help, and
-`initialize_distributed()` is a no-op there, so a demo that calls it runs
-unchanged on one device, on eight, and under `mpirun`.
+`initialize_distributed()` is a no-op there: it looks for a launcher in the
+environment and returns before importing anything if there is none. So a demo
+that calls it runs unchanged on one device, on eight, under pytest, and under
+`mpirun`.
 """
 
+import os
 import socket
 
 _initialized = False
+
+# What each launcher calls the world size. Read instead of asking MPI, because
+# asking means importing `mpi4py`, and importing it calls `MPI_Init` -- which is
+# not something to do to a process that was never launched under a launcher.
+# `mpi4py` is a declared dependency, so a `try: import` around it always
+# succeeds and guards nothing.
+_WORLD_SIZE_VARS = (
+    "OMPI_COMM_WORLD_SIZE",  # Open MPI
+    "PMI_SIZE",  # MPICH, Intel MPI
+    "SLURM_NTASKS",  # Slurm, srun
+)
+
+
+def _launched_world_size() -> int:
+    """Return the world size the launcher advertises, or 1 if there is none."""
+    for var in _WORLD_SIZE_VARS:
+        size = os.environ.get(var)
+        if size:
+            return int(size)
+    return 1
 
 
 def initialize_distributed() -> None:
     """Initialize `jax.distributed` when run under `mpirun`, else do nothing.
 
-    A no-op without `mpi4py` installed and a no-op on a single rank, so the
-    demos stay runnable as ordinary scripts.
+    A no-op when the process was not started by an MPI launcher, and a no-op on
+    a single rank, so the demos stay runnable as ordinary scripts and under
+    pytest.
 
     Idempotent: JAX refuses a second `initialize`, and the demos import each
     other -- RayleighBenard builds on ChannelFlow2D, and a script driving either
@@ -50,17 +74,24 @@ def initialize_distributed() -> None:
     if _initialized:
         return
 
+    world = _launched_world_size()
+    if world == 1:
+        return
+
     try:
         from mpi4py import MPI
-    except ImportError:
-        return
+    except ImportError as exc:  # pragma: no cover - depends on the environment
+        raise RuntimeError(
+            f"Started under an MPI launcher with {world} ranks, but mpi4py is "
+            "not importable, so the ranks cannot agree on a coordinator. "
+            "Without it every rank would run the whole problem independently. "
+            "Install mpi4py, or run without the launcher."
+        ) from exc
 
     import jax.distributed as jdist
 
     comm = MPI.COMM_WORLD
-    world, rank = comm.Get_size(), comm.Get_rank()
-    if world == 1:
-        return
+    rank = comm.Get_rank()
 
     if rank == 0:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

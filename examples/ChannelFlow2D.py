@@ -840,7 +840,7 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         )
 
     def _setup_impl(self, dt: float) -> None:
-        """Factorize every operator before time steppipng starts.
+        """Factorize every operator before time stepping starts.
 
         The continuity operator has to be warmed here for the same reason the
         stage operators do: the solver picks its path by inspecting concrete

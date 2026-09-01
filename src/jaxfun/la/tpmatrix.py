@@ -815,9 +815,7 @@ def _looped_banded_lu(
     return _prune_zero_diagonals(L, U, L_offsets, U_offsets)
 
 
-def _check_shardable(
-    poly_axis: int, shape: tuple[int, ...], n_F: int, n_total: int
-) -> None:
+def _check_shardable(poly_axis: int, shape: tuple[int, ...], n_total: int) -> None:
     """Reject a layout the wavenumber sharding cannot express.
 
     Both conditions are properties of the operator, so they are checked once, at
@@ -832,19 +830,24 @@ def _check_shardable(
             "Multi-device solve requires axis 0 to be a Fourier axis "
             f"(poly_axis=0 not supported). Got shape={shape}, poly_axis={poly_axis}."
         )
-    if n_F % n_total:
-        lower = (n_F // n_total) * n_total
+    # Axis 0, not the product of every Fourier extent: the spectral sharding
+    # partitions that one axis, and for more than one Fourier axis the two
+    # differ -- a (3, 4, n_P) operator has 12 wavenumbers, which two devices
+    # divide, across a leading axis of 3, which they do not.
+    n_0 = shape[0]
+    if n_0 % n_total:
+        lower = (n_0 // n_total) * n_total
         raise ValueError(
-            f"The Fourier axis carries {n_F} wavenumbers, which {n_total} devices "
-            "cannot split evenly: the spectral sharding partitions axis 0, so the "
-            "wavenumber count must be a multiple of the device count. Nearest "
-            f"workable counts are {lower} and {lower + n_total}. A half spectrum "
-            "(`TensorProduct(..., real=True)`) stores M // 2 + 1 coefficients, "
-            "which is odd for every power-of-two M, and pads them up to a "
-            "multiple of the device count for exactly this reason -- so reaching "
-            "this means the padding was turned off with n_extra, or the space "
-            "was built before the other processes' devices were visible. A full "
-            "Fourier spectrum stores n_F = M and needs no padding."
+            f"The leading Fourier axis carries {n_0} wavenumbers, which "
+            f"{n_total} devices cannot split evenly: the spectral sharding "
+            "partitions axis 0, so that count must be a multiple of the device "
+            f"count. Nearest workable counts are {lower} and {lower + n_total}. "
+            "A half spectrum (`TensorProduct(..., real=True)`) stores M // 2 + 1 "
+            "coefficients, which is odd for every power-of-two M, and pads them "
+            "up to a multiple of the device count for exactly this reason -- so "
+            "reaching this means the padding was turned off with n_extra, or the "
+            "space was built before the other processes' devices were visible. A "
+            "full Fourier spectrum stores n_F = M and needs no padding."
         )
 
 
@@ -906,7 +909,7 @@ class TPMatricesWavenumberSolver(nnx.Pytree):
         self.shape = shape
 
         if B_data_batch is not None and poly_offsets is not None:
-            n_F, _n_diags, n_P_local = B_data_batch.shape
+            _, _n_diags, n_P_local = B_data_batch.shape
             L_all, U_all, L_offsets, U_offsets = _batched_banded_lu(
                 B_data_batch, poly_offsets
             )
@@ -914,7 +917,7 @@ class TPMatricesWavenumberSolver(nnx.Pytree):
             assert B_matrices is not None, (
                 "Either B_data_batch+poly_offsets or B_matrices must be provided."
             )
-            n_F, n_P_local = len(B_matrices), B_matrices[0].shape[0]
+            n_P_local = B_matrices[0].shape[0]
             L_all, U_all, L_offsets, U_offsets = _looped_banded_lu(B_matrices)
 
         self.L_offsets: tuple[int, ...] = L_offsets
@@ -940,7 +943,7 @@ class TPMatricesWavenumberSolver(nnx.Pytree):
 
         n_total = len(jax.devices())
         if n_total > 1:
-            _check_shardable(poly_axis, shape, n_F, n_total)
+            _check_shardable(poly_axis, shape, n_total)
 
         # One path for one device and for many. Each wavenumber's banded solve
         # is independent and contracts only the polynomial axis, which is never

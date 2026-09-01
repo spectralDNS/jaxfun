@@ -323,10 +323,17 @@ def test_padding_stays_empty_through_a_nonlinear_solve() -> None:
     if jax.device_count() < 2:
         pytest.skip("needs at least 2 devices")
 
-    Fx = FunctionSpace(32, RFourier, domain=Domain(0, LX), name="Fx")
-    D = FunctionSpace(16, Legendre.Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    n = jax.device_count()
+    Fx = FunctionSpace(16 * n, RFourier, domain=Domain(0, LX), name="Fx")
+    D = FunctionSpace(
+        8 * n, Legendre.Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}}
+    )
     V = TensorProduct(Fx, D, name="Vn")
-    assert Fx.n_extra, "32 gives 17 wavenumbers, which no device count here divides"
+    # 16*n quadrature points store 8*n + 1 coefficients, which n never divides,
+    # so the padding is always exercised. The polynomial axis is sized off the
+    # device count too, so the transform takes its distributed path rather than
+    # falling back for want of a divisible quadrature count.
+    assert Fx.n_extra, f"{Fx.n_real} wavenumbers should have needed padding"
 
     x, y = V.system.base_scalars()
     t = V.system.base_time()
@@ -358,11 +365,15 @@ def test_unpadded_indivisible_axis_is_refused() -> None:
     if jax.device_count() < 2:
         pytest.skip("needs at least 2 devices")
 
-    Fx = RFourier(16, domain=Domain(0, LX), name="Fs", n_extra=0)
+    n = jax.device_count()
+    # A half spectrum this device count cannot divide, whatever it happens to
+    # be: 8n quadrature points store 4n + 1 coefficients, and 4n + 1 leaves a
+    # remainder of 1 for every n > 1.
+    Fx = RFourier(8 * n, domain=Domain(0, LX), name="Fs", n_extra=0)
     D = FunctionSpace(12, Legendre.Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}})
     V = TensorProduct(Fx, D, name="Vs")
-    assert Fx.N == 9
-    with pytest.raises(ValueError, match="does not divide"):
+    assert Fx.N % n, f"{Fx.N} coefficients happen to divide by {n}"
+    with pytest.raises(ValueError, match="cannot divide"):
         V.backward(jnp.zeros(V.num_dofs, dtype=complex))
 
 

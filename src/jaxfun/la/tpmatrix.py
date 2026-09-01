@@ -9,7 +9,7 @@ import jax.core
 import jax.numpy as jnp
 import numpy as np
 from flax import nnx
-from jax import Array, shard_map
+from jax import Array
 from scipy import sparse as scipy_sparse
 
 from jaxfun.la.diamatrix import DiaMatrix, diakron
@@ -848,32 +848,6 @@ def _check_shardable(
         )
 
 
-def _replicated_factors(data: Array) -> np.ndarray:
-    """Return the LU factor data as a host array, identical on every process.
-
-    The factors cover *every* wavenumber and each device slices out its own,
-    rather than each device holding only its own slice. That costs `n_devices`
-    times the factor memory -- `(n_F, bandwidth, n_dof)`, small next to the
-    fields themselves -- and buys the one property the alternative cannot have:
-    nothing here spans a device the process cannot address.
-
-    A genuinely sharded factor array is a global array, and JAX refuses to close
-    over one of those. It would have to arrive as a jit *argument*, which means
-    the whole integrator crossing the jit boundary as a traced pytree. That
-    works for one solver in isolation, but it hands every operator array to
-    GSPMD's input-sharding inference, which proposes shardings they cannot take
-    -- `P("k")` on a scalar step size, or on a `(1, n)` array of Fourier
-    diagonals -- and, once the same integrator is compiled at two batch lengths,
-    produces executables whose argument count disagrees with what the caller
-    supplies. Replicating a small banded factor avoids all of it, and leaves the
-    single-device path compiling exactly the constants it did before.
-
-    Host (`numpy`) rather than device memory, so it is an ordinary HLO constant
-    with no placement of its own to reconcile.
-    """
-    return np.asarray(data)
-
-
 class TPMatricesWavenumberSolver(nnx.Pytree):
     """Per-wavenumber solver for Fourier x polynomial tensor-product systems.
 
@@ -951,7 +925,7 @@ class TPMatricesWavenumberSolver(nnx.Pytree):
             L_offsets, U_offsets, n_P_local, L_all.dtype
         )
 
-        # Geometry of the transposed (Fourier..., polynomial) layout the kernel
+        # Geometry of the transposed (Fourier..., polynomial) layout the solve
         # works in, and the permutation back out of it.
         _ndim = len(shape)
         _fourier_axes = [a for a in range(_ndim) if a != poly_axis]
@@ -967,74 +941,29 @@ class TPMatricesWavenumberSolver(nnx.Pytree):
         n_total = len(jax.devices())
         if n_total > 1:
             _check_shardable(poly_axis, shape, n_F, n_total)
-            _n_F_per_device = _n_F // n_total
-            _fourier_shape_per_device = (
-                _fourier_shape[0] // n_total,
-            ) + _fourier_shape[1:]
-            _L_const = _replicated_factors(L_all)
-            _U_const = _replicated_factors(U_all)
 
-            def _shard_kernel(rhs_d: Array) -> Array:
-                # Each device takes the wavenumbers its position along the mesh
-                # axis owns, out of factors every device holds in full.
-                start = jax.lax.axis_index("k") * _n_F_per_device
-                L = jax.lax.dynamic_slice_in_dim(
-                    jnp.asarray(_L_const), start, _n_F_per_device, axis=0
-                )
-                U = jax.lax.dynamic_slice_in_dim(
-                    jnp.asarray(_U_const), start, _n_F_per_device, axis=0
-                )
-                rhs_2d = jnp.transpose(rhs_d, _axes_order).reshape(
-                    _n_F_per_device, _n_P
-                )
-                sol_2d = _vmap_fn(L, U, rhs_2d)
-                sol_perm = sol_2d.reshape(_fourier_shape_per_device + (_n_P,))
-                return jnp.transpose(sol_perm, _inv_perm)
+        # One path for one device and for many. Each wavenumber's banded solve
+        # is independent and contracts only the polynomial axis, which is never
+        # the split one, so with `rhs` on the spectral sharding the partitioner
+        # hands each device its own wavenumbers, folds the matching slice of the
+        # factors into that device's executable, and adds no communication --
+        # leaving an explicit `shard_map` nothing to arrange. The factors
+        # themselves stay on a single device, so nothing here spans one the
+        # process cannot address; `pin_state` is what keeps them there.
+        @jax.jit
+        def _solve_jit(L: Array, U: Array, rhs: Array) -> Array:
+            rhs_2d = jnp.transpose(rhs, _axes_order).reshape(_n_F, _n_P)
+            sol_2d = _vmap_fn(L, U, rhs_2d)
+            sol_perm = sol_2d.reshape(_fourier_shape + (_n_P,))
+            return jnp.transpose(sol_perm, _inv_perm)
 
-            from jaxfun.sharding import spectral_sharding
-
-            # No communication between devices: every wavenumber's banded solve
-            # is independent, and each device already holds the rows it needs.
-            self._solve_shard_map = jax.jit(
-                shard_map(
-                    _shard_kernel,
-                    mesh=spectral_sharding.mesh,
-                    in_specs=(spectral_sharding.spec,),
-                    out_specs=spectral_sharding.spec,
-                    check_vma=False,
-                )
-            )
-            self._solve_jit = None
-
-        else:
-            self._solve_shard_map = None
-
-            @jax.jit
-            def _solve_jit(L: Array, U: Array, rhs: Array) -> Array:
-                rhs_2d = jnp.transpose(rhs, _axes_order).reshape(_n_F, _n_P)
-                sol_2d = _vmap_fn(L, U, rhs_2d)
-                sol_perm = sol_2d.reshape(_fourier_shape + (_n_P,))
-                return jnp.transpose(sol_perm, _inv_perm)
-
-            self._solve_jit = _solve_jit
+        self._solve_jit = _solve_jit
 
     def solve(self, rhs: Array) -> Array:
         """Solve the wavenumber-loop system for RHS ``rhs``.
 
-        All per-wavenumber 1-D banded polynomial solves are executed in a single
-        :func:`jax.vmap` call over the stacked ``L`` / ``U`` factor data.  The
-        scan kernels are compiled once on the first call and reused.
-
-        Callable from inside an enclosing trace, which is how every time
-        integrator reaches it -- `TimeStepper.solve`'s `fori_loop`, and the
-        jitted step inside it. Nothing it closes over spans a device the process
-        cannot address, which is the property that makes that legal across
-        processes; see `_replicated_factors`.
-
-        In multi-process mode ``rhs`` must carry sharding ``P("k", None, None)``
-        so that each process holds a contiguous block of Fourier wavenumber
-        rows. The whole solve -- reshape, local vmap, sharded dispatch -- is one
-        compiled computation with no communication between devices.
+        Safe to call from inside an enclosing trace, which is how the time
+        integrators reach it, and on any number of devices.
 
         Args:
             rhs: Right-hand side shaped ``self.shape``.
@@ -1042,9 +971,6 @@ class TPMatricesWavenumberSolver(nnx.Pytree):
         Returns:
             Solution with the same shape and sharding as ``rhs``.
         """
-        if self._solve_shard_map is not None:
-            return self._solve_shard_map(rhs)
-        assert self._solve_jit is not None  # __init__ always sets one of the two
         return self._solve_jit(self.L, self.U, rhs)
 
 

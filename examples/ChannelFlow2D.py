@@ -508,6 +508,9 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
                 A_div.global_indices,
             )
         )
+        # Note that the global matrix A_pin quite remarkably leads to a distributed
+        # solve, with no communication between the devices. The solve is done in
+        # parallel, with each device solving its local part of the system independently.
 
         self.My = nnx.data(A_div.mats[1])
         self.C_v = nnx.data(linear_operator(v.diff(y, 1) * w))

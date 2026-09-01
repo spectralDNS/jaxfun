@@ -244,10 +244,10 @@ def _advance[StateT: IntegratorState](
 
     Constants are only safe because no operator holds an array spanning devices
     this process cannot address -- JAX refuses to close over one of those, and
-    that refusal is exactly what used to break the multi-process runs. Keeping
-    them addressable is `_replicated_factors`'s job, in `jaxfun.la.tpmatrix`.
-    They also have to stay *replicated*, which is what `pin_state` around the
-    loop carry secures; see there.
+    that refusal is exactly what used to break the multi-process runs. What
+    keeps them addressable is `pin_state` around the loop carry: pinning the
+    state leaves the partitioner no reason to propagate a sharding backwards
+    onto the operator arrays this closes over. See there.
 
     `n_steps` is *traced*, so this compiles exactly once per `(stepper, dt, N)`
     and the loop is a `while_loop` over a dynamic bound. Static would let XLA

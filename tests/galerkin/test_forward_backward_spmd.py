@@ -259,6 +259,7 @@ def test_batch_communicates_once_for_the_whole_batch() -> None:
     assert T._use_spmd(T._spectral_sharding, uh.shape, T.num_quad_points)
     fields = jnp.stack([uh, uh, uh])
     hlo = jax.jit(T.backward_batch).lower(fields).compile().as_text()
+    assert isinstance(hlo, str), hlo
     assert len(re.findall(r"\ball-to-all\(", hlo)) == 1, hlo
     assert "all-gather(" not in hlo
 

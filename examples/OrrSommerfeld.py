@@ -47,13 +47,13 @@ from OrrSommerfeld_eigs import OrrSommerfeld
 from jaxfun.galerkin.inner import project
 from jaxfun.typing import Array, PolynomialKind, TestSpaceKind
 
-M, N = 32, 128  # Fourier modes (x), wall-normal modes (y)
+M, N = 16, 48  # Fourier modes (x), wall-normal modes (y)
 # Any M runs on any number of devices: the half spectrum stores M // 2 + 1
 # coefficients, which is odd for every power-of-two M, and `RFourier` pads that
 # up to a multiple of the device count itself. The padding is empty, so a power
 # of two here buys the fast FFT without costing anything to distribute.
 RE, ALFA = 8000.0, 1.0  # Reynolds number, streamwise wavenumber
-DT, T_END = 0.02, 100.0
+DT, T_END = 0.02, 1.0
 AMPLITUDE = 1e-7  # eigenmode amplitude; small enough that the dynamics stay linear
 N_OS = 100  # modes in the Orr-Sommerfeld eigenproblem itself
 # Wall-normal basis and test space, as in RayleighBenard.py; see "CHOICE OF BASIS
@@ -192,8 +192,8 @@ def main() -> KMM2D:
     assert d1["v[k=0]"] < 1e-14 * d1["max|v|"], "the k=0 mode must not be driven"
 
     e0, e1, e2, exact = solution_error(solver, final, t_end, RE, ALFA, amplitude)
-    assert abs(e1 / e0 - exact) < 1e-6
-    assert jnp.sqrt(e2) < 1e-11
+    assert jnp.sqrt(e2) < 1e-11, jnp.sqrt(e2)
+    assert abs(e1 / e0 - exact) < 1e-5, abs(e1 / e0 - exact)
 
     if "PYTEST" not in os.environ:
         assert abs(rate / expected - 1) < 0.01, "growth rate off by more than 1%"

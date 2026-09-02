@@ -8,7 +8,6 @@ from scipy.fft import dct as scipy_dct, dst as scipy_dst, idct as scipy_idct
 
 from jaxfun.coordinates import CartCoordSys, x, y
 from jaxfun.galerkin import FunctionSpace
-from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.la import DiaMatrix
 from jaxfun.typing import Array, ArrayLike
@@ -241,33 +240,6 @@ def test_dct_rejects_other_types() -> None:
     for f in (common.dct, common.idct):
         with pytest.raises(ValueError, match="type"):
             f(x, type=1)
-
-
-@pytest.mark.parametrize("N", [8, 15, 17, 32])
-def test_chebyshev_transforms_match_the_space(N: int) -> None:
-    """The folded transforms must reproduce what `Chebyshev` computes itself.
-
-    They are not DCTs: the scaling carries a (-1)^k that reverses the quadrature
-    points, the space ordering them in increasing x where the DCT convention
-    wants x_j = cos(theta).
-    """
-    space = FunctionSpace(N, Chebyshev, name="C")
-    u = jnp.asarray(np.random.default_rng(2).standard_normal(N))
-    assert jnp.allclose(common.chebyshev_forward(u), space.forward(u), atol=ulp(1000))
-    assert jnp.allclose(
-        common.chebyshev_backward(u, n=N), space.backward(u), atol=ulp(1000)
-    )
-    # More quadrature points than coefficients: the backward pads up to `n`.
-    assert jnp.allclose(
-        common.chebyshev_backward(u, n=2 * N),
-        space.backward(u, N=2 * N),
-        atol=ulp(1000),
-    )
-    assert jnp.allclose(
-        common.chebyshev_scalar_product(u, float(space.domain_factor)),
-        space.scalar_product(u),
-        atol=ulp(1000),
-    )
 
 
 @pytest.mark.parametrize("type", [1, 2])

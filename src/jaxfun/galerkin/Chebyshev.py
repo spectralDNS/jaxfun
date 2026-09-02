@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from functools import cache
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 import sympy as sp
 from jax import Array
 from sympy import Expr, Symbol
@@ -10,7 +13,15 @@ from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.composite import Composite, PGComposite
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TestSpaceKind
-from jaxfun.utils.common import Domain, cache_static, jit_vmap
+from jaxfun.utils.common import (
+    Domain,
+    _dct_twiddle,
+    _deinterleave,
+    _idct_twiddles,
+    _scaled_dct,
+    cache_static,
+    jit_vmap,
+)
 
 from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
@@ -39,6 +50,32 @@ def _dense_derivative_matrix(
     test_modes: int, trial_modes: int, derivative: int
 ) -> Matrix:
     return Matrix(_dense_derivative_matrix_data(test_modes, trial_modes, derivative))
+
+
+@cache
+def _chebyshev_backward_scales(N: int) -> tuple[np.ndarray, np.ndarray]:
+    """Return the idct input scalings with the backward transform's folded in."""
+    # The transform is `0.5*uh[0] + N*idct(uh)` for `uh = c*(-1)^k`, and both the
+    # sign and the N multiply elementwise in k, so they fold into the two vectors
+    # the idct already multiplies its input by. Only the `0.5*c[0]` is additive
+    # and has to stay outside.
+    fwd, rev = _idct_twiddles(N)
+    sign = (-1.0) ** np.arange(N)
+    return N * sign * fwd, N * sign * rev
+
+
+@cache
+def _chebyshev_forward_scale(N: int) -> np.ndarray:
+    """Return W4 with the Chebyshev forward transform's scaling folded in."""
+    c = (-1.0) ** np.arange(N) / N
+    c[0] *= 0.5
+    return _dct_twiddle(N) * c
+
+
+@cache
+def _chebyshev_scalar_product_scale(N: int, domain_factor: float) -> np.ndarray:
+    """Return W4 with the Chebyshev scalar product's scaling folded in."""
+    return _dct_twiddle(N) * (np.pi * (-1.0) ** np.arange(N) / (2 * N * domain_factor))
 
 
 class Chebyshev(Jacobi):
@@ -236,12 +273,15 @@ class Chebyshev(Jacobi):
             Reversed coefficient array.
         """
         n: int = self.num_quad_points if N is None else N
-
+        fwd, rev = _chebyshev_backward_scales(n)
         if n > len(c):
             c = jnp.pad(c, (0, n - len(c)))
-        sign = (-1) ** jnp.arange(n)
-        uh = c * sign
-        return 0.5 * uh[0] + n * jax.scipy.fft.idct(uh, n=n)
+        G = c * fwd + jnp.roll(jnp.flip(c * rev, -1), 1, -1)
+        out = _deinterleave(jnp.fft.ifft(G, axis=-1))
+        if not jnp.iscomplexobj(c):
+            out = out.real
+        out = out + 0.5 * c[:1]
+        return out
 
     @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
@@ -255,12 +295,8 @@ class Chebyshev(Jacobi):
         """
         n: int = u.shape[0]
         assert n >= self.N, "Only truncation supported for forward transform"
-        sign = (-1) ** jnp.arange(n)
-        uh = jax.scipy.fft.dct(u, n=n)
-        uh = uh.at[0].set(uh[0] / 2) * sign / n
-        if n > self.N:
-            uh = uh[: self.N]
-        return uh
+        uh = _scaled_dct(u, _chebyshev_forward_scale(n))
+        return uh[: self.N] if n > self.N else uh
 
     @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
@@ -274,12 +310,9 @@ class Chebyshev(Jacobi):
         """
         n: int = len(u)
         assert n >= self.N, "Only truncation supported for forward transform"
-        sign = (-1) ** jnp.arange(n)
-        uh = jax.scipy.fft.dct(u, n=n)
-        uh = uh * jnp.pi * sign / n / 2 / self.domain_factor
-        if len(u) > self.N:
-            uh = uh[: self.N]
-        return uh
+        scale = _chebyshev_scalar_product_scale(n, self.domain_factor)
+        uh = _scaled_dct(u, scale)
+        return uh[: self.N] if n > self.N else uh
 
     @jax.jit(static_argnums=(0, 2))
     def derivative_coeffs(self, c: Array, k: int = 0) -> Array:

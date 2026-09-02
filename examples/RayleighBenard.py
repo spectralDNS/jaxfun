@@ -80,11 +80,12 @@
 #     `self.VB`. Under Galerkin those are the same object; under PG they are not.
 #
 # See "CHOICE OF BASIS AND TEST SPACE" in ChannelFlow2D.py for which pairings are
-# worth using. The crossover is higher here than for the velocity alone, because
-# the temperature adds transforms but also one more banded solve: measured with
-# dt scaled as 1/N^2 and every run verified finite, Chebyshev-PG against
-# Legendre-Galerkin at M=128 runs 0.72x at N=64, 0.79x at N=128, 1.03x at N=256
-# and 1.50x at N=512.
+# worth using and for the measured crossover. That table is taken on this solver,
+# temperature included, so it is the one that applies here. What the temperature
+# changes is the balance rather than the answer: it adds a pair of transforms,
+# which favours Chebyshev, and one more banded solve, which favours Legendre. The
+# velocity-only crossover has not been measured separately, so nothing here
+# claims a direction for it.
 #
 # Spatial discretization: Fourier x (Legendre Galerkin | Chebyshev Petrov-Galerkin)
 # Time discretization: any globally stiffly accurate IMEX Runge-Kutta tableau
@@ -146,8 +147,10 @@ TABLEAU = ARS443
 CRITICAL = True  # run the linear-stability verification
 # Wall-normal basis and test space, forwarded to KMM2D and reused for the
 # temperature. Pair CHEBYSHEV with PG and LEGENDRE with GALERKIN -- see "CHOICE
-# OF BASIS" in ChannelFlow2D.py. Chebyshev wins above N ~ 256 here; below that
-# Legendre is faster (0.72x at 128 x 64, 1.50x at 128 x 512).
+# OF BASIS" in ChannelFlow2D.py. The two are level to N=128 and Chebyshev pulls
+# ahead above it (1.25x at 128 x 256, 1.83x at 128 x 512). Below the crossover
+# pick on accuracy rather than speed: Chebyshev's transform round-trips at
+# 8.9e-16 against the Legendre Vandermonde's 1.2e-13.
 POLYNOMIAL = PolynomialKind.CHEBYSHEV
 KIND = TestSpaceKind.PETROV_GALERKIN
 

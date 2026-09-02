@@ -4,10 +4,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from scipy.fft import dst as scipy_dst
+from scipy.fft import dct as scipy_dct, dst as scipy_dst, idct as scipy_idct
 
 from jaxfun.coordinates import CartCoordSys, x, y
 from jaxfun.galerkin import FunctionSpace
+from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.la import DiaMatrix
 from jaxfun.typing import Array, ArrayLike
@@ -192,3 +193,110 @@ def test_dst_type1_vs_scipy() -> None:
     expected = scipy_dst(np.asarray(x), type=1, norm=None)
     result = common.dst(x, type=1)
     assert jnp.allclose(result, jnp.asarray(expected), rtol=ulp(1000), atol=ulp(1000))
+
+
+@pytest.mark.parametrize("transform", ["dct", "idct"])
+@pytest.mark.parametrize("complex_input", [False, True])
+@pytest.mark.parametrize("n", [15, 16, 17, 32])
+def test_dct_vs_scipy(transform: str, complex_input: bool, n: int) -> None:
+    """Both directions must match scipy for real and complex input alike.
+
+    Complex input is the case these exist for: `jax.scipy.fft` splits it into two
+    real transforms, and these do it in one.
+    """
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(n)
+    if complex_input:
+        x = x + 1j * rng.standard_normal(n)
+    ours = getattr(common, transform)(jnp.asarray(x))
+    expected = (scipy_dct if transform == "dct" else scipy_idct)(x, type=2, norm=None)
+    # Kind, not width: the suite runs in float32 unless --float64 is given.
+    assert jnp.iscomplexobj(ours) == np.iscomplexobj(expected)
+    assert jnp.allclose(ours, jnp.asarray(expected), rtol=ulp(1000), atol=ulp(1000))
+
+
+def test_dct_axis_and_padding() -> None:
+    """`axis` and a longer `n` must behave as scipy's do."""
+    rng = np.random.default_rng(1)
+    x = rng.standard_normal((8, 16))
+    along_0 = common.dct(jnp.asarray(x), axis=0)
+    assert jnp.allclose(
+        along_0,
+        jnp.asarray(scipy_dct(x, type=2, axis=0, norm=None)),
+        rtol=ulp(1000),
+        atol=ulp(1000),
+    )
+    padded = common.dct(jnp.asarray(x), n=24)
+    assert jnp.allclose(
+        padded,
+        jnp.asarray(scipy_dct(x, type=2, n=24, norm=None)),
+        rtol=ulp(1000),
+        atol=ulp(1000),
+    )
+
+
+def test_dct_rejects_other_types() -> None:
+    """Only type 2 is implemented, as for `dst`."""
+    x = jnp.zeros(8)
+    for f in (common.dct, common.idct):
+        with pytest.raises(ValueError, match="type"):
+            f(x, type=1)
+
+
+@pytest.mark.parametrize("N", [8, 15, 17, 32])
+def test_chebyshev_transforms_match_the_space(N: int) -> None:
+    """The folded transforms must reproduce what `Chebyshev` computes itself.
+
+    They are not DCTs: the scaling carries a (-1)^k that reverses the quadrature
+    points, the space ordering them in increasing x where the DCT convention
+    wants x_j = cos(theta).
+    """
+    space = FunctionSpace(N, Chebyshev, name="C")
+    u = jnp.asarray(np.random.default_rng(2).standard_normal(N))
+    assert jnp.allclose(common.chebyshev_forward(u), space.forward(u), atol=ulp(1000))
+    assert jnp.allclose(
+        common.chebyshev_backward(u, n=N), space.backward(u), atol=ulp(1000)
+    )
+    # More quadrature points than coefficients: the backward pads up to `n`.
+    assert jnp.allclose(
+        common.chebyshev_backward(u, n=2 * N),
+        space.backward(u, N=2 * N),
+        atol=ulp(1000),
+    )
+    assert jnp.allclose(
+        common.chebyshev_scalar_product(u, float(space.domain_factor)),
+        space.scalar_product(u),
+        atol=ulp(1000),
+    )
+
+
+@pytest.mark.parametrize("type", [1, 2])
+@pytest.mark.parametrize("complex_input", [False, True])
+def test_dst_vs_scipy_complex_axis_and_padding(type: int, complex_input: bool) -> None:
+    """`dst` must match scipy for complex input, off-axis and padded alike.
+
+    Complex input goes through one FFT rather than two: the odd extension of
+    z = a + ib is linear, so both Hermitian halves ride in a single transform.
+    """
+    rng = np.random.default_rng(0)
+    for shape, kwargs in (
+        ((32,), {}),
+        ((8, 32), {}),
+        ((8, 32), {"axis": 0}),
+        ((32,), {"n": 40}),
+    ):
+        x = rng.standard_normal(shape)
+        if complex_input:
+            x = x + 1j * rng.standard_normal(shape)
+        ours = common.dst(jnp.asarray(x), type=type, **kwargs)
+        expected = scipy_dst(x, type=type, norm=None, **kwargs)
+        assert jnp.iscomplexobj(ours) == np.iscomplexobj(expected)
+        assert jnp.allclose(
+            ours, jnp.asarray(expected), rtol=ulp(1000), atol=ulp(1000)
+        ), f"{shape} {kwargs}"
+
+
+def test_dst_rejects_other_types() -> None:
+    """Only types 1 and 2 are implemented."""
+    with pytest.raises(ValueError, match="type"):
+        common.dst(jnp.zeros(8), type=3)

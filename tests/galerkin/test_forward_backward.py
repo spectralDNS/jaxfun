@@ -245,3 +245,19 @@ def test_backward_batch_direct_sum() -> None:
 if __name__ == "__main__":
     # test_forward_backward_2d(Fourier.Fourier)
     test_forward_backward_composite(Legendre.Legendre)
+
+
+@pytest.mark.parametrize(
+    "space", (Chebyshev.Chebyshev, ChebyshevU.ChebyshevU, Legendre.Legendre)
+)
+def test_forward_backward_complex(space) -> None:
+    """A complex coefficient array must round-trip as a real one does.
+
+    That is the wall-normal array in any Fourier x polynomial tensor product, and
+    `ChebyshevU` transforms through `dst`, which used to take -Im of one complex
+    FFT and so mixed the real and imaginary halves of a complex input.
+    """
+    D = space(12)
+    rng = np.random.default_rng(0)
+    ue = jnp.asarray(rng.standard_normal(12) + 1j * rng.standard_normal(12))
+    assert jnp.linalg.norm(D.forward(D.backward(ue)) - ue) < ulp(1000)

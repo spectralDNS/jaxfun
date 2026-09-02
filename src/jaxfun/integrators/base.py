@@ -29,7 +29,7 @@ from jaxfun.utils.operator_tools import assemble_linear_term
 from jaxfun.utils.sympy_factoring import time_derivative_as_operator
 
 from ._utils import (
-    FieldCoupling,
+    CoupledOperator,
     SolverOptions,
     apply_field_couplings,
     assemble_field_couplings,
@@ -38,6 +38,7 @@ from ._utils import (
     node_for,
     physical_shape,
     solve_with_options,
+    split_couplings,
     validate_solver_options,
     warm_operator_solve_cache,
 )
@@ -228,7 +229,7 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
         return u_hat
 
 
-@jax.jit(static_argnums=(0, 2, 4))
+@jax.jit(static_argnums=(2, 4))
 def _advance[StateT: IntegratorState](
     stepper: TimeStepper[StateT],
     u_hat: StateT,
@@ -238,25 +239,32 @@ def _advance[StateT: IntegratorState](
 ) -> StateT:
     """Advance `n_steps` steps as a single compiled computation.
 
-    `stepper` is static -- hashed by identity, not flattened -- so every array
-    it holds reaches the trace as a constant XLA can fold, which measures a few
-    percent faster than passing the integrator in as a traced pytree.
+    `stepper` is *traced*: it flattens as a pytree and every array it holds
+    arrives as a jit argument carrying its own sharding. Static -- hashed by
+    identity, the arrays folded in as constants -- measures a few percent
+    faster, and that is what this used to do. It cannot do it any more, because
+    a constant is exactly what a per-device operator may not be.
 
-    Constants are only safe because no operator holds an array spanning devices
-    this process cannot address -- JAX refuses to close over one of those, and
-    that refusal is exactly what used to break the multi-process runs. What
-    keeps them addressable is `pin_state` around the loop carry: pinning the
-    state leaves the partitioner no reason to propagate a sharding backwards
-    onto the operator arrays this closes over. See there.
+    JAX refuses to close over an array spanning devices the process cannot
+    address, so under a static stepper every operator had to be replicated, and
+    the per-wavenumber factors were replicated on every device at full size.
+    Passing them instead is what the error message asks for and what makes
+    per-device factorisation reachable: the sharded factor arrays cross the
+    boundary as arguments, and `shard_map` hands each device its own block.
 
-    `n_steps` is *traced*, so this compiles exactly once per `(stepper, dt, N)`
-    and the loop is a `while_loop` over a dynamic bound. Static would let XLA
-    see the trip count, but it also gives the jit cache more than one entry
-    keyed on a static `stepper`, and on a multi-device mesh a *hit* on such an
-    entry aborts the process inside PJRT ("Execution supplied 1 arguments but
-    compiled program expected 10") -- a dispatch collision, not anything about
-    this loop. One entry cannot collide. Reproduce with `n_steps` static and
-    JAX 0.11: call at 1, at 10, then at 10 again; the third call dies.
+    Note that only *arrays* gain this freedom. Anything used as a Python value
+    -- an index, a shape, a flag -- has to stay under `nnx.static`, or it
+    arrives as a tracer where a concrete value is needed. `_coupling_slots` is
+    split out from `_couplings` for precisely that reason; see `split_couplings`.
+
+    `n_steps` is *traced*, so this compiles exactly once per `(dt, N)` and the
+    loop is a `while_loop` over a dynamic bound. Static would let XLA see the
+    trip count, but it also gives the jit cache more than one entry, and on a
+    multi-device mesh a *hit* on such an entry aborts the process inside PJRT
+    ("Execution supplied 1 arguments but compiled program expected 10") -- a
+    dispatch collision, not anything about this loop. One entry cannot collide.
+    Reproduce with `n_steps` static and JAX 0.11: call at 1, at 10, then at 10
+    again; the third call dies.
 
     Call it positionally. `static_argnums` has no effect on an argument passed
     by keyword, so `_advance(..., N=N)` makes `N` traced where `_advance(..., N)`
@@ -391,7 +399,7 @@ class BaseIntegrator(TimeStepper[Array]):
             self.linear_operator.diagonal_or_none()
         )
 
-        self._couplings: tuple[FieldCoupling, ...] = nnx.data(
+        _coupling_slots, _coupling_ops = split_couplings(
             assemble_field_couplings(
                 coupling_exprs,
                 self._node_for,
@@ -400,6 +408,8 @@ class BaseIntegrator(TimeStepper[Array]):
                 sparse_tol=self.sparse_tol,
             )
         )
+        self._coupling_slots: tuple[int, ...] = nnx.static(_coupling_slots)
+        self._couplings: tuple[CoupledOperator, ...] = nnx.data(_coupling_ops)
 
         self._nonlinear_jaxfunction: AppliedUndef | None = None
         self._nonlinear_evaluator: (
@@ -583,7 +593,7 @@ class BaseIntegrator(TimeStepper[Array]):
         Do *not* apply the mass inverse to complete the forward transformation,
         because the mass inverse may be required elsewhere.
         """
-        total = apply_field_couplings(self._couplings, uh)
+        total = apply_field_couplings(self._coupling_slots, self._couplings, uh)
         if self.has_nonlinear:
             assert self._nonlinear_evaluator is not None
             M = physical_shape(self.testspace, N)

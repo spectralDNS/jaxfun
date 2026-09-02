@@ -29,12 +29,17 @@ def replicate(x):
     boundary liftings -- as opposed to the state it is handed each step.
 
     Assembly places its right-hand side on `spectral_sharding`, which is what a
-    top-level `A.solve(b)` wants. Held on the integrator it is the wrong thing:
-    the integrator goes into `_advance` as a static argument, so everything
-    under it is reached through the *closure*, and JAX refuses to close over an
-    array spanning devices this process cannot address. Replicating costs one
-    gather, once, at construction, on a vector the size of a single field --
-    against a run that would otherwise not start.
+    top-level `A.solve(b)` wants. Held on the integrator it is the wrong shape
+    of thing: these are whole-field vectors read at every stage, not state that
+    is split, and replicating costs one gather, once, at construction.
+
+    This used to be load-bearing rather than a placement choice. While the
+    integrator went into `_advance` as a static argument, everything under it
+    was reached through the *closure*, and JAX refuses to close over an array
+    spanning devices this process cannot address -- so a sharded forcing did
+    not merely place badly, it failed to compile. The stepper is traced now and
+    its arrays arrive as jit arguments, which is what lets
+    `TPMatricesWavenumberSolver` keep genuinely sharded factors. See `_advance`.
 
     A no-op on one device, and on anything that is not an array (an initial
     condition may still be a SymPy expression at this point).
@@ -66,7 +71,7 @@ def pin_state[StateT](state: StateT) -> StateT:
     A no-op on one device. On more than one it is what keeps a jitted step
     compilable at all, and the reason is indirect: left unconstrained, the state
     gives GSPMD freedom to choose layouts, and it exercises that freedom
-    *backwards*, onto the small replicated operator arrays the step closes over.
+    *backwards*, onto the small replicated operator arrays the step is handed.
     The shardings it proposes for them are regularly ones they cannot take --
     `P("k")` on a scalar step size, or on a `(1, n)` array of Fourier diagonals
     -- and the failure surfaces far from the cause: an `IndexError` out of

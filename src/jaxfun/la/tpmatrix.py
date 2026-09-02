@@ -9,7 +9,8 @@ import jax.core
 import jax.numpy as jnp
 import numpy as np
 from flax import nnx
-from jax import Array
+from jax import Array, shard_map
+from jax.sharding import NamedSharding, PartitionSpec as P
 from scipy import sparse as scipy_sparse
 
 from jaxfun.la.diamatrix import DiaMatrix, diakron
@@ -26,6 +27,18 @@ if TYPE_CHECKING:
 
 type _SparseMatrixCache = _CacheBox[DiaMatrix]
 type _DenseMatrixCache = _CacheBox[Matrix]
+
+
+def _sharding():
+    """Return `jaxfun.sharding`, imported on use rather than at module scope.
+
+    `jaxfun.sharding` imports `jaxfun.typing`, which imports `jaxfun.la`, which
+    is this package -- so importing it from here at module scope closes a cycle.
+    Every caller below is on a multi-device path, long after imports settle.
+    """
+    from jaxfun import sharding
+
+    return sharding
 
 
 def _solve_diagonal(diagonal: Array, rhs: Array) -> Array:
@@ -734,6 +747,29 @@ def _align_dia_data(
     return jnp.stack(rows)
 
 
+def _nonzero_diagonals(x: Array) -> np.ndarray:
+    """Which diagonals of ``x`` are nonzero somewhere in the *global* batch.
+
+    ``x`` is ``(n_F, n_diags, n_P)`` and may be split over the wavenumber axis,
+    so "somewhere" spans devices and processes. Reduced from each addressable
+    block and then OR-ed across processes: the result is a handful of booleans,
+    and every process has to come out with the same ones -- see
+    `_prune_zero_diagonals` for what disagreeing would cost.
+
+    Read from addressable blocks rather than the global array because a sharded
+    array cannot be fetched whole from a process that holds only part of it.
+    """
+    nz = np.zeros(x.shape[1], dtype=bool)
+    for shard in x.addressable_shards:
+        nz |= np.asarray(jnp.any(jnp.abs(shard.data) > 0, axis=(0, 2)))
+    if jax.process_count() > 1:
+        from jax.experimental import multihost_utils
+
+        gathered = multihost_utils.process_allgather(jnp.asarray(nz))
+        nz = np.asarray(np.any(np.asarray(gathered), axis=0), dtype=bool)
+    return nz
+
+
 def _prune_zero_diagonals(
     L: Array, U: Array, L_offsets: tuple[int, ...], U_offsets: tuple[int, ...]
 ) -> tuple[Array, Array, tuple[int, ...], tuple[int, ...]]:
@@ -745,9 +781,13 @@ def _prune_zero_diagonals(
     from one process's slice lets two processes prune differently, and a
     differing set of offsets means a differing kernel shape and so a differing
     compiled program, which SPMD cannot survive.
+
+    The mask has to be concrete: it selects how many diagonals the solve kernel
+    carries, which is a shape. `_nonzero_diagonals` is what makes it both
+    concrete and global.
     """
-    L_nz = jax.device_get(jnp.any(jnp.abs(L) > 0, axis=(0, 2)))
-    U_nz = jax.device_get(jnp.any(jnp.abs(U) > 0, axis=(0, 2)))
+    L_nz = _nonzero_diagonals(L)
+    U_nz = _nonzero_diagonals(U)
     return (
         L[:, L_nz, :],
         U[:, U_nz, :],
@@ -756,23 +796,27 @@ def _prune_zero_diagonals(
     )
 
 
-def _batched_banded_lu(
+def _banded_lu_batch(
     B_data_batch: Array, poly_offsets: tuple[int, ...]
 ) -> tuple[Array, Array, tuple[int, ...], tuple[int, ...]]:
     """Factorize every wavenumber's banded system in one vmapped XLA call.
 
     Converts DIA format to band storage, runs all the LU factorisations at
     once, then extracts the *full* band range so that fill-in landing on a gap
-    position is not dropped, and prunes what is structurally zero.
+    position is not dropped. Nothing is pruned here: which diagonals survive is
+    a global property, so the caller prunes once it can see the whole batch.
+
+    Every wavenumber is independent, so this is happy with a per-device block --
+    which is how the sharded path uses it, one call per device on its own
+    wavenumbers.
 
     Args:
-        B_data_batch: ``(n_F, n_diags, n_P)`` per-wavenumber DIA data, for every
-            wavenumber -- not a per-process slice; see `_prune_zero_diagonals`.
+        B_data_batch: ``(n_F, n_diags, n_P)`` per-wavenumber DIA data.
         poly_offsets: The diagonal offsets ``B_data_batch``'s rows correspond to.
 
     Returns:
-        ``(L, U, L_offsets, U_offsets)``, L and U shaped
-        ``(n_F, n_kept_offsets, n_P)``.
+        ``(L, U, L_offsets, U_offsets)`` over the *full* band range, L and U
+        shaped ``(n_F, n_offsets, n_P)``.
     """
     from jaxfun.la.diamatrix import _lu_banded_no_pivot_kernel
 
@@ -791,6 +835,44 @@ def _batched_banded_lu(
     )
     L = jnp.stack([band_lu[:, center + off, :] for off in range(-p, 0)], axis=1)
     U = jnp.stack([band_lu[:, center + off, :] for off in range(0, q + 1)], axis=1)
+    return L, U, tuple(range(-p, 0)), tuple(range(0, q + 1))
+
+
+def _batched_banded_lu(
+    B_data_batch: Array, poly_offsets: tuple[int, ...]
+) -> tuple[Array, Array, tuple[int, ...], tuple[int, ...]]:
+    """`_banded_lu_batch` followed by the structural prune."""
+    return _prune_zero_diagonals(*_banded_lu_batch(B_data_batch, poly_offsets))
+
+
+def _sharded_banded_lu(
+    B_data_batch: Array, poly_offsets: tuple[int, ...]
+) -> tuple[Array, Array, tuple[int, ...], tuple[int, ...]]:
+    """Factorize per device, then prune on a mask every device agrees on.
+
+    `B_data_batch` is split over the wavenumber axis, so the `shard_map` body
+    factors one device's block and nothing is ever assembled whole. The prune
+    cannot go inside: it selects how many diagonals the solve kernel carries,
+    which is a shape, and shapes have to match across devices. So the mapped
+    body returns the full band range and `_prune_zero_diagonals` -- reading
+    addressable blocks and OR-ing across processes -- decides afterwards.
+    """
+    p = max((-o for o in poly_offsets if o < 0), default=0)
+    q = max((o for o in poly_offsets if o > 0), default=0)
+
+    def _local(B_loc: Array) -> tuple[Array, Array]:
+        L_loc, U_loc, _, _ = _banded_lu_batch(B_loc, poly_offsets)
+        return L_loc, U_loc
+
+    L, U = jax.jit(
+        shard_map(
+            _local,
+            mesh=_sharding().spmd_mesh,
+            in_specs=(P("k"),),
+            out_specs=(P("k"), P("k")),
+            check_vma=False,
+        )
+    )(B_data_batch)
     return _prune_zero_diagonals(L, U, tuple(range(-p, 0)), tuple(range(0, q + 1)))
 
 
@@ -908,11 +990,27 @@ class TPMatricesWavenumberSolver(nnx.Pytree):
         self.poly_axis = poly_axis
         self.shape = shape
 
+        n_total = len(jax.devices())
+        if n_total > 1:
+            _check_shardable(poly_axis, shape, n_total)
+
         if B_data_batch is not None and poly_offsets is not None:
             _, _n_diags, n_P_local = B_data_batch.shape
-            L_all, U_all, L_offsets, U_offsets = _batched_banded_lu(
-                B_data_batch, poly_offsets
-            )
+            # Factor each device's own wavenumbers. `B_data_batch` arrives on
+            # `spectral_sharding`, so under `shard_map` the body sees one
+            # device's block and never the whole batch -- which is the point:
+            # the factors are the largest thing the operator holds, and this is
+            # what keeps them O(n_F / n_devices) per device instead of O(n_F).
+            # Pruning is deliberately left out of the mapped body; it decides a
+            # shape, and a shape has to be agreed globally.
+            if n_total > 1:
+                L_all, U_all, L_offsets, U_offsets = _sharded_banded_lu(
+                    B_data_batch, poly_offsets
+                )
+            else:
+                L_all, U_all, L_offsets, U_offsets = _batched_banded_lu(
+                    B_data_batch, poly_offsets
+                )
         else:
             assert B_matrices is not None, (
                 "Either B_data_batch+poly_offsets or B_matrices must be provided."
@@ -941,24 +1039,44 @@ class TPMatricesWavenumberSolver(nnx.Pytree):
             _inv_perm[_old_pos] = _new_pos
         _vmap_fn = self._vmap_solve
 
-        n_total = len(jax.devices())
-        if n_total > 1:
-            _check_shardable(poly_axis, shape, n_total)
-
-        # One path for one device and for many. Each wavenumber's banded solve
-        # is independent and contracts only the polynomial axis, which is never
-        # the split one, so with `rhs` on the spectral sharding the partitioner
-        # hands each device its own wavenumbers, folds the matching slice of the
-        # factors into that device's executable, and adds no communication --
-        # leaving an explicit `shard_map` nothing to arrange. The factors
-        # themselves stay on a single device, so nothing here spans one the
-        # process cannot address; `pin_state` is what keeps them there.
-        @jax.jit
-        def _solve_jit(L: Array, U: Array, rhs: Array) -> Array:
-            rhs_2d = jnp.transpose(rhs, _axes_order).reshape(_n_F, _n_P)
+        def _local_solve(
+            L: Array, U: Array, rhs: Array, n_F: int, out_shape: tuple[int, ...]
+        ) -> Array:
+            """The whole solve, on whatever block of wavenumbers it is handed."""
+            rhs_2d = jnp.transpose(rhs, _axes_order).reshape(n_F, _n_P)
             sol_2d = _vmap_fn(L, U, rhs_2d)
-            sol_perm = sol_2d.reshape(_fourier_shape + (_n_P,))
+            sol_perm = sol_2d.reshape(out_shape + (_n_P,))
             return jnp.transpose(sol_perm, _inv_perm)
+
+        if n_total == 1:
+
+            @jax.jit
+            def _solve_jit(L: Array, U: Array, rhs: Array) -> Array:
+                return _local_solve(L, U, rhs, _n_F, _fourier_shape)
+        else:
+            # Every wavenumber's banded solve is independent and contracts only
+            # the polynomial axis, which is never the split one. `shard_map`
+            # states that rather than leaving it to the partitioner to notice:
+            # each device gets its own wavenumbers of `rhs` *and* the factors
+            # for exactly those, so the body has nothing to fetch and no
+            # collective to arrange. Getting the factors sharded to match is
+            # what earns this -- handed a replicated `L`/`U`, the partitioner
+            # would reshard them on every call, outside the module where an HLO
+            # collectives grep cannot see it.
+            _n_F_local = _n_F // n_total
+            _local_fourier_shape = (_fourier_shape[0] // n_total,) + _fourier_shape[1:]
+
+            @jax.jit
+            def _solve_jit(L: Array, U: Array, rhs: Array) -> Array:
+                return shard_map(
+                    lambda L_loc, U_loc, rhs_loc: _local_solve(
+                        L_loc, U_loc, rhs_loc, _n_F_local, _local_fourier_shape
+                    ),
+                    mesh=_sharding().spmd_mesh,
+                    in_specs=(P("k"), P("k"), P("k")),
+                    out_specs=P("k"),
+                    check_vma=False,
+                )(L, U, rhs)
 
         self._solve_jit = _solve_jit
 
@@ -1308,7 +1426,24 @@ def tpmats_wavenumber_factor(
 
     # Assemble per-wavenumber DIA data:
     # B_data_batch[k, d, :] = sum_i W[i,k] * P_data_stack[i, d, :].
-    B_data_batch = jnp.einsum("tf,tdp->fdp", W, P_data_stack)  # (n_F, n_diags, n_P)
+    n_total = len(jax.devices())
+    if n_total > 1:
+        # `W` is (n_terms, n_F) of Fourier diagonals -- kilobytes -- and
+        # `P_data_stack` does not depend on the wavenumber at all, so both are
+        # cheap to hold whole. `B_data_batch` is the first array here that
+        # scales as n_F * n_diags * n_P, and so the first that must be born
+        # split rather than split afterwards. The einsum is elementwise in the
+        # wavenumber index, so placing `W`'s f axis places the output with it
+        # and no wavenumber's data goes anywhere.
+        _check_shardable(poly_axis, shape, n_total)
+        _sh = _sharding()
+        W = jax.device_put(W, NamedSharding(_sh.spmd_mesh, P(None, "k")))
+        B_data_batch = jax.jit(
+            lambda w, pd: jnp.einsum("tf,tdp->fdp", w, pd),
+            out_shardings=_sh.spectral_sharding,
+        )(W, P_data_stack)
+    else:
+        B_data_batch = jnp.einsum("tf,tdp->fdp", W, P_data_stack)  # (n_F, n_diags, n_P)
 
     return TPMatricesWavenumberSolver(
         poly_axis=poly_axis,

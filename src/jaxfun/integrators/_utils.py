@@ -152,6 +152,7 @@ def warm_operator_solve_cache(
 
 
 type FieldCoupling = tuple[int, BaseMatrix, Array | None]
+type CoupledOperator = tuple[BaseMatrix, Array | None]
 
 
 def assemble_field_couplings(
@@ -188,12 +189,30 @@ def assemble_field_couplings(
     return tuple(out)
 
 
+def split_couplings(
+    couplings: Sequence[FieldCoupling],
+) -> tuple[tuple[int, ...], tuple[CoupledOperator, ...]]:
+    """Split assembled triples into slots and `(operator, forcing)` pairs.
+
+    The slot indexes the state tuple, so it has to survive as a Python int. The
+    integrator reaches `_advance` as a traced pytree, and everything stored under
+    `nnx.data` becomes a tracer there -- an index that cannot index. Keeping the
+    slots in a separate `nnx.static` attribute is what leaves them concrete.
+    """
+    return (
+        tuple(slot for slot, _, _ in couplings),
+        tuple((operator, forcing) for _, operator, forcing in couplings),
+    )
+
+
 def apply_field_couplings(
-    couplings: Sequence[FieldCoupling], uh: IntegratorState
+    slots: Sequence[int],
+    couplings: Sequence[CoupledOperator],
+    uh: IntegratorState,
 ) -> Array | None:
     """Sum every coupling operator applied to its field; None when there are none."""
     total: Array | None = None
-    for slot, operator, forcing in couplings:
+    for slot, (operator, forcing) in zip(slots, couplings, strict=True):
         term = operator @ cast(tuple[Array, ...], uh)[slot]
         if forcing is not None:
             term = term + jnp.asarray(forcing)

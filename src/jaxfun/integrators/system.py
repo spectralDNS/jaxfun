@@ -314,7 +314,7 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
         """
         results: list[Array] = []
         for g in self.integrators:
-            coupling = apply_field_couplings(g._couplings, states)
+            coupling = apply_field_couplings(g._coupling_slots, g._couplings, states)
             results.append(g._no_nonlinear(states) if coupling is None else coupling)
         if self._coupled_nonlinear_evaluator is None:
             return tuple(results)

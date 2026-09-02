@@ -32,7 +32,7 @@ from jaxfun.utils.operator_tools import assemble_linear_term
 from jaxfun.utils.sympy_factoring import split_linear_nonlinear_terms
 
 from ._utils import (
-    FieldCoupling,
+    CoupledOperator,
     SolverOptions,
     apply_field_couplings,
     assemble_field_couplings,
@@ -40,6 +40,7 @@ from ._utils import (
     node_for,
     physical_shape,
     solve_with_options,
+    split_couplings,
     validate_solver_options,
     warm_operator_solve_cache,
 )
@@ -138,7 +139,7 @@ class ConstraintSolver(nnx.Module):
         # under multi-process SPMD. See `replicate`.
         self.forcing: Array | None = nnx.data(replicate(forcing))
 
-        self._couplings: tuple[FieldCoupling, ...] = nnx.data(
+        _coupling_slots, _coupling_ops = split_couplings(
             assemble_field_couplings(
                 coupling_exprs,
                 self._node_for,
@@ -147,6 +148,8 @@ class ConstraintSolver(nnx.Module):
                 sparse_tol=self.sparse_tol,
             )
         )
+        self._coupling_slots: tuple[int, ...] = nnx.static(_coupling_slots)
+        self._couplings: tuple[CoupledOperator, ...] = nnx.data(_coupling_ops)
 
         self._nonlinear_evaluator: (
             Callable[[IntegratorState, ScalarPadding], Array] | None
@@ -261,7 +264,7 @@ class ConstraintSolver(nnx.Module):
         """
         # Everything in the residual that does not involve the own field, in
         # scalar-product form; the solve then inverts `operator @ u = -total`.
-        total = apply_field_couplings(self._couplings, states)
+        total = apply_field_couplings(self._coupling_slots, self._couplings, states)
         if self._nonlinear_evaluator is not None:
             pointwise = self.testspace.scalar_product(
                 self._nonlinear_evaluator(states, physical_shape(self.testspace, N))

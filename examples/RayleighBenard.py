@@ -80,12 +80,9 @@
 #     `self.VB`. Under Galerkin those are the same object; under PG they are not.
 #
 # See "CHOICE OF BASIS AND TEST SPACE" in ChannelFlow2D.py for which pairings are
-# worth using and for the measured crossover. That table is taken on this solver,
-# temperature included, so it is the one that applies here. What the temperature
-# changes is the balance rather than the answer: it adds a pair of transforms,
-# which favours Chebyshev, and one more banded solve, which favours Legendre. The
-# velocity-only crossover has not been measured separately, so nothing here
-# claims a direction for it.
+# worth using. The temperature shifts the balance a little -- it adds a pair of
+# transforms, favouring Chebyshev, and one more banded solve, favouring Legendre
+# -- but not enough to change the recommendation either way.
 #
 # Spatial discretization: Fourier x (Legendre Galerkin | Chebyshev Petrov-Galerkin)
 # Time discretization: any globally stiffly accurate IMEX Runge-Kutta tableau
@@ -105,8 +102,8 @@ jax.config.update("jax_enable_x64", True)
 
 # Likewise before any jaxfun import, and for a related reason: `jaxfun.sharding`
 # builds its device mesh at import time, so the other processes' devices have to
-# be visible by then. A no-op without mpi4py or on a single rank, which is what
-# keeps this demo an ordinary script.
+# be visible by then. A no-op outside an MPI launcher or on a single rank; under
+# an MPI launcher, mpi4py is required.
 from spmd_bootstrap import echo, initialize_distributed, is_leader, to_host
 
 initialize_distributed()
@@ -147,10 +144,8 @@ TABLEAU = ARS443
 CRITICAL = True  # run the linear-stability verification
 # Wall-normal basis and test space, forwarded to KMM2D and reused for the
 # temperature. Pair CHEBYSHEV with PG and LEGENDRE with GALERKIN -- see "CHOICE
-# OF BASIS" in ChannelFlow2D.py. The two are level to N=128 and Chebyshev pulls
-# ahead above it (1.25x at 128 x 256, 1.83x at 128 x 512). Below the crossover
-# pick on accuracy rather than speed: Chebyshev's transform round-trips at
-# 8.9e-16 against the Legendre Vandermonde's 1.2e-13.
+# OF BASIS" in ChannelFlow2D.py. Chebyshev gains as N grows; where the two cross
+# depends on the machine, so measure before caring.
 POLYNOMIAL = PolynomialKind.CHEBYSHEV
 KIND = TestSpaceKind.PETROV_GALERKIN
 

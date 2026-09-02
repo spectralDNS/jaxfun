@@ -33,8 +33,8 @@ jax.config.update("jax_enable_x64", True)
 
 # Likewise before any jaxfun import, and for a related reason: `jaxfun.sharding`
 # builds its device mesh at import time, so the other processes' devices have to
-# be visible by then. A no-op without mpi4py or on a single rank, which is what
-# keeps this demo an ordinary script.
+# be visible by then. A no-op outside an MPI launcher or on a single rank; under
+# an MPI launcher, mpi4py is required.
 from spmd_bootstrap import echo, initialize_distributed, is_leader
 
 initialize_distributed()
@@ -56,11 +56,13 @@ RE, ALFA = 8000.0, 1.0  # Reynolds number, streamwise wavenumber
 DT, T_END = 0.02, 100.0
 AMPLITUDE = 1e-7  # eigenmode amplitude; small enough that the dynamics stay linear
 N_OS = 100  # modes in the Orr-Sommerfeld eigenproblem itself
-# Wall-normal basis and test space, as in RayleighBenard.py. See "CHOICE OF BASIS
-# AND TEST SPACE" in ChannelFlow2D.py: at N=128 Legendre-Galerkin is the faster of
-# the two recommended pairings.
-POLYNOMIAL = PolynomialKind.LEGENDRE
-KIND = TestSpaceKind.GALERKIN
+# Wall-normal basis and test space, as in RayleighBenard.py; see "CHOICE OF BASIS
+# AND TEST SPACE" in ChannelFlow2D.py for the pairing rule. Chebyshev-PG is the
+# faster of the two here, this box being narrow enough (M=32) that the
+# wall-normal transform still decides the step -- though by how much, or whether
+# at all, depends on the machine. Both give the growth rate to the same 5e-07.
+POLYNOMIAL = PolynomialKind.CHEBYSHEV
+KIND = TestSpaceKind.PETROV_GALERKIN
 
 if "PYTEST" in os.environ:
     M, N, T_END = 16, 48, 1.0

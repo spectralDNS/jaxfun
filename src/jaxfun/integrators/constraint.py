@@ -21,6 +21,7 @@ from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import project
 from jaxfun.la import BaseMatrix
+from jaxfun.sharding import replicate
 from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
 from jaxfun.utils import (
     normalize_explicit,
@@ -128,7 +129,14 @@ class ConstraintSolver(nnx.Module):
                 "its own field, so the field has to appear linearly in it."
             )
         self.operator: BaseMatrix = nnx.data(operator)
-        self.forcing: Array | None = nnx.data(forcing)
+        # Replicated for the same reason `BaseIntegrator.linear_forcing` is:
+        # assembly places a right-hand side on the global spectral sharding, and
+        # a constraint solver is reached through `_advance`'s closure because the
+        # system stepper is a static argument there. JAX refuses to close over an
+        # array spanning devices this process cannot address, so an inhomogeneous
+        # constraint on a divisible multidimensional space would fail to compile
+        # under multi-process SPMD. See `replicate`.
+        self.forcing: Array | None = nnx.data(replicate(forcing))
 
         self._couplings: tuple[FieldCoupling, ...] = nnx.data(
             assemble_field_couplings(

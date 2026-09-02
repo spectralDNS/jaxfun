@@ -186,41 +186,25 @@
 # Galerkin leaves it dense -- asking for PG raises NotImplementedError from the
 # space rather than falling back. It is here for completeness.
 #
-# Which of the two recommended pairings is faster is a resolution question, not
-# a correctness one. Chebyshev transforms are DCTs, O(N log N), against
-# Legendre's cached Vandermonde matrix-multiply, O(N^2); Legendre's operators
-# are narrower, so it wins while the matrix-multiply is still cheap. Measured on
-# RayleighBenard at M=128, Ra=1e6, every run verified finite with dt scaled as
-# 1/N^2, Chebyshev-PG relative to Legendre-Galerkin:
+# Which of the two is faster is a performance question, not a correctness one,
+# and the answer is machine-dependent -- measure it rather than trusting a
+# number written here. Chebyshev transforms are DCTs, O(N log N), against
+# Legendre's cached Vandermonde matrix-multiply, O(N^2), while Legendre's
+# operators are narrower; so Chebyshev gains as N grows, and gains as M shrinks
+# because the streamwise FFT work is identical for both and dilutes the
+# difference. Where that leaves a given (M, N) on a given machine is not
+# predictable from here.
 #
-#   N          64      128      256      512
-#   speedup   1.01x   0.99x    1.25x    1.83x
+# Accuracy is the more portable reason to prefer Chebyshev: its transform
+# round-trips at machine epsilon where the dense Legendre Vandermonde
+# accumulates a few hundred ulp.
 #
-# so the two are level up to N=128 and Chebyshev is ahead above it. Pick on
-# accuracy below the crossover rather than on speed: the Chebyshev transform
-# round-trips at 8.9e-16 where the Legendre Vandermonde manages 1.2e-13, that
-# being a dense matrix-multiply accumulating error the DCT never incurs.
-#
-# That crossover used to sit near N=256, Chebyshev running 0.72x at N=64 and
-# 1.50x at N=512. What moved it is the transform rather than the operators.
-# `Chebyshev.forward`, `.backward` and `.scalar_product` went from
-# `jax.scipy.fft.dct`/`.idct` to `jaxfun.utils.common`. Neither jax.scipy entry
-# point has a primitive behind it: both are Python composites over `jnp.fft`,
-# and both handle a complex argument -- which is what a Fourier x polynomial
-# coefficient array is -- by running the whole transform twice, once on each of
-# its real and imaginary halves, each taking a full complex FFT of its own. The
-# versions in `common` carry both halves in one FFT and build their twiddles on
-# the host, worth 1.34x on this solver at 512 x 128.
-#
-# Three traps if you re-measure this. `solve()` carries a fixed cost of order
-# half a second per call, so a few hundred steps measures the overhead, not the
-# solver -- use thousands, or time `_step_impl` in a `fori_loop` directly. The
-# machine drifts by a few percent between processes, enough to swamp a crossover
-# this shallow, so time both bases in one process and alternate them. And a
-# diverged run is *faster* than a healthy one, because a resolved spectral tail
-# reaches denormals while NaN arithmetic does not: check `jnp.isfinite` on the
-# final state, and that no coefficient has reached denormal range, before
-# believing any number.
+# Three traps if you do measure. `solve()` carries a fixed cost of order half a
+# second per call, so time `_step_impl` in a `fori_loop` instead. Machines drift
+# by a few percent between processes, so time both bases in one process,
+# alternating. And a diverged run is *faster* than a healthy one, since a
+# resolved spectral tail reaches denormals while NaN arithmetic does not: check
+# `jnp.isfinite`, and that no coefficient is denormal, before believing anything.
 #
 # RESOLUTION AND STEP SIZE ARE COUPLED
 #

@@ -272,3 +272,57 @@ def test_dst_rejects_other_types() -> None:
     """Only types 1 and 2 are implemented."""
     with pytest.raises(ValueError, match="type"):
         common.dst(jnp.zeros(8), type=3)
+
+
+@pytest.mark.parametrize("transform", ["dct", "idct"])
+@pytest.mark.parametrize("n", [4, 16, 31, 32, 40])
+def test_dct_resizes_like_scipy(transform: str, n: int) -> None:
+    """`n` is the length of the transform, not a lower bound on the input.
+
+    scipy crops a longer input rather than transforming all of it, so
+    `dct(x, n=k)` must equal `dct(x[:k])`. Getting this wrong is silent for the
+    DSTs, whose odd extension would otherwise be built at one length and sliced
+    at another.
+    """
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(32) + 1j * rng.standard_normal(32)
+    f = getattr(common, transform)
+    scipy_f = scipy_dct if transform == "dct" else scipy_idct
+    expected = scipy_f(x, type=2, n=n, norm=None)
+    assert jnp.allclose(
+        f(jnp.asarray(x), n=n), jnp.asarray(expected), rtol=ulp(1000), atol=ulp(1000)
+    )
+    # The crop is the whole of it: no other resizing may be going on.
+    if n <= x.shape[0]:
+        assert jnp.allclose(
+            f(jnp.asarray(x), n=n),
+            f(jnp.asarray(x[:n])),
+            rtol=ulp(1000),
+            atol=ulp(1000),
+        )
+
+
+@pytest.mark.parametrize("type", [1, 2])
+@pytest.mark.parametrize("n", [4, 16, 31, 32, 40])
+def test_dst_resizes_like_scipy(type: int, n: int) -> None:
+    """The same for `dst`, where a shortened `n` used to be silently wrong.
+
+    The odd extension was built from the full input while `_dst_modes` sliced it
+    with the shorter length, so the mode ranges addressed the wrong entries.
+    """
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(32) + 1j * rng.standard_normal(32)
+    expected = scipy_dst(x, type=type, n=n, norm=None)
+    assert jnp.allclose(
+        common.dst(jnp.asarray(x), type=type, n=n),
+        jnp.asarray(expected),
+        rtol=ulp(1000),
+        atol=ulp(1000),
+    )
+    if n <= x.shape[0]:
+        assert jnp.allclose(
+            common.dst(jnp.asarray(x), type=type, n=n),
+            common.dst(jnp.asarray(x[:n]), type=type),
+            rtol=ulp(1000),
+            atol=ulp(1000),
+        )

@@ -310,7 +310,13 @@ def dst(x: Array, axis: int = -1, type: int = 2, n: int | None = None) -> Array:
         The transform, of the same shape as `x` but with `axis` of length `n`.
     """
     N = x.shape[axis] if n is None else n
-    if x.shape[axis] < N:
+    # Resized before either odd extension is built, not after: the extension has
+    # to be the one belonging to `N`, or the mode ranges `_dst_modes` slices out
+    # of it address the wrong entries. scipy reads `n` as the length of the
+    # transform, so a shorter one crops -- `dst(x, n=k)` equals `dst(x[:k])`.
+    if x.shape[axis] > N:
+        x = jax.lax.slice_in_dim(x, 0, N, axis=axis)
+    elif x.shape[axis] < N:
         # One spec per axis. A single `[(0, k)]` broadcasts to every axis, so a
         # 2-D input used to pad both and then fail to broadcast against the
         # twiddle.
@@ -422,10 +428,15 @@ def _deinterleave(x: Array) -> Array:
 
 
 def _to_last(x: Array, axis: int, N: int | None) -> tuple[Array, int]:
-    """Move `axis` last and zero-pad it up to `N`."""
+    """Move `axis` last and resize it to `N`, cropping or zero-padding."""
     x = x if axis in (-1, x.ndim - 1) else jnp.moveaxis(x, axis, -1)
     N = x.shape[-1] if N is None else N
-    if x.shape[-1] < N:
+    # scipy takes `n` as the length of the transform, not a lower bound: a
+    # shorter one crops the input rather than transforming all of it and
+    # returning part, so `dct(x, n=k)` equals `dct(x[:k])`.
+    if x.shape[-1] > N:
+        x = x[..., :N]
+    elif x.shape[-1] < N:
         x = jnp.pad(x, [(0, 0)] * (x.ndim - 1) + [(0, N - x.shape[-1])])
     return x, N
 

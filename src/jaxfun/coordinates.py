@@ -1316,7 +1316,10 @@ class SubCoordSys:
             AssertionError: If the parent system is strictly 1D (no sub-extraction
             needed).
         """
-        assert system.dims > 1
+        assert system.dims > 1, (
+            f"cannot take sub-system {index} of coordinate system '{system}': "
+            "it is already one-dimensional, so it has no axis to extract."
+        )
         self._base_scalars = (system._base_scalars[index],)
         self._base_vectors = (system._base_vectors[index],)
         self._psi = (system._psi[index],)

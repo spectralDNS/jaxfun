@@ -561,6 +561,12 @@ class TensorProductSpace:
         satisfy and could not, rather than a size that happens not to suit, so
         that one case raises instead of degrading quietly.
 
+        Both index lists below are non-empty because a tensor product space has
+        at least two axes -- `TensorProduct` refuses fewer -- while both
+        `spectral_sharding` and `physical_sharding` split exactly one. A rank-1
+        space would leave one of them empty and index out of range here, which is
+        why the factory rejects it rather than this guarding against it twice.
+
         Args:
             sharding: `self._spectral_sharding` or `self._physical_sharding` --
                 None on a single device, which is the common early exit.
@@ -1036,8 +1042,16 @@ def TensorProduct(
     if real:
         basespaces = tuple(_halve_leading_fourier(basespaces, n_extra))
 
+    if len(basespaces) < 2:
+        raise ValueError(
+            f"{name}: a tensor product needs at least two base spaces, got "
+            f"{len(basespaces)}. A single space is already usable on its own, and "
+            "a rank-1 tensor product space is not supported -- the sharded "
+            "transforms need one split axis and one unsplit axis, and it has "
+            "only one axis in total."
+        )
     system = (
-        CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[len(basespaces)])
+        CartCoordSys("N", {2: (x, y), 3: (x, y, z)}[len(basespaces)])
         if system is None
         else system
     )

@@ -1637,9 +1637,27 @@ def tpmats_wavenumber_factor(
     shape = tuple(int(tpmats[0].mats[a].shape[0]) for a in range(ndim))
     n_P = shape[poly_axis]
 
-    # Determine working dtype from the polynomial-axis matrices so the solver
-    # honours float64 when JAX is configured for 64-bit precision.
-    _dtype = jnp.result_type(*[tp.mats[poly_axis].data.dtype for tp in tpmats])
+    # Working dtype, from *every* axis and the coefficients -- not the
+    # polynomial axis alone. A Fourier diagonal is complex whenever the operator
+    # carries an odd derivative along that direction (continuity is the case in
+    # hand: its diagonal is purely imaginary), and taking the dtype from the
+    # polynomial axis casts that diagonal to real, which silently zeroes every
+    # k != 0 block and factorises a singular matrix. Nothing caught it because
+    # every operator previously routed here is Helmholtz-like, whose diagonal is
+    # real even when it is stored complex.
+    _dtype = jnp.result_type(
+        *[m.data.dtype for tp in tpmats for m in tp.mats],
+        *[jnp.asarray(tp.coefficient).dtype for tp in tpmats],
+    )
+    # Stored complex is not the same as complex-valued. Demote when nothing
+    # actually carries an imaginary part, so the usual real operators keep their
+    # real factors instead of doubling their width for zeros.
+    if jnp.issubdtype(_dtype, jnp.complexfloating) and not any(
+        bool(jnp.any(jnp.abs(jnp.imag(jnp.asarray(part))) > 0))
+        for tp in tpmats
+        for part in ([m.data for m in tp.mats] + [jnp.asarray(tp.coefficient)])
+    ):
+        _dtype = jnp.finfo(_dtype).dtype
 
     # Build weight matrix W[i, k] = scale_i * prod_a(diag(F_i^(a))[k_a]).
     # The flat Fourier index k varies in C-order (last Fourier axis fastest),

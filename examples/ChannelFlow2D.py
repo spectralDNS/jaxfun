@@ -277,6 +277,7 @@ from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.integrators import ARS443, IMEXRungeKutta, IMEXTableau
 from jaxfun.integrators.base import TimeStepper
 from jaxfun.la import BaseMatrix, DiaMatrix, TPMatrix
+from jaxfun.la.tpmatrix import tpmats_wavenumber_factor
 from jaxfun.operators import Constant, Div, Grad
 from jaxfun.sharding import (
     batched_physical_sharding,
@@ -505,16 +506,25 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         assert float(jnp.abs(A_kx.diagonal(0)[0])) == 0.0, (
             "the k=0 row of the continuity operator must be singular"
         )
-        self.A_pin = nnx.data(
-            TPMatrix(
-                [A_kx.pin({0: 1.0}).matrix, A_div.mats[1]],
-                A_div.coefficient,
-                A_div.global_indices,
-            )
+        A_pin = TPMatrix(
+            [A_kx.pin({0: 1.0}).matrix, A_div.mats[1]],
+            A_div.coefficient,
+            A_div.global_indices,
         )
-        # Note that the global matrix A_pin quite remarkably leads to a distributed
-        # solve, with no communication between the devices. The solve is done in
-        # parallel, with each device solving its local part of the system independently.
+        # Continuity is one diagonal (Fourier) axis against one banded
+        # (wall-normal) axis, which is exactly what the per-wavenumber solver
+        # wants -- so hand it there rather than letting `TPMatrix.solve` fall
+        # back to a per-axis LU. That fallback runs the wall-normal
+        # substitution as one scan the full length of the axis, and this solve
+        # happens once per Runge-Kutta stage, which made it the single largest
+        # cost of a step on a GPU: sequential steps are kernel launches there,
+        # and the box is too narrow for any of them to be doing real work.
+        #
+        # The wavenumber solver also brings what it knows about this structure:
+        # the wall-normal offsets are even, so it decouples the two index
+        # parities and halves the depth again, and each device factorises only
+        # the wavenumbers it owns, with no communication.
+        self.A_pin = nnx.data(tpmats_wavenumber_factor([A_pin]))
 
         self.My = nnx.data(A_div.mats[1])
         self.C_v = nnx.data(linear_operator(v.diff(y, 1) * w))

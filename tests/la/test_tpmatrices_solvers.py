@@ -578,3 +578,39 @@ def test_parity_decoupling_is_declined_for_odd_offsets(monkeypatch) -> None:
     assert not _parity_halves_offsets((-1, 0, 1))
     assert not _parity_halves_offsets((-2, -1, 0, 2))
     assert not _parity_halves_offsets((0,))
+
+
+def test_wavenumber_factor_keeps_a_complex_fourier_diagonal() -> None:
+    """An odd derivative along the periodic axis makes that diagonal imaginary.
+
+    The working dtype used to come from the polynomial axis alone, so a complex
+    Fourier diagonal was cast to real on the way in. For an odd derivative the
+    diagonal is *purely* imaginary, so that cast zeroed every k != 0 block and
+    the solver factorised a singular matrix and returned nan. Every operator
+    previously routed here was Helmholtz-like, whose diagonal is real, which is
+    why nothing noticed.
+    """
+    F = FunctionSpace(16, Fourier)
+    D = FunctionSpace(16, Legendre.Legendre, BCS)
+    T = TensorProduct(F, D)
+    v, u = TestFunction(T), TrialFunction(T)
+    x, y = T.system.base_scalars()
+    ue = sp.cos(2 * x) * (1 - y**2)
+    # First derivative in x (imaginary diagonal) plus a mass term, so that the
+    # k = 0 block stays non-singular and the system is solvable.
+    form = v * u.diff(x, 1).diff(y, 2) - v * u
+    rhs_form = v * ue.diff(x, 1).diff(y, 2) - v * ue
+    A_raw, b_raw = inner(form - rhs_form, sparse=True, kind="system")
+    A, b = cast(TPMatrices, A_raw), cast(Array, b_raw)
+
+    fourier_diag = A.tpmats[0].mats[0].data[0]
+    assert bool(jnp.any(jnp.abs(jnp.imag(fourier_diag)) > 0)), (
+        "this test is pointless unless the Fourier diagonal really is complex"
+    )
+
+    uh = tpmats_wavenumber_factor(A).solve(b)
+    assert bool(jnp.all(jnp.isfinite(uh))), "a truncated diagonal returns nan"
+
+    ref = tpmats_to_kron(list(A.tpmats)).solve(b.flatten()).reshape(b.shape)
+    scale = float(jnp.max(jnp.abs(ref)))
+    assert float(jnp.max(jnp.abs(uh - ref))) < scale * jnp.sqrt(ulp(10))

@@ -340,18 +340,26 @@ class Chebyshev(Jacobi):
 
         # The recurrence is `x[t] = a[t] + x[t-2]` -- lag two, and a coefficient
         # of exactly one -- so each parity class of `t` is a running total and
-        # the whole thing is two cumulative sums. Written as a scan it is `N`
+        # the whole thing is a cumulative sum. Written as a scan it is `N`
         # sequential steps, which on an accelerator is `N` kernel launches for a
         # handful of arithmetic each; as a cumsum it is logarithmic depth and
         # the same answer to round-off.
-        n_idx = jnp.arange(N - 2, -1, -1)
-        a = 2 * (n_idx + 1) * c[n_idx + 1]
-        xs = jnp.zeros_like(a)
-        xs = xs.at[0::2].set(jnp.cumsum(a[0::2]))
-        xs = xs.at[1::2].set(x1 + jnp.cumsum(a[1::2]))
-        return jnp.concatenate(
-            (jnp.array([xs[-1] / 2]), xs[-2::-1], jnp.array([x1, x0]))
-        )
+        #
+        # The two parity classes are separated by *reshaping* rather than by
+        # slicing with a stride. Both express the same split, but `a[0::2]` and
+        # `xs.at[0::2].set(...)` lower to a gather and a scatter, which under the
+        # `vmap` over wavenumbers in `backward_primitive` cost far more than the
+        # sequential loop they were meant to replace. A reshape to (m, 2) puts
+        # each class in its own column for free, and one cumsum down the columns
+        # does both at once.
+        n = N - 1
+        a = jnp.flip(2 * jnp.arange(1, N) * c[1:N])
+        m = (n + 1) // 2
+        a = jnp.pad(a, (0, 2 * m - n)).reshape(m, 2)
+        # The pad only ever lands last in its column, so it cannot reach a kept
+        # entry; the seed `x1` belongs to the odd class alone.
+        xs = (jnp.cumsum(a, axis=0) + jnp.stack([x0, x1])).reshape(2 * m)[:n]
+        return jnp.concatenate((xs[-1:] / 2, jnp.flip(xs[:-1]), jnp.stack([x1, x0])))
 
     chebder = derivative_coeffs
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import warnings
 from typing import TYPE_CHECKING, NamedTuple, TypedDict, overload
@@ -2132,25 +2133,39 @@ def _lu_banded_kernel(
     return band_lu, perm
 
 
-# How much larger the prefix form's r x r companion stack may be than the band
-# it replaces before the extra traffic outweighs the depth it saves. A tuning
-# constant, not a derived one: it admits the narrow bands and rejects the wide
-# ones (a Galerkin Chebyshev stiffness matrix reaches r > 40).
-_PREFIX_BAND_SLACK = 4
+def _prefix_pays(p: int, q: int, n_stored: int, n: int) -> bool:
+    """Whether log depth is worth its extra arithmetic for this band.
+
+    Two quantities, both dimensionless. The prefix form multiplies the traffic
+    by roughly ``r**2 / n_stored``, carrying an ``(n, r, r)`` companion stack
+    where the factors carry ``n_stored`` diagonals. It divides the depth by
+    roughly ``n / (2 log2 n)``, turning ``n`` sequential steps into that many
+    levels. Take it when the depth it buys exceeds the traffic it costs.
+
+    Written as a ratio rather than a fixed bound on ``r`` because the two cases
+    are not alike. A per-wavenumber solve is thousands of systems wide, so its
+    companion stack is real memory and a wide band is ruinous. A lone 1-D solve
+    carries kilobytes whatever ``r`` is, and only depth is left to pay for --
+    a fixed ``r`` cutoff cannot tell those apart, and rejected the mean-flow
+    substitution for a band that costs it nothing.
+    """
+    r = max(p, q)
+    if r == 0:
+        return False
+    traffic = (r * r) / max(n_stored, 1)
+    depth = n / max(2.0 * math.log2(max(n, 2)), 1.0)
+    return traffic <= depth
 
 
-def _use_prefix_substitution(p: int, q: int, n_stored: int) -> bool:
+def _use_prefix_substitution(p: int, q: int, n_stored: int, n: int) -> bool:
     """Whether to resolve the substitutions in log depth rather than in order.
 
     The sequential scan is ``n`` steps of a few multiply-adds; the prefix form
     is ``O(log n)`` steps of ``r x r`` matmuls. Which wins is a property of the
-    backend and the band, not of the operator.
-
-    A step costs a kernel launch on an accelerator, so depth is what is paid for
-    there. On CPU a step is a loop iteration and the extra arithmetic is the
-    whole cost, so the scan wins by a wide margin. The band matters because the
-    prefix form carries an ``(n, r, r)`` companion stack, growing as ``r**2``
-    where the factors grow as ``r``.
+    backend as well as the band: a step costs a kernel launch on an
+    accelerator, so depth is what is paid for there, while on CPU a step is a
+    loop iteration and the extra arithmetic is the whole cost -- measured at
+    10-60x slower across every size tried. `_prefix_pays` weighs the band.
 
     `JAXFUN_WAVENUMBER_SUBSTITUTION` (``scan`` | ``prefix`` | ``auto``)
     overrides it, which is how the two get compared on new hardware.
@@ -2165,8 +2180,7 @@ def _use_prefix_substitution(p: int, q: int, n_stored: int) -> bool:
             f"JAXFUN_WAVENUMBER_SUBSTITUTION must be 'scan', 'prefix' or 'auto', "
             f"got {choice!r}."
         )
-    r = max(p, q)
-    return jax.default_backend() != "cpu" and r * r <= _PREFIX_BAND_SLACK * n_stored
+    return jax.default_backend() != "cpu" and _prefix_pays(p, q, n_stored, n)
 
 
 def _affine_prefix(coef: Array, rhs: Array, r: int) -> Array:
@@ -2257,7 +2271,7 @@ def _forward_elimination(L: DiaMatrix, b: Array) -> Array:
     # carry: window[:, :] where window[j] = y[i-1-j] — the last p y-values.
     # Only the d present diagonals contribute; their window slots are win_indices.
 
-    if _use_prefix_substitution(p, 0, len(offsets)):
+    if _use_prefix_substitution(p, 0, len(offsets), n):
         # Same recurrence, resolved by composing affine maps. The window slots
         # an absent sub-diagonal would occupy are simply zero here, which the
         # companion matrix carries for free.
@@ -2331,7 +2345,7 @@ def _backward_substitution(U: DiaMatrix, b: Array) -> Array:
 
     # carry: window[j] = x[i+1+j] — next q solution values.
     # Only the d present diagonals contribute; their slots are win_indices.
-    if _use_prefix_substitution(0, q, len(offsets)):
+    if _use_prefix_substitution(0, q, len(offsets), n):
         # Reversed, this is the same forward recurrence; dividing by the main
         # diagonal on both sides puts it in the `rhs - coef . window` form the
         # prefix scan wants.

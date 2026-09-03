@@ -771,7 +771,7 @@ def _make_wavenumber_solve(
     """
     p = max((-o for o in L_offsets if o < 0), default=0)
     q = max((o for o in U_offsets if o > 0), default=0)
-    if _use_prefix_substitution(p, q, len(L_offsets) + len(U_offsets)):
+    if _use_prefix_substitution(p, q, len(L_offsets) + len(U_offsets), n_P):
         return _make_wavenumber_prefix_solve(L_offsets, U_offsets, n_P, dtype)
     return _make_wavenumber_vmap_solve(L_offsets, U_offsets, n_P, dtype)
 

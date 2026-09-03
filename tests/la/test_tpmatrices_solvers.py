@@ -25,7 +25,7 @@ from jaxfun.la import (
     TPMatrix,
     tpmats_to_kron,
 )
-from jaxfun.la.diamatrix import _PREFIX_BAND_SLACK, DiaMatrix
+from jaxfun.la.diamatrix import DiaMatrix, _prefix_pays
 from jaxfun.la.tpmatrix import (
     TPLUFactors,
     TPMatricesDenseLUFactors,
@@ -451,12 +451,13 @@ def test_prefix_substitution_agrees_with_scan(build, poly, monkeypatch) -> None:
 
 
 def _band_is_narrow_enough(wn) -> bool:
-    """The `auto` test in `_make_wavenumber_solve`, over an assembled solver."""
-    r = max(
+    """The band half of `auto`, over an assembled solver and free of the backend."""
+    return _prefix_pays(
         max((-o for o in wn.L_offsets if o < 0), default=0),
         max((o for o in wn.U_offsets if o > 0), default=0),
+        len(wn.L_offsets) + len(wn.U_offsets),
+        wn.L.shape[-1],
     )
-    return r * r <= _PREFIX_BAND_SLACK * (len(wn.L_offsets) + len(wn.U_offsets))
 
 
 def test_band_width_follows_the_formulation_not_the_basis() -> None:

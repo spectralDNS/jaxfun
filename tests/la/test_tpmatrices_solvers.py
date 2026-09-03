@@ -25,9 +25,8 @@ from jaxfun.la import (
     TPMatrix,
     tpmats_to_kron,
 )
-from jaxfun.la.diamatrix import DiaMatrix
+from jaxfun.la.diamatrix import _PREFIX_BAND_SLACK, DiaMatrix
 from jaxfun.la.tpmatrix import (
-    _PREFIX_BAND_SLACK,
     TPLUFactors,
     TPMatricesDenseLUFactors,
     TPMatricesLUFactors,

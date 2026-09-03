@@ -338,14 +338,17 @@ class Chebyshev(Jacobi):
         if N == 1:
             return jnp.array([x1, x0])
 
-        def inner_loop(
-            carry: tuple[Array, Array], n: int | Array
-        ) -> tuple[tuple[Array, Array], Array]:
-            x0, x1 = carry
-            x2 = 2 * (n + 1) * c[n + 1] + x0
-            return (x1, x2), x2
-
-        xs = jax.lax.scan(inner_loop, (x0, x1), jnp.arange(N - 2, -1, -1))[1]
+        # The recurrence is `x[t] = a[t] + x[t-2]` -- lag two, and a coefficient
+        # of exactly one -- so each parity class of `t` is a running total and
+        # the whole thing is two cumulative sums. Written as a scan it is `N`
+        # sequential steps, which on an accelerator is `N` kernel launches for a
+        # handful of arithmetic each; as a cumsum it is logarithmic depth and
+        # the same answer to round-off.
+        n_idx = jnp.arange(N - 2, -1, -1)
+        a = 2 * (n_idx + 1) * c[n_idx + 1]
+        xs = jnp.zeros_like(a)
+        xs = xs.at[0::2].set(jnp.cumsum(a[0::2]))
+        xs = xs.at[1::2].set(x1 + jnp.cumsum(a[1::2]))
         return jnp.concatenate(
             (jnp.array([xs[-1] / 2]), xs[-2::-1], jnp.array([x1, x0]))
         )

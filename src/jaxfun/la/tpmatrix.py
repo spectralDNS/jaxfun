@@ -14,7 +14,12 @@ from jax import Array, shard_map
 from jax.sharding import NamedSharding, PartitionSpec as P
 from scipy import sparse as scipy_sparse
 
-from jaxfun.la.diamatrix import DiaMatrix, diakron
+from jaxfun.la.diamatrix import (
+    DiaMatrix,
+    _affine_prefix,
+    _use_prefix_substitution,
+    diakron,
+)
 from jaxfun.la.matrix import LUFactors, Matrix
 from jaxfun.la.matrixprotocol import (
     BaseMatrix,
@@ -731,13 +736,6 @@ def _make_wavenumber_vmap_solve(
     return jax.jit(jax.vmap(_solve_one))
 
 
-# How much larger the prefix form's r x r companion stack may be than the band
-# it replaces before the extra traffic outweighs the depth it saves. A tuning
-# constant, not a derived one: it admits the narrow bands (Legendre Poisson at
-# r=2, biharmonic at r=4) and rejects the wide ones (Chebyshev at r>40).
-_PREFIX_BAND_SLACK = 4
-
-
 def _make_wavenumber_solve(
     L_offsets: tuple[int, ...],
     U_offsets: tuple[int, ...],
@@ -771,63 +769,11 @@ def _make_wavenumber_solve(
     `JAXFUN_WAVENUMBER_SUBSTITUTION` (``scan`` | ``prefix`` | ``auto``)
     overrides the choice, which is how the two get compared on new hardware.
     """
-    choice = os.environ.get("JAXFUN_WAVENUMBER_SUBSTITUTION", "auto").lower()
-    if choice == "auto":
-        r = max(
-            max((-o for o in L_offsets if o < 0), default=0),
-            max((o for o in U_offsets if o > 0), default=0),
-        )
-        band = len(L_offsets) + len(U_offsets)
-        narrow_enough = r * r <= _PREFIX_BAND_SLACK * band
-        choice = (
-            "prefix" if jax.default_backend() != "cpu" and narrow_enough else "scan"
-        )
-    if choice == "prefix":
+    p = max((-o for o in L_offsets if o < 0), default=0)
+    q = max((o for o in U_offsets if o > 0), default=0)
+    if _use_prefix_substitution(p, q, len(L_offsets) + len(U_offsets)):
         return _make_wavenumber_prefix_solve(L_offsets, U_offsets, n_P, dtype)
-    if choice == "scan":
-        return _make_wavenumber_vmap_solve(L_offsets, U_offsets, n_P, dtype)
-    raise ValueError(
-        f"JAXFUN_WAVENUMBER_SUBSTITUTION must be 'scan', 'prefix' or 'auto', "
-        f"got {choice!r}."
-    )
-
-
-def _affine_prefix(coef: Array, rhs: Array, r: int) -> Array:
-    """``v_i = rhs_i - coef[i] . (v_{i-1}, ..., v_{i-r})``, in log depth.
-
-    The state ``Y_i = (v_i, ..., v_{i-r+1})`` obeys an affine map
-    ``Y_i = A_i Y_{i-1} + c_i`` with ``A_i`` a companion matrix, and affine maps
-    compose associatively::
-
-        (A_2, c_2) . (A_1, c_1) = (A_2 A_1, A_2 c_1 + c_2)
-
-    So the recurrence is a prefix scan rather than a loop: `associative_scan`
-    resolves it in ``O(log n)`` sequential steps instead of ``n``. `Y_{-1}` is
-    zero, so the composed translation *is* the answer and the composed matrix is
-    only scaffolding.
-
-    Costs more arithmetic than the sequential form -- ``r x r`` matmuls at every
-    level, against ``r`` multiply-adds per step -- and trades it for depth. That
-    is the right trade only where a step's cost is dominated by launching it;
-    see `_make_wavenumber_solve` for who chooses.
-    """
-    n = rhs.shape[0]
-    dt = rhs.dtype
-    A = jnp.zeros((n, r, r), dtype=dt).at[:, 0, :].set(-coef)
-    if r > 1:
-        k = jnp.arange(r - 1)
-        A = A.at[:, k + 1, k].set(jnp.ones(r - 1, dtype=dt))
-    c = jnp.zeros((n, r), dtype=dt).at[:, 0].set(rhs)
-
-    def combine(
-        left: tuple[Array, Array], right: tuple[Array, Array]
-    ) -> tuple[Array, Array]:
-        A_l, c_l = left
-        A_r, c_r = right
-        return (A_r @ A_l, jnp.einsum("...ij,...j->...i", A_r, c_l) + c_r)
-
-    _, c_out = jax.lax.associative_scan(combine, (A, c))
-    return c_out[:, 0]
+    return _make_wavenumber_vmap_solve(L_offsets, U_offsets, n_P, dtype)
 
 
 def _make_wavenumber_prefix_solve(
@@ -866,7 +812,7 @@ def _make_wavenumber_prefix_solve(
             else:
                 l_rows.append(jnp.zeros(n_P, dtype=dtype))
         l_mat = jnp.stack(l_rows)  # (p, n_P); l_mat[j, i] = L[i, i-(j+1)]
-        return _affine_prefix(l_mat.T, b, p)
+        return _affine_prefix(l_mat.T, b[:, None], p)[:, 0]
 
     def _bwd_sub(U_data: Array, y: Array) -> Array:
         diag_d = U_data[U_main_idx]
@@ -886,7 +832,7 @@ def _make_wavenumber_prefix_solve(
         diag_rev = diag_d[rev]
         y_rev = y[rev] / diag_rev
         u_rev = u_mat[:, rev].T / diag_rev[:, None]  # (n_P, q)
-        return _affine_prefix(u_rev, y_rev, q)[rev]
+        return _affine_prefix(u_rev, y_rev[:, None], q)[:, 0][rev]
 
     def _solve_one(L_data: Array, U_data: Array, b: Array) -> Array:
         return _bwd_sub(U_data, _fwd_elim(L_data, b))

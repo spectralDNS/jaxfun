@@ -32,6 +32,7 @@ from jaxfun.la.tpmatrix import (
     TPMatricesDenseLUFactors,
     TPMatricesLUFactors,
     TPMatricesWavenumberSolver,
+    _parity_halves_offsets,
     tpmats_dense_lu_factor,
     tpmats_lu_factor,
     tpmats_wavenumber_factor,
@@ -495,3 +496,85 @@ def test_unknown_substitution_is_rejected(monkeypatch) -> None:
     _, A, _, _ = _poisson_fourier_poly_2d(8, Legendre.Legendre)
     with pytest.raises(ValueError, match="must be 'scan', 'prefix' or 'auto'"):
         tpmats_wavenumber_factor(A)
+
+
+# ---------------------------------------------------------------------------
+# Odd-even (parity) decoupling
+# ---------------------------------------------------------------------------
+
+
+def _poisson_fourier_poly_sizes(n_fourier: int, n_poly: int, poly):
+    """Poisson with the two axes sized independently.
+
+    The shared-`n` helpers cannot reach an odd polynomial extent: Fourier
+    requires an even mode count, and that is the number they pass to both.
+    """
+    F = FunctionSpace(n_fourier, Fourier)
+    D = FunctionSpace(n_poly, poly, BCS)
+    T = TensorProduct(F, D)
+    v, u = TestFunction(T), TrialFunction(T)
+    x, y = T.system.base_scalars()
+    ue = sp.cos(2 * x) * (1 - y**2)
+    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
+    return T, cast(TPMatrices, A), b, ue
+
+
+@POLY_SPACES
+@pytest.mark.parametrize("n_poly", [16, 17], ids=["even-extent", "odd-extent"])
+def test_parity_decoupling_leaves_the_answer_alone(poly, n_poly, monkeypatch) -> None:
+    """Decoupled or not, it is the same operator and the same solution.
+
+    `n_poly=17` gives an odd polynomial extent, where the odd-index block is one
+    shorter than the even one and is padded with an identity row. That row's
+    solution is zero and is dropped on the way out; if the padding leaked into
+    the system the answer would move.
+    """
+    _, A, b, _ = _poisson_fourier_poly_sizes(16, n_poly, poly)
+
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_PARITY", "off")
+    plain = tpmats_wavenumber_factor(A).solve(b)
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_PARITY", "on")
+    split = tpmats_wavenumber_factor(A).solve(b)
+
+    scale = float(jnp.max(jnp.abs(plain)))
+    assert float(jnp.max(jnp.abs(split - plain))) < scale * jnp.sqrt(ulp(10))
+
+
+@POLY_SPACES
+def test_parity_decoupling_halves_the_band_and_the_extent(poly, monkeypatch) -> None:
+    """What the decoupling is *for*, stated on the factors it produces.
+
+    Every operator here has even offsets only, so the polynomial axis splits into
+    two independent halves. The factors should come back over half the extent
+    with the offsets halved -- and contiguous, because the odd slots the window
+    used to carry as structural zeros are gone.
+    """
+    _, A, _, _ = _poisson_fourier_poly_2d(16, poly)
+
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_PARITY", "off")
+    plain = tpmats_wavenumber_factor(A)
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_PARITY", "on")
+    split = tpmats_wavenumber_factor(A)
+
+    assert plain._parity is False and split._parity is True
+    # Half the sequential extent, twice the batch: depth traded for width.
+    assert split.L.shape[-1] == (plain.L.shape[-1] + 1) // 2
+    assert split.L.shape[0] == plain.L.shape[0] * 2
+    # Offsets halved, and now adjacent rather than every other one.
+    assert split.L_offsets == tuple(o // 2 for o in plain.L_offsets)
+    assert split.U_offsets == tuple(o // 2 for o in plain.U_offsets)
+
+
+def test_parity_decoupling_is_declined_for_odd_offsets(monkeypatch) -> None:
+    """An operator that couples the parities must be left alone.
+
+    Nothing in the suite assembles one, so build the predicate's input directly:
+    a first-derivative term would put odd offsets in the band, and the two halves
+    stop being independent.
+    """
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_PARITY", "on")
+    assert _parity_halves_offsets((-2, 0, 2))
+    assert _parity_halves_offsets((-4, -2, 0, 2, 4))
+    assert not _parity_halves_offsets((-1, 0, 1))
+    assert not _parity_halves_offsets((-2, -1, 0, 2))
+    assert not _parity_halves_offsets((0,))

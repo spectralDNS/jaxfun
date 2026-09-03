@@ -960,6 +960,68 @@ def _prune_zero_diagonals(
     )
 
 
+def _parity_decoupling_enabled() -> bool:
+    """Whether to split an even-offset operator into its two parity blocks.
+
+    On by default. `JAXFUN_WAVENUMBER_PARITY=off` keeps the undecoupled path,
+    which is what the two get compared against each other with.
+    """
+    return os.environ.get("JAXFUN_WAVENUMBER_PARITY", "on").lower() != "off"
+
+
+def _parity_halves_offsets(poly_offsets: tuple[int, ...]) -> bool:
+    """Whether every offset is even, so the operator decouples by index parity."""
+    return any(o != 0 for o in poly_offsets) and all(o % 2 == 0 for o in poly_offsets)
+
+
+def _parity_split_dia(
+    B_data_batch: Array, poly_offsets: tuple[int, ...], n_P: int
+) -> tuple[Array, tuple[int, ...], int]:
+    """Split an even-offset DIA batch into its two decoupled parity blocks.
+
+    An operator whose offsets are all even never connects an even index to an
+    odd one, so reordering the polynomial axis as ``[0, 2, 4, ..., 1, 3, 5, ...]``
+    makes it block diagonal: two independent systems of half the size, each with
+    the offsets halved. The blocks join the batch, so the wavenumber axis doubles
+    while the sequential axis halves -- depth traded for width, in the direction
+    the hardware wants.
+
+    On DIA data the reordering costs nothing. ``data[d][j]`` is the entry in
+    *column* ``j``, and column ``2j + c`` is position ``j`` of parity ``c``, so
+    the two blocks are the stride-2 slices ``data[d][0::2]`` and
+    ``data[d][1::2]``. An odd ``n_P`` leaves the odd block one short; it is
+    padded with an identity row, whose solution is zero and is dropped on the way
+    out.
+
+    Returns ``(B_split, offsets, m)`` with ``B_split`` shaped
+    ``(n_batch * 2, n_diags, m)``, parity varying fastest so each device keeps
+    the wavenumbers it already had.
+    """
+    m = (n_P + 1) // 2
+    new_offsets = tuple(o // 2 for o in poly_offsets)
+
+    cols = np.arange(m)[None, :] * 2 + np.arange(2)[:, None]  # (2, m)
+    real = cols < n_P
+    taken = jnp.transpose(
+        B_data_batch[:, :, np.clip(cols, 0, n_P - 1)], (0, 2, 1, 3)
+    )  # (n_batch, 2, n_diags, m)
+
+    # A DIA slot is only a matrix entry while its implied row stays in range;
+    # the rest are storage padding and have to read as zero, because the odd
+    # block inherits slots whose original row lay past the end.
+    rows = np.arange(m)[None, :] - np.asarray(new_offsets)[:, None]
+    row_ok = (rows >= 0) & (rows < m)  # (n_diags, m)
+    keep = real[:, None, :] & row_ok[None, :, :]
+    is_main = (np.asarray(new_offsets) == 0)[None, :, None]
+    pad_identity = (~real)[:, None, :] & is_main & row_ok[None, :, :]
+
+    split = jnp.where(keep, taken, 0) + jnp.where(pad_identity, 1, 0).astype(
+        B_data_batch.dtype
+    )
+    n_batch = B_data_batch.shape[0]
+    return split.reshape(n_batch * 2, len(poly_offsets), m), new_offsets, m
+
+
 def _banded_lu_batch(
     B_data_batch: Array, poly_offsets: tuple[int, ...]
 ) -> tuple[Array, Array, tuple[int, ...], tuple[int, ...]]:
@@ -1158,6 +1220,22 @@ class TPMatricesWavenumberSolver(nnx.Pytree):
         if n_total > 1:
             _check_shardable(poly_axis, shape, n_total)
 
+        parity = False
+        if (
+            B_data_batch is not None
+            and poly_offsets is not None
+            and _parity_decoupling_enabled()
+            and _parity_halves_offsets(poly_offsets)
+        ):
+            # Before the factorisation, not after: halving the band makes the LU
+            # itself cheaper, shrinks what the factors store, and both
+            # substitutions inherit it without knowing it happened.
+            n_P_full = B_data_batch.shape[-1]
+            B_data_batch, poly_offsets, _m_parity = _parity_split_dia(
+                B_data_batch, poly_offsets, n_P_full
+            )
+            parity = True
+
         if B_data_batch is not None and poly_offsets is not None:
             _, _n_diags, n_P_local = B_data_batch.shape
             # Factor each device's own wavenumbers. `B_data_batch` arrives on
@@ -1182,6 +1260,7 @@ class TPMatricesWavenumberSolver(nnx.Pytree):
             n_P_local = B_matrices[0].shape[0]
             L_all, U_all, L_offsets, U_offsets = _looped_banded_lu(B_matrices)
 
+        self._parity: bool = parity
         self.L_offsets: tuple[int, ...] = L_offsets
         self.U_offsets: tuple[int, ...] = U_offsets
         self.L = L_all
@@ -1203,12 +1282,27 @@ class TPMatricesWavenumberSolver(nnx.Pytree):
             _inv_perm[_old_pos] = _new_pos
         _vmap_fn = self._vmap_solve
 
+        _m = (_n_P + 1) // 2  # parity block length; unused when not decoupled
+
+        def _to_parity(rhs_2d: Array, n_F: int) -> Array:
+            """``(n_F, n_P)`` -> ``(n_F * 2, m)``, parity fastest."""
+            r = jnp.pad(rhs_2d, ((0, 0), (0, 2 * _m - _n_P)))
+            return r.reshape(n_F, _m, 2).transpose(0, 2, 1).reshape(n_F * 2, _m)
+
+        def _from_parity(sol: Array, n_F: int) -> Array:
+            """``(n_F * 2, m)`` -> ``(n_F, n_P)``, dropping the identity padding."""
+            interleaved = sol.reshape(n_F, 2, _m).transpose(0, 2, 1)
+            return interleaved.reshape(n_F, 2 * _m)[:, :_n_P]
+
         def _local_solve(
             L: Array, U: Array, rhs: Array, n_F: int, out_shape: tuple[int, ...]
         ) -> Array:
             """The whole solve, on whatever block of wavenumbers it is handed."""
             rhs_2d = jnp.transpose(rhs, _axes_order).reshape(n_F, _n_P)
-            sol_2d = _vmap_fn(L, U, rhs_2d)
+            if parity:
+                sol_2d = _from_parity(_vmap_fn(L, U, _to_parity(rhs_2d, n_F)), n_F)
+            else:
+                sol_2d = _vmap_fn(L, U, rhs_2d)
             sol_perm = sol_2d.reshape(out_shape + (_n_P,))
             return jnp.transpose(sol_perm, _inv_perm)
 

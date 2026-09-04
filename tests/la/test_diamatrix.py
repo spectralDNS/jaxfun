@@ -1250,7 +1250,7 @@ class TestPin:
         A = DiagonalMatrix(jnp.arange(1.0, 7.0))
         pinned = A.pin({0: 1.0 + 1.0j, 3: 2.0})
         assert pinned.constraints == ((0, 1.0 + 1.0j), (3, 2.0))
-        b = jnp.asarray(np.linspace(0.3, 1.7, 6), dtype=jnp.complex64)
+        b = jnp.asarray(np.linspace(0.3, 1.7, 6), dtype=complex)
         rhs = np.asarray(b).astype(complex).copy()
         rhs[0], rhs[3] = 1.0 + 1.0j, 2.0
         expected = np.linalg.solve(np.asarray(pinned.matrix.todense()), rhs)
@@ -1337,7 +1337,7 @@ class TestPin:
         a, A = _tridiag(5)
         mat = a if use_matrix else A
         sys = mat.pin({0: 1.0 + 2.0j, 4: 0.0})
-        b = jnp.ones(5, dtype=jnp.complex64)
+        b = jnp.ones(5, dtype=complex)
         x_hat = sys.solve(b)
         assert jnp.allclose(x_hat[0], 1.0 + 2.0j)
         assert jnp.allclose(x_hat[4], 0.0)

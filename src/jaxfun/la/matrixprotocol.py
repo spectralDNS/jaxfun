@@ -27,6 +27,20 @@ class DiaMatrixSolveMethod(StrEnum):
     DENSE = "dense"
 
 
+def pin_value_to_scalar(v: Array) -> complex | float:
+    """Concretise a ``pin()`` constraint value into a plain Python scalar.
+
+    ``_pin`` runs under ``jax.jit``, so every element of its return pytree —
+    including constraint values that started as plain Python numbers — comes
+    back as a (weakly-typed) ``jax.Array``.  That is unusable as
+    :class:`~flax.nnx.Pytree` static metadata, which rejects array leaves, so
+    the value must be pulled back to a concrete Python number.  The array's
+    dtype (not the original literal) decides whether that number is complex
+    or real.
+    """
+    return complex(v) if jnp.iscomplexobj(v) else float(v)
+
+
 class SolverNotApplicable(Exception):
     """Raised when a solver strategy cannot be applied to the given matrix structure.
 

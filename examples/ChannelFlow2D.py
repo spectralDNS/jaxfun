@@ -276,7 +276,7 @@ from jaxfun.galerkin.composite import PGComposite
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.integrators import ARS443, IMEXRungeKutta, IMEXTableau
 from jaxfun.integrators.base import TimeStepper
-from jaxfun.la import BaseMatrix, DiaMatrix, TPMatrix
+from jaxfun.la import BaseMatrix, DiagonalMatrix, DiaMatrix, TPMatrix
 from jaxfun.la.tpmatrix import tpmats_wavenumber_factor
 from jaxfun.operators import Constant, Div, Grad
 from jaxfun.sharding import (
@@ -506,8 +506,15 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         assert float(jnp.abs(A_kx.diagonal(0)[0])) == 0.0, (
             "the k=0 row of the continuity operator must be singular"
         )
+        # Since the A_kx matrix is diagonal with fully complex entries, we can
+        # simply multiply it with 1j to get a real diagonal matrix. The
+        # TPMatrix A_pin is then also a real matrix, which is important for the
+        # efficiency of the wavenumber solver. Note that because of this, we
+        # also need to multiply the right-hand side of the continuity equation
+        # with 1j, which is done in the `velocity` method below.
+        kx = jnp.hstack((jnp.array([-1.0]), -A_kx.diagonal().imag[1:]))  # pin
         A_pin = TPMatrix(
-            [A_kx.pin({0: 1.0}).matrix, A_div.mats[1]],
+            [DiagonalMatrix(kx), A_div.mats[1]],
             A_div.coefficient,
             A_div.global_indices,
         )
@@ -577,9 +584,14 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         return (self.gv, self.g0) + self.scalar_integrators
 
     def velocity(self, v_hat: Array, u0: Array) -> Array:
-        """Return the streamwise velocity: continuity for k != 0, u0 at k = 0."""
-        rhs = (-(self.C_v @ v_hat)).at[0].set(self.My @ (u0 + 0j))
-        return self.A_pin.solve(rhs)
+        """Return the streamwise velocity: continuity for k != 0, u0 at k = 0.
+
+        Note that the right-hand side of the continuity equation is multiplied by
+        1j since the A_kx matrix is also multiplied by 1j to make it real.
+        """
+        h = self.My @ (u0 + 0j)
+        rhs = (-(self.C_v @ v_hat)).at[0].set(1j * h)
+        return self.A_pin.solve(1j * rhs)
 
     @overload
     def velocity_from_state(

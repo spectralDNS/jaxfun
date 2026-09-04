@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from jaxfun.la.matrixprotocol import BaseMatrix, _CacheBox
+from jaxfun.la.matrixprotocol import BaseMatrix, _CacheBox, pin_value_to_scalar
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
@@ -443,7 +443,7 @@ class Matrix(BaseMatrix):
         return Matrix(self.data.astype(dtype))
 
     def pin(
-        self, constraints: dict[int, float] | tuple[tuple[int, float], ...]
+        self, constraints: dict[int, complex] | tuple[tuple[int, complex], ...]
     ) -> PinnedMatrix:
         """Return a :class:`PinnedSystem` with the given DOFs fixed."""
         from jaxfun.la.pinned import PinnedMatrix
@@ -452,13 +452,14 @@ class Matrix(BaseMatrix):
             constraints = tuple(sorted(constraints.items()))
         norm_constraints, data = self._pin(constraints)
         return PinnedMatrix(
-            Matrix(data), tuple((int(i), float(j)) for i, j in norm_constraints)
+            Matrix(data),
+            tuple((int(i), pin_value_to_scalar(j)) for i, j in norm_constraints),
         )
 
     @jax.jit(static_argnums=(1,))
     def _pin(
-        self, constraints: tuple[tuple[int, float], ...]
-    ) -> tuple[list[tuple[int, float]], Array]:
+        self, constraints: tuple[tuple[int, complex], ...]
+    ) -> tuple[list[tuple[int, complex]], Array]:
         """Return a :class:`PinnedSystem` with the given DOFs fixed.
 
         For each ``(row_index, value)`` pair in *constraints* the
@@ -470,11 +471,11 @@ class Matrix(BaseMatrix):
         calls are cheap.
 
         Args:
-            constraints: Mapping from DOF index to pinned value, e.g.
-                ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0}``.  Negative indices
-                are supported (Python-style, relative to ``n``).  Positive
-                indices must be in ``[0, n)``, otherwise :exc:`IndexError`
-                is raised.
+            constraints: Mapping from DOF index to pinned value (real or
+                complex), e.g. ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0 + 2.0j}``.
+                Negative indices are supported (Python-style, relative to
+                ``n``).  Positive indices must be in ``[0, n)``, otherwise
+                :exc:`IndexError` is raised.
 
         Returns:
             :class:`PinnedSystem` whose :meth:`~PinnedSystem.solve` method
@@ -487,13 +488,16 @@ class Matrix(BaseMatrix):
         """
         n, _m = self.shape
         # Normalise negative indices (Python-style); reject out-of-range positives.
-        norm_constraints: list[tuple[int, float]] = []
+        # Preserve the value's own type: floats stay floats (unaffected repr),
+        # complex values are kept as complex rather than truncated.
+        norm_constraints: list[tuple[int, complex]] = []
         for idx, val in constraints:
             if idx < -n or idx >= n:
                 raise IndexError(
                     f"Constraint index {idx} is out of range for matrix of size {n}"
                 )
-            norm_constraints.append((idx % n, float(val)))
+            val = complex(val) if isinstance(val, complex) else float(val)
+            norm_constraints.append((idx % n, val))
         data = self.data
         for idx, _ in norm_constraints:
             data = data.at[idx].set(0.0)

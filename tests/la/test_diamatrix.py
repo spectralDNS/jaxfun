@@ -1097,6 +1097,23 @@ class TestPin:
         assert sys_neg.constraints == sys_pos.constraints
 
     @pytest.mark.parametrize("use_matrix", [False, True])
+    def test_pin_accepts_complex_value(self, use_matrix):
+        """pin() must accept a complex constraint value without truncating it."""
+        a, A = _tridiag(5)
+        mat = a if use_matrix else A
+        sys = mat.pin({0: 1.0 + 2.0j, 4: 0.0})
+        assert sys.constraints == ((0, 1.0 + 2.0j), (4, 0.0))
+
+    def test_pin_mixed_real_and_complex_values(self):
+        """A real constraint alongside a complex one must keep its own type."""
+        _, A = _tridiag(5)
+        sys = A.pin({0: 0.0, 1: 1.0 + 2.0j})
+        idx0, val0 = sys.constraints[0]
+        idx1, val1 = sys.constraints[1]
+        assert idx0 == 0 and isinstance(val0, float) and val0 == 0.0
+        assert idx1 == 1 and isinstance(val1, complex) and val1 == 1.0 + 2.0j
+
+    @pytest.mark.parametrize("use_matrix", [False, True])
     def test_out_of_range_positive_raises(self, use_matrix):
         """Positive indices >= n must raise IndexError, not silently wrap."""
         a, A = _tridiag(5)
@@ -1228,6 +1245,17 @@ class TestPin:
         expected = np.linalg.solve(np.asarray(pinned.matrix.todense()), rhs)
         assert jnp.allclose(pinned.solve(b), jnp.asarray(expected))
 
+    def test_pin_diagonal_solves_complex(self):
+        """A pinned diagonal must also accept a complex pin value."""
+        A = DiagonalMatrix(jnp.arange(1.0, 7.0))
+        pinned = A.pin({0: 1.0 + 1.0j, 3: 2.0})
+        assert pinned.constraints == ((0, 1.0 + 1.0j), (3, 2.0))
+        b = jnp.asarray(np.linspace(0.3, 1.7, 6), dtype=jnp.complex64)
+        rhs = np.asarray(b).astype(complex).copy()
+        rhs[0], rhs[3] = 1.0 + 1.0j, 2.0
+        expected = np.linalg.solve(np.asarray(pinned.matrix.todense()), rhs)
+        assert jnp.allclose(pinned.solve(b), jnp.asarray(expected))
+
     def test_pin_data_stays_on_device(self):
         """pin() must not force a device→host transfer; result should be a JAX array."""
         _, A = _tridiag(5)
@@ -1302,6 +1330,20 @@ class TestPin:
         b = A.matvec(x_true)
         x_hat = sys.solve(b)
         assert jnp.allclose(x_hat, x_true, atol=ulp(100))
+
+    @pytest.mark.parametrize("use_matrix", [False, True])
+    def test_solve_with_complex_pin_value(self, use_matrix):
+        """A complex pin value must land exactly in the solution at that DOF."""
+        a, A = _tridiag(5)
+        mat = a if use_matrix else A
+        sys = mat.pin({0: 1.0 + 2.0j, 4: 0.0})
+        b = jnp.ones(5, dtype=jnp.complex64)
+        x_hat = sys.solve(b)
+        assert jnp.allclose(x_hat[0], 1.0 + 2.0j)
+        assert jnp.allclose(x_hat[4], 0.0)
+        # The interior rows must still satisfy the (row-substituted) system,
+        # not just have the pinned entries overwritten.
+        assert jnp.allclose(sys.matrix.matvec(x_hat), sys.fix_rhs(b), atol=ulp(1000))
 
     @pytest.mark.parametrize("use_matrix", [False, True])
     def test_solve_dia_matches_matrix(self, use_matrix):

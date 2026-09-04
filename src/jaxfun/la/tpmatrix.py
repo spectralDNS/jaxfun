@@ -1263,10 +1263,7 @@ class TPMatricesWavenumberSolver(nnx.Pytree):
             # states that rather than leaving it to the partitioner to notice:
             # each device gets its own wavenumbers of `rhs` *and* the factors
             # for exactly those, so the body has nothing to fetch and no
-            # collective to arrange. Getting the factors sharded to match is
-            # what earns this -- handed a replicated `L`/`U`, the partitioner
-            # would reshard them on every call, outside the module where an HLO
-            # collectives grep cannot see it.
+            # collective to arrange.
             _n_F_local = _n_F // n_total
             _local_fourier_shape = (_fourier_shape[0] // n_total,) + _fourier_shape[1:]
 

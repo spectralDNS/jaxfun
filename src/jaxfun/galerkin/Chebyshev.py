@@ -55,10 +55,6 @@ def _dense_derivative_matrix(
 @cache
 def _chebyshev_backward_scales(N: int) -> tuple[np.ndarray, np.ndarray]:
     """Return the idct input scalings with the backward transform's folded in."""
-    # The transform is `0.5*uh[0] + N*idct(uh)` for `uh = c*(-1)^k`, and both the
-    # sign and the N multiply elementwise in k, so they fold into the two vectors
-    # the idct already multiplies its input by. Only the `0.5*c[0]` is additive
-    # and has to stay outside.
     fwd, rev = _idct_twiddles(N)
     sign = (-1.0) ** np.arange(N)
     return N * sign * fwd, N * sign * rev
@@ -100,7 +96,6 @@ class Chebyshev(Jacobi):
         **kw: Extra keyword args passed to parent Jacobi constructor.
     """
 
-    # `backward` is an FFT/DCT, so derivatives stay in coefficient space.
     has_fast_transform = True
 
     def __init__(
@@ -344,20 +339,11 @@ class Chebyshev(Jacobi):
         # sequential steps, which on an accelerator is `N` kernel launches for a
         # handful of arithmetic each; as a cumsum it is logarithmic depth and
         # the same answer to round-off.
-        #
-        # The two parity classes are separated by *reshaping* rather than by
-        # slicing with a stride. Both express the same split, but `a[0::2]` and
-        # `xs.at[0::2].set(...)` lower to a gather and a scatter, which under the
-        # `vmap` over wavenumbers in `backward_primitive` cost far more than the
-        # sequential loop they were meant to replace. A reshape to (m, 2) puts
-        # each class in its own column for free, and one cumsum down the columns
-        # does both at once.
+
         n = N - 1
         a = jnp.flip(2 * jnp.arange(1, N) * c[1:N])
         m = (n + 1) // 2
         a = jnp.pad(a, (0, 2 * m - n)).reshape(m, 2)
-        # The pad only ever lands last in its column, so it cannot reach a kept
-        # entry; the seed `x1` belongs to the odd class alone.
         xs = (jnp.cumsum(a, axis=0) + jnp.stack([x0, x1])).reshape(2 * m)[:n]
         return jnp.concatenate((xs[-1:] / 2, jnp.flip(xs[:-1]), jnp.stack([x1, x0])))
 

@@ -9,7 +9,12 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from jaxfun.la.matrixprotocol import BaseMatrix, DiaMatrixSolveMethod, _CacheBox
+from jaxfun.la.matrixprotocol import (
+    BaseMatrix,
+    DiaMatrixSolveMethod,
+    _CacheBox,
+    pin_value_to_scalar,
+)
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
@@ -1410,16 +1415,17 @@ class DiaMatrix(BaseMatrix):
         return self.data.dtype
 
     def pin(
-        self, constraints: dict[int, float] | tuple[tuple[int, float], ...]
+        self, constraints: dict[int, complex] | tuple[tuple[int, complex], ...]
     ) -> PinnedDiaMatrix:
         """Return a :class:`PinnedSystem` with the given DOFs fixed.
 
         Args:
-            constraints: Mapping from DOF index to pinned value, e.g.
-                ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0}``.  Negative indices are supported
-                (Python-style, relative to ``n``).  Positive indices must be in
-                ``[0, n)``, otherwise :exc:`IndexError` is raised.
-                Alternatively, a tuple of ``(row_index, value)`` pairs can be provided.
+            constraints: Mapping from DOF index to pinned value (real or
+                complex), e.g. ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0 + 2.0j}``.
+                Negative indices are supported (Python-style, relative to
+                ``n``).  Positive indices must be in ``[0, n)``, otherwise
+                :exc:`IndexError` is raised.  Alternatively, a tuple of
+                ``(row_index, value)`` pairs can be provided.
 
         Returns:
             :class:`PinnedDiaMatrix` whose :meth:`~PinnedDiaMatrix.solve` method
@@ -1434,13 +1440,14 @@ class DiaMatrix(BaseMatrix):
             data=data, offsets=tuple(int(i) for i in new_offsets), shape=self.shape
         )
         return PinnedDiaMatrix(
-            pinned_matrix, tuple((int(i), float(j)) for i, j in norm_constraints)
+            pinned_matrix,
+            tuple((int(i), pin_value_to_scalar(j)) for i, j in norm_constraints),
         )
 
     @jax.jit(static_argnums=(1,))
     def _pin(
-        self, constraints: tuple[tuple[int, float], ...]
-    ) -> tuple[list[tuple[int, float]], list[int], Array]:
+        self, constraints: tuple[tuple[int, complex], ...]
+    ) -> tuple[list[tuple[int, complex]], list[int], Array]:
         """Return a :class:`PinnedSystem` with the given DOFs fixed.
 
         For each ``(row_index, value)`` pair in *constraints* the corresponding
@@ -1453,11 +1460,11 @@ class DiaMatrix(BaseMatrix):
         calls are cheap.
 
         Args:
-            constraints: Mapping from DOF index to pinned value, e.g.
-                ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0}``.  Negative indices
-                are supported (Python-style, relative to ``n``).  Positive
-                indices must be in ``[0, n)``, otherwise :exc:`IndexError`
-                is raised.
+            constraints: Mapping from DOF index to pinned value (real or
+                complex), e.g. ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0 + 2.0j}``.
+                Negative indices are supported (Python-style, relative to
+                ``n``).  Positive indices must be in ``[0, n)``, otherwise
+                :exc:`IndexError` is raised.
 
         Returns:
             :class:`PinnedDiaMatrix` whose :meth:`~PinnedDiaMatrix.solve` method
@@ -1487,13 +1494,16 @@ class DiaMatrix(BaseMatrix):
         main_idx = offsets.index(0)
 
         # Normalise negative indices (Python-style); reject out-of-range positives.
-        norm_constraints: list[tuple[int, float]] = []
+        # Preserve the value's own type: floats stay floats (unaffected repr),
+        # complex values are kept as complex rather than truncated.
+        norm_constraints: list[tuple[int, complex]] = []
         for idx, val in constraints:
             if idx < -n or idx >= n:
                 raise IndexError(
                     f"Constraint index {idx} is out of range for matrix of size {n}"
                 )
-            norm_constraints.append((idx % n, float(val)))
+            val = complex(val) if isinstance(val, complex) else float(val)
+            norm_constraints.append((idx % n, val))
 
         # Zero every stored entry in each pinned row, then set diagonal to 1.
         # All indices (di, j) are Python ints — static at trace time — so
@@ -1630,16 +1640,17 @@ class DiagonalMatrix(DiaMatrix):
         )
 
     def pin(
-        self, constraints: dict[int, float] | tuple[tuple[int, float], ...]
+        self, constraints: dict[int, complex] | tuple[tuple[int, complex], ...]
     ) -> PinnedDiaMatrix:
         """Return a :class:`PinnedDiaMatrix` with the given DOFs fixed.
 
         Args:
-            constraints: Mapping from DOF index to pinned value, e.g.
-                ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0}``.  Negative indices are supported
-                (Python-style, relative to ``n``).  Positive indices must be in
-                ``[0, n)``, otherwise :exc:`IndexError` is raised.
-                Alternatively, a tuple of ``(row_index, value)`` pairs can be provided.
+            constraints: Mapping from DOF index to pinned value (real or
+                complex), e.g. ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0 + 2.0j}``.
+                Negative indices are supported (Python-style, relative to
+                ``n``).  Positive indices must be in ``[0, n)``, otherwise
+                :exc:`IndexError` is raised.  Alternatively, a tuple of
+                ``(row_index, value)`` pairs can be provided.
 
         Returns:
             :class:`PinnedDiaMatrix` whose :meth:`~PinnedDiaMatrix.solve` method
@@ -1652,7 +1663,7 @@ class DiagonalMatrix(DiaMatrix):
         norm_constraints, _, data = self._pin(constraints)
         return PinnedDiaMatrix(
             DiagonalMatrix(data[0]),
-            tuple((int(i), float(j)) for i, j in norm_constraints),
+            tuple((int(i), pin_value_to_scalar(j)) for i, j in norm_constraints),
         )
 
     @property

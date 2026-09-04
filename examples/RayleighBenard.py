@@ -141,6 +141,7 @@ N_SNAPSHOTS = 120
 SEED = 0
 AMPLITUDE = 1e-3  # initial temperature perturbation
 TABLEAU = ARS443
+MODE = 0
 CRITICAL = True  # run the linear-stability verification
 # Wall-normal basis and test space, forwarded to KMM2D and reused for the
 # temperature. Pair CHEBYSHEV with PG and LEGENDRE with GALERKIN -- see "CHOICE
@@ -170,7 +171,7 @@ class RayleighBenard(KMM2D):
         *,
         amplitude: float = AMPLITUDE,
         seed: int = SEED,
-        mode: int | None = None,
+        mode: int = MODE,
         tableau: IMEXTableau = TABLEAU,
         time: tuple[float, float] | None = None,
         padding: tuple[int, int] | None = None,
@@ -187,8 +188,9 @@ class RayleighBenard(KMM2D):
             Pr: Prandtl number.
             amplitude: Size of the initial temperature perturbation.
             seed: PRNG seed for the perturbation.
-            mode: When given, seed only this Fourier mode (used by the linear
-                stability check) instead of broadband noise.
+            mode: 0, 1 or 2. The first two disturbs an initial linear profile
+                with broadband noise; the last starts with zero temperature
+                throughout the domain, perturbed by noise.
             tableau: Any globally stiffly accurate IMEX Runge-Kutta tableau.
             time: Optional default integration interval.
             padding: Shape of real space, as in `KMM2D`.
@@ -315,11 +317,16 @@ class RayleighBenard(KMM2D):
         """
         Vh = self.VT.get_homogeneous()
         xx, yy = Vh.mesh()
-        if self.mode is None:
+        if self.mode == 0:
             noise = jax.random.normal(jax.random.PRNGKey(self.seed), Vh.shape)
-        else:
+            T_hat = Vh.forward(self.amplitude * noise * (1 - yy**2))
+        elif self.mode == 1:
             noise = jnp.cos(2 * jnp.pi * self.mode * xx / self.Lx) * jnp.ones_like(yy)
-        T_hat = Vh.forward(self.amplitude * noise * (1 - yy**2))
+            T_hat = Vh.forward(self.amplitude * noise * (1 - yy**2))
+        else:
+            noise = jax.random.uniform(jax.random.PRNGKey(self.seed), self.VT.shape)
+            T_hat = self.VT.forward(self.amplitude * noise * (1 - yy**2))
+
         return (T_hat.at[self.nyquist].set(0.0),)
 
     # -- diagnostics -------------------------------------------------------
@@ -448,6 +455,7 @@ def main() -> None:
         padding=padding,
         polynomial=POLYNOMIAL,
         kind=KIND,
+        mode=2,
     )
     echo(
         f"  dofs: v {solver.VB.num_dofs} T {solver.VT.num_dofs} u0 {solver.D1.num_dofs}"

@@ -12,12 +12,93 @@ spectral_sharding = NamedSharding(spmd_mesh, P("k"))
 physical_sharding = NamedSharding(spmd_mesh, P(None, "k"))
 
 
+replicated_sharding = NamedSharding(spmd_mesh, P())
+
+# The batched counterparts of `spectral_sharding` / `physical_sharding`, for the
+# `(n_fields, k, y)` arrays the transforms carry when several fields share one
+# matrix product. The leading axis is the field batch and is never split; which
+# of the remaining two is, is exactly the distinction the rank-2 pair makes.
+batched_spectral_sharding = NamedSharding(spmd_mesh, P(None, "k", None))
+batched_physical_sharding = NamedSharding(spmd_mesh, P(None, None, "k"))
+
+
+def replicate(x):
+    """Return `x` with a full copy on every device, or unchanged if it has none.
+
+    For the small assembled arrays an integrator *stores* -- forcing vectors,
+    boundary liftings -- as opposed to the state it is handed each step.
+
+    Assembly places its right-hand side on `spectral_sharding`, which is what a
+    top-level `A.solve(b)` wants. Held on the integrator it is the wrong shape
+    of thing: these are whole-field vectors read at every stage, not state that
+    is split, and replicating costs one gather, once, at construction.
+
+    This used to be load-bearing rather than a placement choice. While the
+    integrator went into `_advance` as a static argument, everything under it
+    was reached through the *closure*, and JAX refuses to close over an array
+    spanning devices this process cannot address -- so a sharded forcing did
+    not merely place badly, it failed to compile. The stepper is traced now and
+    its arrays arrive as jit arguments, which is what lets
+    `TPMatricesWavenumberSolver` keep genuinely sharded factors. See `_advance`.
+
+    A no-op on one device, and on anything that is not an array (an initial
+    condition may still be a SymPy expression at this point).
+    """
+    if len(jax.devices()) <= 1 or not isinstance(x, jax.Array):
+        return x
+    return jax.device_put(x, replicated_sharding)
+
+
+def state_sharding(shape: tuple[int, ...]) -> NamedSharding:
+    """Return the sharding a coefficient array of this shape should carry.
+
+    Spectral coefficients split along the leading (Fourier) axis, which is what
+    `spectral_sharding` expresses and what the per-wavenumber solvers and the
+    separable transforms both assume. Anything the mesh cannot divide evenly
+    stays replicated, and so does anything one-dimensional: a rank-1 state is a
+    single wavenumber's profile, whose one axis is a non-Fourier direction and
+    so is never the split axis.
+    """
+    n = len(jax.devices())
+    if len(shape) >= 2 and shape[0] % n == 0:
+        return spectral_sharding
+    return replicated_sharding
+
+
+def pin_state[StateT](state: StateT) -> StateT:
+    """Constrain every leaf of a coefficient state to its `state_sharding`.
+
+    A no-op on one device. On more than one it is what keeps a jitted step
+    compilable at all, and the reason is indirect: left unconstrained, the state
+    gives GSPMD freedom to choose layouts, and it exercises that freedom
+    *backwards*, onto the small replicated operator arrays the step is handed.
+    The shardings it proposes for them are regularly ones they cannot take --
+    `P("k")` on a scalar step size, or on a `(1, n)` array of Fourier diagonals
+    -- and the failure surfaces far from the cause: an `IndexError` out of
+    `named_sharding_to_xla_hlo_sharding`, or a fatal PJRT abort over an argument
+    count when a hoisted constant goes missing on a jit cache hit.
+
+    Pinning the state removes the freedom. Every array whose layout matters is
+    then stated rather than inferred, and the operators stay replicated because
+    nothing suggests otherwise.
+    """
+    if len(jax.devices()) <= 1:
+        return state
+    return jax.tree.map(
+        lambda x: jax.lax.with_sharding_constraint(x, state_sharding(x.shape)), state
+    )
+
+
 def get_transposed_sharding(sharding: NamedSharding) -> NamedSharding:
     """Return the sharding with unsharded and sharded axes transposed."""
     if sharding == spectral_sharding:
         return physical_sharding
     elif sharding == physical_sharding:
         return spectral_sharding
+    elif sharding == batched_spectral_sharding:
+        return batched_physical_sharding
+    elif sharding == batched_physical_sharding:
+        return batched_spectral_sharding
     else:
         raise ValueError(f"Provided {sharding} does not match spectral or physical.")
 
@@ -61,7 +142,11 @@ def _build_local_apply_fn(dim: int, ax: int, fn: ArrayFun) -> ArrayFun:
 
 
 def _apply_separable_spmd_shard_map(
-    c: Array, fns: tuple[ArrayFun, ...], sharding: NamedSharding, cache: dict
+    c: Array,
+    fns: tuple[ArrayFun, ...],
+    sharding: NamedSharding,
+    cache: dict,
+    batch_dims: int = 0,
 ) -> Array:
     """Apply separable per-axis transforms using ``shard_map`` + ``lax.all_to_all``.
 
@@ -76,6 +161,19 @@ def _apply_separable_spmd_shard_map(
     * **All-to-all**: ``lax.all_to_all(tiled=True)`` transposes the sharding.
     * **Phase 2**: originally-sharded-axis transforms applied locally.
 
+    Args:
+        c: The array to transform.
+        fns: One local transform per *space* axis, in axis order. Each is built
+            for the rank ``c`` actually has, so with ``batch_dims`` non-zero
+            ``fns[i]`` acts on axis ``batch_dims + i``.
+        sharding: How ``c`` is split. The output carries its transpose.
+        cache: Where the compiled kernel is kept, keyed so that each
+            ``(fns, spec, batch_dims)`` combination compiles once.
+        batch_dims: Number of leading axes that are not space axes. They are
+            carried along replicated: they take no transform, and they are
+            excluded from the choice of ``split_axis``/``concat_axis``, which
+            has to fall on a space axis for the transpose to mean anything.
+
     .. note::
         ``lax.all_to_all(tiled=True)`` requires the ``split_axis`` dimension
         (the first unsharded axis, after Phase 1) to be divisible by the
@@ -87,18 +185,18 @@ def _apply_separable_spmd_shard_map(
     # combination.  _kernel is defined inside the method, so each call would
     # produce a new function object and force recompilation.  Storing the
     # shard_map-wrapped callable ensures it is compiled exactly once.
-    cache_key = ("shard_map_kernel", id(fns), sharding.spec)
+    cache_key = ("shard_map_kernel", id(fns), sharding.spec, batch_dims)
     if cache_key not in cache:
-        dim = c.ndim
         spec = sharding.spec
-        sharded = [ax for ax in range(dim) if ax < len(spec) and spec[ax] is not None]
-        unsharded = [ax for ax in range(dim) if ax not in sharded]
+        space = range(batch_dims, c.ndim)
+        sharded = [ax for ax in space if ax < len(spec) and spec[ax] is not None]
+        unsharded = [ax for ax in space if ax not in sharded]
         transposed = get_transposed_sharding(sharding)
 
         def _kernel(c_loc: Array) -> Array:
             # Phase 1 — unsharded axes: fully local, no communication.
             for ax in unsharded:
-                c_loc = fns[ax](c_loc)
+                c_loc = fns[ax - batch_dims](c_loc)
             # All-to-all: redistribute sharding from sharded → unsharded axes.
             c_loc = jax.lax.all_to_all(
                 c_loc,
@@ -109,7 +207,7 @@ def _apply_separable_spmd_shard_map(
             )
             # Phase 2 — originally-sharded axes: fully local after the transpose.
             for ax in sharded:
-                c_loc = fns[ax](c_loc)
+                c_loc = fns[ax - batch_dims](c_loc)
             return c_loc
 
         cache[cache_key] = jax.jit(

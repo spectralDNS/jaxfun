@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+import os
 import warnings
 from typing import TYPE_CHECKING, NamedTuple, TypedDict, overload
 
@@ -7,7 +9,12 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from jaxfun.la.matrixprotocol import BaseMatrix, DiaMatrixSolveMethod, _CacheBox
+from jaxfun.la.matrixprotocol import (
+    BaseMatrix,
+    DiaMatrixSolveMethod,
+    _CacheBox,
+    pin_value_to_scalar,
+)
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
@@ -1408,16 +1415,17 @@ class DiaMatrix(BaseMatrix):
         return self.data.dtype
 
     def pin(
-        self, constraints: dict[int, float] | tuple[tuple[int, float], ...]
+        self, constraints: dict[int, complex] | tuple[tuple[int, complex], ...]
     ) -> PinnedDiaMatrix:
         """Return a :class:`PinnedSystem` with the given DOFs fixed.
 
         Args:
-            constraints: Mapping from DOF index to pinned value, e.g.
-                ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0}``.  Negative indices are supported
-                (Python-style, relative to ``n``).  Positive indices must be in
-                ``[0, n)``, otherwise :exc:`IndexError` is raised.
-                Alternatively, a tuple of ``(row_index, value)`` pairs can be provided.
+            constraints: Mapping from DOF index to pinned value (real or
+                complex), e.g. ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0 + 2.0j}``.
+                Negative indices are supported (Python-style, relative to
+                ``n``).  Positive indices must be in ``[0, n)``, otherwise
+                :exc:`IndexError` is raised.  Alternatively, a tuple of
+                ``(row_index, value)`` pairs can be provided.
 
         Returns:
             :class:`PinnedDiaMatrix` whose :meth:`~PinnedDiaMatrix.solve` method
@@ -1432,13 +1440,14 @@ class DiaMatrix(BaseMatrix):
             data=data, offsets=tuple(int(i) for i in new_offsets), shape=self.shape
         )
         return PinnedDiaMatrix(
-            pinned_matrix, tuple((int(i), float(j)) for i, j in norm_constraints)
+            pinned_matrix,
+            tuple((int(i), pin_value_to_scalar(j)) for i, j in norm_constraints),
         )
 
     @jax.jit(static_argnums=(1,))
     def _pin(
-        self, constraints: tuple[tuple[int, float], ...]
-    ) -> tuple[list[tuple[int, float]], list[int], Array]:
+        self, constraints: tuple[tuple[int, complex], ...]
+    ) -> tuple[list[tuple[int, complex]], list[int], Array]:
         """Return a :class:`PinnedSystem` with the given DOFs fixed.
 
         For each ``(row_index, value)`` pair in *constraints* the corresponding
@@ -1451,11 +1460,11 @@ class DiaMatrix(BaseMatrix):
         calls are cheap.
 
         Args:
-            constraints: Mapping from DOF index to pinned value, e.g.
-                ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0}``.  Negative indices
-                are supported (Python-style, relative to ``n``).  Positive
-                indices must be in ``[0, n)``, otherwise :exc:`IndexError`
-                is raised.
+            constraints: Mapping from DOF index to pinned value (real or
+                complex), e.g. ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0 + 2.0j}``.
+                Negative indices are supported (Python-style, relative to
+                ``n``).  Positive indices must be in ``[0, n)``, otherwise
+                :exc:`IndexError` is raised.
 
         Returns:
             :class:`PinnedDiaMatrix` whose :meth:`~PinnedDiaMatrix.solve` method
@@ -1485,13 +1494,16 @@ class DiaMatrix(BaseMatrix):
         main_idx = offsets.index(0)
 
         # Normalise negative indices (Python-style); reject out-of-range positives.
-        norm_constraints: list[tuple[int, float]] = []
+        # Preserve the value's own type: floats stay floats (unaffected repr),
+        # complex values are kept as complex rather than truncated.
+        norm_constraints: list[tuple[int, complex]] = []
         for idx, val in constraints:
             if idx < -n or idx >= n:
                 raise IndexError(
                     f"Constraint index {idx} is out of range for matrix of size {n}"
                 )
-            norm_constraints.append((idx % n, float(val)))
+            val = complex(val) if isinstance(val, complex) else float(val)
+            norm_constraints.append((idx % n, val))
 
         # Zero every stored entry in each pinned row, then set diagonal to 1.
         # All indices (di, j) are Python ints — static at trace time — so
@@ -1597,6 +1609,16 @@ class DiagonalMatrix(DiaMatrix):
         shape[axis] = diagonal.shape[0]
         return diagonal.reshape(tuple(shape)) * x
 
+    def rmatvec(self, x: Array, axis: int = -1) -> Array:
+        """Multiply ``x @ A`` contracting ``axis`` of ``x``.
+
+        A diagonal matrix is its own transpose, so this is the elementwise
+        product :meth:`matvec` performs, and delegates to it. Overridden so a
+        single diagonal does not take the banded path, which pads ``x`` by
+        ``m - 1`` on each side of the contracted axis.
+        """
+        return self.matvec(x, axis=axis)
+
     def lu_solve(
         self,
         b: Array,
@@ -1618,16 +1640,17 @@ class DiagonalMatrix(DiaMatrix):
         )
 
     def pin(
-        self, constraints: dict[int, float] | tuple[tuple[int, float], ...]
+        self, constraints: dict[int, complex] | tuple[tuple[int, complex], ...]
     ) -> PinnedDiaMatrix:
         """Return a :class:`PinnedDiaMatrix` with the given DOFs fixed.
 
         Args:
-            constraints: Mapping from DOF index to pinned value, e.g.
-                ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0}``.  Negative indices are supported
-                (Python-style, relative to ``n``).  Positive indices must be in
-                ``[0, n)``, otherwise :exc:`IndexError` is raised.
-                Alternatively, a tuple of ``(row_index, value)`` pairs can be provided.
+            constraints: Mapping from DOF index to pinned value (real or
+                complex), e.g. ``{0: 0.0}`` or ``{0: 0.0, -1: 1.0 + 2.0j}``.
+                Negative indices are supported (Python-style, relative to
+                ``n``).  Positive indices must be in ``[0, n)``, otherwise
+                :exc:`IndexError` is raised.  Alternatively, a tuple of
+                ``(row_index, value)`` pairs can be provided.
 
         Returns:
             :class:`PinnedDiaMatrix` whose :meth:`~PinnedDiaMatrix.solve` method
@@ -1640,7 +1663,7 @@ class DiagonalMatrix(DiaMatrix):
         norm_constraints, _, data = self._pin(constraints)
         return PinnedDiaMatrix(
             DiagonalMatrix(data[0]),
-            tuple((int(i), float(j)) for i, j in norm_constraints),
+            tuple((int(i), pin_value_to_scalar(j)) for i, j in norm_constraints),
         )
 
     @property
@@ -2121,6 +2144,101 @@ def _lu_banded_kernel(
     return band_lu, perm
 
 
+def _prefix_pays(p: int, q: int, n_stored: int, n: int) -> bool:
+    """Whether log depth is worth its extra arithmetic for this band.
+
+    Two quantities, both dimensionless. The prefix form multiplies the traffic
+    by roughly ``r**2 / n_stored``, carrying an ``(n, r, r)`` companion stack
+    where the factors carry ``n_stored`` diagonals. It divides the depth by
+    roughly ``n / (2 log2 n)``, turning ``n`` sequential steps into that many
+    levels. Take it when the depth it buys exceeds the traffic it costs.
+
+    Written as a ratio rather than a fixed bound on ``r`` because the two cases
+    are not alike. A per-wavenumber solve is thousands of systems wide, so its
+    companion stack is real memory and a wide band is ruinous. A lone 1-D solve
+    carries kilobytes whatever ``r`` is, and only depth is left to pay for --
+    a fixed ``r`` cutoff cannot tell those apart, and rejected the mean-flow
+    substitution for a band that costs it nothing.
+    """
+    r = max(p, q)
+    if r == 0:
+        return False
+    traffic = (r * r) / max(n_stored, 1)
+    depth = n / max(2.0 * math.log2(max(n, 2)), 1.0)
+    return traffic <= depth
+
+
+def _use_prefix_substitution(p: int, q: int, n_stored: int, n: int) -> bool:
+    """Whether to resolve the substitutions in log depth rather than in order.
+
+    The sequential scan is ``n`` steps of a few multiply-adds; the prefix form
+    is ``O(log n)`` steps of ``r x r`` matmuls. Which wins is a property of the
+    backend as well as the band: a step costs a kernel launch on an
+    accelerator, so depth is what is paid for there, while on CPU a step is a
+    loop iteration and the extra arithmetic is the whole cost -- measured at
+    10-60x slower across every size tried. `_prefix_pays` weighs the band.
+
+    `JAXFUN_WAVENUMBER_SUBSTITUTION` (``scan`` | ``prefix`` | ``auto``)
+    overrides it, which is how the two get compared on new hardware.
+    """
+    choice = os.environ.get("JAXFUN_WAVENUMBER_SUBSTITUTION", "auto").lower()
+    if choice == "prefix":
+        return True
+    if choice == "scan":
+        return False
+    if choice != "auto":
+        raise ValueError(
+            f"JAXFUN_WAVENUMBER_SUBSTITUTION must be 'scan', 'prefix' or 'auto', "
+            f"got {choice!r}."
+        )
+    return jax.default_backend() != "cpu" and _prefix_pays(p, q, n_stored, n)
+
+
+def _affine_prefix(coef: Array, rhs: Array, r: int) -> Array:
+    """``v_i = rhs_i - coef[i] . (v_{i-1}, ..., v_{i-r})``, in log depth.
+
+    The state ``Y_i = (v_i, ..., v_{i-r+1})`` obeys an affine map
+    ``Y_i = A_i Y_{i-1} + c_i`` with ``A_i`` a companion matrix, and affine maps
+    compose associatively::
+
+        (A_2, c_2) . (A_1, c_1) = (A_2 A_1, A_2 c_1 + c_2)
+
+    So the recurrence is a prefix scan rather than a loop: `associative_scan`
+    resolves it in ``O(log n)`` sequential steps instead of ``n``. ``Y_{-1}`` is
+    zero, so the composed translation *is* the answer and the composed matrix is
+    only scaffolding.
+
+    Costs more arithmetic than the sequential form -- ``r x r`` matmuls at every
+    level against ``r`` multiply-adds per step -- and trades it for depth. See
+    `_use_prefix_substitution` for who chooses.
+
+    Args:
+        coef: ``(n, r)``; ``coef[i, j]`` multiplies ``v_{i-1-j}``.
+        rhs: ``(n, k)``, one column per right-hand side.
+        r: Order of the recurrence.
+
+    Returns:
+        ``(n, k)``.
+    """
+    n, k = rhs.shape
+    dt = rhs.dtype
+    A = jnp.zeros((n, r, r), dtype=dt).at[:, 0, :].set(-coef.astype(dt))
+    if r > 1:
+        j = jnp.arange(r - 1)
+        A = A.at[:, j + 1, j].set(jnp.ones(r - 1, dtype=dt))
+    c = jnp.zeros((n, r, k), dtype=dt).at[:, 0, :].set(rhs)
+
+    def combine(
+        left: tuple[Array, Array], right: tuple[Array, Array]
+    ) -> tuple[Array, Array]:
+        A_l, c_l = left
+        A_r, c_r = right
+        return (A_r @ A_l, A_r @ c_l + c_r)
+
+    _, c_out = jax.lax.associative_scan(combine, (A, c))
+    return c_out[:, 0, :]
+
+
 @jax.jit
 def _forward_elimination(L: DiaMatrix, b: Array) -> Array:
     """Solve ``L y = b`` where ``L`` is unit-lower-triangular (DiaMatrix).
@@ -2163,6 +2281,16 @@ def _forward_elimination(L: DiaMatrix, b: Array) -> Array:
 
     # carry: window[:, :] where window[j] = y[i-1-j] — the last p y-values.
     # Only the d present diagonals contribute; their window slots are win_indices.
+
+    if _use_prefix_substitution(p, 0, len(offsets), n):
+        # Same recurrence, resolved by composing affine maps. The window slots
+        # an absent sub-diagonal would occupy are simply zero here, which the
+        # companion matrix carries for free.
+        coef = jnp.zeros((n, p), dtype=b.dtype)
+        for row, stride in enumerate(sub_strides):
+            coef = coef.at[:, stride - 1].set(l_mat[row].astype(b.dtype))
+        ys = _affine_prefix(coef, b2d, p)
+        return ys[:, 0] if scalar else ys
 
     def step(window: Array, xs: tuple) -> tuple[Array, Array]:
         bi, l_i = xs  # (k,), (d,)
@@ -2228,6 +2356,19 @@ def _backward_substitution(U: DiaMatrix, b: Array) -> Array:
 
     # carry: window[j] = x[i+1+j] — next q solution values.
     # Only the d present diagonals contribute; their slots are win_indices.
+    if _use_prefix_substitution(0, q, len(offsets), n):
+        # Reversed, this is the same forward recurrence; dividing by the main
+        # diagonal on both sides puts it in the `rhs - coef . window` form the
+        # prefix scan wants.
+        coef = jnp.zeros((n, q), dtype=b.dtype)
+        for row, stride in enumerate(super_strides):
+            coef = coef.at[:, stride - 1].set(
+                (u_mat_rev[:, row] / diag_rev).astype(b.dtype)
+            )
+        xs_pref = _affine_prefix(coef, b_rev / diag_rev[:, None], q)
+        x = xs_pref[rev]
+        return x[:, 0] if scalar else x
+
     def step(window: Array, xs: tuple) -> tuple[Array, Array]:
         bi, u_i, dii = xs  # (k,), (d,), ()
         xi = (bi - jnp.einsum("d,dk->k", u_i, window[win_indices])) / dii

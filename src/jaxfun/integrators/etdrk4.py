@@ -3,7 +3,6 @@
 from collections.abc import Callable
 from typing import cast
 
-import jax
 import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
@@ -85,7 +84,7 @@ class ETDRK4(BaseIntegrator):
         )
         self._forcing_rhs = nnx.data(forcing_rhs)
 
-    def setup(self, dt: float) -> None:
+    def _setup_impl(self, dt: float) -> None:
         """Precompute ETD propagators and nonlinear stage coefficients."""
         mass_diag = self.mass_operator.diagonal_or_none()
         linear_diag = self.linear_operator.diagonal_or_none()
@@ -149,8 +148,7 @@ class ETDRK4(BaseIntegrator):
         )
         return nval + self._forcing_rhs
 
-    @jax.jit(static_argnums=(0, 3))
-    def step(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:
+    def _step_impl(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:
         """Advance one ETDRK4 step in coefficient space."""
         dtQ = dt * self.Q
         n1 = self._N(u_hat, N)

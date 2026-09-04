@@ -10,6 +10,8 @@ All tests are marked ``spmd`` and are **skipped by default**.  Run with
     pytest tests/galerkin/test_forward_backward_spmd.py --num-devices=2
 """
 
+import re
+
 import jax
 import jax.numpy as jnp
 import pytest
@@ -180,42 +182,86 @@ def test_cached_basis_survives_shard_map() -> None:
     assert jnp.linalg.norm(uj.real - ue) < ulp(100)
 
 
-def test_backward_batch_refuses_sharded() -> None:
-    """`backward_batch` must refuse sharded input rather than fail obscurely.
+def _batch_case(N: int = 8, bcs: bool = False) -> tuple:
+    """A sharded coefficient array and the space it belongs to.
 
-    `_apply_separable_spmd_shard_map` identifies each axis's role by position
-    against a fixed-rank spec, which a batch axis shifts. Without the check the
-    vmap would instead die on `c.devices()` being called on a traced array.
+    Without `bcs` every extent is `N`, so the sharded path applies at any device
+    count that divides it. Two Dirichlet conditions make the polynomial axis
+    carry `N - 2` coefficients against `N` quadrature points, and `_use_spmd`
+    wants both divisible -- which only ever holds for two devices. That case is
+    worth transforming anyway; it just may take the local path.
     """
-    N = 8
     F = FunctionSpace(N, Fourier.Fourier, name="F")
-    D = FunctionSpace(N, Legendre.Legendre, {"left": {"D": 0}, "right": {"D": 0}})
+    kw = {"bcs": {"left": {"D": 0}, "right": {"D": 0}}} if bcs else {}
+    D = FunctionSpace(N, Legendre.Legendre, name="D", **kw)
     T = TensorProduct(F, D, name="T")
     x, y = T.system.base_scalars()
     uh = jax.device_put(project(sp.sin(x) * (1 - y**2), T), spectral_sharding)
-
-    # Unbatched is unaffected: it still goes down the sharded path.
-    assert T.backward(uh).shape == T.mesh(broadcast=False)[0].shape[:1] + (N,)
-    with pytest.raises(NotImplementedError, match="sharded coefficients"):
-        T.backward_batch(jnp.stack([uh, uh]))
+    return T, uh
 
 
+@pytest.mark.parametrize("bcs", (False, True), ids=["orthogonal", "composite"])
 @pytest.mark.parametrize(
     "method", ("backward", "backward_primitive", "forward", "scalar_product")
 )
-def test_batch_refuses_sharded(method: str) -> None:
-    """Every batched transform must refuse sharded input, not fail obscurely."""
-    N = 8
-    F = FunctionSpace(N, Fourier.Fourier, name="F")
-    D = FunctionSpace(N, Legendre.Legendre, {"left": {"D": 0}, "right": {"D": 0}})
-    T = TensorProduct(F, D, name="T")
-    x, y = T.system.base_scalars()
-    uh = jax.device_put(project(sp.sin(x) * (1 - y**2), T), spectral_sharding)
+def test_batch_matches_one_at_a_time_sharded(method: str, bcs: bool) -> None:
+    """A batched transform of sharded input must equal the per-field result.
+
+    The batch axis rides along replicated while the space axes keep their
+    sharding, so batching changes only how the arithmetic is issued -- exactly
+    the guarantee the unsharded batch already makes.
+    """
+    T, uh = _batch_case(bcs=bcs)
     spectral = method.startswith("backward")
     arg = uh if spectral else jax.device_put(T.backward(uh), physical_sharding)
     kwargs = {"k": (1, 0)} if method == "backward_primitive" else {}
-    with pytest.raises(NotImplementedError, match="does not handle sharded"):
-        getattr(T, method + "_batch")(jnp.stack([arg, arg]), **kwargs)
+
+    fields = jnp.stack([arg, 2.0 * arg, -arg])
+    batched = getattr(T, method + "_batch")(fields, **kwargs)
+    one_at_a_time = jnp.stack(
+        [getattr(T, method)(fields[i], **kwargs) for i in range(fields.shape[0])]
+    )
+    assert batched.shape == one_at_a_time.shape
+    assert jnp.linalg.norm(batched - one_at_a_time) < ulp(100)
+
+
+def _split_axes(x) -> tuple[int, ...]:
+    """The axes of `x` that are actually spread over the mesh.
+
+    Read off the spec rather than compared to one: JAX drops trailing `None`s,
+    so `P(None, "k")` and `P(None, "k", None)` are the same placement of a
+    rank-3 array and only one of them is what comes back.
+    """
+    return tuple(ax for ax, part in enumerate(x.sharding.spec) if part is not None)
+
+
+def test_batch_transposes_the_sharding() -> None:
+    """The batch axis stays whole; the space axes swap which one is split."""
+    T, uh = _batch_case()
+    assert T._use_spmd(T._spectral_sharding, uh.shape, T.num_quad_points)
+    fields = jnp.stack([uh, uh])
+
+    uj = T.backward_batch(fields)
+    assert _split_axes(uj) == (2,)  # physical: last space axis
+
+    back = T.forward_batch(uj)
+    assert _split_axes(back) == (1,)  # spectral: first space axis, never the batch
+    assert jnp.linalg.norm(back - fields) < ulp(100)
+
+
+def test_batch_communicates_once_for_the_whole_batch() -> None:
+    """One `all_to_all` per batched transform, not one per field, and no gather.
+
+    A gather on the split axis would mean the fields are not distributed at all,
+    which is the failure the histogram catches and a correctness check does not.
+    """
+    T, uh = _batch_case()
+    assert T._use_spmd(T._spectral_sharding, uh.shape, T.num_quad_points)
+    fields = jnp.stack([uh, uh, uh])
+    hlo = jax.jit(T.backward_batch).lower(fields).compile().as_text()
+    assert isinstance(hlo, str), hlo
+    assert len(re.findall(r"\ball-to-all\(", hlo)) == 1, hlo
+    assert "all-gather(" not in hlo
 
 
 def test_direct_sum_batch_needs_single_device() -> None:

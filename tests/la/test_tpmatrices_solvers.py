@@ -25,12 +25,13 @@ from jaxfun.la import (
     TPMatrix,
     tpmats_to_kron,
 )
-from jaxfun.la.diamatrix import DiaMatrix
+from jaxfun.la.diamatrix import DiaMatrix, _prefix_pays
 from jaxfun.la.tpmatrix import (
     TPLUFactors,
     TPMatricesDenseLUFactors,
     TPMatricesLUFactors,
     TPMatricesWavenumberSolver,
+    _parity_halves_offsets,
     tpmats_dense_lu_factor,
     tpmats_lu_factor,
     tpmats_wavenumber_factor,
@@ -404,3 +405,212 @@ def test_blockmatrix_solve_cached_rcm(poly):
     x1 = A.solve(b)
     x2 = A.solve(b)
     assert jnp.allclose(x1.flatten(), x2.flatten(), atol=ulp(10))
+
+
+# ---------------------------------------------------------------------------
+# Banded substitution: sequential scan vs parallel prefix
+# ---------------------------------------------------------------------------
+
+
+def _biharmonic_fourier_poly_2d(n: int, poly):
+    """Fourier x poly biharmonic, for the wide-band end of the solver."""
+    F = FunctionSpace(n, Fourier)
+    D = FunctionSpace(n, poly, {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}})
+    T = TensorProduct(F, D)
+    v, u = TestFunction(T), TrialFunction(T)
+    x, y = T.system.base_scalars()
+    ue = sp.cos(2 * x) * (1 - y**2) ** 2
+    A, b = inner(
+        v * Div(Grad(Div(Grad(u)))) - v * Div(Grad(Div(Grad(ue)))),
+        sparse=True,
+        kind="system",
+    )
+    return T, cast(TPMatrices, A), b, ue
+
+
+@pytest.mark.parametrize(
+    "build", [_poisson_fourier_poly_2d, _biharmonic_fourier_poly_2d], ids=["d2", "d4"]
+)
+@POLY_SPACES
+def test_prefix_substitution_agrees_with_scan(build, poly, monkeypatch) -> None:
+    """The two substitutions are the same solve, reached at different depths.
+
+    `_affine_prefix` resolves the recurrence by composing affine maps rather
+    than stepping through it, which is a different order of operations and so a
+    different rounding path -- but not a different answer.
+    """
+    _, A, b, _ = build(16, poly)
+
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_SUBSTITUTION", "scan")
+    seq = tpmats_wavenumber_factor(A).solve(b)
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_SUBSTITUTION", "prefix")
+    par = tpmats_wavenumber_factor(A).solve(b)
+
+    scale = float(jnp.max(jnp.abs(seq)))
+    assert float(jnp.max(jnp.abs(par - seq))) < scale * jnp.sqrt(ulp(10))
+
+
+def _band_is_narrow_enough(wn) -> bool:
+    """The band half of `auto`, over an assembled solver and free of the backend."""
+    return _prefix_pays(
+        max((-o for o in wn.L_offsets if o < 0), default=0),
+        max((o for o in wn.U_offsets if o > 0), default=0),
+        len(wn.L_offsets) + len(wn.U_offsets),
+        wn.L.shape[-1],
+    )
+
+
+def test_band_width_follows_the_formulation_not_the_basis() -> None:
+    """What `auto` keys off, and why it cannot key off the basis instead.
+
+    A Chebyshev stiffness matrix assembled Galerkin-style is nearly dense
+    upper-triangular, and the prefix substitution -- whose companion stack grows
+    as `r**2` against the factors' `r` -- must decline it. The same operator in
+    a Petrov-Galerkin formulation is banded, and should be taken. Same basis,
+    opposite decision, so the offsets are the only honest thing to read.
+    """
+    galerkin = tpmats_wavenumber_factor(
+        _poisson_fourier_poly_2d(16, Chebyshev.Chebyshev)[1]
+    )
+    assert not _band_is_narrow_enough(galerkin), (
+        f"Galerkin Chebyshev should be too wide, got U_offsets={galerkin.U_offsets}"
+    )
+
+    F = FunctionSpace(16, Fourier)
+    D = FunctionSpace(16, Chebyshev.Chebyshev, BCS, name="D")
+    T = TensorProduct(F, D)
+    Tt = TensorProduct(F, D.get_testspace("PG", name="Pt"))
+    u, v = TrialFunction(T), TestFunction(Tt)
+    x, y = T.system.base_scalars()
+    ue = sp.cos(2 * x) * (1 - y**2)
+    A_pg, _ = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
+    petrov = tpmats_wavenumber_factor(cast(TPMatrices, A_pg))
+    assert _band_is_narrow_enough(petrov), (
+        f"Petrov-Galerkin Chebyshev should be narrow, got U_offsets={petrov.U_offsets}"
+    )
+
+
+def test_unknown_substitution_is_rejected(monkeypatch) -> None:
+    """A typo in the override must not silently fall back to a default."""
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_SUBSTITUTION", "parallel")
+    _, A, _, _ = _poisson_fourier_poly_2d(8, Legendre.Legendre)
+    with pytest.raises(ValueError, match="must be 'scan', 'prefix' or 'auto'"):
+        tpmats_wavenumber_factor(A)
+
+
+# ---------------------------------------------------------------------------
+# Odd-even (parity) decoupling
+# ---------------------------------------------------------------------------
+
+
+def _poisson_fourier_poly_sizes(n_fourier: int, n_poly: int, poly):
+    """Poisson with the two axes sized independently.
+
+    The shared-`n` helpers cannot reach an odd polynomial extent: Fourier
+    requires an even mode count, and that is the number they pass to both.
+    """
+    F = FunctionSpace(n_fourier, Fourier)
+    D = FunctionSpace(n_poly, poly, BCS)
+    T = TensorProduct(F, D)
+    v, u = TestFunction(T), TrialFunction(T)
+    x, y = T.system.base_scalars()
+    ue = sp.cos(2 * x) * (1 - y**2)
+    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
+    return T, cast(TPMatrices, A), b, ue
+
+
+@POLY_SPACES
+@pytest.mark.parametrize("n_poly", [16, 17], ids=["even-extent", "odd-extent"])
+def test_parity_decoupling_leaves_the_answer_alone(poly, n_poly, monkeypatch) -> None:
+    """Decoupled or not, it is the same operator and the same solution.
+
+    `n_poly=17` gives an odd polynomial extent, where the odd-index block is one
+    shorter than the even one and is padded with an identity row. That row's
+    solution is zero and is dropped on the way out; if the padding leaked into
+    the system the answer would move.
+    """
+    _, A, b, _ = _poisson_fourier_poly_sizes(16, n_poly, poly)
+
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_PARITY", "off")
+    plain = tpmats_wavenumber_factor(A).solve(b)
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_PARITY", "on")
+    split = tpmats_wavenumber_factor(A).solve(b)
+
+    scale = float(jnp.max(jnp.abs(plain)))
+    assert float(jnp.max(jnp.abs(split - plain))) < scale * jnp.sqrt(ulp(10))
+
+
+@POLY_SPACES
+def test_parity_decoupling_halves_the_band_and_the_extent(poly, monkeypatch) -> None:
+    """What the decoupling is *for*, stated on the factors it produces.
+
+    Every operator here has even offsets only, so the polynomial axis splits into
+    two independent halves. The factors should come back over half the extent
+    with the offsets halved -- and contiguous, because the odd slots the window
+    used to carry as structural zeros are gone.
+    """
+    _, A, _, _ = _poisson_fourier_poly_2d(16, poly)
+
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_PARITY", "off")
+    plain = tpmats_wavenumber_factor(A)
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_PARITY", "on")
+    split = tpmats_wavenumber_factor(A)
+
+    assert plain._parity is False and split._parity is True
+    # Half the sequential extent, twice the batch: depth traded for width.
+    assert split.L.shape[-1] == (plain.L.shape[-1] + 1) // 2
+    assert split.L.shape[0] == plain.L.shape[0] * 2
+    # Offsets halved, and now adjacent rather than every other one.
+    assert split.L_offsets == tuple(o // 2 for o in plain.L_offsets)
+    assert split.U_offsets == tuple(o // 2 for o in plain.U_offsets)
+
+
+def test_parity_decoupling_is_declined_for_odd_offsets(monkeypatch) -> None:
+    """An operator that couples the parities must be left alone.
+
+    Nothing in the suite assembles one, so build the predicate's input directly:
+    a first-derivative term would put odd offsets in the band, and the two halves
+    stop being independent.
+    """
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_PARITY", "on")
+    assert _parity_halves_offsets((-2, 0, 2))
+    assert _parity_halves_offsets((-4, -2, 0, 2, 4))
+    assert not _parity_halves_offsets((-1, 0, 1))
+    assert not _parity_halves_offsets((-2, -1, 0, 2))
+    assert not _parity_halves_offsets((0,))
+
+
+def test_wavenumber_factor_keeps_a_complex_fourier_diagonal() -> None:
+    """An odd derivative along the periodic axis makes that diagonal imaginary.
+
+    The working dtype used to come from the polynomial axis alone, so a complex
+    Fourier diagonal was cast to real on the way in. For an odd derivative the
+    diagonal is *purely* imaginary, so that cast zeroed every k != 0 block and
+    the solver factorised a singular matrix and returned nan. Every operator
+    previously routed here was Helmholtz-like, whose diagonal is real, which is
+    why nothing noticed.
+    """
+    F = FunctionSpace(16, Fourier)
+    D = FunctionSpace(16, Legendre.Legendre, BCS)
+    T = TensorProduct(F, D)
+    v, u = TestFunction(T), TrialFunction(T)
+    x, y = T.system.base_scalars()
+    ue = sp.cos(2 * x) * (1 - y**2)
+    # First derivative in x (imaginary diagonal) plus a mass term, so that the
+    # k = 0 block stays non-singular and the system is solvable.
+    form = v * u.diff(x, 1).diff(y, 2) - v * u
+    rhs_form = v * ue.diff(x, 1).diff(y, 2) - v * ue
+    A_raw, b_raw = inner(form - rhs_form, sparse=True, kind="system")
+    A, b = cast(TPMatrices, A_raw), cast(Array, b_raw)
+
+    fourier_diag = A.tpmats[0].mats[0].data[0]
+    assert bool(jnp.any(jnp.abs(jnp.imag(fourier_diag)) > 0)), (
+        "this test is pointless unless the Fourier diagonal really is complex"
+    )
+
+    uh = tpmats_wavenumber_factor(A).solve(b)
+    assert bool(jnp.all(jnp.isfinite(uh))), "a truncated diagonal returns nan"
+
+    ref = tpmats_to_kron(list(A.tpmats)).solve(b.flatten()).reshape(b.shape)
+    scale = float(jnp.max(jnp.abs(ref)))
+    assert float(jnp.max(jnp.abs(uh - ref))) < scale * jnp.sqrt(ulp(10))

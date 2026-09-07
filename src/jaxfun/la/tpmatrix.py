@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Sequence
 from enum import StrEnum
-from functools import cache
 from typing import TYPE_CHECKING, Any, cast, overload
 
 import jax
@@ -907,7 +906,6 @@ def _prune_zero_diagonals(
     )
 
 
-@cache
 def _parity_decoupling_enabled() -> bool:
     """Whether to split an even-offset operator into its two parity blocks.
 

@@ -11,15 +11,6 @@ from jaxfun.utils.common import Domain, cache_static, jit_vmap
 from .orthogonal import OrthogonalSpace
 
 
-@jax.jit(static_argnums=(0, 1))
-def _fourier_wavenumbers(N: int, eliminate_highest_freq: bool = False) -> Array:
-    indices = jnp.arange(N)
-    k = jnp.where(indices < (N + 1) // 2, indices, indices - N)
-    if eliminate_highest_freq and N % 2 == 0:
-        k = k.at[N // 2].set(0)
-    return k
-
-
 class Fourier(OrthogonalSpace):
     """Complex exponential Fourier basis on a periodic 1D interval.
 
@@ -189,7 +180,7 @@ class Fourier(OrthogonalSpace):
         """Return canonical reference domain [0, 2π]."""
         return Domain(0, 2 * sp.pi)
 
-    @jax.jit(static_argnums=(0, 1, 2))
+    @cache_static
     def wavenumbers(
         self, N: int | None = None, eliminate_highest_freq: bool = False
     ) -> Array:
@@ -202,7 +193,11 @@ class Fourier(OrthogonalSpace):
             Integer array of length N with ordering from fftfreq.
         """
         N = self.N if N is None else N
-        return _fourier_wavenumbers(N, eliminate_highest_freq)
+        indices = jnp.arange(N)
+        k = jnp.where(indices < (N + 1) // 2, indices, indices - N)
+        if eliminate_highest_freq and N % 2 == 0:
+            k = k.at[N // 2].set(0)
+        return k
 
     def norm_squared(self) -> Array:
         """Return L2 norm squared of each basis function over [0, 2π]."""
@@ -355,7 +350,7 @@ class RFourier(Fourier):
         """How many stored coefficients are padding rather than wavenumbers."""
         return self.N - self.n_real
 
-    @jax.jit(static_argnums=(0, 1, 2))
+    @cache_static
     def wavenumbers(
         self, N: int | None = None, eliminate_highest_freq: bool = False
     ) -> Array:

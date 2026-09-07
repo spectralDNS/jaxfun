@@ -331,7 +331,22 @@ class Chebyshev(Jacobi):
             return jnp.array([x0])
         x1: Array = c[-1] * N * 2
         if N == 1:
-            return jnp.array([x1, x0])
+            # Index 0 is the one entry carrying the 1/2 that the tail below
+            # applies, and for N == 1 that is where x1 lands.
+            return jnp.array([x1 / 2, x0])
+
+        # Old version using scan, which is slow on gpus because it launches a kernel
+        # for each iteration.
+        # def inner_loop(
+        #     carry: tuple[Array, Array], n: int | Array
+        # ) -> tuple[tuple[Array, Array], Array]:
+        #     x0, x1 = carry
+        #     x2 = 2 * (n + 1) * c[n + 1] + x0
+        #     return (x1, x2), x2
+        # xs = jax.lax.scan(inner_loop, (x0, x1), jnp.arange(N - 2, -1, -1))[1]
+        # return jnp.concatenate(
+        #     (jnp.array([xs[-1] / 2]), xs[-2::-1], jnp.array([x1, x0]))
+        # )
 
         # The recurrence is `x[t] = a[t] + x[t-2]` -- lag two, and a coefficient
         # of exactly one -- so each parity class of `t` is a running total and

@@ -455,7 +455,7 @@ def main() -> None:
         padding=padding,
         polynomial=POLYNOMIAL,
         kind=KIND,
-        mode=2,
+        mode=MODE,
     )
     echo(
         f"  dofs: v {solver.VB.num_dofs} T {solver.VT.num_dofs} u0 {solver.D1.num_dofs}"

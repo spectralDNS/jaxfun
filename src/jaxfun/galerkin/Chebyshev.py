@@ -354,6 +354,9 @@ class Chebyshev(Jacobi):
         # sequential steps, which on an accelerator is `N` kernel launches for a
         # handful of arithmetic each; as a cumsum it is logarithmic depth and
         # the same answer to round-off.
+        # Note that a cumsum approach is also obtainable from a straightforward
+        # Galerkin derivation, where the derivative matrix is appropriately diagonally
+        # scaled.
 
         n = N - 1
         a = jnp.flip(2 * jnp.arange(1, N) * c[1:N])

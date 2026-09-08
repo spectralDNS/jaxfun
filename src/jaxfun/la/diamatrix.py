@@ -2194,7 +2194,7 @@ def _use_prefix_substitution(p: int, q: int, n_stored: int, n: int) -> bool:
     return jax.default_backend() != "cpu" and _prefix_pays(p, q, n_stored, n)
 
 
-def _affine_prefix(coef: Array, rhs: Array, r: int) -> Array:
+def _affine_prefix(coef: Array, rhs: Array, r: int, stride: int = 1) -> Array:
     """``v_i = rhs_i - coef[i] . (v_{i-1}, ..., v_{i-r})``, in log depth.
 
     The state ``Y_i = (v_i, ..., v_{i-r+1})`` obeys an affine map
@@ -2212,21 +2212,64 @@ def _affine_prefix(coef: Array, rhs: Array, r: int) -> Array:
     level against ``r`` multiply-adds per step -- and trades it for depth. See
     `_use_prefix_substitution` for who chooses.
 
+    ``stride`` is the greatest common divisor of the couplings the band actually
+    has: when every present diagonal sits at a multiple of it, index ``i`` only
+    ever reaches ``i - stride``, ``i - 2*stride``, ... and the recurrence falls
+    apart into ``stride`` chains that never meet. Solving them as a batch of
+    length ``n/stride`` shrinks the companion from ``r`` to ``r/stride``, which
+    is the whole point: the stack is ``r/stride`` squared per element instead of
+    ``r`` squared, and each composition is a cube of that. Splitting along ``n``
+    costs nothing to set up: the chains fall out of a reshape, not a gather.
+
     Args:
         coef: ``(n, r)``; ``coef[i, j]`` multiplies ``v_{i-1-j}``.
         rhs: ``(n, k)``, one column per right-hand side.
-        r: Order of the recurrence.
+        r: Order of the recurrence. Must be a multiple of ``stride``.
+        stride: Spacing of the couplings; 1 leaves the recurrence undivided.
 
     Returns:
         ``(n, k)``.
     """
     n, k = rhs.shape
     dt = rhs.dtype
-    A = jnp.zeros((n, r, r), dtype=dt).at[:, 0, :].set(-coef.astype(dt))
-    if r > 1:
-        j = jnp.arange(r - 1)
-        A = A.at[:, j + 1, j].set(jnp.ones(r - 1, dtype=dt))
-    c = jnp.zeros((n, r, k), dtype=dt).at[:, 0, :].set(rhs)
+    rr = r // stride
+    m = -(-n // stride)  # ceil; the tail is padded away below
+
+    # Pad at the end only. `v_i` reads strictly earlier indices, so no real
+    # entry can see a padded one, and the padded rows carry zero coefficients
+    # and zero right-hand side, hence contribute nothing to keep.
+    pad = m * stride - n
+    if pad:
+        coef = jnp.pad(coef, ((0, pad), (0, 0)))
+        rhs = jnp.pad(rhs, ((0, pad), (0, 0)))
+
+    # Within a chain only the couplings at multiples of `stride` survive, which
+    # are columns ``stride-1, 2*stride-1, ...``; drop the rest first so the
+    # reshape moves as little as possible. Row-major reshape then puts index
+    # ``i`` at ``(i // stride, i % stride)``, making axis 1 the chain index.
+    cf = coef[:, stride - 1 :: stride].reshape(m, stride, rr)
+    rh = rhs.reshape(m, stride, k)
+
+    if rr == 1:
+        # One coupling per chain leaves a scalar recurrence: the companion is
+        # 1x1 and composing two of them is a multiply, so there is nothing for
+        # the matmul path to do.
+        a = -cf[:, :, 0].astype(dt)  # (m, stride)
+
+        def combine_scalar(
+            left: tuple[Array, Array], right: tuple[Array, Array]
+        ) -> tuple[Array, Array]:
+            a_l, c_l = left
+            a_r, c_r = right
+            return (a_r * a_l, a_r[..., None] * c_l + c_r)
+
+        _, c_out = jax.lax.associative_scan(combine_scalar, (a, rh))
+        return c_out.reshape(m * stride, k)[:n]
+
+    A = jnp.zeros((m, stride, rr, rr), dtype=dt).at[:, :, 0, :].set(-cf.astype(dt))
+    j = jnp.arange(rr - 1)
+    A = A.at[:, :, j + 1, j].set(jnp.ones(rr - 1, dtype=dt))
+    c = jnp.zeros((m, stride, rr, k), dtype=dt).at[:, :, 0, :].set(rh)
 
     def combine(
         left: tuple[Array, Array], right: tuple[Array, Array]
@@ -2235,8 +2278,10 @@ def _affine_prefix(coef: Array, rhs: Array, r: int) -> Array:
         A_r, c_r = right
         return (A_r @ A_l, A_r @ c_l + c_r)
 
+    # The scan runs down axis 0; the chain axis rides along as a batch dimension
+    # that matmul broadcasts over.
     _, c_out = jax.lax.associative_scan(combine, (A, c))
-    return c_out[:, 0, :]
+    return c_out[:, :, 0, :].reshape(m * stride, k)[:n]
 
 
 @jax.jit
@@ -2282,14 +2327,19 @@ def _forward_elimination(L: DiaMatrix, b: Array) -> Array:
     # carry: window[:, :] where window[j] = y[i-1-j] — the last p y-values.
     # Only the d present diagonals contribute; their window slots are win_indices.
 
-    if _use_prefix_substitution(p, 0, len(offsets), n):
+    # Couplings all at multiples of `g` mean `g` chains that never interact, so
+    # the prefix form solves them as a batch of length n/g with an order-p/g
+    # companion. Both are what it actually costs, hence what the heuristic is
+    # asked about.
+    g = math.gcd(*sub_strides)
+    if _use_prefix_substitution(p // g, 0, len(offsets), n // g):
         # Same recurrence, resolved by composing affine maps. The window slots
         # an absent sub-diagonal would occupy are simply zero here, which the
         # companion matrix carries for free.
         coef = jnp.zeros((n, p), dtype=b.dtype)
         for row, stride in enumerate(sub_strides):
             coef = coef.at[:, stride - 1].set(l_mat[row].astype(b.dtype))
-        ys = _affine_prefix(coef, b2d, p)
+        ys = _affine_prefix(coef, b2d, p, g)
         return ys[:, 0] if scalar else ys
 
     def step(window: Array, xs: tuple) -> tuple[Array, Array]:
@@ -2356,7 +2406,11 @@ def _backward_substitution(U: DiaMatrix, b: Array) -> Array:
 
     # carry: window[j] = x[i+1+j] — next q solution values.
     # Only the d present diagonals contribute; their slots are win_indices.
-    if _use_prefix_substitution(0, q, len(offsets), n):
+    # See `_forward_elimination`: couplings at multiples of `g` split the
+    # recurrence into `g` independent chains. Reversing the index does not
+    # disturb that -- it only relabels which chain an index belongs to.
+    g = math.gcd(*super_strides)
+    if _use_prefix_substitution(0, q // g, len(offsets), n // g):
         # Reversed, this is the same forward recurrence; dividing by the main
         # diagonal on both sides puts it in the `rhs - coef . window` form the
         # prefix scan wants.
@@ -2365,7 +2419,7 @@ def _backward_substitution(U: DiaMatrix, b: Array) -> Array:
             coef = coef.at[:, stride - 1].set(
                 (u_mat_rev[:, row] / diag_rev).astype(b.dtype)
             )
-        xs_pref = _affine_prefix(coef, b_rev / diag_rev[:, None], q)
+        xs_pref = _affine_prefix(coef, b_rev / diag_rev[:, None], q, g)
         x = xs_pref[rev]
         return x[:, 0] if scalar else x
 

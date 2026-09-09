@@ -2178,17 +2178,21 @@ def _use_prefix_substitution(p: int, q: int, n_stored: int, n: int) -> bool:
     loop iteration and the extra arithmetic is the whole cost -- measured at
     10-60x slower across every size tried. `_prefix_pays` weighs the band.
 
-    `JAXFUN_WAVENUMBER_SUBSTITUTION` (``scan`` | ``prefix`` | ``auto``)
-    overrides it, which is how the two get compared on new hardware.
+    `JAXFUN_LU_SUBSTITUTION_ALGORITHM` (``scan`` | ``prefix`` | ``auto``)
+    overrides it, which is how the two get compared on new hardware. The one
+    setting covers both callers -- the plain `DiaMatrix` solve here and the
+    per-wavenumber solve in `la/tpmatrix.py` -- because they resolve the same
+    recurrence. That an LU substitution happens is not in question; the name
+    refers to the algorithm that resolves it.
     """
-    choice = os.environ.get("JAXFUN_WAVENUMBER_SUBSTITUTION", "auto").lower()
+    choice = os.environ.get("JAXFUN_LU_SUBSTITUTION_ALGORITHM", "auto").lower()
     if choice == "prefix":
         return True
     if choice == "scan":
         return False
     if choice != "auto":
         raise ValueError(
-            f"JAXFUN_WAVENUMBER_SUBSTITUTION must be 'scan', 'prefix' or 'auto', "
+            f"JAXFUN_LU_SUBSTITUTION_ALGORITHM must be 'scan', 'prefix' or 'auto', "
             f"got {choice!r}."
         )
     return jax.default_backend() != "cpu" and _prefix_pays(p, q, n_stored, n)
@@ -2216,10 +2220,19 @@ def _affine_prefix(coef: Array, rhs: Array, r: int, stride: int = 1) -> Array:
     has: when every present diagonal sits at a multiple of it, index ``i`` only
     ever reaches ``i - stride``, ``i - 2*stride``, ... and the recurrence falls
     apart into ``stride`` chains that never meet. Solving them as a batch of
-    length ``n/stride`` shrinks the companion from ``r`` to ``r/stride``, which
-    is the whole point: the stack is ``r/stride`` squared per element instead of
-    ``r`` squared, and each composition is a cube of that. Splitting along ``n``
-    costs nothing to set up: the chains fall out of a reshape, not a gather.
+    length ``n/stride`` shrinks the companion from ``r`` to ``r/stride``, so the
+    stack holds ``r/stride`` squared per element instead of ``r`` squared and
+    each composition is a cube of that. Splitting along ``n`` costs nothing to
+    set up: the chains fall out of a reshape, not a gather.
+
+    Where that saving actually shows up is not where the flop count suggests.
+    On an accelerator the scan is launch-bound until ``n*k`` is large, so a
+    wider band whose companion merely shrinks tends to come out level; the gain
+    concentrates in the ``r == stride`` case, where the companion collapses to a
+    scalar and the matmuls leave the graph entirely, and at the large end where
+    there is enough work to escape the floor. On CPU the ranking is different
+    again -- the scalar case is the one that can lose there -- so do not carry a
+    threshold tuned on one backend over to the other.
 
     Args:
         coef: ``(n, r)``; ``coef[i, j]`` multiplies ``v_{i-1-j}``.

@@ -766,7 +766,7 @@ def _make_wavenumber_solve(
     reasoning about which family they came from: the prefix form is taken only
     while ``r**2`` stays within a small multiple of the stored band.
 
-    `JAXFUN_WAVENUMBER_SUBSTITUTION` (``scan`` | ``prefix`` | ``auto``)
+    `JAXFUN_LU_SUBSTITUTION_ALGORITHM` (``scan`` | ``prefix`` | ``auto``)
     overrides the choice, which is how the two get compared on new hardware.
     """
     p = max((-o for o in L_offsets if o < 0), default=0)

@@ -441,9 +441,9 @@ def test_prefix_substitution_agrees_with_scan(build, poly, monkeypatch) -> None:
     """
     _, A, b, _ = build(16, poly)
 
-    monkeypatch.setenv("JAXFUN_WAVENUMBER_SUBSTITUTION", "scan")
+    monkeypatch.setenv("JAXFUN_LU_SUBSTITUTION_ALGORITHM", "scan")
     seq = tpmats_wavenumber_factor(A).solve(b)
-    monkeypatch.setenv("JAXFUN_WAVENUMBER_SUBSTITUTION", "prefix")
+    monkeypatch.setenv("JAXFUN_LU_SUBSTITUTION_ALGORITHM", "prefix")
     par = tpmats_wavenumber_factor(A).solve(b)
 
     scale = float(jnp.max(jnp.abs(seq)))
@@ -492,7 +492,7 @@ def test_band_width_follows_the_formulation_not_the_basis() -> None:
 
 def test_unknown_substitution_is_rejected(monkeypatch) -> None:
     """A typo in the override must not silently fall back to a default."""
-    monkeypatch.setenv("JAXFUN_WAVENUMBER_SUBSTITUTION", "parallel")
+    monkeypatch.setenv("JAXFUN_LU_SUBSTITUTION_ALGORITHM", "parallel")
     _, A, _, _ = _poisson_fourier_poly_2d(8, Legendre.Legendre)
     with pytest.raises(ValueError, match="must be 'scan', 'prefix' or 'auto'"):
         tpmats_wavenumber_factor(A)

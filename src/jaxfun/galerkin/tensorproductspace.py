@@ -3,7 +3,8 @@ from __future__ import annotations
 import copy
 import itertools
 import warnings
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, NoReturn, cast
 
@@ -13,6 +14,7 @@ import jax.numpy as jnp
 import sympy as sp
 from jax import Array, shard_map
 from jax.sharding import NamedSharding, PartitionSpec as P
+from jax.typing import DTypeLike
 
 from jaxfun.coordinates import CartCoordSys, CoordSys
 from jaxfun.sharding import (
@@ -27,7 +29,14 @@ from jaxfun.sharding import (
 from jaxfun.typing import ArrayFun, MeshKind, RankTag
 from jaxfun.utils.common import jit_vmap, lambdify
 
-from .composite import BCGeneric, BoundaryConditions, Composite, DirectSum
+from .composite import (
+    BCGeneric,
+    BoundaryConditions,
+    Composite,
+    DirectSum,
+    canonical_time,
+    values_dtype,
+)
 from .orthogonal import OrthogonalSpace
 
 tensor_product_symbol = "\u2297"
@@ -35,6 +44,7 @@ multiplication_sign = "\u00d7"
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import CartesianTensorProductSpace
+    from jaxfun.typing import ScalarSpaceType
 
 
 IndivisibleError = ValueError
@@ -1119,13 +1129,11 @@ class DirectSumTPS(TensorProductSpace):
                 DirectInstantiationWarning,
                 stacklevel=2,
             )
-        from jaxfun.galerkin.inner import project, project1D
 
         self.basespaces: list[OrthogonalSpace | DirectSum] = basespaces
         self._hermitian_axis = _validate_hermitian_axis(self.basespaces)
         self.system = system
         self.name = name
-        self.bndvals: dict[tuple[OrthogonalSpace, ...], Array] = {}
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
         self._spectral_sharding = spectral_sharding if len(jax.devices()) > 1 else None
         self._physical_sharding = physical_sharding if len(jax.devices()) > 1 else None
@@ -1152,136 +1160,25 @@ class DirectSumTPS(TensorProductSpace):
             raise ValueError(
                 "DirectSum cannot be the first space in a 3D tensor product."
             )
-        has_two_inhomogeneous = len(bcindices) == 2
-
-        projected_bcs: list[list[BoundaryConditions]] = []
-        if has_two_inhomogeneous:
-            # If there are two DirectSums, we need to project to the other for each.
-            # When projecting to the other space, we need to use the BC values
-            # corresponding to the current space's BC values.
-            bcspaces = (
-                cast(DirectSum, basespaces[bcindices[0]]).basespaces[1],
-                cast(DirectSum, basespaces[bcindices[1]]).basespaces[1],
-            )
-            bc_pair = bcspaces
-            bc0, bc1 = bcspaces
-            bc0bcs = copy.deepcopy(bc0.bcs)
-            bc1bcs = copy.deepcopy(bc1.bcs)
-
-            def lr(bcz: BCGeneric, z: str) -> float:
-                return {
-                    "left": float(bcz.domain.lower),
-                    "right": float(bcz.domain.upper),
-                }[z]
-
-            for bcthis, bcother, zother in zip(
-                [bc0bcs, bc1bcs], [bc1bcs, bc0bcs], [bc1, bc0], strict=False
-            ):
-                projected_bcs.append([])
-                df = 2.0 / (zother.domain.upper - zother.domain.lower)
-                s = zother.system.base_scalars()[0]
-                for bcval in bcthis.orderedvals():
-                    bcs: BoundaryConditions = copy.deepcopy(bcother)
-                    for lr_other, bco in bcs.items():
-                        z = lr(zother, lr_other)
-                        for key in bco:
-                            if key == "D":
-                                f = sp.sympify(bcval).subs(s, z)
-                                if len(f.free_symbols) == 0:
-                                    bco[key] = complex(f) if f.has(sp.I) else float(f)
-                                else:
-                                    bco[key] = f
-                            elif key[0] == "N":
-                                nd = 1 if len(key) == 1 else int(key[1])
-                                f = (sp.sympify(bcval).diff(s, nd) / df**nd).subs(s, z)
-                                if len(f.free_symbols) == 0:
-                                    bco[key] = complex(f) if f.has(sp.I) else float(f)
-                                else:
-                                    bco[key] = f
-
-                    projected_bcs[-1].append(bcs)
 
         self.tpspaces: dict[tuple[OrthogonalSpace, ...], TensorProductSpace] = (
             self.split(basespaces)
         )
 
-        # Precompute lifting coefficients
-        for tensorspace in self.tpspaces:
-            otherspaces: list[OrthogonalSpace] = [
-                p for p in tensorspace if not isinstance(p, BCGeneric)
-            ]
-            bcspaces: list[BCGeneric] = [
-                p for p in tensorspace if isinstance(p, BCGeneric)
-            ]
-            bcsindex: list[int] = [
-                i for i, p in enumerate(tensorspace) if isinstance(p, BCGeneric)
-            ]
-
-            if len(otherspaces) == 0:
-                self.bndvals[tensorspace] = jnp.array(
-                    [z.orderedvals() for z in projected_bcs[0]], dtype=float
-                )
-
-            elif len(otherspaces) == 1 and len(bcspaces) == 1:
-                bcspace = bcspaces[0]
-                uh: list[Array] = []
-                for j, bc in enumerate(bcspace.bcs.orderedvals()):
-                    otherspace: OrthogonalSpace = otherspaces[0]
-                    if has_two_inhomogeneous:
-                        bco: BCGeneric = copy.deepcopy(bc_pair[(bcsindex[0] + 1) % 2])
-                        bco.bcs = projected_bcs[bcsindex[0]][j]
-                        otherspace: DirectSum = cast(Composite, otherspace) + bco
-                    uh.append(project1D(bc, otherspace))
-
-                if bcsindex[0] == 0:
-                    self.bndvals[tensorspace] = jnp.array(uh)
-                else:
-                    self.bndvals[tensorspace] = jnp.array(uh).T
-
-            elif len(otherspaces) == 2 and len(bcspaces) == 1:
-                # find BCGeneric index. 1 or 2.
-                isbc = [isinstance(space, BCGeneric) for space in tensorspace]
-                bcind = isbc.index(True)
-                ind_other = 1 if bcind == 2 else 2
-                bcspace = bcspaces[0]
-                uh: list[Array] = []
-                for j, bc in enumerate(bcspace.bcs.orderedvals()):
-                    otherbc = tensorspace[ind_other]
-                    if has_two_inhomogeneous:
-                        bco: BCGeneric = copy.deepcopy(bc_pair[0 if bcind == 2 else 1])
-                        bco.bcs = projected_bcs[bcind - 1][j]
-                        otherbc: DirectSum = (
-                            cast(Composite, tensorspace[ind_other]) + bco
-                        )
-
-                    newspaces = [
-                        copy.deepcopy(space) for space in [otherspaces[0], otherbc]
-                    ]
-                    othertpspace = TensorProduct(
-                        *newspaces,
-                        system=CartCoordSys(
-                            "T",
-                            (
-                                newspaces[0].system.base_scalars()[0],
-                                newspaces[1].system.base_scalars()[0],
-                            ),
-                        ),
-                    )
-                    uh.append(project(bc, othertpspace))
-
-                if bcind == 2:
-                    self.bndvals[tensorspace] = jnp.array(uh).transpose(1, 2, 0)
-                else:
-                    self.bndvals[tensorspace] = jnp.array(uh).transpose(1, 0, 2)
-
-            elif len(otherspaces) == 1 and len(bcspaces) == 2:
-                uh: list[Array] = []
-                for bci in projected_bcs[0]:
-                    for bc0 in bci.orderedvals():
-                        uh.append(project(bc0, otherspaces[0]))
-                self.bndvals[tensorspace] = jnp.array(uh).T.reshape(
-                    (-1, len(projected_bcs[0]), len(projected_bcs[1]))
-                )
+        # The lifting is a plan, not a value: every boundary block records what
+        # it projects and onto what, so it can be rebuilt at a new time without
+        # redoing any symbolic work. `bndvals` is that plan evaluated once, and
+        # is what everything downstream still reads.
+        keys = tuple(self.tpspaces)
+        time = system.base_time()
+        self.lifting = BoundaryLifting(
+            _lifting_plans(basespaces, keys, system),
+            time,
+            lambda: _lifting_plans(_differentiated(basespaces, time), keys, system),
+        )
+        self.bndvals: dict[tuple[OrthogonalSpace, ...], Array] = self.lifting(
+            0.0 if self.lifting.is_transient else None
+        )
 
         self.orthogonal = self.get_orthogonal()
 
@@ -1289,13 +1186,7 @@ class DirectSumTPS(TensorProductSpace):
         self, spaces: list[OrthogonalSpace | DirectSum]
     ) -> dict[tuple[OrthogonalSpace, ...], TensorProductSpace]:
         """Return dict of all homogeneous tensor combinations."""
-        f: list[Iterable[OrthogonalSpace]] = []
-        for space in spaces:
-            if isinstance(space, DirectSum):
-                f.append(space)
-            else:
-                f.append([space])
-        tensorspaces = itertools.product(*f)
+        tensorspaces = itertools.product(*_summands(spaces))
         return {
             s: TensorProductSpace(
                 s,
@@ -1320,8 +1211,11 @@ class DirectSumTPS(TensorProductSpace):
         self,
         c: Array,
         N: tuple[int | None, ...] | None = None,
+        t: float | Array | None = None,
+        *,
+        lifting: dict | None = None,
     ) -> Array:
-        return self.orthogonal.backward(self.to_orthogonal(c), N=N)
+        return self.orthogonal.backward(self.to_orthogonal(c, t, lifting=lifting), N=N)
 
     def _apply_backward(self, c: Array, nq: tuple[int, ...]) -> Array:
         """Lift the boundary values, then transform in the orthogonal space.
@@ -1365,9 +1259,15 @@ class DirectSumTPS(TensorProductSpace):
         self._require_local_batch("forward_batch")
         return super().forward_batch(u)
 
-    def forward(self, u: Array) -> Array:
+    def forward(
+        self,
+        u: Array,
+        t: float | Array | None = None,
+        *,
+        lifting: dict | None = None,
+    ) -> Array:
         d = self.orthogonal.forward(u)
-        return self.from_orthogonal(d)
+        return self.from_orthogonal(d, t, lifting=lifting)
 
     def _apply_forward(self, u: Array) -> Array:
         """Transform in the orthogonal space, then take the lifting back out.
@@ -1387,24 +1287,41 @@ class DirectSumTPS(TensorProductSpace):
             "Scalar product requires homogeneous test space (call on get_homogeneous())"
         )
 
-    def evaluate(self, x: Array, c: Array) -> Array:
-        return self.orthogonal.evaluate(x, self.to_orthogonal(c))
+    def evaluate(
+        self,
+        x: Array,
+        c: Array,
+        t: float | Array | None = None,
+        *,
+        lifting: dict | None = None,
+    ) -> Array:
+        return self.orthogonal.evaluate(x, self.to_orthogonal(c, t, lifting=lifting))
 
     def evaluate_mesh(
         self,
         c: Array,
         kind: MeshKind | str = MeshKind.QUADRATURE,
         N: tuple[int | None, ...] | None = None,
+        t: float | Array | None = None,
+        *,
+        lifting: dict | None = None,
     ) -> Array:
-        return self.orthogonal.evaluate_mesh(self.to_orthogonal(c), kind=kind, N=N)
+        return self.orthogonal.evaluate_mesh(
+            self.to_orthogonal(c, t, lifting=lifting), kind=kind, N=N
+        )
 
     def backward_primitive(
         self,
         c: Array,
         k: tuple[int, ...],
         N: tuple[int | None, ...] | None = None,
+        t: float | Array | None = None,
+        *,
+        lifting: dict | None = None,
     ) -> Array:
-        return self.orthogonal.backward_primitive(self.to_orthogonal(c), k=k, N=N)
+        return self.orthogonal.backward_primitive(
+            self.to_orthogonal(c, t, lifting=lifting), k=k, N=N
+        )
 
     def backward_primitive_batch(
         self,
@@ -1425,11 +1342,44 @@ class DirectSumTPS(TensorProductSpace):
         """
         return self.orthogonal._apply_backward_primitive(self.to_orthogonal(c), k, nq)
 
-    def to_orthogonal(self, c: Array) -> Array:
+    def _lifting_values(
+        self, t: float | Array | None, lifting: dict | None
+    ) -> dict[tuple[OrthogonalSpace, ...], Array]:
+        """Resolve which lifting coefficients a transform should use.
+
+        An explicit `lifting` wins, then a `t`, and otherwise the cached
+        `bndvals`.
+        """
+        # A `t` rebuilds the blocks without touching the cached ones, which is
+        # what makes it safe to call from inside a trace.
+        if lifting is not None:
+            return lifting
+        if t is None:
+            return self.bndvals
+        return self.lifting(t)
+
+    def update_bndvals(self, t: float | Array | None = None) -> None:
+        """Recompute the cached `bndvals` at time `t`.
+
+        For use outside a jitted computation. Inside a trace, pass `t=` or
+        `lifting=` to the transform instead, which leaves the cache alone.
+        """
+        # It rebinds a plain dict held on a shared space, so calling it under a
+        # trace would capture tracers there.
+        self.bndvals = self.lifting(t)
+
+    def to_orthogonal(
+        self,
+        c: Array,
+        t: float | Array | None = None,
+        *,
+        lifting: dict | None = None,
+    ) -> Array:
         result = self.get_homogeneous().to_orthogonal(c)
+        bndvals = self._lifting_values(t, lifting)
 
         for f, v in self.tpspaces.items():
-            inp = self.bndvals.get(f, c)
+            inp = bndvals.get(f, c)
             if inp is c:
                 continue
             ai = v.to_orthogonal(inp)  # sharded if possible
@@ -1440,14 +1390,21 @@ class DirectSumTPS(TensorProductSpace):
 
         return result
 
-    def from_orthogonal(self, c: Array) -> Array:
+    def from_orthogonal(
+        self,
+        c: Array,
+        t: float | Array | None = None,
+        *,
+        lifting: dict | None = None,
+    ) -> Array:
         # Note that c may be replicated, because the orthogonal space is not the
         # same as the original space, so we can't assume the sharding is compatible.
 
         result: Array = jnp.zeros(1)
+        bndvals = self._lifting_values(t, lifting)
 
         for f, v in self.tpspaces.items():
-            inp = self.bndvals.get(f, c)
+            inp = bndvals.get(f, c)
             if inp is c:
                 continue
             ai = -v.to_orthogonal(inp)  # sharded if possible
@@ -1459,3 +1416,316 @@ class DirectSumTPS(TensorProductSpace):
         target = None if isinstance(c, jax.core.Tracer) else c.sharding
         result = c + place(result, target)
         return self.get_homogeneous().from_orthogonal(result)
+
+
+@dataclass(frozen=True)
+class _LiftPlan:
+    """How to build one lifting block, as data rather than as a value.
+
+    `items` pairs each boundary value with the space it is projected onto, in
+    `orderedvals` order; a `None` target means the value is already a scalar
+    coefficient (the corner block, where both coordinates have been evaluated at
+    a wall). `stack` is the branch-specific assembly of the projected pieces --
+    which axis the boundary index ends up on differs per branch.
+
+    Splitting the plan from its value is what lets the same block be rebuilt at
+    a new time without redoing any of the symbolic work: the targets, the
+    stacking and the expressions are all fixed at construction, and only the
+    evaluation moves.
+    """
+
+    key: tuple[OrthogonalSpace, ...]
+    items: tuple[tuple[sp.Expr, ScalarSpaceType | None], ...]
+    stack: Callable[[list[Array]], Array]
+
+    def evaluate(self, time: sp.Symbol, t: float | Array | None) -> Array:
+        from jaxfun.galerkin.inner import project
+
+        pieces = []
+        for expr, target in self.items:
+            if target is None:
+                pieces.append(lambdify((time,), expr)(0.0 if t is None else t))
+            else:
+                pieces.append(project(expr, target, t))
+        return self.stack(pieces)
+
+
+class BoundaryLifting:
+    """The coefficients of a boundary lifting, as a function of time.
+
+    Holds one plan per non-homogeneous tensor subspace. Calling it returns the
+    same dict of coefficient arrays that `DirectSumTPS.bndvals` holds, evaluated
+    at the given time; `rate` returns the time derivative of that dict. Both are
+    traceable in `t`.
+    """
+
+    # The meshes and target spaces are fixed at construction, so evaluating runs
+    # only `lambdify`d expressions and forward transforms -- no symbolic work.
+    #
+    # `rate` differentiates the boundary *values* symbolically and pushes them
+    # through an otherwise identical set of plans. That is exact, because the
+    # lifting is linear in those values, and it avoids AD through the transforms
+    # -- which would also return a silent zero for whatever `lambdify` maps to a
+    # non-differentiable primitive.
+
+    def __init__(
+        self,
+        plans: tuple[_LiftPlan, ...],
+        time: sp.Symbol,
+        rate_plans: Callable[[], tuple[_LiftPlan, ...]],
+    ) -> None:
+        self.plans = plans
+        self.time = time
+        self._rate_plans = rate_plans
+        self._rate_cache: tuple[_LiftPlan, ...] | None = None
+
+    @property
+    def is_transient(self) -> bool:
+        """Return True if any boundary value varies in time."""
+        return any(
+            sp.sympify(expr).has(self.time)
+            for plan in self.plans
+            for expr, _ in plan.items
+        )
+
+    def __call__(self, t: float | Array | None = None) -> dict:
+        """Return the lifting coefficients at time `t`, keyed by tensor subspace.
+
+        Raises:
+            ValueError: If `t` is None and the boundary values depend on time.
+        """
+        if t is None and self.is_transient:
+            raise ValueError("Boundary values depend on time; the lifting needs a `t`.")
+        return {plan.key: plan.evaluate(self.time, t) for plan in self.plans}
+
+    def rate(self, t: float | Array | None = None) -> dict:
+        """Return d/dt of the lifting coefficients at time `t`."""
+        if self._rate_cache is None:
+            self._rate_cache = self._rate_plans()
+        return {plan.key: plan.evaluate(self.time, t) for plan in self._rate_cache}
+
+
+def _differentiated(
+    basespaces: list[OrthogonalSpace | DirectSum], time: sp.Symbol
+) -> list[OrthogonalSpace | DirectSum]:
+    """Return a copy of `basespaces` with every boundary value differentiated in t.
+
+    The corner-consistency values and the nested lifting targets are all derived
+    from these by substitution and differentiation *in space*, which commutes
+    with d/dt -- so differentiating here and rebuilding the plans gives the rate
+    of every block, however deeply the data is nested.
+    """
+    spaces = copy.deepcopy(basespaces)
+    for space in spaces:
+        if isinstance(space, DirectSum):
+            space.basespaces[1].bcs = space.basespaces[1].bcs.diff_time(time)
+            space.bcs = space.basespaces[1].bcs
+    return spaces
+
+
+def _lifting_plans(
+    basespaces: list[OrthogonalSpace | DirectSum],
+    keys: Sequence[tuple[OrthogonalSpace, ...]],
+    system: CoordSys,
+) -> tuple[_LiftPlan, ...]:
+    """Build one lifting plan per non-homogeneous combination of `basespaces`.
+
+    `keys` are the tensor-subspace keys the plans must be filed under, in the
+    order `split` produces them. They are passed in rather than derived so that
+    a plan built from differentiated boundary values -- which necessarily lives
+    on copied spaces -- still keys into the original `tpspaces`.
+    """
+    _validate_bc_symbols(basespaces, system)
+
+    bcindices = [
+        i for i, space in enumerate(basespaces) if isinstance(space, DirectSum)
+    ]
+    has_two_inhomogeneous = len(bcindices) == 2
+
+    projected_bcs: list[list[BoundaryConditions]] = []
+    if has_two_inhomogeneous:
+        # If there are two DirectSums, we need to project to the other for each.
+        # When projecting to the other space, we need to use the BC values
+        # corresponding to the current space's BC values.
+        bc_pair = (
+            cast(DirectSum, basespaces[bcindices[0]]).basespaces[1],
+            cast(DirectSum, basespaces[bcindices[1]]).basespaces[1],
+        )
+        bc0, bc1 = bc_pair
+        bc0bcs = copy.deepcopy(bc0.bcs)
+        bc1bcs = copy.deepcopy(bc1.bcs)
+
+        def lr(bcz: BCGeneric, z: str) -> float:
+            return {
+                "left": float(bcz.domain.lower),
+                "right": float(bcz.domain.upper),
+            }[z]
+
+        for bcthis, bcother, zother in zip(
+            [bc0bcs, bc1bcs], [bc1bcs, bc0bcs], [bc1, bc0], strict=False
+        ):
+            projected_bcs.append([])
+            df = 2.0 / (zother.domain.upper - zother.domain.lower)
+            s = zother.system.base_scalars()[0]
+            for bcval in bcthis.orderedvals():
+                bcs: BoundaryConditions = copy.deepcopy(bcother)
+                for lr_other, bco in bcs.items():
+                    z = lr(zother, lr_other)
+                    for key in bco:
+                        if key == "D":
+                            f = sp.sympify(bcval).subs(s, z)
+                            if len(f.free_symbols) == 0:
+                                bco[key] = complex(f) if f.has(sp.I) else float(f)
+                            else:
+                                bco[key] = f
+                        elif key[0] == "N":
+                            nd = 1 if len(key) == 1 else int(key[1])
+                            f = (sp.sympify(bcval).diff(s, nd) / df**nd).subs(s, z)
+                            if len(f.free_symbols) == 0:
+                                bco[key] = complex(f) if f.has(sp.I) else float(f)
+                            else:
+                                bco[key] = f
+
+                projected_bcs[-1].append(bcs)
+
+    plans: list[_LiftPlan] = []
+    for key, tensorspace in zip(
+        keys, itertools.product(*_summands(basespaces)), strict=True
+    ):
+        otherspaces: list[OrthogonalSpace] = [
+            p for p in tensorspace if not isinstance(p, BCGeneric)
+        ]
+        bcspaces: list[BCGeneric] = [p for p in tensorspace if isinstance(p, BCGeneric)]
+        bcsindex: list[int] = [
+            i for i, p in enumerate(tensorspace) if isinstance(p, BCGeneric)
+        ]
+        items: list[tuple[sp.Expr, ScalarSpaceType | None]] = []
+
+        if len(otherspaces) == 0:
+            rows, cols = len(projected_bcs[0]), len(projected_bcs[0][0].orderedvals())
+            values = [z.orderedvals() for z in projected_bcs[0]]
+            items = [(sp.sympify(v), None) for row in values for v in row]
+            dtype = values_dtype(v for row in values for v in row)
+            stack = partial(_stack_reshape, shape=(rows, cols), dtype=dtype)
+
+        elif len(otherspaces) == 1 and len(bcspaces) == 1:
+            bcspace = bcspaces[0]
+            for j, bc in enumerate(bcspace.bcs.orderedvals()):
+                otherspace: OrthogonalSpace | DirectSum = otherspaces[0]
+                if has_two_inhomogeneous:
+                    bco: BCGeneric = copy.deepcopy(bc_pair[(bcsindex[0] + 1) % 2])
+                    bco.bcs = projected_bcs[bcsindex[0]][j]
+                    otherspace = cast(Composite, otherspace) + bco
+                items.append((sp.sympify(bc), otherspace))
+            stack = _stack_rows if bcsindex[0] == 0 else _stack_columns
+
+        elif len(otherspaces) == 2 and len(bcspaces) == 1:
+            # find BCGeneric index. 1 or 2.
+            isbc = [isinstance(space, BCGeneric) for space in tensorspace]
+            bcind = isbc.index(True)
+            ind_other = 1 if bcind == 2 else 2
+            bcspace = bcspaces[0]
+            for j, bc in enumerate(bcspace.bcs.orderedvals()):
+                otherbc: OrthogonalSpace | DirectSum = tensorspace[ind_other]
+                if has_two_inhomogeneous:
+                    bco = copy.deepcopy(bc_pair[0 if bcind == 2 else 1])
+                    bco.bcs = projected_bcs[bcind - 1][j]
+                    otherbc = cast(Composite, tensorspace[ind_other]) + bco
+
+                newspaces = [
+                    copy.deepcopy(space) for space in [otherspaces[0], otherbc]
+                ]
+                othertpspace = TensorProduct(
+                    *newspaces,
+                    system=CartCoordSys(
+                        "T",
+                        (
+                            newspaces[0].system.base_scalars()[0],
+                            newspaces[1].system.base_scalars()[0],
+                        ),
+                    ),
+                )
+                items.append((sp.sympify(bc), othertpspace))
+            axes = (1, 2, 0) if bcind == 2 else (1, 0, 2)
+            stack = partial(_stack_transpose, axes=axes)
+
+        elif len(otherspaces) == 1 and len(bcspaces) == 2:
+            for bci in projected_bcs[0]:
+                for bc0 in bci.orderedvals():
+                    items.append((sp.sympify(bc0), otherspaces[0]))
+            shape = (-1, len(projected_bcs[0]), len(projected_bcs[1]))
+            stack = partial(_stack_columns_reshape, shape=shape)
+
+        if items:
+            plans.append(_LiftPlan(key, tuple(items), stack))
+
+    return tuple(plans)
+
+
+def _validate_bc_symbols(
+    basespaces: Sequence[OrthogonalSpace | DirectSum], system: CoordSys
+) -> None:
+    """Reject boundary values written in symbols the space cannot evaluate.
+
+    A boundary value may depend on the other coordinates and on time, and on
+    nothing else -- those are the only arguments the lifting has to supply. The
+    trap this catches is a plain `sp.Symbol("t")` where `system.base_time()` was
+    meant: the two differ by their assumptions, so the value would be taken for
+    a constant, frozen at construction, and fail much later inside `lambdify`
+    with a message about an abstract array.
+    """
+    time = system.base_time()
+    allowed = {s.name for s in system.base_scalars()} | {time.name}
+    for space in basespaces:
+        if not isinstance(space, DirectSum):
+            continue
+        bcs = space.basespaces[1].bcs
+        for side in bcs.values():
+            for key, v in side.items():
+                if isinstance(v, tuple | list):
+                    side[key] = (v[0], canonical_time(v[1], time))
+                else:
+                    side[key] = canonical_time(v, time)
+        for val in bcs.orderedvals():
+            unknown = {str(s) for s in sp.sympify(val).free_symbols} - allowed
+            if unknown:
+                raise ValueError(
+                    f"Boundary value {val} of {space.name} uses "
+                    f"{sorted(unknown)}, which the space cannot evaluate. "
+                    f"Boundary data may depend on the coordinates "
+                    f"{sorted(allowed - {time.name})} and on time "
+                    f"({time.name}), and on nothing else."
+                )
+
+
+def _summands(
+    spaces: Sequence[OrthogonalSpace | DirectSum],
+) -> list[Iterable[OrthogonalSpace]]:
+    """Return, per axis, the spaces a direct sum expands into."""
+    return [space if isinstance(space, DirectSum) else [space] for space in spaces]
+
+
+# The per-branch stacking, as named functions rather than lambdas so that a plan
+# stays inspectable and picklable.
+
+
+def _stack_rows(pieces: list[Array]) -> Array:
+    return jnp.array(pieces)
+
+
+def _stack_columns(pieces: list[Array]) -> Array:
+    return jnp.array(pieces).T
+
+
+def _stack_reshape(
+    pieces: list[Array], shape: tuple[int, ...], dtype: DTypeLike
+) -> Array:
+    return jnp.array(pieces, dtype=dtype).reshape(shape)
+
+
+def _stack_transpose(pieces: list[Array], axes: tuple[int, ...]) -> Array:
+    return jnp.array(pieces).transpose(axes)
+
+
+def _stack_columns_reshape(pieces: list[Array], shape: tuple[int, ...]) -> Array:
+    return jnp.array(pieces).T.reshape(shape)

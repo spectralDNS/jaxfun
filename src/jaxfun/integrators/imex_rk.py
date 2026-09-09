@@ -48,6 +48,25 @@ class IMEXRungeKutta(BaseIntegrator):
             ops.append(op)
         self._stage_operators: tuple[BaseMatrix, ...] = nnx.data(tuple(ops))
 
+    def _forcing_caches(
+        self, t: Array | float, dt: float
+    ) -> tuple[Array | None, list[Array] | None]:
+        """Return `(forcing, forcing_stage)` for a step starting at `t`.
+
+        Steady data fills the first and moving data the second; `stage` takes
+        whichever it is given.
+        """
+        # The stage values are computed up front because the forcing does not
+        # depend on the state, so none of them has to wait for a solve.
+        if not self._transient_boundary:
+            forcing = self.linear_forcing
+            return (jnp.asarray(forcing) if forcing is not None else None), None
+        c_i = self.tableau.implicit.c
+        return None, [
+            jnp.asarray(self.forcing_at(t + c_i[j] * dt))
+            for j in range(self.tableau.stages)
+        ]
+
     def _stage_operator(self, a_ii: float) -> BaseMatrix:
         """Return the cached implicit system operator for diagonal coeff `a_ii`."""
         idx = self.tableau.distinct_diagonal_coeffs.index(a_ii)
@@ -61,6 +80,7 @@ class IMEXRungeKutta(BaseIntegrator):
         nonlinear_stage: list[Array | None],
         linear_stage: list[Array | None],
         forcing: Array | None,
+        forcing_stage: list[Array] | None = None,
     ) -> Array:
         """Compute stage `i` from the caches already populated for `j < i`.
 
@@ -68,7 +88,20 @@ class IMEXRungeKutta(BaseIntegrator):
         `j < i` must already be populated by the caller); this method does
         not append to them -- that bookkeeping is `step`-specific (it depends
         on `step`'s choice of final-combination path) and stays there.
+
+        Pass `forcing_stage` -- the forcing evaluated at every stage time -- when
+        it varies in time, and `forcing` when it does not.
         """
+        # The forcing rides with the *implicit* tableau, because `A u + f(t)` is
+        # the affine part of the implicit operator: that is where it came from,
+        # and a stiffly-accurate implicit treatment is what avoids order
+        # reduction in the boundary layer a moving wall drives.
+        #
+        # For a constant forcing the row-sum condition `sum_j a_i[i][j] ==
+        # c_i[i]` collapses the accumulation to a single scaling. Both branches
+        # are then correct but not bit-for-bit equal -- they sum a different
+        # number of terms -- so the shortcut is kept rather than unified, and a
+        # steady problem gets exactly the arithmetic it got before.
         tableau: IMEXTableau = self.tableau
         a_e, a_i = tableau.explicit.A, tableau.implicit.A
         c_i = tableau.implicit.c
@@ -80,14 +113,27 @@ class IMEXRungeKutta(BaseIntegrator):
                 rhs = rhs + dt * a_e[i][j] * cast(Array, nonlinear_stage[j])
             if a_i[i][j] != 0.0:
                 rhs = rhs + dt * a_i[i][j] * cast(Array, linear_stage[j])
-        if forcing is not None and c_i[i] != 0.0:
+        if forcing_stage is not None:
+            # `a_i` is lower triangular including the diagonal, and the forcing
+            # does not depend on the state, so stage `i`'s own term is known.
+            for j in range(i + 1):
+                if a_i[i][j] != 0.0:
+                    rhs = rhs + dt * a_i[i][j] * forcing_stage[j]
+        elif forcing is not None and c_i[i] != 0.0:
             rhs = rhs + dt * c_i[i] * forcing
 
         if a_ii == 0.0:
             return self.apply_mass_inverse(rhs)
         return solve_with_options(self._stage_operator(a_ii), rhs, self._solver_options)
 
-    def _step_impl(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:
+    def _step_impl(
+        self,
+        u_hat: Array,
+        dt: float,
+        N: ScalarPadding = None,
+        t: Array | float = 0.0,
+        /,
+    ) -> Array:
         """Advance one IMEX Runge-Kutta step in coefficient space.
 
         Three final-combination paths, selected by `tableau`'s (static)
@@ -117,18 +163,16 @@ class IMEXRungeKutta(BaseIntegrator):
         last = tableau.stages - 1
 
         m_u = self.apply_mass(u_hat)
-        forcing = (
-            jnp.asarray(self.linear_forcing)
-            if self.linear_forcing is not None
-            else None
-        )
+        forcing, forcing_stage = self._forcing_caches(t, dt)
 
         stages: list[Array] = []
         nonlinear_stage: list[Array | None] = []
         linear_stage: list[Array | None] = []
 
         for i in range(tableau.stages):
-            stage = self.stage(i, m_u, dt, nonlinear_stage, linear_stage, forcing)
+            stage = self.stage(
+                i, m_u, dt, nonlinear_stage, linear_stage, forcing, forcing_stage
+            )
             stages.append(stage)
             is_last = i == last
             skip_nonlinear = is_last and full_gsa
@@ -138,6 +182,10 @@ class IMEXRungeKutta(BaseIntegrator):
             )
             linear_stage.append(None if skip_linear else (self.linear_operator @ stage))
 
+        # Both stiffly-accurate paths need no forcing term of their own: `b_i`
+        # equals `a_i[-1]` there, so the `b_i`-weighted forcing is already
+        # inside the last stage. That is why the general path below is the only
+        # one that carries it, for a moving forcing exactly as for a fixed one.
         if full_gsa:
             return stages[-1]
 
@@ -155,7 +203,11 @@ class IMEXRungeKutta(BaseIntegrator):
                 rhs = rhs + dt * b_e[j] * cast(Array, nonlinear_stage[j])
             if b_i[j] != 0.0:
                 rhs = rhs + dt * b_i[j] * cast(Array, linear_stage[j])
-        if forcing is not None:
+        if forcing_stage is not None:
+            for j in range(tableau.stages):
+                if b_i[j] != 0.0:
+                    rhs = rhs + dt * b_i[j] * forcing_stage[j]
+        elif forcing is not None:
             rhs = rhs + dt * forcing
         return self.apply_mass_inverse(rhs)
 
@@ -192,7 +244,12 @@ class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
         self.tableau = nnx.static(tableau)
 
     def _step_impl(
-        self, u_hats: tuple[Array, ...], dt: float, N: ScalarPadding = None
+        self,
+        u_hats: tuple[Array, ...],
+        dt: float,
+        N: ScalarPadding = None,
+        t: Array | float = 0.0,
+        /,
     ) -> tuple[Array, ...]:
         """Advance every field one IMEX Runge-Kutta step in coefficient space.
 
@@ -224,10 +281,9 @@ class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
             g.apply_mass(u_hats[slot])
             for g, slot in zip(integrators, slots, strict=True)
         )
-        forcing = tuple(
-            jnp.asarray(g.linear_forcing) if g.linear_forcing is not None else None
-            for g in integrators
-        )
+        caches = tuple(g._forcing_caches(t, dt) for g in integrators)
+        forcing = tuple(c[0] for c in caches)
+        forcing_stage = tuple(c[1] for c in caches)
 
         stages: list[list[Array]] = [[] for _ in integrators]
         nonlinear_stage: list[list[Array | None]] = [[] for _ in integrators]
@@ -243,9 +299,20 @@ class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
             stage_i = list(u_hats)
             for k, (g, slot) in enumerate(zip(integrators, slots, strict=True)):
                 stage_i[slot] = g.stage(
-                    i, m_u[k], dt, nonlinear_stage[k], linear_stage[k], forcing[k]
+                    i,
+                    m_u[k],
+                    dt,
+                    nonlinear_stage[k],
+                    linear_stage[k],
+                    forcing[k],
+                    forcing_stage[k],
                 )
-            state_i = self.resolve_constraints(tuple(stage_i), M)
+            # Constraints are algebraic, so they carry no `dB/dt` term -- but
+            # their own boundary lifting still has to be read at this stage's
+            # time, not the step's.
+            state_i = self.resolve_constraints(
+                tuple(stage_i), M, t=t + tableau.implicit.c[i] * dt
+            )
             is_last = i == last
             skip_nonlinear = is_last and full_gsa
             skip_linear = is_last and (full_gsa or implicit_only_sa)
@@ -272,7 +339,7 @@ class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
             out = list(u_hats)
             for slot, value in zip(slots, evolved, strict=True):
                 out[slot] = value
-            return self.resolve_constraints(tuple(out), M)
+            return self.resolve_constraints(tuple(out), M, t=t + dt)
 
         if full_gsa:
             # The last stage *is* the accepted solution, so its constrained
@@ -299,8 +366,12 @@ class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
                     rhs = rhs + dt * b_e[j] * cast(Array, nonlinear_stage[k][j])
                 if b_i[j] != 0.0:
                     rhs = rhs + dt * b_i[j] * cast(Array, linear_stage[k][j])
-            forcing_k = forcing[k]
-            if forcing_k is not None:
-                rhs = rhs + dt * forcing_k
+            stage_forcing = forcing_stage[k]
+            if stage_forcing is not None:
+                for j in range(tableau.stages):
+                    if b_i[j] != 0.0:
+                        rhs = rhs + dt * b_i[j] * stage_forcing[j]
+            elif forcing[k] is not None:
+                rhs = rhs + dt * cast(Array, forcing[k])
             evolved.append(g.apply_mass_inverse(rhs))
         return accepted(evolved)

@@ -14,9 +14,9 @@ from sympy.core.function import AppliedUndef
 from jaxfun.coordinates import get_system
 from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.forms import get_basisfunctions
-from jaxfun.galerkin.inner import project
+from jaxfun.galerkin.inner import BoundaryForcing, project
 from jaxfun.la import BaseMatrix, IdentityMatrix, ZeroMatrix
-from jaxfun.sharding import pin_state, replicate
+from jaxfun.sharding import pin_state, replicate, replicate_scalar
 from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
 from jaxfun.utils import (
     get_time_independent,
@@ -25,7 +25,10 @@ from jaxfun.utils import (
     split_linear_nonlinear_terms,
     split_time_derivative_terms,
 )
-from jaxfun.utils.operator_tools import assemble_linear_term
+from jaxfun.utils.operator_tools import (
+    assemble_boundary_term,
+    assemble_linear_term,
+)
 from jaxfun.utils.sympy_factoring import time_derivative_as_operator
 
 from ._utils import (
@@ -58,7 +61,12 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
 
     @abstractmethod
     def _step_impl(
-        self, u_hat: StateT, dt: float, N: ScalarPadding = None, /
+        self,
+        u_hat: StateT,
+        dt: float,
+        N: ScalarPadding = None,
+        t: Array | float = 0.0,
+        /,
     ) -> StateT:
         """Advance the state one step -- the traceable body of a step.
 
@@ -71,10 +79,21 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
         is not the same thing in every subclass -- one array for a scalar
         equation, one per field for a system. Binding the parameter names would
         make every subclass answer to `u_hat`.
+
+        `t` is the time at the start of the step. It defaults to zero so that a
+        stepper with no time-dependent data -- which is every stepper whose
+        boundary values and sources are steady -- behaves exactly as before, and
+        so that calling a step directly stays a two-argument affair.
         """
         ...
 
-    def step(self, u_hat: StateT, dt: float, N: ScalarPadding = None) -> StateT:
+    def step(
+        self,
+        u_hat: StateT,
+        dt: float,
+        N: ScalarPadding = None,
+        t: float = 0.0,
+    ) -> StateT:
         """Advance the state one step, as one compiled computation.
 
         A batch of one, so that a single step and a whole `solve` go through
@@ -85,7 +104,7 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
         `dt` is static, so a sweep over step sizes recompiles once per value.
         See `_advance` for why it has to be.
         """
-        return _advance(self, u_hat, dt, 1, N)
+        return _advance(self, u_hat, dt, 1, N, _as_start_time(t))
 
     @abstractmethod
     def initial_coefficients(self, initial=None) -> StateT:
@@ -147,6 +166,27 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
             steps = int(round(span / dt))
         return t0, t1, int(steps)
 
+    def end_time(
+        self,
+        dt: float,
+        steps: int | None = None,
+        trange: tuple[float, float] | None = None,
+    ) -> float:
+        """Return the time a `solve` with these arguments would finish at.
+
+        Use it to reconstruct a solution whose boundary data moved::
+
+            V.backward(u_hat, t=integrator.end_time(dt, steps))
+        """
+        # A query rather than something `solve` records, because `solve` must
+        # store nothing on the stepper: binding or rebinding an attribute
+        # between two `_advance` calls changes the module the jit cache was
+        # keyed on, and the mismatch surfaces as a PJRT abort over the argument
+        # count rather than as anything to do with the attribute. `setup`
+        # describes the same hazard from the other direction.
+        t0, _, n_steps = self.resolve_time(dt, steps=steps, trange=trange)
+        return t0 + n_steps * dt
+
     def solve(
         self,
         dt: float,
@@ -183,7 +223,7 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
             raise ValueError("n_batches must be a positive integer")
 
         self.setup(dt)
-        _, _, n_steps = self.resolve_time(dt, steps=steps, trange=trange)
+        t_start, _, n_steps = self.resolve_time(dt, steps=steps, trange=trange)
 
         if state0 is None:
             u_hat = self.initial_coefficients()
@@ -207,8 +247,12 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
             if progress
             else r_batch
         )
+        taken = 0
         for _ in iterator:
-            u_hat = _advance(self, u_hat, dt, batch_len, N)
+            u_hat = _advance(
+                self, u_hat, dt, batch_len, N, _as_start_time(t_start + taken * dt)
+            )
+            taken += batch_len
             if return_batch_snapshots:
                 states.append(u_hat)
             if any(
@@ -219,7 +263,10 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
                 break
 
         if remainder and not diverged:
-            u_hat = _advance(self, u_hat, dt, remainder, N)
+            u_hat = _advance(
+                self, u_hat, dt, remainder, N, _as_start_time(t_start + taken * dt)
+            )
+            taken += remainder
             if return_batch_snapshots:
                 states.append(u_hat)
 
@@ -236,6 +283,7 @@ def _advance[StateT: IntegratorState](
     dt: float,
     n_steps: int,
     N: ScalarPadding = None,
+    t0: Array | None = None,
 ) -> StateT:
     """Advance `n_steps` steps as a single compiled computation.
 
@@ -280,10 +328,40 @@ def _advance[StateT: IntegratorState](
     recompiles that would not have anyway.
     """
 
-    def body(_i: int, u: StateT) -> StateT:
-        return pin_state(stepper._step_impl(u, dt, N))
+    def body(i: int, u: StateT) -> StateT:
+        return pin_state(stepper._step_impl(u, dt, N, _step_time(t0, i, dt)))
 
     return jax.lax.fori_loop(0, n_steps, body, pin_state(u_hat))
+
+
+def _as_start_time(t0: float) -> Array:
+    """Return a batch start time in the shape `_advance` wants it.
+
+    Shape `(1,)`, not a scalar; see `_step_time` for why that matters.
+    """
+    return jnp.asarray([t0], dtype=jnp.result_type(float))
+
+
+def _step_time(t0: Array | None, i: int, dt: float) -> Array | float:
+    """Return the time at the start of step `i` of a batch beginning at `t0`.
+
+    `t0` arrives as a shape-`(1,)` array rather than a scalar, and that is
+    deliberate. A rank-0 float parameter is exactly what `dt` had to stop being:
+    GSPMD propagates a sharding backwards onto the parameters a sharded result
+    was computed from, and `P("k")` on a rank-0 parameter is the `IndexError`
+    out of `_to_xla_hlo_sharding` described above and in `pin_state`. A rank-1
+    array carries `P(None)` instead. It is then constrained to a replicated
+    sharding here, so the placement is stated rather than inferred -- the same
+    discipline `pin_state` applies to the state.
+
+    `dt` is a compile-time constant, so `t0 + i*dt` costs nothing at runtime.
+    Note it is computed in the loop index rather than accumulated, so a long
+    batch does not drift; `solve` likewise recomputes `t0` per batch from the
+    step count.
+    """
+    if t0 is None:
+        return 0.0
+    return replicate_scalar(t0)[0] + i * dt
 
 
 class BaseIntegrator(TimeStepper[Array]):
@@ -368,15 +446,16 @@ class BaseIntegrator(TimeStepper[Array]):
         mass_operator, mass_forcing = assemble_linear_term(
             self.mass_expr, sparse=self.sparse, sparse_tol=self.sparse_tol
         )
-        if mass_forcing is not None:
+        self._transient_boundary = nnx.static(self._has_transient_boundary())
+        if mass_forcing is not None and not self._transient_boundary:
             # A space with inhomogeneous boundary conditions splits the solution
             # into a free part and a fixed boundary lifting B, so the mass term
             # assembles as `M @ u_hat + inner(v, B)`. The whole term sits under
             # d/dt, and B is constant in time, so the lifting contributes
             # nothing to d/dt(M @ u_hat + inner(v, B)) = M @ du_hat/dt and is
-            # dropped here. Time-dependent boundary data would instead need
-            # d/dt inner(v, B) on the right-hand side; see the guard below.
-            self._check_static_boundary_data()
+            # dropped here. When B *does* vary in time, `d/dt inner(v, B)` is
+            # carried on the right-hand side instead; see `forcing_at`.
+            self._check_mass_forcing_is_a_lifting()
         if mass_operator is None:
             mass_operator = IdentityMatrix(self._state_shape)
         self.mass_operator: BaseMatrix = nnx.data(mass_operator)
@@ -392,6 +471,26 @@ class BaseIntegrator(TimeStepper[Array]):
         if linear_operator is None:
             linear_operator = ZeroMatrix(self._state_shape)
         self.linear_operator: BaseMatrix = nnx.data(linear_operator)
+
+        # Boundary blocks, kept uncontracted so they can be re-evaluated as the
+        # lifting moves. `inner` has already folded the boundary contribution
+        # into `linear_forcing` at the lifting the space was built with, so that
+        # frozen copy is subtracted back out and `linear_forcing` is left
+        # holding the genuine source terms alone. Both sides go through the same
+        # contraction, so what is removed is exactly what was added.
+        self._mass_boundary: BoundaryForcing | None = nnx.data(None)
+        self._linear_boundary: BoundaryForcing | None = nnx.data(None)
+        if self._transient_boundary:
+            if not self.supports_transient_boundary:
+                raise NotImplementedError(
+                    f"{type(self).__name__} does not support time-dependent "
+                    "boundary data. Use IMEXRungeKutta or BackwardEuler."
+                )
+            self._mass_boundary = nnx.data(assemble_boundary_term(self.mass_expr))
+            self._linear_boundary = nnx.data(assemble_boundary_term(self.linear_expr))
+            if self._linear_boundary is not None and linear_forcing is not None:
+                linear_forcing = linear_forcing - self._linear_boundary()
+
         # Replicated, not sharded: this is stored on the integrator and so is
         # reached through `_advance`'s closure. See `replicate`.
         self.linear_forcing: Array | None = nnx.data(replicate(linear_forcing))
@@ -418,27 +517,30 @@ class BaseIntegrator(TimeStepper[Array]):
         if self.has_nonlinear:
             self._setup_nonlinear_evaluator(trial)
 
-    def _check_static_boundary_data(self) -> None:
-        """Reject boundary data that varies in time.
+    supports_transient_boundary: bool = True
+    """Whether this stepper can carry boundary data that varies in time."""
 
-        The boundary lifting enters the mass term under the time derivative, and
-        the integrators assume it differentiates away. That only holds for
-        boundary values that are constant in time. They may vary in space: in a
-        tensor-product space each 1D factor carries its own boundary values,
-        which are allowed to depend on the remaining coordinates.
+    def _has_transient_boundary(self) -> bool:
+        """Return True if any of the trial space's boundary values varies in time."""
+        t = self.trialspace.system.base_time()
+        return any(val.has(t) for val in boundary_values(self.trialspace))
+
+    def _check_mass_forcing_is_a_lifting(self) -> None:
+        """Check that a forcing under the time derivative is boundary data.
+
+        The mass term is dropped on the steady path, and the only thing it is
+        allowed to hold is `inner(v, B)` for a lifting `B` that differentiates
+        away. Anything else would be silently discarded. Boundary values may
+        still vary in space: in a tensor-product space each 1D factor carries
+        its own, which may depend on the remaining coordinates.
+
+        Only reached when the boundary data is steady -- `_has_transient_boundary`
+        has already sent the other case to `forcing_at`, which keeps the term.
         """
-        values = boundary_values(self.trialspace)
-        if not values:
+        if not boundary_values(self.trialspace):
             raise ValueError(
                 "Time-derivative operator assembly produced forcing, but the "
                 "trial space has no boundary conditions to explain it"
-            )
-        t = self.trialspace.system.base_time()
-        transient = [val for val in values if val.has(t)]
-        if transient:
-            raise NotImplementedError(
-                "Time-dependent boundary conditions are not supported by the "
-                f"integrators, got {transient}"
             )
 
     def _extract_equation_terms(
@@ -536,11 +638,21 @@ class BaseIntegrator(TimeStepper[Array]):
         """Return the assembled linear operator as a dense matrix."""
         return self._dense_matrix(self.linear_operator)
 
+    @property
+    def start_time(self) -> float:
+        """Return the time the integration starts at."""
+        return 0.0 if self.time is None else float(self.time[0])
+
     def initial_coefficients(self, initial: sp.Expr | Array | None = None) -> Array:
         """Return coefficient-space data for an initial condition."""
+        # The state holds the *homogeneous* coefficients, so projecting takes
+        # the boundary lifting back out -- and the one to take out is the
+        # lifting at the start time, not at zero. For steady data the two
+        # coincide and nothing changes.
         init = self.initial_condition if initial is None else initial
         if isinstance(init, sp.Expr):
-            return project(init, self.trialspace)
+            t = self.start_time if self._transient_boundary else None
+            return project(init, self.trialspace, t)
         return jnp.asarray(init).reshape(self.trialspace.num_dofs)
 
     def _coerce_state(self, state0: IntegratorState) -> Array:
@@ -601,14 +713,37 @@ class BaseIntegrator(TimeStepper[Array]):
             total = pointwise if total is None else total + pointwise
         return self._no_nonlinear(uh) if total is None else total
 
-    def linear_rhs(self, uh: Array) -> Array:
+    def forcing_at(self, t: Array | float = 0.0) -> Array | None:
+        """Return the right-hand-side forcing at time `t`.
+
+        For steady boundary data this is `linear_forcing`, unchanged.
+        """
+        # When the lifting varies, two terms join the source: `a(v, B(t))`, the
+        # stiffness acting on the lifting, which `inner` would have collapsed at
+        # a single time; and `-<v, dB/dt>`, what the lifting contributes under
+        # the time derivative. The second is dropped for steady data because it
+        # is then exactly zero -- and still is here, the rate coming from
+        # differentiating the boundary values symbolically.
+        if self._linear_boundary is None:
+            return self.linear_forcing
+        total = self._linear_boundary(t)
+        if self._mass_boundary is not None:
+            total = total - self._mass_boundary.rate(t)
+        if self.linear_forcing is not None:
+            total = total + jnp.asarray(self.linear_forcing)
+        return total
+
+    def linear_rhs(self, uh: Array, t: Array | float = 0.0) -> Array:
         """Return the linear contribution after applying the inverse mass matrix."""
         rhs = self.linear_operator @ uh
-        if self.linear_forcing is not None:
-            rhs = rhs + jnp.asarray(self.linear_forcing)
+        forcing = self.forcing_at(t)
+        if forcing is not None:
+            rhs = rhs + jnp.asarray(forcing)
         return self.apply_mass_inverse(rhs)
 
     @jax.jit(static_argnums=(0, 2))
-    def total_rhs(self, uh: Array, N: ScalarPadding = None) -> Array:
+    def total_rhs(
+        self, uh: Array, N: ScalarPadding = None, t: Array | float = 0.0
+    ) -> Array:
         """Return the full semi-discrete right-hand side."""
-        return self.linear_rhs(uh) + self.nonlinear_rhs(uh, N)
+        return self.linear_rhs(uh, t) + self.nonlinear_rhs(uh, N)

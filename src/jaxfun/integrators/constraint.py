@@ -19,7 +19,7 @@ from sympy.core.function import AppliedUndef
 from jaxfun.coordinates import get_system
 from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.forms import get_basisfunctions
-from jaxfun.galerkin.inner import project
+from jaxfun.galerkin.inner import BoundaryForcing, project
 from jaxfun.la import BaseMatrix
 from jaxfun.sharding import replicate
 from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
@@ -28,7 +28,10 @@ from jaxfun.utils import (
     split_linear_couplings,
     split_time_derivative_terms,
 )
-from jaxfun.utils.operator_tools import assemble_linear_term
+from jaxfun.utils.operator_tools import (
+    assemble_boundary_term,
+    assemble_linear_term,
+)
 from jaxfun.utils.sympy_factoring import split_linear_nonlinear_terms
 
 from ._utils import (
@@ -36,6 +39,7 @@ from ._utils import (
     SolverOptions,
     apply_field_couplings,
     assemble_field_couplings,
+    boundary_values,
     coefficient_shape,
     node_for,
     physical_shape,
@@ -130,6 +134,17 @@ class ConstraintSolver(nnx.Module):
                 "its own field, so the field has to appear linearly in it."
             )
         self.operator: BaseMatrix = nnx.data(operator)
+        # A constraint is algebraic, so its lifting never enters a time
+        # derivative: only `a(v, B(t))` contributes, and there is no `dB/dt`
+        # term to match `BaseIntegrator.forcing_at`. As there, the frozen copy
+        # `inner` folded in is subtracted back out so the live one can replace
+        # it, and a steady constraint keeps exactly the forcing it had.
+        self._boundary: BoundaryForcing | None = nnx.data(None)
+        if _values_vary_in_time(self.trialspace):
+            self._boundary = nnx.data(assemble_boundary_term(linear_expr))
+            if self._boundary is not None and forcing is not None:
+                forcing = forcing - self._boundary()
+
         # Replicated for the same reason `BaseIntegrator.linear_forcing` is:
         # assembly places a right-hand side on the global spectral sharding, and
         # a constraint solver is reached through `_advance`'s closure because the
@@ -255,7 +270,21 @@ class ConstraintSolver(nnx.Module):
             self.operator, self._state_shape, self._solver_options
         )
 
-    def solve_field(self, states: tuple[Array, ...], N: ScalarPadding = None) -> Array:
+    def forcing_at(self, t: Array | float = 0.0) -> Array | None:
+        """Return the constraint's forcing at time `t`."""
+        if self._boundary is None:
+            return self.forcing
+        total = self._boundary(t)
+        if self.forcing is not None:
+            total = total + jnp.asarray(self.forcing)
+        return total
+
+    def solve_field(
+        self,
+        states: tuple[Array, ...],
+        N: ScalarPadding = None,
+        t: Array | float = 0.0,
+    ) -> Array:
         """Return this constraint's field, given every field's coefficients.
 
         `states` is the whole system's coefficient tuple in global field order;
@@ -270,10 +299,17 @@ class ConstraintSolver(nnx.Module):
                 self._nonlinear_evaluator(states, physical_shape(self.testspace, N))
             )
             total = pointwise if total is None else total + pointwise
-        if self.forcing is not None:
-            forcing = jnp.asarray(self.forcing)
+        forcing = self.forcing_at(t)
+        if forcing is not None:
+            forcing = jnp.asarray(forcing)
             total = forcing if total is None else total + forcing
         if total is None:
             # Homogeneous: `operator @ u = 0`, so the field vanishes identically.
             return jnp.zeros(self._state_shape)
         return solve_with_options(self.operator, -total, self._solver_options)
+
+
+def _values_vary_in_time(space: ScalarSpaceType) -> bool:
+    """Return True if any of `space`'s boundary values varies in time."""
+    t = space.system.base_time()
+    return any(val.has(t) for val in boundary_values(space))

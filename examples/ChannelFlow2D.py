@@ -808,6 +808,7 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         state: tuple[Array, ...],
         dt: float,
         N: ScalarPadding = None,
+        t: Array | float = 0.0,
         /,
     ) -> tuple[Array, ...]:
         """Advance one IMEX Runge-Kutta step.
@@ -873,6 +874,15 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         matrix values, and inside the jitted step those are tracers.
         """
         for g in self.integrators:
+            # `_step_impl` passes each sub-integrator its `linear_forcing`, not
+            # `forcing_at(t)`, so a moving wall would not merely freeze -- the
+            # boundary contribution is subtracted out of `linear_forcing` on the
+            # transient path and would be dropped entirely. Refuse it here.
+            if g._transient_boundary:  # noqa: SLF001
+                raise NotImplementedError(
+                    "KMM2D does not support time-dependent boundary data; the "
+                    "channel walls must be steady."
+                )
             g.setup(dt)
         self.A_pin.solve(jnp.zeros(self.VD.num_dofs, dtype=complex))
 

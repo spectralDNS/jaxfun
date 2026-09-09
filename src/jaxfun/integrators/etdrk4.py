@@ -64,6 +64,13 @@ def _phi_matrices(z: Array) -> tuple[Array, Array, Array]:
 
 
 class ETDRK4(BaseIntegrator):
+    # The phi-propagators fold the forcing into the matrix exponential at setup,
+    # which is only valid for a forcing that does not move. Carrying a moving
+    # one properly needs phi-weights against divided differences of it at the
+    # stage times; evaluating it once per step and reusing the constant-forcing
+    # weights would silently drop the forcing to first order.
+    supports_transient_boundary = False
+
     """Fourth-order exponential time differencing for semilinear systems."""
 
     def __init__(
@@ -148,8 +155,20 @@ class ETDRK4(BaseIntegrator):
         )
         return nval + self._forcing_rhs
 
-    def _step_impl(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:
-        """Advance one ETDRK4 step in coefficient space."""
+    def _step_impl(
+        self,
+        u_hat: Array,
+        dt: float,
+        N: ScalarPadding = None,
+        t: Array | float = 0.0,
+        /,
+    ) -> Array:
+        """Advance one ETDRK4 step in coefficient space.
+
+        `t` is accepted for the common step signature and unused: the
+        exponential propagators fold a *constant* forcing into themselves at
+        setup, so transient boundary data is rejected at construction.
+        """
         dtQ = dt * self.Q
         n1 = self._N(u_hat, N)
         a = self.E2 @ u_hat + dtQ @ n1

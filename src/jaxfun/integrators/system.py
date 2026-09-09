@@ -405,18 +405,20 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
         states: tuple[Array, ...],
         N: ScalarPadding = None,
         slots: tuple[int, ...] | None = None,
+        t: Array | float = 0.0,
     ) -> tuple[Array, ...]:
         """Return `states` with every constrained field solved from the others.
 
         Constraints are resolved in equation declaration order, so one may read
         the field of a constraint declared before it. `slots` restricts the work
         to those global field slots, which initialization uses to leave a field
-        the caller supplied alone.
+        the caller supplied alone. `t` is the time the constraint's own boundary
+        data is read at -- a stage time, not the step's.
         """
         out = list(states)
         for slot, c in zip(self.constraint_slots, self.constraints, strict=True):
             if slots is None or slot in slots:
-                out[slot] = c.solve_field(tuple(out), N)
+                out[slot] = c.solve_field(tuple(out), N, t)
         return tuple(out)
 
     def _check_state_length(self, states: Sequence[Any], what: str) -> None:

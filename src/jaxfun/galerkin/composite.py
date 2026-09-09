@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterator
+import functools
+from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING, Literal, cast, overload
 
 import jax
@@ -14,7 +15,7 @@ from sympy import Number
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import MeshKind, TestSpaceKind
-from jaxfun.utils.common import Domain, cache_static, matmat, n
+from jaxfun.utils.common import Domain, cache_static, lambdify, matmat, n
 
 if TYPE_CHECKING:
     from jaxfun.galerkin.cartesianproductspace import CartesianProductSpace
@@ -116,6 +117,72 @@ class BoundaryConditions(dict):
             for s in v:
                 bc[k][s] = 0
         return BoundaryConditions(bc)
+
+    def has_time(self, t: sp.Symbol) -> bool:
+        """Return True if any boundary value varies with time.
+
+        Raises:
+            NotImplementedError: If a Robin/weighted alpha depends on time.
+        """
+        # Alpha enters the boundary basis itself (`get_bc_basis`), not the data
+        # applied to it, so a time-dependent alpha would mean re-deriving the
+        # basis symbolically every step -- a much larger feature than
+        # time-dependent boundary data, and not this one.
+        for side in self.values():
+            for key, v in side.items():
+                if isinstance(v, tuple | list) and canonical_time(v[0], t).has(t):
+                    raise NotImplementedError(
+                        f"Time-dependent Robin/weighted coefficient in {key!r}: "
+                        f"{v[0]}. Only the boundary value may depend on time."
+                    )
+        return any(canonical_time(v, t).has(t) for v in self.orderedvals())
+
+    def diff_time(self, t: sp.Symbol) -> BoundaryConditions:
+        """Return a copy with every boundary value differentiated in time."""
+        # The lifting is linear in these values, so differentiating them and
+        # projecting is the same as differentiating the projection -- which is
+        # how `d/dt B` is had without AD through the transforms. A constant
+        # value differentiates to exactly zero, so a steady problem gets a rate
+        # that is identically zero rather than one that merely rounds to it.
+        self.has_time(t)  # rejects a time-dependent Robin alpha
+        # Copied rather than rebuilt through `__init__`, which would apply the
+        # Neumann domain normalization a second time.
+        out = copy.deepcopy(self)
+        for side in out.values():
+            for key, v in side.items():
+                if isinstance(v, tuple | list):
+                    side[key] = (v[0], sp.diff(canonical_time(v[1], t), t))
+                else:
+                    side[key] = sp.diff(canonical_time(v, t), t)
+        return out
+
+    def value_dtype(self) -> jnp.dtype:
+        """Return the dtype the boundary values evaluate to."""
+        return values_dtype(self.orderedvals())
+
+
+def canonical_time[T: sp.Basic](expr: T, t: sp.Symbol) -> T:
+    """Return `expr` with any symbol named like `t` replaced by `t` itself."""
+    # Boundary values bind to coordinates by *name*: `lambdify` is handed the
+    # system's base scalars as argument names, which is why a plain
+    # `sympy.Symbol("x")` already works. Time follows the same rule here.
+    # `BaseTime` carries different assumptions from a plain `Symbol("t")` and so
+    # compares unequal to it, which would otherwise make a value written with
+    # the plain symbol look constant in time -- freezing its lifting, and
+    # failing much later inside `lambdify`.
+    expr = sp.sympify(expr)
+    replace = {s: t for s in expr.free_symbols if str(s) == t.name and s != t}
+    return expr.xreplace(replace) if replace else expr
+
+
+def values_dtype(values: Iterable[sp.Expr]) -> jnp.dtype:
+    """Return the dtype a set of boundary values evaluates to."""
+    # Decided symbolically rather than read off whatever `lambdify` returns: a
+    # boundary value of `1` comes back a Python int, and an array built from it
+    # would be integer-typed.
+    if any(sp.sympify(v).has(sp.I) for v in values):
+        return jnp.result_type(complex)
+    return jnp.result_type(float)
 
 
 dirichlet = BoundaryConditions({"left": {"D": 0}, "right": {"D": 0}})
@@ -428,6 +495,32 @@ class Composite(OrthogonalSpace):
         return DirectSum(self, b)
 
 
+def _evaluate_bnd_vals(
+    bcs: BoundaryConditions, time: sp.Symbol, t: float | Array | None
+) -> Array:
+    """Evaluate a set of ordered boundary values at time `t`."""
+    vals = tuple(canonical_time(v, time) for v in bcs.orderedvals())
+    return jnp.asarray(
+        _lambdify_bnd_vals(vals, time)(0.0 if t is None else t),
+        dtype=bcs.value_dtype(),
+    )
+
+
+@functools.cache
+def _lambdify_bnd_vals(
+    values: tuple[sp.Expr, ...], t: sp.Symbol
+) -> Callable[[float | Array], tuple]:
+    """Return a JAX-traceable callable mapping time to the ordered values.
+
+    Keyed on the values rather than cached on the space: `DirectSumTPS` deep
+    copies `BCGeneric` spaces and reassigns their `bcs` while building the
+    corner-consistency liftings, so an instance-level cache would go stale.
+    """
+    # `ArrayFn` describes the common case of an expression returning one array;
+    # a `sp.Tuple` lambdifies to a tuple of them, which it cannot express.
+    return cast(Callable[[float | Array], tuple], lambdify((t,), sp.Tuple(*values)))
+
+
 class BCGeneric(Composite):
     """Basis spanning only boundary-constraint enforcing functions.
 
@@ -480,14 +573,35 @@ class BCGeneric(Composite):
         """Return number of free DOFs (always zero for pure BC basis)."""
         return 0
 
-    def bnd_vals(self) -> Array:
-        """Return ordered boundary values vector."""
-        return jnp.array(
-            [
-                complex(s) if sp.sympify(s).has(sp.I) else float(s)
-                for s in self.bcs.orderedvals()
-            ]
-        )
+    def bnd_vals(self, t: float | Array | None = None) -> Array:
+        """Return the ordered boundary values, evaluated at time `t`.
+
+        These *are* the lifting coefficients: `S` is the inverse of the boundary
+        trace matrix, so no solve stands between a boundary value and the
+        coefficient that imposes it.
+
+        Args:
+            t: Time to evaluate at. `None` asserts the values do not depend on
+                time.
+
+        Raises:
+            ValueError: If `t` is None and the values do depend on time.
+        """
+        time = self.system.base_time()
+        if t is None and self.bcs.has_time(time):
+            raise ValueError(
+                f"Boundary values of {self.name} depend on time; "
+                "`bnd_vals` needs a `t`."
+            )
+        return _evaluate_bnd_vals(self.bcs, time, t)
+
+    def bnd_vals_rate(self, t: float | Array | None = None) -> Array:
+        """Return d/dt of the ordered boundary values at time `t`.
+
+        The one-dimensional counterpart of `BoundaryLifting.rate`.
+        """
+        time = self.system.base_time()
+        return _evaluate_bnd_vals(self.bcs.diff_time(time), time, t)
 
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Quadrature nodes/weights (override to enforce num_quad_points)."""
@@ -586,9 +700,9 @@ class DirectSum:
         """Return mesh from homogeneous Composite summand."""
         return self[0].mesh(kind=kind, N=N)
 
-    def bnd_vals(self) -> Array:
-        """Return boundary lifting values (from BCGeneric)."""
-        return self[1].bnd_vals()
+    def bnd_vals(self, t: float | Array | None = None) -> Array:
+        """Return boundary lifting values (from BCGeneric) at time `t`."""
+        return self[1].bnd_vals(t)
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -605,52 +719,47 @@ class DirectSum:
         """Return free degrees of freedom (Composite part)."""
         return self[0].num_dofs
 
-    @jax.jit(static_argnums=0)
-    def to_orthogonal(self, c: Array) -> Array:
+    def to_orthogonal(self, c: Array, t: float | Array | None = None) -> Array:
         """Map direct-sum coefficients -> underlying orthogonal coefficients."""
-        c_a = self[0].to_orthogonal(c)
-        c_b = self[1].to_orthogonal(self[1].bnd_vals())
-        c_b = jnp.pad(c_b, (0, c_a.shape[0] - c_b.shape[0]))
-        return c_a + c_b
+        return _ds_to_orthogonal(self, c, self.bnd_vals(t))
 
-    @jax.jit(static_argnums=0)
-    def from_orthogonal(self, a: Array) -> Array:
+    def from_orthogonal(self, a: Array, t: float | Array | None = None) -> Array:
         """Map underlying orthogonal coefficients -> direct-sum (inhomogeneous) coefficients."""  # noqa: E501
-        c_b = self[1].to_orthogonal(self[1].bnd_vals())
-        c_b = jnp.pad(c_b, (0, a.shape[0] - c_b.shape[0]))
-        c_a = a - c_b
-        return self[0].from_orthogonal(c_a)
+        return _ds_from_orthogonal(self, a, self.bnd_vals(t))
 
-    @jax.jit(static_argnums=0)
-    def evaluate(self, x: Array, c: Array) -> Array:
-        """Evaluate direct-sum expansion at points x."""
-        return self.orthogonal.evaluate(x, self.to_orthogonal(c))
-
-    @jax.jit(static_argnums=(0, 2, 3))
-    def evaluate_mesh(
-        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
+    def evaluate(
+        self, x: float | Array, c: Array, t: float | Array | None = None
     ) -> Array:
-        return self.orthogonal.evaluate_mesh(self.to_orthogonal(c), kind=kind, N=N)
+        """Evaluate direct-sum expansion at points x."""
+        return _ds_evaluate(self, x, c, self.bnd_vals(t))
 
-    @jax.jit(static_argnums=(0, 2))
-    def backward(self, c: Array, N: int | None = None) -> Array:
+    def evaluate_mesh(
+        self,
+        c: Array,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
+        N: int | None = None,
+        t: float | Array | None = None,
+    ) -> Array:
+        return _ds_evaluate_mesh(self, c, self.bnd_vals(t), kind, N)
+
+    def backward(
+        self, c: Array, N: int | None = None, t: float | Array | None = None
+    ) -> Array:
         """Return backward transform."""
-        return self.orthogonal.backward(self.to_orthogonal(c), N)
+        return _ds_backward(self, c, self.bnd_vals(t), N)
 
-    @jax.jit(static_argnums=(0, 2, 3))
     def backward_primitive(
         self,
         c: Array,
         k: int = 0,
         N: int | None = None,
+        t: float | Array | None = None,
     ) -> Array:
         """Return backward transform for k-th derivative."""
-        return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, N)
+        return _ds_backward_primitive(self, c, self.bnd_vals(t), k, N)
 
-    @jax.jit(static_argnums=0)
-    def forward(self, uj: Array) -> Array:
-        a = self[0].orthogonal.forward(uj)
-        return self.from_orthogonal(a)
+    def forward(self, uj: Array, t: float | Array | None = None) -> Array:
+        return _ds_forward(self, uj, self.bnd_vals(t))
 
     @jax.jit(static_argnums=0)
     def scalar_product(self, uj: Array) -> Array:
@@ -660,6 +769,65 @@ class DirectSum:
     def get_homogeneous(self) -> Composite:
         """Return homogeneous Composite part of the direct sum."""
         return self[0]
+
+
+# The boundary lifting crosses these as a traced argument rather than being read
+# off the space inside the trace. `static_argnums=0` keys the cache on the
+# space's identity, and the space is mutable: `DirectSumTPS` reassigns `bcs` on
+# the copies it builds, and boundary data may vary in time. Read from inside,
+# the lifting would be baked into the first-compiled executable and every later
+# call would silently get that one back. The space's *structure* is genuinely
+# static, so only the data moves out.
+
+
+@jax.jit(static_argnums=0)
+def _ds_to_orthogonal(space: DirectSum, c: Array, bvals: Array) -> Array:
+    c_a = space[0].to_orthogonal(c)
+    c_b = space[1].to_orthogonal(bvals)
+    c_b = jnp.pad(c_b, (0, c_a.shape[0] - c_b.shape[0]))
+    return c_a + c_b
+
+
+@jax.jit(static_argnums=0)
+def _ds_from_orthogonal(space: DirectSum, a: Array, bvals: Array) -> Array:
+    c_b = space[1].to_orthogonal(bvals)
+    c_b = jnp.pad(c_b, (0, a.shape[0] - c_b.shape[0]))
+    return space[0].from_orthogonal(a - c_b)
+
+
+@jax.jit(static_argnums=0)
+def _ds_evaluate(space: DirectSum, x: float | Array, c: Array, bvals: Array) -> Array:
+    return space.orthogonal.evaluate(x, _ds_to_orthogonal(space, c, bvals))
+
+
+@jax.jit(static_argnums=(0, 3, 4))
+def _ds_evaluate_mesh(
+    space: DirectSum,
+    c: Array,
+    bvals: Array,
+    kind: MeshKind | str,
+    N: int | None,
+) -> Array:
+    return space.orthogonal.evaluate_mesh(
+        _ds_to_orthogonal(space, c, bvals), kind=kind, N=N
+    )
+
+
+@jax.jit(static_argnums=(0, 3))
+def _ds_backward(space: DirectSum, c: Array, bvals: Array, N: int | None) -> Array:
+    return space.orthogonal.backward(_ds_to_orthogonal(space, c, bvals), N)
+
+
+@jax.jit(static_argnums=(0, 3, 4))
+def _ds_backward_primitive(
+    space: DirectSum, c: Array, bvals: Array, k: int, N: int | None
+) -> Array:
+    return space.orthogonal.backward_primitive(_ds_to_orthogonal(space, c, bvals), k, N)
+
+
+@jax.jit(static_argnums=0)
+def _ds_forward(space: DirectSum, uj: Array, bvals: Array) -> Array:
+    return _ds_from_orthogonal(space, space[0].orthogonal.forward(uj), bvals)
 
 
 class PGComposite(Composite):

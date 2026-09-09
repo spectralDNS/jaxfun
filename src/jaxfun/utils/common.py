@@ -13,7 +13,7 @@ from scipy.special import sph_harm_y
 from sympy import Expr, Symbol
 
 from jaxfun.la import DiaMatrix
-from jaxfun.typing import FloatLike
+from jaxfun.typing import ArrayLike, FloatLike
 
 if TYPE_CHECKING:
     from jaxfun.coordinates import BaseScalar
@@ -201,7 +201,9 @@ def tosparse(a: Array, tol: int = 100) -> DiaMatrix:
 
 
 class ArrayFn(Protocol):
-    def __call__(self, *args: Array) -> Array: ...
+    # Python scalars are as acceptable as arrays: a projection passes a mesh
+    # coordinate and a scalar time side by side.
+    def __call__(self, *args: ArrayLike) -> Array: ...
 
 
 def lambdify(

@@ -1502,7 +1502,6 @@ class DiaMatrix(BaseMatrix):
                 raise IndexError(
                     f"Constraint index {idx} is out of range for matrix of size {n}"
                 )
-            val = complex(val) if isinstance(val, complex) else float(val)
             norm_constraints.append((idx % n, val))
 
         # Zero every stored entry in each pinned row, then set diagonal to 1.

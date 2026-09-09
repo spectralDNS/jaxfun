@@ -29,11 +29,21 @@ class BackwardEuler(BaseIntegrator):
             self._system_operator, self._state_shape, self._solver_options
         )
 
-    def _step_impl(self, u_hat: Array, dt: float, N: ScalarPadding = None) -> Array:
+    def _step_impl(
+        self,
+        u_hat: Array,
+        dt: float,
+        N: ScalarPadding = None,
+        t: Array | float = 0.0,
+        /,
+    ) -> Array:
         """Advance one backward-Euler step in coefficient space."""
+        # The forcing is evaluated at the *end* of the step, which is what makes
+        # this implicit Euler rather than a mixture. Invisible for steady data.
         rhs = self.apply_mass(u_hat)
-        if self.linear_forcing is not None:
-            rhs = rhs + dt * jnp.asarray(self.linear_forcing)
+        forcing = self.forcing_at(t + dt)
+        if forcing is not None:
+            rhs = rhs + dt * jnp.asarray(forcing)
         if self.has_nonlinear:
             rhs = rhs + dt * self.nonlinear_rhs_scalar_product(u_hat, N)
 

@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import sympy as sp
+from jax import Array
 
 from jaxfun.galerkin import FunctionSpace, JAXFunction, TensorProduct
 from jaxfun.galerkin.Chebyshev import Chebyshev
@@ -118,13 +119,15 @@ def test_backward_primitive_composite(jspace: type[Jacobi], domain: Domain):
     x = D.system.x
     f = sp.sin(x * sp.pi)
     uf = JAXFunction(f, D)
+    uh = uf.array
+    assert isinstance(uh, Array)  # a scalar space, so one coefficient array
     du = JAXFunction(sp.diff(f, x), D.orthogonal)  # Cannot use D due to bcs
-    df = D.backward_primitive(uf.array, 1)
+    df = D.backward_primitive(uh, 1)
     error = jnp.linalg.norm(df - du.backward())
     assert error < jnp.sqrt(ulp(10))
     if jax.config.jax_enable_x64:
         du = JAXFunction(sp.diff(f, x, 2), D.orthogonal)
-        df = D.backward_primitive(uf.array, 2)
+        df = D.backward_primitive(uh, 2)
         error = jnp.linalg.norm(df - du.backward())
         assert error < jnp.sqrt(ulp(100)), error
 
@@ -142,13 +145,15 @@ def test_backward_primitive_directsum(jspace: type[Jacobi], domain: Domain):
     (x,) = D.system.base_scalars()
     f = D.system.expr_psi_to_base_scalar(f)
     uf = JAXFunction(f, D)
+    uh = uf.array
+    assert isinstance(uh, Array)  # a scalar space, so one coefficient array
     du = JAXFunction(sp.diff(f, x), D.orthogonal)  # Cannot use D due to bcs
-    df = D.backward_primitive(uf.array, 1)
+    df = D.backward_primitive(uh, 1)
     error = jnp.linalg.norm(df - du.backward())
     assert error < jnp.sqrt(ulp(100))
     if jax.config.jax_enable_x64:
         du = JAXFunction(sp.diff(f, x, 2), D.orthogonal)
-        df = D.backward_primitive(uf.array, 2)
+        df = D.backward_primitive(uh, 2)
         error = jnp.linalg.norm(df - du.backward())
         assert error < jnp.sqrt(ulp(100)), error
 

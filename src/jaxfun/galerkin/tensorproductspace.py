@@ -12,12 +12,14 @@ import jax.core
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array, shard_map
-from jax.sharding import PartitionSpec as P
+from jax.sharding import NamedSharding, PartitionSpec as P
 
 from jaxfun.coordinates import CartCoordSys, CoordSys
 from jaxfun.sharding import (
     _apply_separable_spmd_shard_map,
     _build_local_apply_fn,
+    batched_physical_sharding,
+    batched_spectral_sharding,
     physical_sharding,
     place,
     spectral_sharding,
@@ -440,7 +442,7 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._spectral_sharding and len(c.devices()) > 1:
+        if self._use_spmd(self._spectral_sharding, c.shape, nq):
             # Orders the axes itself, so `fns` stays indexed by axis.
             return _apply_separable_spmd_shard_map(
                 c, fns, spectral_sharding, self._spmd_local_fn_cache
@@ -472,7 +474,7 @@ class TensorProductSpace:
         Returns:
             Scalar or (n_pts,) array of evaluated values.
         """
-        if self._spectral_sharding and len(c.devices()) > 1:
+        if self._use_spmd(self._spectral_sharding, c.shape):
             dim = len(self)
             T = self.basespaces
 
@@ -521,6 +523,81 @@ class TensorProductSpace:
             _token=_tensorproduct_token,
         )
 
+    def _use_spmd(
+        self,
+        sharding: NamedSharding | None,
+        in_shape: tuple[int, ...],
+        out_shape: tuple[int, ...] | None = None,
+    ) -> bool:
+        """Whether the sharded transform path applies to arrays of these shapes.
+
+        Decided from the shapes, never from an array's placement. Placement is
+        not knowable inside `jit`: `Tracer.devices()` raises, and this build of
+        JAX does not carry sharding on avals either. Every transform here has to
+        be callable from inside a jitted time step -- `BaseIntegrator` takes a
+        scalar product of its nonlinear terms at every stage -- so a test that
+        only works on concrete arrays makes the whole class unusable there. A
+        shape is static under trace and answers the same question.
+
+        Exactly two extents have to divide by the device count, and they are not
+        all of them:
+
+        * the axis actually split across devices, for the sharding itself;
+        * the axis `lax.all_to_all` splits to transpose that -- `unsharded[0]`,
+          at the extent it has *after* the local phase, which is its extent in
+          `out_shape`.
+
+        The others are free. A composite polynomial axis with two boundary
+        conditions carries `N - 2` coefficients against `N` quadrature points,
+        and only the quadrature count is ever split, so `N - 2` may be any
+        number at all.
+
+        Failing either one means running locally, which costs the parallelism
+        and nothing else -- with one exception. A half spectrum stores
+        `N // 2 + 1` coefficients, odd for every power-of-two `N`, and
+        `RFourier` pads that up to a multiple of the device count precisely so
+        the leading axis can be split. A half-spectrum space whose leading axis
+        still does not divide is therefore a request the library was asked to
+        satisfy and could not, rather than a size that happens not to suit, so
+        that one case raises instead of degrading quietly.
+
+        Both index lists below are non-empty because a tensor product space has
+        at least two axes -- `TensorProduct` refuses fewer -- while both
+        `spectral_sharding` and `physical_sharding` split exactly one. A rank-1
+        space would leave one of them empty and index out of range here, which is
+        why the factory rejects it rather than this guarding against it twice.
+
+        Args:
+            sharding: `self._spectral_sharding` or `self._physical_sharding` --
+                None on a single device, which is the common early exit.
+            in_shape: Shape of the array going in, space axes only.
+            out_shape: Shape it comes out with, space axes only. Omitted by the
+                paths that do not transpose the split, which then constrain only
+                the split axis itself.
+        """
+        if sharding is None:
+            return False
+        n = len(jax.devices())
+
+        if self.is_hermitian_half and self.num_dofs[0] % n:
+            raise IndivisibleError(
+                f"{self.name}: the half spectrum stores {self.num_dofs[0]} "
+                f"coefficients on its leading axis, which {n} devices cannot "
+                "divide, so it cannot be split. `RFourier` pads that count up to "
+                "a multiple of the device count by default -- reaching this means "
+                "the padding was turned off with `n_extra`, or the space was "
+                "built before the other processes' devices were visible."
+            )
+
+        spec = sharding.spec
+        sharded = [
+            ax for ax in range(len(in_shape)) if ax < len(spec) and spec[ax] is not None
+        ]
+        unsharded = [ax for ax in range(len(in_shape)) if ax not in sharded]
+        if in_shape[sharded[0]] % n:
+            return False
+        return out_shape is None or out_shape[unsharded[0]] % n == 0
+
     def backward(
         self,
         c: Array,
@@ -538,7 +615,7 @@ class TensorProductSpace:
         See `backward_batch` for transforming several coefficient arrays at once.
         """
         nq = self._resolve_quad_points(N)
-        if self._spectral_sharding and len(c.devices()) > 1:
+        if self._use_spmd(self._spectral_sharding, c.shape, nq):
             # Orders the axes itself, so the transforms stay indexed by axis.
             return _apply_separable_spmd_shard_map(
                 c, self._backward_fns(nq), spectral_sharding, self._spmd_local_fn_cache
@@ -565,28 +642,33 @@ class TensorProductSpace:
         The result is identical to transforming them one at a time -- this is
         purely how the same arithmetic is issued.
 
-        Raises:
-            NotImplementedError: if `c` is sharded across devices. Nothing about
-                the transform prevents that -- a batch axis rides along
-                replicated while the space axes keep their sharding -- but
-                `_apply_separable_spmd_shard_map` identifies each axis's role by
-                position against a fixed-rank spec, which a batch axis shifts.
+        Sharded coefficients take the same distributed path `backward` does,
+        with the batch axis carried along replicated: the fields differ only in
+        their values, so each device holds the same wavenumbers of all of them
+        and one `all_to_all` transposes the whole batch at once.
         """
-        if self._spectral_sharding and len(c.devices()) > 1:
-            raise NotImplementedError(
-                "backward_batch does not handle sharded coefficients yet. "
-                "Transform the fields one at a time with backward()."
-            )
         nq = self._resolve_quad_points(N)
+        if self._use_spmd(self._spectral_sharding, c.shape[1:], nq):
+            return _apply_separable_spmd_shard_map(
+                c,
+                self._backward_fns(nq, batch_dims=1),
+                batched_spectral_sharding,
+                self._spmd_local_fn_cache,
+                batch_dims=1,
+            )
         return jax.vmap(lambda ci: self._apply_backward(ci, nq))(c)
 
-    def _backward_fns(self, nq: tuple[int, ...]) -> tuple[ArrayFun, ...]:
-        """Return the cached per-axis backward transforms, indexed by axis."""
-        cache_key = ("backward", nq)
+    def _backward_fns(
+        self, nq: tuple[int, ...], batch_dims: int = 0
+    ) -> tuple[ArrayFun, ...]:
+        """Return the cached per-axis backward transforms, indexed by space axis."""
+        cache_key = ("backward", nq, batch_dims)
         if cache_key not in self._spmd_local_fn_cache:
             self._spmd_local_fn_cache[cache_key] = tuple(
                 _build_local_apply_fn(
-                    len(self), ax, partial(self.basespaces[ax].backward, N=nq[ax])
+                    len(self) + batch_dims,
+                    batch_dims + ax,
+                    partial(self.basespaces[ax].backward, N=nq[ax]),
                 )
                 for ax in range(len(self))
             )
@@ -616,7 +698,7 @@ class TensorProductSpace:
         See `scalar_product_batch` for several arrays at once.
         """
         u = self._weight_by_metric(u)
-        if self._physical_sharding and len(u.devices()) > 1:
+        if self._use_spmd(self._physical_sharding, u.shape, self.num_dofs):
             return _apply_separable_spmd_shard_map(
                 u,
                 self._scalar_product_fns(),
@@ -635,15 +717,15 @@ class TensorProductSpace:
             The inner products, batch axis first.
 
         The batched counterpart of `scalar_product`; see `backward_batch` for
-        what batching buys and why sharding is excluded.
-
-        Raises:
-            NotImplementedError: if `u` is sharded across devices.
+        what batching buys and how a sharded batch is handled.
         """
-        if self._physical_sharding and len(u.devices()) > 1:
-            raise NotImplementedError(
-                "scalar_product_batch does not handle sharded arrays yet. "
-                "Take the inner products one at a time with scalar_product()."
+        if self._use_spmd(self._physical_sharding, u.shape[1:], self.num_dofs):
+            return _apply_separable_spmd_shard_map(
+                self._weight_by_metric(u),
+                self._scalar_product_fns(batch_dims=1),
+                batched_physical_sharding,
+                self._spmd_local_fn_cache,
+                batch_dims=1,
             )
         return jax.vmap(
             lambda ui: self._apply_scalar_product(self._weight_by_metric(ui))
@@ -656,12 +738,16 @@ class TensorProductSpace:
             return u
         return u * lambdify(self.system.base_scalars(), sg)(*self.mesh())
 
-    def _scalar_product_fns(self) -> tuple[ArrayFun, ...]:
-        """Return the cached per-axis scalar products, indexed by axis."""
-        cache_key = ("scalar_product",)
+    def _scalar_product_fns(self, batch_dims: int = 0) -> tuple[ArrayFun, ...]:
+        """Return the cached per-axis scalar products, indexed by space axis."""
+        cache_key = ("scalar_product", batch_dims)
         if cache_key not in self._spmd_local_fn_cache:
             self._spmd_local_fn_cache[cache_key] = tuple(
-                _build_local_apply_fn(len(self), ax, self.basespaces[ax].scalar_product)
+                _build_local_apply_fn(
+                    len(self) + batch_dims,
+                    batch_dims + ax,
+                    self.basespaces[ax].scalar_product,
+                )
                 for ax in range(len(self))
             )
         return self._spmd_local_fn_cache[cache_key]
@@ -690,7 +776,7 @@ class TensorProductSpace:
 
         See `forward_batch` for transforming several arrays at once.
         """
-        if self._physical_sharding and len(u.devices()) > 1:
+        if self._use_spmd(self._physical_sharding, u.shape, self.num_dofs):
             return _apply_separable_spmd_shard_map(
                 u, self._forward_fns(), physical_sharding, self._spmd_local_fn_cache
             )
@@ -706,24 +792,28 @@ class TensorProductSpace:
             The transformed arrays, batch axis first.
 
         The batched counterpart of `forward`; see `backward_batch` for what
-        batching buys and why sharding is excluded.
-
-        Raises:
-            NotImplementedError: if `u` is sharded across devices.
+        batching buys and how a sharded batch is handled.
         """
-        if self._physical_sharding and len(u.devices()) > 1:
-            raise NotImplementedError(
-                "forward_batch does not handle sharded arrays yet. "
-                "Transform them one at a time with forward()."
+        if self._use_spmd(self._physical_sharding, u.shape[1:], self.num_dofs):
+            return _apply_separable_spmd_shard_map(
+                u,
+                self._forward_fns(batch_dims=1),
+                batched_physical_sharding,
+                self._spmd_local_fn_cache,
+                batch_dims=1,
             )
         return jax.vmap(self._apply_forward)(u)
 
-    def _forward_fns(self) -> tuple[ArrayFun, ...]:
-        """Return the cached per-axis forward transforms, indexed by axis."""
-        cache_key = ("forward",)
+    def _forward_fns(self, batch_dims: int = 0) -> tuple[ArrayFun, ...]:
+        """Return the cached per-axis forward transforms, indexed by space axis."""
+        cache_key = ("forward", batch_dims)
         if cache_key not in self._spmd_local_fn_cache:
             self._spmd_local_fn_cache[cache_key] = tuple(
-                _build_local_apply_fn(len(self), ax, self.basespaces[ax].forward)
+                _build_local_apply_fn(
+                    len(self) + batch_dims,
+                    batch_dims + ax,
+                    self.basespaces[ax].forward,
+                )
                 for ax in range(len(self))
             )
         return self._spmd_local_fn_cache[cache_key]
@@ -759,7 +849,7 @@ class TensorProductSpace:
         See `backward_primitive_batch` for several coefficient arrays at once.
         """
         nq = self._resolve_quad_points(N)
-        if self._spectral_sharding and len(c.devices()) > 1:
+        if self._use_spmd(self._spectral_sharding, c.shape, nq):
             # Orders the axes itself, so the transforms stay indexed by axis.
             return _apply_separable_spmd_shard_map(
                 c,
@@ -786,33 +876,32 @@ class TensorProductSpace:
             The evaluated fields, batch axis first.
 
         The batched counterpart of `backward_primitive`; see `backward_batch`
-        for what batching buys and why sharding is excluded. `k` is shared, so
-        fields wanting different derivative orders need separate calls -- along
-        a polynomial axis each order is a different Vandermonde, which is
-        exactly what a batch has to hold fixed.
-
-        Raises:
-            NotImplementedError: if `c` is sharded across devices.
+        for what batching buys and how a sharded batch is handled. `k` is
+        shared, so fields wanting different derivative orders need separate
+        calls -- along a polynomial axis each order is a different Vandermonde,
+        which is exactly what a batch has to hold fixed.
         """
-        if self._spectral_sharding and len(c.devices()) > 1:
-            raise NotImplementedError(
-                "backward_primitive_batch does not handle sharded coefficients "
-                "yet. Transform the fields one at a time with "
-                "backward_primitive()."
-            )
         nq = self._resolve_quad_points(N)
+        if self._use_spmd(self._spectral_sharding, c.shape[1:], nq):
+            return _apply_separable_spmd_shard_map(
+                c,
+                self._backward_primitive_fns(k, nq, batch_dims=1),
+                batched_spectral_sharding,
+                self._spmd_local_fn_cache,
+                batch_dims=1,
+            )
         return jax.vmap(lambda ci: self._apply_backward_primitive(ci, k, nq))(c)
 
     def _backward_primitive_fns(
-        self, k: tuple[int, ...], nq: tuple[int, ...]
+        self, k: tuple[int, ...], nq: tuple[int, ...], batch_dims: int = 0
     ) -> tuple[ArrayFun, ...]:
-        """Return the cached per-axis derivative transforms, indexed by axis."""
-        cache_key = ("backward_primitive", k, nq)
+        """Return the cached per-axis derivative transforms, indexed by space axis."""
+        cache_key = ("backward_primitive", k, nq, batch_dims)
         if cache_key not in self._spmd_local_fn_cache:
             self._spmd_local_fn_cache[cache_key] = tuple(
                 _build_local_apply_fn(
-                    len(self),
-                    ax,
+                    len(self) + batch_dims,
+                    batch_dims + ax,
                     partial(
                         self.basespaces[ax].backward_primitive,
                         k=k[ax],
@@ -871,6 +960,7 @@ class TensorProductSpace:
 
 def _halve_leading_fourier(
     basespaces: Sequence[OrthogonalSpace | DirectSum],
+    n_extra: int | None = None,
 ) -> list[OrthogonalSpace | DirectSum]:
     """Return `basespaces` with the leading Fourier axis stored as a half spectrum.
 
@@ -906,6 +996,7 @@ def _halve_leading_fourier(
             system=head.system,
             name=head.name,
             fun_str=head.fun_str,
+            n_extra=n_extra,
         ),
         *out[1:],
     ]
@@ -916,6 +1007,7 @@ def TensorProduct(
     system: CoordSys | None = None,
     name: str = "T",
     real: bool = False,
+    n_extra: int | None = None,
 ) -> TensorProductSpace | DirectSumTPS:
     """Factory returning TensorProductSpace or DirectSumTPS.
 
@@ -938,6 +1030,9 @@ def TensorProduct(
             construction to size operators and initial conditions, long before
             any field exists to inspect. Passing a complex field to a space
             built with `real=True` raises from the forward transform.
+        n_extra: Padding for the half spectrum, forwarded to `RFourier`. Only
+            meaningful with `real=True`; defaults to whatever the current device
+            count needs, which is nothing on one device.
 
     Returns:
         Instance of TensorProductSpace or DirectSumTPS.
@@ -945,10 +1040,18 @@ def TensorProduct(
     from jaxfun.coordinates import CartCoordSys, x, y, z
 
     if real:
-        basespaces = tuple(_halve_leading_fourier(basespaces))
+        basespaces = tuple(_halve_leading_fourier(basespaces, n_extra))
 
+    if len(basespaces) < 2:
+        raise ValueError(
+            f"{name}: a tensor product needs at least two base spaces, got "
+            f"{len(basespaces)}. A single space is already usable on its own, and "
+            "a rank-1 tensor product space is not supported -- the sharded "
+            "transforms need one split axis and one unsplit axis, and it has "
+            "only one axis in total."
+        )
     system = (
-        CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[len(basespaces)])
+        CartCoordSys("N", {2: (x, y), 3: (x, y, z)}[len(basespaces)])
         if system is None
         else system
     )
@@ -1234,8 +1337,14 @@ class DirectSumTPS(TensorProductSpace):
         Lifting the boundary values adds the field to a boundary contribution
         that `to_orthogonal` has already placed on the space's sharding, and a
         traced array carries no placement to match it against. A plain tensor
-        product space does no such mixing, so it batches replicated arrays on a
-        multi-device host quite happily; a direct sum cannot.
+        product space does no such mixing: it batches a sharded array through
+        the same `shard_map` its unbatched transforms use, carrying the batch
+        axis along replicated. A direct sum cannot, and this is also what keeps
+        it out of that inherited path -- which applies the base space's own
+        per-axis transforms and would skip the lifting entirely. The two
+        conditions are complements, `self._spectral_sharding` being set exactly
+        when `_use_spmd` can return True, so neither case is ever reached twice
+        or missed.
         """
         if self._spectral_sharding:
             raise NotImplementedError(

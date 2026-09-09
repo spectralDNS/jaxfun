@@ -240,19 +240,35 @@ class Legendre(Jacobi):
         x0: Array = jnp.zeros((), dtype=c.dtype)
         if N == 0:
             return jnp.array([x0])
-        x1: Array = c[-1] * (2 * N - 1)
         if N == 1:
-            return jnp.array([x1, x0])
+            return jnp.array([c[-1] * (2 * N - 1), x0])
 
-        def inner_loop(
-            carry: tuple[Array, Array], n: int | Array
-        ) -> tuple[tuple[Array, Array], Array]:
-            x0, x1 = carry
-            x2 = (2 * n + 1) * c[n + 1] + (2 * n + 1) / (2 * n + 5) * x0
-            return (x1, x2), x2
+        # Old version using scan, which is slow on gpus because it launches a kernel
+        # for each iteration.
+        # def inner_loop(
+        #     carry: tuple[Array, Array], n: int | Array
+        # ) -> tuple[tuple[Array, Array], Array]:
+        #     x0, x1 = carry
+        #     x2 = (2 * n + 1) * c[n + 1] + (2 * n + 1) / (2 * n + 5) * x0
+        #     return (x1, x2), x2
+        # _, xs = jax.lax.scan(inner_loop, (x0, x1), jnp.arange(N - 2, -1, -1))
+        # return jnp.concatenate((xs[::-1], jnp.array([x1, x0])))
 
-        _, xs = jax.lax.scan(inner_loop, (x0, x1), jnp.arange(N - 2, -1, -1))
-        return jnp.concatenate((xs[::-1], jnp.array([x1, x0])))
+        # The recurrence is `x[n] = (2n+1) c[n+1] + (2n+1)/(2n+5) x[n+2]`, and
+        # since 2n+5 = 2(n+2)+1 the substitution `w[n] = x[n] / (2n+1)`
+        # telescopes it into `w[n] = c[n+1] + w[n+2]` -- lag two, and a
+        # coefficient of exactly one -- so each parity class of `n` is a running
+        # total and the whole thing is a reversed cumulative sum. Written as a
+        # scan it is `N` sequential steps, which on an accelerator is `N` kernel
+        # launches for a handful of arithmetic each; as a cumsum it is
+        # logarithmic depth, and losing the divisions costs no accuracy.
+
+        m = (N + 2) // 2
+        a = jnp.pad(c, (0, 2 * m - (N + 1))).reshape(m, 2)
+        w = jnp.flip(jnp.cumsum(jnp.flip(a, axis=0), axis=0), axis=0)
+        return jnp.concatenate(
+            ((2 * jnp.arange(N) + 1) * w.reshape(2 * m)[1 : N + 1], jnp.stack([x0]))
+        )
 
     legder = derivative_coeffs
 

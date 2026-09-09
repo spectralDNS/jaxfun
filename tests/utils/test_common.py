@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from scipy.fft import dst as scipy_dst
+from scipy.fft import dct as scipy_dct, dst as scipy_dst, idct as scipy_idct
 
 from jaxfun.coordinates import CartCoordSys, x, y
 from jaxfun.galerkin import FunctionSpace
@@ -192,3 +192,137 @@ def test_dst_type1_vs_scipy() -> None:
     expected = scipy_dst(np.asarray(x), type=1, norm=None)
     result = common.dst(x, type=1)
     assert jnp.allclose(result, jnp.asarray(expected), rtol=ulp(1000), atol=ulp(1000))
+
+
+@pytest.mark.parametrize("transform", ["dct", "idct"])
+@pytest.mark.parametrize("complex_input", [False, True])
+@pytest.mark.parametrize("n", [15, 16, 17, 32])
+def test_dct_vs_scipy(transform: str, complex_input: bool, n: int) -> None:
+    """Both directions must match scipy for real and complex input alike.
+
+    Complex input is the case these exist for: `jax.scipy.fft` splits it into two
+    real transforms, and these do it in one.
+    """
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(n)
+    if complex_input:
+        x = x + 1j * rng.standard_normal(n)
+    ours = getattr(common, transform)(jnp.asarray(x))
+    expected = (scipy_dct if transform == "dct" else scipy_idct)(x, type=2, norm=None)
+    # Kind, not width: the suite runs in float32 unless --float64 is given.
+    assert jnp.iscomplexobj(ours) == np.iscomplexobj(expected)
+    assert jnp.allclose(ours, jnp.asarray(expected), rtol=ulp(1000), atol=ulp(1000))
+
+
+def test_dct_axis_and_padding() -> None:
+    """`axis` and a longer `n` must behave as scipy's do."""
+    rng = np.random.default_rng(1)
+    x = rng.standard_normal((8, 16))
+    along_0 = common.dct(jnp.asarray(x), axis=0)
+    assert jnp.allclose(
+        along_0,
+        jnp.asarray(scipy_dct(x, type=2, axis=0, norm=None)),
+        rtol=ulp(1000),
+        atol=ulp(1000),
+    )
+    padded = common.dct(jnp.asarray(x), n=24)
+    assert jnp.allclose(
+        padded,
+        jnp.asarray(scipy_dct(x, type=2, n=24, norm=None)),
+        rtol=ulp(1000),
+        atol=ulp(1000),
+    )
+
+
+def test_dct_rejects_other_types() -> None:
+    """Only type 2 is implemented, as for `dst`."""
+    x = jnp.zeros(8)
+    for f in (common.dct, common.idct):
+        with pytest.raises(ValueError, match="type"):
+            f(x, type=1)
+
+
+@pytest.mark.parametrize("type", [1, 2])
+@pytest.mark.parametrize("complex_input", [False, True])
+def test_dst_vs_scipy_complex_axis_and_padding(type: int, complex_input: bool) -> None:
+    """`dst` must match scipy for complex input, off-axis and padded alike.
+
+    Complex input goes through one FFT rather than two: the odd extension of
+    z = a + ib is linear, so both Hermitian halves ride in a single transform.
+    """
+    rng = np.random.default_rng(0)
+    for shape, kwargs in (
+        ((32,), {}),
+        ((8, 32), {}),
+        ((8, 32), {"axis": 0}),
+        ((32,), {"n": 40}),
+    ):
+        x = rng.standard_normal(shape)
+        if complex_input:
+            x = x + 1j * rng.standard_normal(shape)
+        ours = common.dst(jnp.asarray(x), type=type, **kwargs)
+        expected = scipy_dst(x, type=type, norm=None, **kwargs)
+        assert jnp.iscomplexobj(ours) == np.iscomplexobj(expected)
+        assert jnp.allclose(
+            ours, jnp.asarray(expected), rtol=ulp(1000), atol=ulp(1000)
+        ), f"{shape} {kwargs}"
+
+
+def test_dst_rejects_other_types() -> None:
+    """Only types 1 and 2 are implemented."""
+    with pytest.raises(ValueError, match="type"):
+        common.dst(jnp.zeros(8), type=3)
+
+
+@pytest.mark.parametrize("transform", ["dct", "idct"])
+@pytest.mark.parametrize("n", [4, 16, 31, 32, 40])
+def test_dct_resizes_like_scipy(transform: str, n: int) -> None:
+    """`n` is the length of the transform, not a lower bound on the input.
+
+    scipy crops a longer input rather than transforming all of it, so
+    `dct(x, n=k)` must equal `dct(x[:k])`. Getting this wrong is silent for the
+    DSTs, whose odd extension would otherwise be built at one length and sliced
+    at another.
+    """
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(32) + 1j * rng.standard_normal(32)
+    f = getattr(common, transform)
+    scipy_f = scipy_dct if transform == "dct" else scipy_idct
+    expected = scipy_f(x, type=2, n=n, norm=None)
+    assert jnp.allclose(
+        f(jnp.asarray(x), n=n), jnp.asarray(expected), rtol=ulp(1000), atol=ulp(1000)
+    )
+    # The crop is the whole of it: no other resizing may be going on.
+    if n <= x.shape[0]:
+        assert jnp.allclose(
+            f(jnp.asarray(x), n=n),
+            f(jnp.asarray(x[:n])),
+            rtol=ulp(1000),
+            atol=ulp(1000),
+        )
+
+
+@pytest.mark.parametrize("type", [1, 2])
+@pytest.mark.parametrize("n", [4, 16, 31, 32, 40])
+def test_dst_resizes_like_scipy(type: int, n: int) -> None:
+    """The same for `dst`, where a shortened `n` used to be silently wrong.
+
+    The odd extension was built from the full input while `_dst_modes` sliced it
+    with the shorter length, so the mode ranges addressed the wrong entries.
+    """
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(32) + 1j * rng.standard_normal(32)
+    expected = scipy_dst(x, type=type, n=n, norm=None)
+    assert jnp.allclose(
+        common.dst(jnp.asarray(x), type=type, n=n),
+        jnp.asarray(expected),
+        rtol=ulp(1000),
+        atol=ulp(1000),
+    )
+    if n <= x.shape[0]:
+        assert jnp.allclose(
+            common.dst(jnp.asarray(x), type=type, n=n),
+            common.dst(jnp.asarray(x[:n]), type=type),
+            rtol=ulp(1000),
+            atol=ulp(1000),
+        )

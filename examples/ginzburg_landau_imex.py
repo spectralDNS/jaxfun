@@ -11,11 +11,11 @@ import sys
 from typing import cast
 
 import jax
-import jax.numpy as jnp
 
 if "PYTEST" not in os.environ:
     jax.config.update("jax_enable_x64", True)
 
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
 from matplotlib.animation import FuncAnimation

@@ -160,12 +160,14 @@ def test_constraint_equation_is_classified_and_split() -> None:
     # and nothing is left needing the physical-space evaluator.
     assert not constraint.has_nonlinear
     assert sp.sympify(constraint.nonlinear_expr) == 0
-    ((slot, coupling, _),) = constraint._couplings
+    ((coupling, _),) = constraint._couplings
+    (slot,) = constraint._coupling_slots
     assert slot == 0  # u is the field of equation 0
     assert coupling.shape == (V.dim, U.dim)
 
     # The transported equation's `b*v` term is the same story, the other way.
-    ((slot, coupling, _),) = integrator.integrators[0]._couplings
+    ((coupling, _),) = integrator.integrators[0]._couplings
+    (slot,) = integrator.integrators[0]._coupling_slots
     assert slot == 1
     assert coupling.shape == (U.dim, V.dim)
 

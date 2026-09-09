@@ -25,7 +25,7 @@ bcs = {
 }
 D = FunctionSpace(N, Chebyshev, bcs=bcs, name="D", fun_str="psi", domain=domain)
 
-u = FlaxFunction(D, name="u")
+u = FlaxFunction(D, name="u", rngs=nnx.Rngs(101))
 ue = D.system.expr_psi_to_base_scalar(ue)
 
 N = 1000

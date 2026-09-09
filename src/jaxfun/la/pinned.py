@@ -57,12 +57,12 @@ class PinnedSystem(BaseMatrix):
     """
 
     matrix: Matrix | DiaMatrix
-    constraints: tuple[tuple[int, float], ...]
+    constraints: tuple[tuple[int, complex], ...]
 
     def __init__(
         self,
         matrix: Matrix | DiaMatrix,
-        constraints: tuple[tuple[int, float], ...],
+        constraints: tuple[tuple[int, complex], ...],
     ) -> None:
         self.matrix = nnx.data(matrix)
         self.constraints = nnx.static(constraints)
@@ -182,7 +182,7 @@ class PinnedDiaMatrix(PinnedSystem):
     def __init__(
         self,
         matrix: DiaMatrix,
-        constraints: tuple[tuple[int, float], ...],
+        constraints: tuple[tuple[int, complex], ...],
     ) -> None:
         PinnedSystem.__init__(self, matrix, constraints)
 
@@ -234,7 +234,7 @@ class PinnedMatrix(PinnedSystem):
     def __init__(
         self,
         matrix: Matrix,
-        constraints: tuple[tuple[int, float], ...],
+        constraints: tuple[tuple[int, complex], ...],
     ) -> None:
         PinnedSystem.__init__(self, matrix, constraints)
 

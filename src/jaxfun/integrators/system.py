@@ -314,7 +314,7 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
         """
         results: list[Array] = []
         for g in self.integrators:
-            coupling = apply_field_couplings(g._couplings, states)
+            coupling = apply_field_couplings(g._coupling_slots, g._couplings, states)
             results.append(g._no_nonlinear(states) if coupling is None else coupling)
         if self._coupled_nonlinear_evaluator is None:
             return tuple(results)
@@ -476,7 +476,7 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
             out[slot] = jnp.zeros(c._state_shape)
         return self.resolve_constraints(tuple(out))
 
-    def setup(self, dt: float) -> None:
+    def _setup_impl(self, dt: float) -> None:
         """Precompute step-size-dependent data for every equation."""
         for g in self.integrators:
             g.setup(dt)

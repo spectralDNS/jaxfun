@@ -211,6 +211,47 @@ class ChebyshevU(Jacobi):
             uh = uh[: self.N]
         return uh
 
+    @jax.jit(static_argnums=(0, 2))
+    def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
+        """
+        Args:
+            c: Coefficients of Chebyshev series.
+            k: Order of derivative to compute.
+
+        Returns:
+            Array (N,) of coefficients for the k'th derivative of the series.
+        """
+        if k == 0:
+            return c
+
+        if k > 1:
+            return self.derivative_coeffs(self.derivative_coeffs(c, k - 1), 1)
+
+        N: int = c.shape[0] - 1
+        x0: Array = jnp.zeros((), dtype=c.dtype)
+        if N == 0:
+            return jnp.array([x0])
+        if N == 1:
+            return jnp.array([c[-1] * 2 * N, x0])
+
+        # Specializing the generic Jacobi recurrence to alpha = beta = 1/2 gives
+        # `x[n] = 2(n+1) c[n+1] + (n+1)/(n+3) x[n+2]`, and since n+3 = (n+2)+1
+        # the substitution `w[n] = x[n] / (n+1)` telescopes it into
+        # `w[n] = 2 c[n+1] + w[n+2]` -- lag two, and a coefficient of exactly one
+        # -- so each parity class of `n` is a running total and the whole thing
+        # is a reversed cumulative sum. Written as a scan it is `N` sequential
+        # steps, which on an accelerator is `N` kernel launches for a handful of
+        # arithmetic each; as a cumsum it is logarithmic depth. It also skips the
+        # sympy lambdify of the recursion coefficients that the generic version
+        # does on every trace.
+
+        m = (N + 2) // 2
+        a = jnp.pad(c, (0, 2 * m - (N + 1))).reshape(m, 2)
+        w = jnp.flip(jnp.cumsum(jnp.flip(a, axis=0), axis=0), axis=0)
+        return jnp.concatenate(
+            ((2 * jnp.arange(1, N + 1)) * w.reshape(2 * m)[1 : N + 1], jnp.stack([x0]))
+        )
+
     # Scaling function (see Eq. (2.28) of https://www.duo.uio.no/bitstream/handle/10852/99687/1/PGpaper.pdf)
     def gn(self, n: Symbol | int) -> Expr:
         """Return scaling g_n used in Jacobi-based normalization.

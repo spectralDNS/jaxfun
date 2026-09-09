@@ -7,14 +7,9 @@ import pytest
 root = Path(__file__).parent.parent
 
 # Modules that live in examples/ but are not demos: imported by a demo rather
-# than run on their own. `runpy` puts examples/ on sys.path, which is what makes
-# those imports resolve. ChannelFlow2D defines the channel solver and has no entry
-# point -- OrrSommerfeld and RayleighBenard drive it, and are collected here in
-# its place. Without this it would still be *collected*, and would pass having run
-# nothing at all. OrrSommerfeld_eigs supplies the eigenmode OrrSommerfeld seeds
-# itself with; running it directly only reaches its argparse entry point, which
-# rejects pytest's argv and exits before computing anything.
-NOT_DEMOS = {"OrrSommerfeld_eigs", "ChannelFlow2D"}
+# than run on their own. `spmd_bootstrap` brings up `jax.distributed` for the
+# demos that can run under `mpirun`; running it on its own does nothing.
+NOT_DEMOS = {"OrrSommerfeld_eigs", "ChannelFlow2D", "spmd_bootstrap"}
 
 _all_files = [f for f in root.glob("examples/*.py") if f.is_file()]
 _all_files = [

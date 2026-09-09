@@ -20,6 +20,7 @@ from jaxfun.la import (
     TPMatrices,
     TPMatrix,
 )
+from jaxfun.sharding import place
 from jaxfun.typing import (
     CoeffDict,
     ComputationalSpaceType,
@@ -746,7 +747,9 @@ def _finalize_inner_result(
 
     assert not isinstance(test_space, OrthogonalSpace)
     if len(jax.devices()) > 1 and bresult is not None:
-        bresult = jax.device_put(bresult, test_space._spectral_sharding)
+        # `place`, not a bare `device_put`: a size the mesh cannot divide is a
+        # reason to leave the array alone, not to refuse to assemble it.
+        bresult = place(cast(Array, bresult), test_space._spectral_sharding)
 
     if len(aresults) > 0:
         # aresults is an empty list or a list of TPMatrix/TensorMatrix objects.
@@ -1097,7 +1100,7 @@ def project(ue: sp.Expr | sp.Tuple, V: FunctionSpaceType) -> Array | tuple[Array
                 assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
                 uj = (lambdify(s, (uei).doit())(*V.mesh()) for uei in ue)
             uj = jnp.stack([jnp.broadcast_to(ui, V.num_quad_points) for ui in uj])
-        return V.forward(jax.device_put(uj, V._physical_sharding))
+        return V.forward(place(uj, V._physical_sharding))
 
     u = TrialFunction(V)
     v = TestFunction(V)

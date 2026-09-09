@@ -252,7 +252,7 @@ def test_etdrk4_zk_step_jaxpr_uses_diagonal_fft_path() -> None:
     assert integrator.linear_diag is not None
 
     uhat0 = integrator.initial_coefficients()
-    jaxpr = jax.make_jaxpr(integrator.step)(uhat0, dt).jaxpr
+    jaxpr = jax.make_jaxpr(integrator._step_impl)(uhat0, dt).jaxpr
 
     # The 2D ZK timestep should stay on the diagonal ETD + FFT pseudospectral path.
     assert _count_primitive(jaxpr, "fft") >= 24

@@ -239,9 +239,9 @@ def test_a_constraint_reads_its_wall_at_the_stage_time() -> None:
 
     N = 12
     hom = {"left": {"D": 0}, "right": {"D": 0}}
-    Vy = FunctionSpace(N, Legendre.Legendre, bcs=hom, name="cVy")
-    x = Vy.system.x
-    t = Vy.system.base_time()
+    R2 = R(2)
+    x, _ = R2.base_scalars()
+    t = R2.base_time()
     wall = (1 - x**2) * sp.exp(-t)
     V = TensorProduct(
         FunctionSpace(N, Legendre.Legendre, bcs=hom, name="cVx", fun_str="Lvx"),

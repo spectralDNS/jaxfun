@@ -106,7 +106,7 @@ def CartCoordSys(
 
 
 def R(dim: int) -> CoordSys:
-    """Return Cartesian coordinate system of dimension `dim` with base scalars x, y, z.
+    """Return Cartesian coordinate system of dimension `dim`
 
     Args:
         dim: Dimension of the Cartesian space (1, 2, or 3).

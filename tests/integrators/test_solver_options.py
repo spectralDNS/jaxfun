@@ -72,7 +72,7 @@ def _diffusion_2d(**params):
         weak_form,
         tableau=ARK4_3_6L2SA,
         time=(0.0, 0.1),
-        initial=V.system.expr_psi_to_base_scalar(u0),
+        initial=u0,
         sparse=True,
         sparse_tol=1000,
         **params,

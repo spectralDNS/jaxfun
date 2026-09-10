@@ -34,7 +34,6 @@ from .composite import (
     BoundaryConditions,
     Composite,
     DirectSum,
-    canonical_time,
     values_dtype,
 )
 from .orthogonal import OrthogonalSpace
@@ -1127,19 +1126,6 @@ class DirectSumTPS(TensorProductSpace):
         self.global_index = global_index
         self.leaf = leaf
 
-        # Normalize symbolic BC expressions to base scalar form
-        # for space in basespaces:
-        #    if space.bcs is None:
-        #        continue
-        #    if space.bcs.is_homogeneous():
-        #        continue
-        #    if isinstance(space, DirectSum):
-        #        s0 = space.basespaces[1]
-        #        for val in s0.bcs.values():
-        #            for key, v in val.items():
-        #                if len(sp.sympify(v).free_symbols) > 0:
-        #                    val[key] = system.expr_psi_to_base_scalar(v)
-
         bcindices = [
             i for i, space in enumerate(basespaces) if isinstance(space, DirectSum)
         ]
@@ -1204,13 +1190,17 @@ class DirectSumTPS(TensorProductSpace):
     ) -> Array:
         return self.orthogonal.backward(self.to_orthogonal(c, t, lifting=lifting), N=N)
 
-    def _apply_backward(self, c: Array, nq: tuple[int, ...]) -> Array:
+    def _apply_backward(
+        self, c: Array, nq: tuple[int, ...], t: float | Array | None = None
+    ) -> Array:
         """Lift the boundary values, then transform in the orthogonal space.
 
         The same redirection `backward` makes, as the hook `backward_batch`
-        vmaps over -- a direct sum keeps no transform cache of its own.
+        vmaps over -- a direct sum keeps no transform cache of its own. `t`
+        defaults to `None` because the inherited hook supplies no time; a
+        moving lifting reaches it through `backward_batch`'s own `vmap`.
         """
-        return self.orthogonal._apply_backward(self.to_orthogonal(c), nq)
+        return self.orthogonal._apply_backward(self.to_orthogonal(c, t), nq)
 
     def _require_local_batch(self, what: str) -> None:
         """Refuse batching while sharding is active.
@@ -1234,17 +1224,82 @@ class DirectSumTPS(TensorProductSpace):
                 "traced array cannot carry. Transform the fields one at a time."
             )
 
+    def _batch_times(
+        self, t: Array | Sequence[float] | None, n: int, what: str
+    ) -> Array | None:
+        """Resolve a per-field time array, or `None` for the steady path."""
+        if t is None:
+            # A batch is usually a run's snapshots, so omitting `t` when the
+            # boundary data moves means lifting every snapshot at the time the
+            # space was built -- wrong, and wrong quietly. `bndvals` stays the
+            # default for the unbatched transforms, where a single field at the
+            # construction-time lifting is a coherent thing to ask for.
+            if self.lifting.is_transient:
+                raise ValueError(
+                    f"{what} needs `t` on a space whose boundary data depends "
+                    f"on time: one time per field, an array of shape ({n},). "
+                    "Without it every field would be lifted at the time the "
+                    "space was built."
+                )
+            return None
+        # One lifting per field, so the two have to line up exactly: a shorter
+        # `t` would otherwise be zipped silently against the wrong fields.
+        ts = jnp.asarray(t)
+        if ts.ndim != 1 or ts.shape[0] != n:
+            raise ValueError(
+                f"{what} takes one time per field: expected an array of shape "
+                f"({n},), got {ts.shape}. Pass jnp.full({n}, t) to place the "
+                "whole batch at a single time."
+            )
+        return ts
+
     def backward_batch(
         self,
         c: Array,
         N: tuple[int | None, ...] | None = None,
+        t: Array | Sequence[float] | None = None,
     ) -> Array:
-        self._require_local_batch("backward_batch")
-        return super().backward_batch(c, N=N)
+        """Backward transform of several coefficient arrays at once.
 
-    def forward_batch(self, u: Array) -> Array:
+        Args:
+            c: Coefficient arrays stacked along one leading batch axis.
+            N: Optional per-axis counts, as for `backward`.
+            t: One time per field, shape `(c.shape[0],)`. Required when the
+                boundary data depends on time; `None` uses the cached `bndvals`
+                and is allowed only for a steady lifting.
+
+        Returns:
+            The transformed fields, batch axis first.
+
+        Unlike the steady case, a batch given `t` agrees with transforming the
+        fields one at a time only to round-off, not bit-for-bit: each field
+        carries its own lifting, so the projection that builds it is batched
+        along with the transform.
+        """
+        self._require_local_batch("backward_batch")
+        ts = self._batch_times(t, c.shape[0], "backward_batch")
+        if ts is None:
+            return super().backward_batch(c, N=N)
+        nq = self._resolve_quad_points(N)
+        return jax.vmap(lambda ci, ti: self._apply_backward(ci, nq, ti))(c, ts)
+
+    def forward_batch(
+        self, u: Array, t: Array | Sequence[float] | None = None
+    ) -> Array:
+        """Forward transform of several arrays at once.
+
+        Args:
+            u: Input arrays stacked along one leading batch axis.
+            t: One time per field, as for `backward_batch`.
+
+        Returns:
+            The transformed arrays, batch axis first.
+        """
         self._require_local_batch("forward_batch")
-        return super().forward_batch(u)
+        ts = self._batch_times(t, u.shape[0], "forward_batch")
+        if ts is None:
+            return super().forward_batch(u)
+        return jax.vmap(lambda ui, ti: self._apply_forward(ui, ti))(u, ts)
 
     def forward(
         self,
@@ -1256,13 +1311,15 @@ class DirectSumTPS(TensorProductSpace):
         d = self.orthogonal.forward(u)
         return self.from_orthogonal(d, t, lifting=lifting)
 
-    def _apply_forward(self, u: Array) -> Array:
+    def _apply_forward(self, u: Array, t: float | Array | None = None) -> Array:
         """Transform in the orthogonal space, then take the lifting back out.
 
         The same redirection `forward` makes, as the hook `forward_batch` vmaps
-        over -- a direct sum keeps no transform cache of its own.
+        over -- a direct sum keeps no transform cache of its own. `t` defaults
+        to `None` because the inherited hook supplies no time; a moving lifting
+        reaches it through `forward_batch`'s own `vmap`.
         """
-        return self.from_orthogonal(self.orthogonal._apply_forward(u))
+        return self.from_orthogonal(self.orthogonal._apply_forward(u), t)
 
     def scalar_product(self, u: Array) -> NoReturn:
         raise RuntimeError(
@@ -1315,19 +1372,45 @@ class DirectSumTPS(TensorProductSpace):
         c: Array,
         k: tuple[int, ...],
         N: tuple[int | None, ...] | None = None,
+        t: Array | Sequence[float] | None = None,
     ) -> Array:
+        """Evaluate a derivative of several coefficient arrays at once.
+
+        Args:
+            c: Coefficient arrays stacked along one leading batch axis.
+            k: Tuple of derivative orders along each axis, shared by the batch.
+            N: Optional per-axis counts, as for `backward_primitive`.
+            t: One time per field, as for `backward_batch`.
+
+        Returns:
+            The evaluated fields, batch axis first.
+        """
         self._require_local_batch("backward_primitive_batch")
-        return super().backward_primitive_batch(c, k, N=N)
+        ts = self._batch_times(t, c.shape[0], "backward_primitive_batch")
+        if ts is None:
+            return super().backward_primitive_batch(c, k, N=N)
+        nq = self._resolve_quad_points(N)
+        return jax.vmap(lambda ci, ti: self._apply_backward_primitive(ci, k, nq, ti))(
+            c, ts
+        )
 
     def _apply_backward_primitive(
-        self, c: Array, k: tuple[int, ...], nq: tuple[int, ...]
+        self,
+        c: Array,
+        k: tuple[int, ...],
+        nq: tuple[int, ...],
+        t: float | Array | None = None,
     ) -> Array:
         """Lift the boundary values, then differentiate in the orthogonal space.
 
         The same redirection `backward_primitive` makes, as the hook
-        `backward_primitive_batch` vmaps over.
+        `backward_primitive_batch` vmaps over. `t` defaults to `None` because
+        the inherited hook supplies no time; a moving lifting reaches it
+        through `backward_primitive_batch`'s own `vmap`.
         """
-        return self.orthogonal._apply_backward_primitive(self.to_orthogonal(c), k, nq)
+        return self.orthogonal._apply_backward_primitive(
+            self.to_orthogonal(c, t), k, nq
+        )
 
     def _lifting_values(
         self, t: float | Array | None, lifting: dict | None
@@ -1654,12 +1737,8 @@ def _validate_bc_symbols(
 ) -> None:
     """Reject boundary values written in symbols the space cannot evaluate.
 
-    A boundary value may depend on the other coordinates and on time, and on
-    nothing else -- those are the only arguments the lifting has to supply. The
-    trap this catches is a plain `sp.Symbol("t")` where `system.base_time()` was
-    meant: the two differ by their assumptions, so the value would be taken for
-    a constant, frozen at construction, and fail much later inside `lambdify`
-    with a message about an abstract array.
+    A boundary value may depend on the coordinates and on time, and on nothing
+    else -- those are the only arguments the lifting has to supply.
     """
     time = system.base_time()
     allowed = {s.name for s in system.base_scalars()} | {time.name}
@@ -1667,12 +1746,6 @@ def _validate_bc_symbols(
         if not isinstance(space, DirectSum):
             continue
         bcs = space.basespaces[1].bcs
-        for side in bcs.values():
-            for key, v in side.items():
-                if isinstance(v, tuple | list):
-                    side[key] = (v[0], canonical_time(v[1], time))
-                else:
-                    side[key] = canonical_time(v, time)
         for val in bcs.orderedvals():
             unknown = {str(s) for s in sp.sympify(val).free_symbols} - allowed
             if unknown:

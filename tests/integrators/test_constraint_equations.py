@@ -23,6 +23,7 @@ import pytest
 import sympy as sp
 
 from jaxfun import Div, Domain, Grad
+from jaxfun.coordinates import R
 from jaxfun.galerkin import TensorProduct
 from jaxfun.galerkin.arguments import JAXFunction, TestFunction, TrialFunction
 from jaxfun.galerkin.Fourier import Fourier
@@ -58,7 +59,8 @@ def signal_spaces(N: int = 12, modes: int | None = None):
     -- which is also what lets it represent `v - lap(v)` exactly. `modes`
     truncates it below that, which the recovery then loses.
     """
-    x = sp.Symbol("x")
+    R2 = R(2)
+    x, _ = R2.base_scalars()
     hom = {"left": {"D": 0}, "right": {"D": 0}}
     V = TensorProduct(
         FunctionSpace(N, Legendre, bcs=hom, name="Vxs", fun_str="Lvx"),

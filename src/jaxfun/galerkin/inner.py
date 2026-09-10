@@ -288,13 +288,6 @@ class BoundaryForcing(nnx.Module):
     derivative. Both are traceable in `t`.
     """
 
-    # `inner` collapses a boundary block into a load vector while assembling,
-    # which freezes it at whatever lifting the space held. Keeping the operators
-    # instead lets the contraction be redone whenever the lifting moves, which
-    # is once per stage. The operators are the expensive half and are built
-    # once; evaluating is a lambdified expression per boundary value, a forward
-    # transform along the remaining axes, and a matvec.
-
     def __init__(
         self,
         blocks: Sequence[_BoundaryBlock],

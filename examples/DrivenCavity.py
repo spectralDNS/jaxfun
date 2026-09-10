@@ -10,16 +10,18 @@ if "PYTEST" not in os.environ:
 
 import jax.numpy as jnp
 
-from jaxfun.coordinates import x
+from jaxfun.coordinates import R
 from jaxfun.galerkin import CartesianProduct, FunctionSpace, Legendre, TensorProduct
 from jaxfun.operators import Constant, Div, Dot, Grad
 from jaxfun.pinns import FlaxFunction, Loss, Trainer, adam, lbfgs
 from jaxfun.pinns.mesh import Rectangle
 
+R2 = R(2)
+x, y = R2.base_scalars()
 f = (1 - x) ** 2 * (1 + x) ** 2
-N = 24
 bcsx = {"left": {"D": 0}, "right": {"D": 0}}
 bcsy = {"left": {"D": 0}, "right": {"D": f}}
+N = 24
 Re = 200.0
 rho = 1.0
 nu = Constant("nu", 2.0 / Re)
@@ -35,8 +37,6 @@ W = CartesianProduct(Q, V, name="W")
 
 pu = FlaxFunction(W, name="pu", rngs=nnx.Rngs(2001))
 p, u = pu
-
-x, y = V.system.base_scalars()
 
 eq1 = Dot(Grad(u), u) - nu * Div(Grad(u)) + Grad(p)
 eq2 = Div(u)

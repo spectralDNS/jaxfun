@@ -41,7 +41,7 @@ L = FunctionSpace(N, Legendre, domain=(0, np.pi), name="L", fun_str="theta")
 F = FunctionSpace(M, Fourier, name="F", fun_str="phi")
 T = TensorProduct(
     F, L, system=C, name="T"
-)  # Fourier first for efficient wavenumber solver  # noqa: E501
+)  # Fourier first for efficient wavenumber solver
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 

@@ -10,7 +10,7 @@ if "PYTEST" not in os.environ:
 
 import jax.numpy as jnp
 
-from jaxfun.coordinates import x
+from jaxfun.coordinates import R
 from jaxfun.galerkin import (
     CartesianProduct,
     FunctionSpace,
@@ -23,16 +23,18 @@ from jaxfun.galerkin import (
 from jaxfun.la.blockmatrix import BlockArray
 from jaxfun.operators import Constant, Div, Dot, Grad
 
+R2 = R(2)
+x, y = R2.base_scalars()
 f = (1 - x) ** 2 * (1 + x) ** 2
-N = 24
 bcsx = {"left": {"D": 0}, "right": {"D": 0}}
 bcsy = {"left": {"D": 0}, "right": {"D": f}}
+N = 24
 nu = Constant("nu", 0.01)
 D0 = FunctionSpace(N, Legendre.Legendre, bcs=bcsx, name="D0")
 D1 = FunctionSpace(N, Legendre.Legendre, bcs=bcsy, name="D1")
 P0 = FunctionSpace(
     N - 2, Legendre.Legendre, name="P0"
-)  # Need to use N - 2 to escape several nullspaces and excessive pinning  # noqa: E501
+)  # Need to use N - 2 to escape several nullspaces and excessive pinning
 T0 = TensorProduct(D0, D1, name="T0")
 T1 = TensorProduct(D0, D0, name="T1")
 Q = TensorProduct(P0, P0, name="Q")

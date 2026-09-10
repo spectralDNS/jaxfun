@@ -7,7 +7,7 @@ import time
 import jax.numpy as jnp
 import sympy as sp
 
-from jaxfun.coordinates import BaseScalar, x
+from jaxfun.coordinates import R
 from jaxfun.galerkin import CartesianProduct
 from jaxfun.galerkin.arguments import TestFunction
 
@@ -17,11 +17,12 @@ from jaxfun.galerkin.Legendre import Legendre as space
 from jaxfun.pinns import FlaxFunction, Line, Loss, Trainer, adam, lbfgs
 from jaxfun.utils.common import jacn, lambdify, ulp
 
-M = 60
+R1 = R(1)
+x = R1.x
 ue = sp.exp(sp.cos(2 * sp.pi * x))
-
 bcs = {"left": {"D": ue.subs(x, -1)}, "right": {"D": ue.subs(x, 1)}}
 
+M = 60
 D = FunctionSpace(M, space, bcs=bcs, name="D", fun_str="psi")
 S = FunctionSpace(M, space, name="S", fun_str="phi")
 C = CartesianProduct(D, S, name="C")
@@ -30,9 +31,6 @@ v, q = TestFunction(C, name="vq")
 
 us = FlaxFunction(C, name="us")
 u, s = us
-
-x: BaseScalar = C.system.x
-ue = C.system.expr_psi_to_base_scalar(ue)
 
 eq1 = (s.diff(x) + u**2) - (ue.diff(x, 2) + ue**2)
 eq2 = u.diff(x) - s

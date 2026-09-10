@@ -7,7 +7,8 @@ import matplotlib.pyplot as plt
 import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
-from jaxfun.galerkin.arguments import TestFunction, TrialFunction, x, y
+from jaxfun.coordinates import R
+from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
@@ -15,6 +16,9 @@ from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
+
+R2 = R(2)
+x, y = R2.base_scalars()
 
 ue = (1 - y**2) * (sp.cos(2 * x)) * sp.exp(sp.cos(sp.pi * y))
 
@@ -25,10 +29,6 @@ F = FunctionSpace(N, Fourier, name="F", fun_str="E")
 T = TensorProduct(F, D, name="T", real=True)
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
-
-# Method of manufactured solution
-x, y = T.system.base_scalars()
-ue = T.system.expr_psi_to_base_scalar(ue)
 
 # A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=True)
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")

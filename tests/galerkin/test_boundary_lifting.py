@@ -361,13 +361,13 @@ def test_transient_boundary_values_need_a_time() -> None:
         W.bnd_vals()
 
 
-def test_a_plain_time_symbol_binds_like_a_plain_coordinate() -> None:
-    """`sp.Symbol("t")` means time, the way `sp.Symbol("x")` already means x.
+def test_time_from_an_equal_but_distinct_system_is_still_time() -> None:
+    """A `BaseTime` need not be the space's own instance to register as time.
 
-    Boundary values bind to coordinates by name -- that is how a plain `x`
-    works. `BaseTime` compares unequal to a plain `Symbol("t")` because of its
-    assumptions, so without canonicalizing by name the value would look constant
-    in time and its lifting would silently freeze.
+    `D` and the tensor product each build their own `R`, so the symbols the
+    boundary value is written in belong to a third. `BaseTime` and `BaseScalar`
+    compare equal and hash alike across systems -- only identity separates them
+    -- which is what lets `has_time` see this value as transient.
     """
     R2 = R(2)
     x, _ = R2.base_scalars()

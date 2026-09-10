@@ -130,12 +130,12 @@ class BoundaryConditions(dict):
         # time-dependent boundary data, and not this one.
         for side in self.values():
             for key, v in side.items():
-                if isinstance(v, tuple | list) and canonical_time(v[0], t).has(t):
+                if isinstance(v, tuple | list) and sp.sympify(v[0]).has(t):
                     raise NotImplementedError(
                         f"Time-dependent Robin/weighted coefficient in {key!r}: "
                         f"{v[0]}. Only the boundary value may depend on time."
                     )
-        return any(canonical_time(v, t).has(t) for v in self.orderedvals())
+        return any(sp.sympify(v).has(t) for v in self.orderedvals())
 
     def diff_time(self, t: sp.Symbol) -> BoundaryConditions:
         """Return a copy with every boundary value differentiated in time."""
@@ -151,28 +151,14 @@ class BoundaryConditions(dict):
         for side in out.values():
             for key, v in side.items():
                 if isinstance(v, tuple | list):
-                    side[key] = (v[0], sp.diff(canonical_time(v[1], t), t))
+                    side[key] = (v[0], sp.diff(sp.sympify(v[1]), t))
                 else:
-                    side[key] = sp.diff(canonical_time(v, t), t)
+                    side[key] = sp.diff(sp.sympify(v), t)
         return out
 
     def value_dtype(self) -> jnp.dtype:
         """Return the dtype the boundary values evaluate to."""
         return values_dtype(self.orderedvals())
-
-
-def canonical_time[T: sp.Basic](expr: T, t: sp.Symbol) -> T:
-    """Return `expr` with any symbol named like `t` replaced by `t` itself."""
-    # Boundary values bind to coordinates by *name*: `lambdify` is handed the
-    # system's base scalars as argument names, which is why a plain
-    # `sympy.Symbol("x")` already works. Time follows the same rule here.
-    # `BaseTime` carries different assumptions from a plain `Symbol("t")` and so
-    # compares unequal to it, which would otherwise make a value written with
-    # the plain symbol look constant in time -- freezing its lifting, and
-    # failing much later inside `lambdify`.
-    expr = sp.sympify(expr)
-    replace = {s: t for s in expr.free_symbols if str(s) == t.name and s != t}
-    return expr.xreplace(replace) if replace else expr
 
 
 def values_dtype(values: Iterable[sp.Expr]) -> jnp.dtype:
@@ -499,7 +485,7 @@ def _evaluate_bnd_vals(
     bcs: BoundaryConditions, time: sp.Symbol, t: float | Array | None
 ) -> Array:
     """Evaluate a set of ordered boundary values at time `t`."""
-    vals = tuple(canonical_time(v, time) for v in bcs.orderedvals())
+    vals = tuple(sp.sympify(v) for v in bcs.orderedvals())
     return jnp.asarray(
         _lambdify_bnd_vals(vals, time)(0.0 if t is None else t),
         dtype=bcs.value_dtype(),

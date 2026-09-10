@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
-from jaxfun.coordinates import x, y
+from jaxfun.coordinates import R
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 
 # from jaxfun.galerkin.Chebyshev import Chebyshev as space
@@ -20,11 +20,13 @@ from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
-M = 50
+R2 = R(2)
+x, y = R2.base_scalars()
 ue = sp.exp(-(x**2 + y**2))
 
 bcsx = {"left": {"D": ue.subs(x, 0)}, "right": {"D": ue.subs(x, 1)}}
 bcsy = {"left": {"D": ue.subs(y, 0)}, "right": {"D": ue.subs(y, 1)}}
+M = 50
 Dx = FunctionSpace(
     M, space, bcs=bcsx, name="Dx", fun_str="psi", scaling=n + 1, domain=(0, 1)
 )
@@ -34,9 +36,6 @@ Dy = FunctionSpace(
 T = TensorProduct(Dx, Dy, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
-
-# Method of manufactured solution
-ue = T.system.expr_psi_to_base_scalar(ue)
 
 A, L = inner(
     v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True, kind="system"

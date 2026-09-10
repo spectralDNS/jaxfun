@@ -21,6 +21,7 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
+from jaxfun.coordinates import R
 from jaxfun.galerkin import (
     Fourier,
     FunctionSpace,
@@ -43,17 +44,18 @@ from jaxfun.utils.common import lambdify
 pytestmark = pytest.mark.integration
 
 NU = 0.5
-X, Y = sp.symbols("x y", real=True)
 
 
 def _decaying_mode_1d(N: int, tag: str):
     """`u = exp(-4*nu*t)*sin(2x)` on [-1, 1]: an exact solution with moving walls."""
-    t = FunctionSpace(N, Legendre.Legendre).system.base_time()
-    ue = sp.exp(-4 * NU * t) * sp.sin(2 * X)
+    R1 = R(1)
+    x = R1.x
+    t = R1.base_time()
+    ue = sp.exp(-4 * NU * t) * sp.sin(2 * x)
     V = FunctionSpace(
         N,
         Legendre.Legendre,
-        bcs={"left": {"D": ue.subs(X, -1)}, "right": {"D": ue.subs(X, 1)}},
+        bcs={"left": {"D": ue.subs(x, -1)}, "right": {"D": ue.subs(x, 1)}},
         name=f"V{tag}",
     )
     return V, ue, t
@@ -62,19 +64,20 @@ def _decaying_mode_1d(N: int, tag: str):
 def _heat_equation(V, t):
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
+    t = V.system.base_time()
     return v * (u.diff(t) - Constant("nu", NU) * Div(Grad(u)))
 
 
 def _error_1d(cls, steps, T, N, tag, **kw):
     V, ue, t = _decaying_mode_1d(N, tag)
-    (x,) = V.system.base_scalars()
+    x = V.system.x
     integrator = cls(
         _heat_equation(V, t), time=(0.0, T), initial=sp.sin(2 * x), sparse=True, **kw
     )
     u_hat = integrator.solve(dt=T / steps, steps=steps, progress=False)
     xj = V.mesh(kind="uniform", N=50)
     got = V.evaluate(xj, u_hat, t=integrator.end_time(T / steps, steps))
-    want = lambdify((x,), ue.subs(t, T).subs(X, x))(xj)
+    want = lambdify((x,), ue.subs(t, T))(xj)
     return float(jnp.linalg.norm(got - want) / jnp.linalg.norm(want))
 
 
@@ -133,22 +136,24 @@ def test_a_dirichlet_lifting_moves_only_through_the_time_derivative() -> None:
 
 
 def _error_2d(steps, T, both_axes: bool, tag: str) -> float:
+    R2 = R(2)
+    x, y = R2.base_scalars()
+    t = R2.base_time()
     if both_axes:
         # u = exp(-2*nu*a^2*t) sin(ax) sin(ay): every wall moves.
         a = 2.0
-        t = FunctionSpace(8, Legendre.Legendre).system.base_time()
-        ue = sp.exp(-2 * NU * a**2 * t) * sp.sin(a * X) * sp.sin(a * Y)
+        ue = sp.exp(-2 * NU * a**2 * t) * sp.sin(a * x) * sp.sin(a * y)
         space = TensorProduct(
             FunctionSpace(
                 16,
                 Legendre.Legendre,
-                bcs={"left": {"D": ue.subs(X, -1)}, "right": {"D": ue.subs(X, 1)}},
+                bcs={"left": {"D": ue.subs(x, -1)}, "right": {"D": ue.subs(x, 1)}},
                 name=f"Dx{tag}",
             ),
             FunctionSpace(
                 16,
                 Legendre.Legendre,
-                bcs={"left": {"D": ue.subs(Y, -1)}, "right": {"D": ue.subs(Y, 1)}},
+                bcs={"left": {"D": ue.subs(y, -1)}, "right": {"D": ue.subs(y, 1)}},
                 name=f"Dy{tag}",
             ),
             name=f"T{tag}",
@@ -157,14 +162,13 @@ def _error_2d(steps, T, both_axes: bool, tag: str) -> float:
         # Fourier(x) x Legendre(y): the wall value moves in time *and* in x.
         k, m = 1, 2.0
         F = Fourier.Fourier(12, name=f"F{tag}")
-        t = F.system.base_time()
-        ue = sp.exp(-NU * (k**2 + m**2) * t) * sp.cos(k * X) * sp.sin(m * Y)
+        ue = sp.exp(-NU * (k**2 + m**2) * t) * sp.cos(k * x) * sp.sin(m * y)
         space = TensorProduct(
             F,
             FunctionSpace(
                 16,
                 Legendre.Legendre,
-                bcs={"left": {"D": ue.subs(Y, -1)}, "right": {"D": ue.subs(Y, 1)}},
+                bcs={"left": {"D": ue.subs(y, -1)}, "right": {"D": ue.subs(y, 1)}},
                 name=f"D{tag}",
             ),
             name=f"T{tag}",
@@ -177,17 +181,14 @@ def _error_2d(steps, T, both_axes: bool, tag: str) -> float:
         v * (u.diff(t) - Constant("nu", NU) * Div(Grad(u))),
         tableau=ARK4_3_6L2SA,
         time=(0.0, T),
-        initial=space.system.expr_psi_to_base_scalar(ue.subs(t, 0)),
+        initial=ue.subs(t, 0),
         sparse=True,
         # The two-axis operator is banded enough to warn but not to pay off.
         solver_options={"auto_threshold": 100_000},
     )
     u_hat = integrator.solve(dt=T / steps, steps=steps, progress=False)
     got = space.backward(u_hat, t=integrator.end_time(T / steps, steps))
-    want = lambdify(
-        space.system.base_scalars(),
-        space.system.expr_psi_to_base_scalar(ue.subs(t, T)),
-    )(*space.mesh())
+    want = lambdify((x, y), ue.subs(t, T))(*space.mesh())
     return float(jnp.linalg.norm(got - want) / jnp.linalg.norm(want))
 
 
@@ -239,8 +240,9 @@ def test_a_constraint_reads_its_wall_at_the_stage_time() -> None:
     N = 12
     hom = {"left": {"D": 0}, "right": {"D": 0}}
     Vy = FunctionSpace(N, Legendre.Legendre, bcs=hom, name="cVy")
+    x = Vy.system.x
     t = Vy.system.base_time()
-    wall = (1 - X**2) * sp.exp(-t)
+    wall = (1 - x**2) * sp.exp(-t)
     V = TensorProduct(
         FunctionSpace(N, Legendre.Legendre, bcs=hom, name="cVx", fun_str="Lvx"),
         FunctionSpace(

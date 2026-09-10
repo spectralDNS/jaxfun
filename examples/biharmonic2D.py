@@ -4,9 +4,10 @@ import sys
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
-from jaxfun.coordinates import x, y
+from jaxfun.coordinates import R
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
@@ -15,12 +16,18 @@ from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
+R2 = R(2)
+x, y = R2.base_scalars()
+
 # Method of manufactured solution
-# ue = sp.exp(sp.cos(2 * sp.pi * (x - sp.S.Half / 2))) * sp.exp(
-#    sp.sin(2 * (y - sp.S.Half))
-# )
-ue = (x - x**2) ** 2 * (x - y**2) ** 2
-M = 20
+if "PYTEST" in os.environ:
+    ue = (x - x**2) ** 2 * (x - y**2) ** 2
+    M = 20
+else:
+    ue = sp.exp(sp.cos(2 * sp.pi * (x - sp.S.Half / 2))) * sp.exp(
+        sp.sin(2 * (y - sp.S.Half))
+    )
+    M = 40
 
 bcsx = {
     "left": {"D": ue.subs(x, -1), "N": ue.diff(x, 1).subs(x, -1)},
@@ -36,7 +43,6 @@ Dy = FunctionSpace(M, Legendre, scaling=n + 1, bcs=bcsy, name="Dy", fun_str="phi
 T = TensorProduct(Dx, Dy, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
-ue = T.system.expr_psi_to_base_scalar(ue)
 
 A, b = inner(
     Div(Grad(Div(Grad(u)))) * v - Div(Grad(Div(Grad(ue)))) * v,

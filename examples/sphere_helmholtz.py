@@ -26,7 +26,7 @@ theta, phi = sp.symbols("theta, phi", real=True, positive=True)
 C = get_CoordSys(
     "C",
     sp.Lambda(
-        (theta, phi),
+        (phi, theta),
         (
             r * sp.sin(theta) * sp.cos(phi),
             r * sp.sin(theta) * sp.sin(phi),
@@ -37,14 +37,16 @@ C = get_CoordSys(
     & sp.Q.positive(phi)
     & sp.Q.positive(sp.sin(theta)),
 )
-D0 = FunctionSpace(N, Legendre, domain=(0, np.pi), name="D0", fun_str="theta")
-D1 = FunctionSpace(M, Fourier, name="D1", fun_str="phi")
-T = TensorProduct(D0, D1, system=C, name="T")
+L = FunctionSpace(N, Legendre, domain=(0, np.pi), name="L", fun_str="theta")
+F = FunctionSpace(M, Fourier, name="F", fun_str="phi")
+T = TensorProduct(
+    F, L, system=C, name="T"
+)  # Fourier first for efficient wavenumber solver  # noqa: E501
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 
 # Method of manufactured solution
-theta, phi = C.base_scalars()
+phi, theta = C.base_scalars()
 sph = sp.functions.special.spherical_harmonics.Ynm  # ty:ignore[possibly-missing-submodule]
 ue = sph(6, 3, theta, phi)
 
@@ -57,10 +59,10 @@ A, b = inner(
 
 un = A.solve(b)
 
-rj, tj = T.mesh(N=(100, 100))
+tj, rj = T.mesh(N=(100, 100))
 xc, yc, zc = T.cartesian_mesh(N=(100, 100))
 uj = T.backward(un, N=(100, 100))
-uej = lambdify((theta, phi), ue)(rj, tj)
+uej = lambdify((phi, theta), ue)(tj, rj)
 
 error = jnp.linalg.norm(uj - uej) / 100
 if "PYTEST" in os.environ:

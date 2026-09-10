@@ -22,7 +22,7 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
-from jaxfun.coordinates import x, y, z
+from jaxfun.coordinates import R
 from jaxfun.galerkin import (
     Chebyshev,
     Fourier,
@@ -44,6 +44,8 @@ def _dirichlet(expr: sp.Expr, s: sp.Symbol, lo: float, up: float) -> dict:
 
 def _one_inhomogeneous_2d() -> tuple[DirectSumTPS, sp.Expr]:
     """Fourier x Legendre, inhomogeneous in y only -> `1 other + 1 bc`."""
+    R2 = R(2)
+    x, y = R2.base_scalars()
     ue = sp.cos(2 * x) * (2 + y)
     D = FunctionSpace(14, Legendre.Legendre, bcs=_dirichlet(ue, y, -1, 1), name="D")
     F = Fourier.Fourier(16, name="F")
@@ -52,6 +54,8 @@ def _one_inhomogeneous_2d() -> tuple[DirectSumTPS, sp.Expr]:
 
 def _two_inhomogeneous_2d() -> tuple[DirectSumTPS, sp.Expr]:
     """Legendre x Legendre, inhomogeneous in both -> adds the corner block."""
+    R2 = R(2)
+    x, y = R2.base_scalars()
     ue = sp.exp(-(x**2 + y**2))
     Dx = FunctionSpace(18, Legendre.Legendre, bcs=_dirichlet(ue, x, -1, 1), name="Dx")
     Dy = FunctionSpace(19, Legendre.Legendre, bcs=_dirichlet(ue, y, -1, 1), name="Dy")
@@ -60,6 +64,8 @@ def _two_inhomogeneous_2d() -> tuple[DirectSumTPS, sp.Expr]:
 
 def _one_inhomogeneous_3d() -> tuple[DirectSumTPS, sp.Expr]:
     """Fourier x Legendre x Chebyshev, inhomogeneous in z -> `2 other + 1 bc`."""
+    R3 = R(3)
+    x, y, z = R3.base_scalars()
     ue = sp.cos(2 * x) * (2 + y) * (3 + z)
     F = Fourier.Fourier(12, name="F3")
     L = FunctionSpace(10, Legendre.Legendre, name="L3")
@@ -74,6 +80,8 @@ def _two_inhomogeneous_3d() -> tuple[DirectSumTPS, sp.Expr]:
     reproduced by the corner block alone, leaving the two single-axis blocks at
     round-off and testing nothing.
     """
+    R3 = R(3)
+    x, y, z = R3.base_scalars()
     ue = sp.cos(2 * x) * sp.exp(y / 2) * sp.cos(z)
     F = Fourier.Fourier(12, name="F4")
     Dy = FunctionSpace(
@@ -142,7 +150,7 @@ def test_lifting_attains_the_prescribed_boundary_values(case: str) -> None:
 
     dims = len(T.basespaces)
     interior = jnp.linspace(-0.7, 0.7, 5)
-    exact = lambdify(T.system.base_scalars(), T.system.expr_psi_to_base_scalar(ue))
+    exact = lambdify(T.system.base_scalars(), ue)
 
     probed = 0
     for axis, space in enumerate(T.basespaces):
@@ -207,8 +215,10 @@ def test_one_bc_axis_block_is_the_projection_of_each_wall_value() -> None:
 
 def _transient_2d() -> tuple[DirectSumTPS, sp.Expr, sp.Symbol]:
     """Fourier x Legendre with a wall value varying in both space and time."""
+    R2 = R(2)
+    x, y = R2.base_scalars()
+    t = R2.base_time()
     F = Fourier.Fourier(16, name="Ft")
-    t = F.system.base_time()
     g = sp.cos(2 * x) * sp.sin(3 * t)
     D = FunctionSpace(
         14, Legendre.Legendre, bcs={"left": {"D": g}, "right": {"D": 2 * g}}, name="Dt"
@@ -218,8 +228,9 @@ def _transient_2d() -> tuple[DirectSumTPS, sp.Expr, sp.Symbol]:
 
 def _transient_2d_both_axes() -> tuple[DirectSumTPS, sp.Symbol]:
     """Both axes inhomogeneous and time-dependent -> the corner block moves too."""
-    Dx = FunctionSpace(12, Legendre.Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}})
-    t = Dx.system.base_time()
+    R2 = R(2)
+    x, y = R2.base_scalars()
+    t = R2.base_time()
     ue = sp.exp(-(x**2 + y**2)) * (1 + sp.sin(t))
     Dx = FunctionSpace(12, Legendre.Legendre, bcs=_dirichlet(ue, x, -1, 1), name="Dxt")
     Dy = FunctionSpace(13, Legendre.Legendre, bcs=_dirichlet(ue, y, -1, 1), name="Dyt")
@@ -339,7 +350,8 @@ def test_changing_boundary_conditions_is_visible_through_the_jit_cache() -> None
 
 
 def test_transient_boundary_values_need_a_time() -> None:
-    t = FunctionSpace(8, Legendre.Legendre).system.base_time()
+    R1 = R(1)
+    t = R1.base_time()
     W = FunctionSpace(
         8, Legendre.Legendre, bcs={"left": {"D": sp.sin(t)}, "right": {"D": 0}}
     )
@@ -357,11 +369,14 @@ def test_a_plain_time_symbol_binds_like_a_plain_coordinate() -> None:
     assumptions, so without canonicalizing by name the value would look constant
     in time and its lifting would silently freeze.
     """
+    R2 = R(2)
+    x, _ = R2.base_scalars()
+    t = R2.base_time()
     D = FunctionSpace(
         8,
         Legendre.Legendre,
         bcs={
-            "left": {"D": sp.cos(2 * x) * sp.sin(sp.Symbol("t", real=True))},
+            "left": {"D": sp.cos(2 * x) * t},
             "right": {"D": 0},
         },
         name="Dplain",
@@ -376,6 +391,8 @@ def test_a_plain_time_symbol_binds_like_a_plain_coordinate() -> None:
 
 def test_an_unknown_symbol_in_a_boundary_value_is_rejected() -> None:
     """A name that is neither a coordinate nor time cannot be evaluated."""
+    R2 = R(2)
+    x, y = R2.base_scalars()
     D = FunctionSpace(
         8,
         Legendre.Legendre,

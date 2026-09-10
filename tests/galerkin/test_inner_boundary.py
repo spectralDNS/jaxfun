@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
-from jaxfun.coordinates import x
+from jaxfun.coordinates import R
 from jaxfun.galerkin import (
     Chebyshev,
     Fourier,
@@ -77,8 +77,10 @@ def test_a_form_without_boundary_data_has_no_blocks() -> None:
 
 
 def _transient_2d():
+    R2 = R(2)
+    x, y = R2.base_scalars()
+    t = R2.base_time()
     F = Fourier.Fourier(16, name="Fb")
-    t = F.system.base_time()
     g = sp.cos(2 * x) * sp.sin(3 * t)
     D = FunctionSpace(
         14, Legendre.Legendre, bcs={"left": {"D": g}, "right": {"D": 2 * g}}, name="Db"
@@ -97,12 +99,13 @@ def test_transient_boundary_forcing_moves_and_traces() -> None:
 
 def test_rate_matches_forward_mode_ad() -> None:
     """The symbolic derivative is the real one, in 2D and in 1D."""
-    bf = inner_boundary(_helmholtz(_transient_2d()))
+    T = _transient_2d()
+    bf = inner_boundary(_helmholtz(T))
     assert bf is not None
     ad = jax.jacfwd(bf)(0.37)
     assert jnp.abs(ad - bf.rate(0.37)).max() < 1e-5 * jnp.abs(ad).max()
 
-    t = FunctionSpace(20, Legendre.Legendre).system.base_time()
+    t = T.system.base_time()
     W = FunctionSpace(
         20, Legendre.Legendre, bcs={"left": {"D": 0}, "right": {"D": sp.sin(t)}}
     )

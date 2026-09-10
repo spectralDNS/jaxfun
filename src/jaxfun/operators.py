@@ -179,7 +179,7 @@ def cross(v1: VectorLike, v2: VectorLike) -> VectorLike:
         v2: Second Vector.
 
     Returns:
-        Vector representing v1 × v2 (zero if colinear).
+        Vector representing v1 x v2 (zero if colinear).
 
     Raises:
         AssertionError: If attempting cross outside 3D.
@@ -540,7 +540,7 @@ def curl(v: VectorLike) -> VectorLike:
         doit: If True, evaluate derivatives; else return unevaluated form.
 
     Returns:
-        Vector representing ∇×v.
+        Vector representing ∇xv.
 
     Raises:
         AssertionError: If system dimension != 3 when required.

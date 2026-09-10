@@ -5,6 +5,7 @@ import pytest
 import sympy as sp
 from jax import Array
 
+from jaxfun.coordinates import R
 from jaxfun.galerkin import FunctionSpace, JAXFunction, TensorProduct
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.ChebyshevU import ChebyshevU
@@ -133,7 +134,8 @@ def test_backward_primitive_composite(jspace: type[Jacobi], domain: Domain):
 
 
 def test_backward_primitive_directsum(jspace: type[Jacobi], domain: Domain):
-    from jaxfun.coordinates import x
+    R1 = R(1)
+    x = R1.x
 
     N = 24
     f = sp.cos(x * sp.pi)
@@ -142,8 +144,6 @@ def test_backward_primitive_directsum(jspace: type[Jacobi], domain: Domain):
         "right": {"D": f.subs(x, domain.upper)},
     }
     D = FunctionSpace(N, jspace, bcs=bcs, domain=domain)
-    (x,) = D.system.base_scalars()
-    f = D.system.expr_psi_to_base_scalar(f)
     uf = JAXFunction(f, D)
     uh = uf.array
     assert isinstance(uh, Array)  # a scalar space, so one coefficient array
@@ -175,7 +175,8 @@ def test_backward_primitive_2d(space):
 
 
 def test_backward_primitive_directsum_2d(jspace: type[Jacobi], domain: Domain):
-    from jaxfun.coordinates import x, y
+    R2 = R(2)
+    x, y = R2.base_scalars()
 
     if not jax.config.jax_enable_x64:
         pytest.skip("x64 is disabled")
@@ -193,8 +194,6 @@ def test_backward_primitive_directsum_2d(jspace: type[Jacobi], domain: Domain):
     Dx = FunctionSpace(N, jspace, bcs=bcsx, domain=domain)
     Dy = FunctionSpace(N, jspace, bcs=bcsy, domain=domain)
     T = TensorProduct(Dx, Dy)
-    x, y = T.system.base_scalars()
-    f = T.system.expr_psi_to_base_scalar(f)
     uf = JAXFunction(f, T)
     du = JAXFunction(sp.diff(f, x, y), T.get_orthogonal())
     df = T.backward_primitive(uf.get_array(), (1, 1))

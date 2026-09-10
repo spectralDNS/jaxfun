@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
+from jaxfun.coordinates import R
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev as Cheb
 from jaxfun.galerkin.functionspace import FunctionSpace
@@ -31,8 +32,6 @@ from jaxfun.operators import Constant, Div, Grad
 from jaxfun.utils.common import n
 
 pytestmark = pytest.mark.integration
-
-xs, ys, ts = sp.symbols("x,y,t", real=True)
 
 
 def _diffusion_1d(**params):
@@ -56,17 +55,19 @@ def _diffusion_1d(**params):
 
 def _diffusion_2d(**params):
     """Build a 2D integrator whose stage operator is a `TPMatrices`."""
-    steady = sp.sinh(xs) * sp.cos(ys)
-    bcsx = {"left": {"D": steady.subs(xs, -1)}, "right": {"D": steady.subs(xs, 1)}}
-    bcsy = {"left": {"D": steady.subs(ys, -1)}, "right": {"D": steady.subs(ys, 1)}}
+    R2 = R(2)
+    x, y = R2.base_scalars()
+    t = R2.base_time()
+    steady = sp.sinh(x) * sp.cos(y)
+    bcsx = {"left": {"D": steady.subs(x, -1)}, "right": {"D": steady.subs(x, 1)}}
+    bcsy = {"left": {"D": steady.subs(y, -1)}, "right": {"D": steady.subs(y, 1)}}
     Dx = FunctionSpace(16, Legendre, bcs=bcsx, scaling=n + 1, name="Dx", fun_str="phi")
     Dy = FunctionSpace(16, Legendre, bcs=bcsy, scaling=n + 1, name="Dy", fun_str="psi")
     V = TensorProduct(Dx, Dy, name="V")
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
-    t = V.system.base_time()
     weak_form = v * (u.diff(t) - Constant("nu", 0.5) * Div(Grad(u)))
-    u0 = steady + sp.cos(sp.pi * xs / 2) * sp.cos(sp.pi * ys / 2)
+    u0 = steady + sp.cos(sp.pi * x / 2) * sp.cos(sp.pi * y / 2)
     return V, IMEXRungeKutta(
         weak_form,
         tableau=ARK4_3_6L2SA,

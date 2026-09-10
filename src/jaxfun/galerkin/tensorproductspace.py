@@ -16,7 +16,7 @@ from jax import Array, shard_map
 from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.typing import DTypeLike
 
-from jaxfun.coordinates import CartCoordSys, CoordSys
+from jaxfun.coordinates import CartCoordSys, CoordSys, R
 from jaxfun.sharding import (
     _apply_separable_spmd_shard_map,
     _build_local_apply_fn,
@@ -176,17 +176,10 @@ class TensorProductSpace:
                 DirectInstantiationWarning,
                 stacklevel=2,
             )
-        from jaxfun.coordinates import CartCoordSys, x, y, z
-
-        system = (
-            CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[len(basespaces)])
-            if system is None
-            else system
-        )
+        self.system: CoordSys = R(len(basespaces)) if system is None else system
         self.basespaces: list[OrthogonalSpace] = list(basespaces)
         self._hermitian_axis = _validate_hermitian_axis(self.basespaces)
         self.name = name
-        self.system: CoordSys = system
         self.tensorname = tensor_product_symbol.join([b.name for b in basespaces])
         self._spectral_sharding = spectral_sharding if len(jax.devices()) > 1 else None
         self._physical_sharding = physical_sharding if len(jax.devices()) > 1 else None
@@ -1047,8 +1040,6 @@ def TensorProduct(
     Returns:
         Instance of TensorProductSpace or DirectSumTPS.
     """
-    from jaxfun.coordinates import CartCoordSys, x, y, z
-
     if real:
         basespaces = tuple(_halve_leading_fourier(basespaces, n_extra))
 
@@ -1060,11 +1051,7 @@ def TensorProduct(
             "transforms need one split axis and one unsplit axis, and it has "
             "only one axis in total."
         )
-    system = (
-        CartCoordSys("N", {2: (x, y), 3: (x, y, z)}[len(basespaces)])
-        if system is None
-        else system
-    )
+    system = R(len(basespaces)) if system is None else system
 
     basespaces_list: list[OrthogonalSpace | DirectSum] = [
         copy.deepcopy(space) for space in basespaces
@@ -1141,17 +1128,17 @@ class DirectSumTPS(TensorProductSpace):
         self.leaf = leaf
 
         # Normalize symbolic BC expressions to base scalar form
-        for space in basespaces:
-            if space.bcs is None:
-                continue
-            if space.bcs.is_homogeneous():
-                continue
-            if isinstance(space, DirectSum):
-                s0 = space.basespaces[1]
-                for val in s0.bcs.values():
-                    for key, v in val.items():
-                        if len(sp.sympify(v).free_symbols) > 0:
-                            val[key] = system.expr_psi_to_base_scalar(v)
+        # for space in basespaces:
+        #    if space.bcs is None:
+        #        continue
+        #    if space.bcs.is_homogeneous():
+        #        continue
+        #    if isinstance(space, DirectSum):
+        #        s0 = space.basespaces[1]
+        #        for val in s0.bcs.values():
+        #            for key, v in val.items():
+        #                if len(sp.sympify(v).free_symbols) > 0:
+        #                    val[key] = system.expr_psi_to_base_scalar(v)
 
         bcindices = [
             i for i, space in enumerate(basespaces) if isinstance(space, DirectSum)

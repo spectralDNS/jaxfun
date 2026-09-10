@@ -22,6 +22,7 @@
 # Time discretization: IMEX Runge-Kutta with a constraint solve per stage
 
 import os
+import sys
 from typing import cast
 
 import jax.numpy as jnp
@@ -96,6 +97,7 @@ if "PYTEST" in os.environ:
     assert not jnp.isinf(u_states).any()
     assert not jnp.isnan(v_states).any()
     assert not jnp.isinf(v_states).any()
+    sys.exit(0)
 
 x_plot, y_plot = V.mesh(broadcast=False)
 vmin = float(v_states.min())

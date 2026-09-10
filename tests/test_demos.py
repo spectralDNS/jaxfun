@@ -11,10 +11,28 @@ root = Path(__file__).parent.parent
 # demos that can run under `mpirun`; running it on its own does nothing.
 NOT_DEMOS = {"OrrSommerfeld_eigs", "ChannelFlow2D", "spmd_bootstrap"}
 
-_all_files = [f for f in root.glob("examples/*.py") if f.is_file()]
+# Demos are grouped in subdirectories by topic, so this recurses. `notebooks/`
+# is not part of the suite: it holds paired .py/.ipynb sources, several of which
+# only make sense run cell by cell.
+_all_files = [
+    f
+    for f in root.glob("examples/**/*.py")
+    if f.is_file() and "notebooks" not in f.relative_to(root).parts
+]
 _all_files = [
     f for f in _all_files if "DrivenCavity" not in f.stem and f.stem not in NOT_DEMOS
 ]
+
+# Parametrized on the stem alone, so a demo keeps its test id wherever it is
+# filed and `-k <name>` goes on working. That only holds while stems are unique.
+demo_paths: dict[str, Path] = {}
+for f in _all_files:
+    if f.stem in demo_paths:
+        raise RuntimeError(
+            f"Two demos are named {f.stem}.py ({demo_paths[f.stem]} and {f}); "
+            "test ids are stems, so one would shadow the other."
+        )
+    demo_paths[f.stem] = f
 
 spmd_files = [
     f.stem for f in _all_files if "pytestmark = pytest.mark.spmd" in f.read_text()
@@ -48,7 +66,7 @@ def _run_demo(demo: str) -> None:
         if not jax.config.jax_enable_x64:
             pytest.skip(f"{demo} needs float64; run the examples with --float64")
     with contextlib.suppress(SystemExit):
-        runpy.run_path(str(root / "examples" / f"{demo}.py"), run_name="__main__")
+        runpy.run_path(str(demo_paths[demo]), run_name="__main__")
 
 
 @pytest.mark.smoke

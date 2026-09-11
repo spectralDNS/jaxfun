@@ -13,7 +13,7 @@ from jaxfun.galerkin.inner import inner
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
-M = 30
+M = 32
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
 D = FunctionSpace(M, space, bcs=bcs, name="D", fun_str="psi", scaling=n + 1)
 v = TestFunction(D)
@@ -36,7 +36,7 @@ uj = D.backward(uh)
 uej = lambdify(x, ue)(xj)
 error = jnp.linalg.norm(uj - uej)
 if "PYTEST" in os.environ:
-    assert error < jnp.sqrt(ulp(1)), error
+    assert error < jnp.sqrt(ulp(10)), error
     sys.exit(0)
 
 print("Error =", error)

@@ -1010,6 +1010,7 @@ def TensorProduct(
     name: str = "T",
     real: bool = False,
     n_extra: int | None = None,
+    _validate_bcs: bool = True,
 ) -> TensorProductSpace | DirectSumTPS:
     """Factory returning TensorProductSpace or DirectSumTPS.
 
@@ -1068,7 +1069,13 @@ def TensorProduct(
             space.basespaces[1].orthogonal.system = space.system
 
     if any(isinstance(s, DirectSum) for s in basespaces_list):
-        return DirectSumTPS(basespaces_list, system, name, _token=_tensorproduct_token)
+        return DirectSumTPS(
+            basespaces_list,
+            system,
+            name,
+            _token=_tensorproduct_token,
+            _validate_bcs=_validate_bcs,
+        )
 
     assert all(isinstance(s, OrthogonalSpace) for s in basespaces_list)
     return TensorProductSpace(
@@ -1106,6 +1113,7 @@ class DirectSumTPS(TensorProductSpace):
         leaf: CartesianTensorProductSpace | None = None,
         *,
         _token: object = None,
+        _validate_bcs: bool = True,
     ) -> None:
         if _token is not _tensorproduct_token:
             warnings.warn(
@@ -1145,9 +1153,11 @@ class DirectSumTPS(TensorProductSpace):
         keys = tuple(self.tpspaces)
         time = system.base_time()
         self.lifting = BoundaryLifting(
-            _lifting_plans(basespaces, keys, system),
+            _lifting_plans(basespaces, keys, system, validate=_validate_bcs),
             time,
-            lambda: _lifting_plans(_differentiated(basespaces, time), keys, system),
+            lambda: _lifting_plans(
+                _differentiated(basespaces, time), keys, system, validate=False
+            ),
         )
         self.bndvals: dict[tuple[OrthogonalSpace, ...], Array] = self.lifting(
             0.0 if self.lifting.is_transient else None
@@ -1597,6 +1607,7 @@ def _lifting_plans(
     basespaces: list[OrthogonalSpace | DirectSum],
     keys: Sequence[tuple[OrthogonalSpace, ...]],
     system: CoordSys,
+    validate: bool = True,
 ) -> tuple[_LiftPlan, ...]:
     """Build one lifting plan per non-homogeneous combination of `basespaces`.
 
@@ -1605,7 +1616,13 @@ def _lifting_plans(
     a plan built from differentiated boundary values -- which necessarily lives
     on copied spaces -- still keys into the original `tpspaces`.
     """
-    _validate_bc_symbols(basespaces, system)
+    # Only boundary values a caller wrote are checked. The sub-products built
+    # below carry values this function derived from already-checked ones, and
+    # they are filed under a coordinate system of their own -- so re-checking
+    # them would compare the outer system's symbols against the inner system's
+    # and reject what the caller got right.
+    if validate:
+        _validate_bc_symbols(basespaces, system)
 
     bcindices = [
         i for i, space in enumerate(basespaces) if isinstance(space, DirectSum)
@@ -1707,6 +1724,7 @@ def _lifting_plans(
                 ]
                 othertpspace = TensorProduct(
                     *newspaces,
+                    _validate_bcs=False,
                     system=CartCoordSys(
                         "T",
                         (
@@ -1738,23 +1756,40 @@ def _validate_bc_symbols(
     """Reject boundary values written in symbols the space cannot evaluate.
 
     A boundary value may depend on the coordinates and on time, and on nothing
-    else -- those are the only arguments the lifting has to supply.
+    else -- those are the only arguments the lifting has to supply. They must be
+    the system's own `base_scalars()` and `base_time()`, not plain sympy symbols
+    that merely share their names.
+
+    Raises:
+        ValueError: If a boundary value holds any other symbol.
     """
+    # Matched on the symbols themselves, not on their names. A plain
+    # `sp.Symbol("y")` written where `base_scalars()` was meant has to be
+    # rejected: the corner-consistency machinery differentiates a value against
+    # the base scalar, and `sin(y).diff(y_base)` is 0 with no free symbols left,
+    # so such a Neumann value would be silently zeroed rather than raise.
+    #
+    # Equality, not identity: `BaseScalar` and `BaseTime` compare equal across
+    # two equal systems, so a value may be written with the symbols of any
+    # `R(dim)` of the same shape -- which a tensor product needs, since it
+    # builds a system of its own.
     time = system.base_time()
-    allowed = {s.name for s in system.base_scalars()} | {time.name}
+    allowed = set(system.base_scalars()) | {time}
     for space in basespaces:
         if not isinstance(space, DirectSum):
             continue
         bcs = space.basespaces[1].bcs
         for val in bcs.orderedvals():
-            unknown = {str(s) for s in sp.sympify(val).free_symbols} - allowed
+            unknown = sp.sympify(val).free_symbols - allowed
             if unknown:
                 raise ValueError(
                     f"Boundary value {val} of {space.name} uses "
-                    f"{sorted(unknown)}, which the space cannot evaluate. "
-                    f"Boundary data may depend on the coordinates "
-                    f"{sorted(allowed - {time.name})} and on time "
-                    f"({time.name}), and on nothing else."
+                    f"{sorted(map(str, unknown))}, which the space cannot "
+                    f"evaluate. Boundary data may depend on the coordinates "
+                    f"{sorted(map(str, allowed - {time}))} and on time "
+                    f"({time}), and on nothing else -- and must be written with "
+                    "the system's own symbols, e.g. `x, y = R(2).base_scalars()`, "
+                    "not plain sympy symbols of the same name."
                 )
 
 

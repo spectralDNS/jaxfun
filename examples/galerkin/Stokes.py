@@ -60,7 +60,7 @@ d = C_pin.lu_solve(c.flatten(), method="rcm", pivot=True)
 sol = BlockArray(W, flat_array=d)
 up_ = W.backward(
     sol.array, N=(N, N)
-)  # Need to provide N since spaces have different shape  # noqa: E501
+)  # Need to provide N since spaces have different shape
 
 if "PYTEST" in os.environ:
     for i in range(3):

@@ -1,4 +1,21 @@
-# Solve Poisson's equation in 2D
+# Solve Poisson's equation in 2D with periodic boundary conditions in x and
+# Dirichlet boundary conditions in y.
+#
+# Note that this solver may be run in parallel using SPMD, by setting the environment
+# variable `JAX_NUM_CPU_DEVICES` to the number of devices to use. Or specify the number
+# of devices in the code with `jax.config.update("jax_num_cpu_devices", 2)` before any
+# imports from jaxfun.
+#
+# The matrix A is using the TPMatricesWavenumberSolver, which is a *communication-free*
+# parallel solver for tensor product matrices with wavenumber decomposition. That is,
+# with a Fourier basis along the first (and even second for 3D) axis. The solver works
+# by sharding the LU-decomposition of the matrix and by running only over the local
+# wavenumbers on each device.
+#
+# In order to make the solver work also on distributed devices, one also needs to
+# initialize a distributed JAX environment. See, e.g., the `RayleighBenard.py` example.
+
+
 import os
 import sys
 

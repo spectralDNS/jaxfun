@@ -1,4 +1,4 @@
-# Solve Poisson's equation in polar coordinates on parts of an annulus
+# Solve Poisson's equation in spherical coordinates
 import os
 import sys
 
@@ -19,7 +19,7 @@ from jaxfun.utils.common import lambdify, ulp
 
 N, M = 50, 50
 
-# Define parabolic coordinates
+# Define spherical coordinates
 r = 1
 theta, phi = sp.symbols("theta, phi", real=True, positive=True)
 

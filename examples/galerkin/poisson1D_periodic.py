@@ -1,4 +1,4 @@
-# Solve Poisson's equation
+# Solve Poisson's equation in 1D with periodic boundary conditions
 import os
 import sys
 from typing import cast

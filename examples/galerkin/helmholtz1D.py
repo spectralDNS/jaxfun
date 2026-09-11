@@ -1,4 +1,4 @@
-# Solve Helmholtz' equation
+# Solve Helmholtz' equation in 1D with Dirichlet boundary conditions
 import os
 import sys
 

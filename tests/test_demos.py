@@ -34,10 +34,38 @@ for f in _all_files:
         )
     demo_paths[f.stem] = f
 
-spmd_files = [
-    f.stem for f in _all_files if "pytestmark = pytest.mark.spmd" in f.read_text()
+files = [f.stem for f in _all_files]
+
+# Demos that are run a second time under `--num-devices=2` (or 4). Nothing in a
+# demo marks it and nothing needs to: sharding follows `jax.device_count()`, so
+# a demo whose arrays split *is* the SPMD version of itself once the session has
+# more than one device. Listed here are the ones that actually split and so are
+# worth the second run; they stay in `files` too, and run unsharded there.
+#
+# A demo belongs here when the *solve* splits, not merely its transforms -- the
+# sharded transforms have their own tests under `tests/galerkin`, and a demo
+# listed for them alone would suggest a parallelism it does not have.
+# `poisson2D_periodic` gives every Fourier wavenumber an independent banded
+# system that `TPMatricesWavenumberSolver` factorises per device; `schnakenberg`
+# is Fourier in both directions, so its implicit diffusion operator is diagonal
+# and the stage solves are elementwise. Neither communicates. `schnakenberg`
+# additionally carries a jitted IMEX step, which is where `pin_state` and the
+# replicated forcings have to hold up.
+#
+# Coverage is size-dependent and degrades quietly rather than failing: an extent
+# that does not divide by the device count takes the local path and the demo
+# still passes, so a green run here is not on its own evidence that anything was
+# sharded. Remember to design the demos with appropriate sizes!
+#
+# To run one by hand rather than through pytest, give the interpreter the devices
+# the fixture would have: `JAX_NUM_CPU_DEVICES=2`, or
+# `jax.config.update("jax_num_cpu_devices", 2)` *before* the first jaxfun import
+# -- `jaxfun.sharding` builds its device mesh at import, and JAX refuses the
+# config update once a backend is live.
+SPMD_DEMOS = [
+    "poisson2D_periodic",
+    "schnakenberg",
 ]
-files = [f.stem for f in _all_files if f.stem not in spmd_files]
 
 # Demos whose own verification needs float64, so they enable it for themselves at
 # import. Precision is a global switch: flipping it once another demo has been
@@ -90,7 +118,7 @@ def test_demos(demo: str) -> None:
 @pytest.mark.spmd
 @pytest.mark.parametrize(
     "demo",
-    spmd_files,
+    SPMD_DEMOS,
 )
 def test_demos_spmd(demo: str) -> None:
     _run_demo(demo)

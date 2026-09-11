@@ -1,4 +1,4 @@
-# Solve Helmholtz' equation
+# Solve Helmholtz' equation in 2D with Dirichlet boundary conditions
 import os
 import sys
 
@@ -9,11 +9,7 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from jaxfun.coordinates import R
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
-
-# from jaxfun.galerkin.Chebyshev import Chebyshev as space
 from jaxfun.galerkin.functionspace import FunctionSpace
-
-# from jaxfun.Jacobi import Jacobi as space
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre as space
 from jaxfun.galerkin.tensorproductspace import TensorProduct

@@ -38,6 +38,7 @@ from jaxfun.integrators import (
     BackwardEuler,
     IMEXRungeKutta,
 )
+from jaxfun.integrators._utils import apply_field_couplings
 from jaxfun.operators import Constant, Div, Grad
 from jaxfun.utils.common import lambdify
 
@@ -285,6 +286,105 @@ def test_a_constraint_reads_its_wall_at_the_stage_time() -> None:
     early = float(jnp.abs(V.backward(v_hats[1], t=0.2)).max())
     late = float(jnp.abs(V.backward(v_hats[-1], t=1.0)).max())
     assert late < 0.6 * early, (early, late)
+
+
+def _diffusion_driven_by_a_foreign_wall(N: int = 12):
+    """A field with no boundary conditions, coupled to one with a moving wall.
+
+    `u` lives in an orthogonal space -- no boundary data of its own, so nothing
+    about *its* equation looks transient. All the motion arrives through the
+    coupling to `v`, whose wall decays like `exp(-t)`.
+    """
+    from jaxfun.integrators import ARS443, SystemIMEXRungeKutta
+
+    hom = {"left": {"D": 0}, "right": {"D": 0}}
+    R2 = R(2)
+    x, _ = R2.base_scalars()
+    t = R2.base_time()
+    wall = (1 - x**2) * sp.exp(-t)
+    V = TensorProduct(
+        FunctionSpace(N, Legendre.Legendre, bcs=hom, name="fVx", fun_str="Lfx"),
+        FunctionSpace(
+            N,
+            Legendre.Legendre,
+            bcs={"left": {"D": 0}, "right": {"D": wall}},
+            name="fVy",
+            fun_str="Lfy",
+        ),
+        name="fVsig",
+    )
+    assert isinstance(V, DirectSumTPS)
+    U = V.get_orthogonal()
+    v = TrialFunction(V, name="v")
+    q = TestFunction(V, name="q")
+    u = TrialFunction(U, name="u", transient=True)
+    w = TestFunction(U, name="w")
+    integrator = SystemIMEXRungeKutta(
+        ((u.diff(t) + u + v) * w, (Div(Grad(v)) - v + u) * q),
+        tableau=ARS443,
+        time=(0.0, 6.0),
+        initial=(sp.Integer(0), None),
+        sparse=True,
+    )
+    return integrator, U
+
+
+def test_a_coupling_carries_its_foreign_wall_deferred() -> None:
+    """A coupling to a field whose wall moves must not be collapsed at one time.
+
+    `inner` folds the foreign space's boundary block into a load vector against
+    the space's frozen `bndvals`. Stored that way it is `B_v(0)` forever, while
+    the foreign field's own coefficients are solved relative to `B_v(t)` -- the
+    two halves of one field, read at different instants.
+
+    Nothing about the coupled equation itself looks transient, which is what
+    makes this easy to miss: its own space has no boundary conditions at all.
+    """
+    integrator, _ = _diffusion_driven_by_a_foreign_wall()
+    equation = integrator.integrators[0]
+    # The gate on the equation's *own* space is correctly False -- the motion is
+    # entirely in the coupling, which is the point.
+    assert not equation._transient_boundary
+    ((operator, forcing, boundary),) = equation._couplings
+    assert boundary is not None, "the foreign wall must be kept deferred"
+    assert boundary.is_transient
+    # A coupling's only linear contribution is the lifting, so removing the
+    # frozen copy leaves nothing behind.
+    assert forcing is None or float(jnp.abs(jnp.asarray(forcing)).max()) == 0.0
+
+    # A zero state isolates the boundary block: the operator contributes
+    # nothing, so what is left is the lifting alone.
+    state = tuple(jnp.zeros_like(c) for c in integrator.initial_coefficients())
+    slots = equation._coupling_slots
+    early = apply_field_couplings(slots, equation._couplings, state, 0.0)
+    late = apply_field_couplings(slots, equation._couplings, state, 1.0)
+    assert early is not None and late is not None
+    assert not jnp.allclose(early, late)
+    # The wall is the only thing moving, and it decays like exp(-t).
+    ratio = float(jnp.abs(late).max() / jnp.abs(early).max())
+    assert ratio == pytest.approx(float(jnp.exp(jnp.array(-1.0))), rel=1e-4)
+    assert operator is not None
+
+
+def test_a_coupled_field_decays_with_the_foreign_wall() -> None:
+    """The end-to-end consequence of freezing a coupling's lifting.
+
+    `u` is driven only through `v`, and `v` is driven only by a wall that decays
+    like `exp(-t)`. So `u` has to decay too. Held at `B_v(0)`, the coupling is a
+    source that never switches off and `u` instead grows to a steady state of
+    its own -- roughly 0.96 here, against the 4e-2 it should have fallen to.
+
+    Asserted as decay rather than a threshold: the wrong answer is not a small
+    perturbation of the right one, it has the opposite sign of slope.
+    """
+    integrator, U = _diffusion_driven_by_a_foreign_wall()
+    u_hats, v_hats = integrator.solve(
+        dt=0.05, steps=120, n_batches=6, return_batch_snapshots=True, progress=False
+    )
+    assert jnp.all(jnp.isfinite(u_hats)) and jnp.all(jnp.isfinite(v_hats))
+    peak = float(jnp.abs(U.backward(u_hats[1])).max())
+    final = float(jnp.abs(U.backward(u_hats[-1])).max())
+    assert final < 0.2 * peak, (peak, final)
 
 
 def test_a_run_starting_after_zero_lifts_its_initial_state_there() -> None:

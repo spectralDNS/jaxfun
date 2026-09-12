@@ -297,7 +297,7 @@ class ConstraintSolver(nnx.Module):
         """
         # Everything in the residual that does not involve the own field, in
         # scalar-product form; the solve then inverts `operator @ u = -total`.
-        total = apply_field_couplings(self._coupling_slots, self._couplings, states)
+        total = apply_field_couplings(self._coupling_slots, self._couplings, states, t)
         if self._nonlinear_evaluator is not None:
             pointwise = self.testspace.scalar_product(
                 self._nonlinear_evaluator(states, physical_shape(self.testspace, N))

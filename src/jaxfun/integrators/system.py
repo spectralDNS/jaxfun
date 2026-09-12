@@ -303,7 +303,10 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
         )
 
     def nonlinear_scalar_products(
-        self, states: tuple[Array, ...], N: ScalarPadding = None
+        self,
+        states: tuple[Array, ...],
+        N: ScalarPadding = None,
+        t: Array | float | None = None,
     ) -> tuple[Array, ...]:
         """Return each equation's nonlinear term in coefficient space.
 
@@ -311,10 +314,13 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
         terms evaluated pointwise. As in
         `BaseIntegrator.nonlinear_rhs_scalar_product`, the mass inverse is
         deliberately not applied.
+
+        `t` is the time `states` belongs to, needed by a coupling whose foreign
+        field lifts moving boundary data.
         """
         results: list[Array] = []
         for g in self.integrators:
-            coupling = apply_field_couplings(g._coupling_slots, g._couplings, states)
+            coupling = apply_field_couplings(g._coupling_slots, g._couplings, states, t)
             results.append(g._no_nonlinear(states) if coupling is None else coupling)
         if self._coupled_nonlinear_evaluator is None:
             return tuple(results)

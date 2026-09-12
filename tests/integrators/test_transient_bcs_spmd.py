@@ -30,7 +30,8 @@ import sympy as sp
 from jaxfun.coordinates import R
 from jaxfun.galerkin import Fourier, FunctionSpace, Legendre, TensorProduct
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
-from jaxfun.integrators import ARS443, IMEXRungeKutta
+from jaxfun.integrators import ARS443, IMEXRungeKutta, SystemIMEXRungeKutta
+from jaxfun.integrators._utils import apply_field_couplings
 from jaxfun.integrators.base import _as_start_time, _step_time
 from jaxfun.operators import Constant, Div, Grad
 
@@ -42,6 +43,10 @@ if jax.device_count() not in (1, 2, 4):
 # The leading axis has to divide across the mesh for assembly to shard anything,
 # which is the case these exist for.
 N = 4 * jax.device_count()
+
+# A Dirichlet pair costs two dofs, so this is what makes the *constrained*
+# space's leading axis divide across the mesh.
+Nc = 2 + 4 * jax.device_count()
 
 
 def _diffusion_with_a_lifted_wall():
@@ -175,3 +180,99 @@ def test_a_moving_wall_batches_agree_with_one_long_batch() -> None:
         dt=0.01, steps=10, n_batches=1, progress=False
     )
     assert jnp.allclose(batched, single, atol=1e-6)
+
+
+def _coupled_system_with_a_moving_wall():
+    """A field with no boundary data of its own, coupled to one with a wall.
+
+    `u` is orthogonal -- nothing about its equation looks transient. All the
+    motion reaches it through the coupling to `v`, whose wall moves. The
+    coupling's boundary block is therefore rebuilt from `t` inside the jitted
+    step, where a steady one would have been a constant.
+    """
+    hom = {"left": {"D": 0}, "right": {"D": 0}}
+    R2 = R(2)
+    x, _ = R2.base_scalars()
+    t = R2.base_time()
+    wall = (1 - x**2) * sp.exp(-t)
+    V = TensorProduct(
+        FunctionSpace(Nc, Legendre.Legendre, bcs=hom, name="Vcx", fun_str="Lcx"),
+        FunctionSpace(
+            Nc,
+            Legendre.Legendre,
+            bcs={"left": {"D": 0}, "right": {"D": wall}},
+            name="Vcy",
+            fun_str="Lcy",
+        ),
+        name="Vc",
+    )
+    U = V.get_orthogonal()
+    v = TrialFunction(V, name="vc")
+    q = TestFunction(V, name="qc")
+    u = TrialFunction(U, name="uc", transient=True)
+    w = TestFunction(U, name="wc")
+    return (
+        SystemIMEXRungeKutta(
+            ((u.diff(t) + u + v) * w, (Div(Grad(v)) - v + u) * q),
+            tableau=ARS443,
+            time=(0.0, 6.0),
+            initial=(sp.Integer(0), None),
+            sparse=True,
+        ),
+        V,
+    )
+
+
+def test_a_moving_coupling_block_is_replicated_at_every_time() -> None:
+    """A coupling's lifting is rebuilt per stage, so it can come back sharded.
+
+    `inner` folds a coupled foreign field's boundary block into a load vector,
+    and the deferred replacement re-derives it from `t` inside the step. Each
+    rebuild is a fresh chance to pick up the assembly sharding, which
+    `_advance`'s closure cannot carry across devices -- and the equation's own
+    space has no boundary conditions, so nothing else about it is suspicious.
+
+    Reached through `apply_field_couplings` rather than by calling the block
+    directly: that is the path the step takes, and a block that is correct but
+    read at the wrong time would be invisible to a direct call.
+    """
+    integrator, V = _coupled_system_with_a_moving_wall()
+    equation = integrator.integrators[0]
+    assert not equation._transient_boundary, "the motion is all in the coupling"
+    ((_operator, _forcing, boundary),) = equation._couplings
+    assert boundary is not None and boundary.is_transient
+    # Divisible and multidimensional, so assembly would have sharded it.
+    assert V.num_dofs[0] % jax.device_count() == 0
+    assert len(V.num_dofs) >= 2
+
+    state = tuple(jnp.zeros_like(c) for c in integrator.initial_coefficients())
+    slots = equation._coupling_slots
+    blocks = []
+    for ti in (0.0, 0.1, 0.2):
+        block = apply_field_couplings(slots, equation._couplings, state, ti)
+        assert block is not None
+        blocks.append(block)
+    # Without this the placement assertions would hold for a frozen block too.
+    assert not jnp.allclose(blocks[0], blocks[-1])
+    for block in blocks:
+        assert jnp.asarray(block).is_fully_replicated
+
+
+def test_a_moving_coupling_decays_under_spmd() -> None:
+    """The sharded run of the physics the non-SPMD suite pins.
+
+    `u` is driven only through `v`, and `v` only by a wall decaying like
+    `exp(-t)`, so `u` has to decay. Held at the wall's initial value the
+    coupling never switches off and `u` climbs to a steady state instead. Run
+    here with the operators distributed, which is what says the deferred block
+    survives being assembled across devices.
+    """
+    integrator, _ = _coupled_system_with_a_moving_wall()
+    u_hats, v_hats = integrator.solve(
+        dt=0.05, steps=120, n_batches=6, return_batch_snapshots=True, progress=False
+    )
+    assert jnp.all(jnp.isfinite(u_hats)) and jnp.all(jnp.isfinite(v_hats))
+    U = integrator.integrators[0].trialspace
+    peak = float(jnp.abs(U.backward(u_hats[1])).max())
+    final = float(jnp.abs(U.backward(u_hats[-1])).max())
+    assert final < 0.2 * peak, (peak, final)

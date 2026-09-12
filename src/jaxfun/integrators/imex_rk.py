@@ -178,7 +178,11 @@ class IMEXRungeKutta(BaseIntegrator):
             skip_nonlinear = is_last and full_gsa
             skip_linear = is_last and (full_gsa or implicit_only_sa)
             nonlinear_stage.append(
-                None if skip_nonlinear else self.nonlinear_rhs_scalar_product(stage, N)
+                None
+                if skip_nonlinear
+                else self.nonlinear_rhs_scalar_product(
+                    stage, N, t + tableau.implicit.c[i] * dt
+                )
             )
             linear_stage.append(None if skip_linear else (self.linear_operator @ stage))
 
@@ -310,17 +314,24 @@ class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):
             # Constraints are algebraic, so they carry no `dB/dt` term -- but
             # their own boundary lifting still has to be read at this stage's
             # time, not the step's.
-            state_i = self.resolve_constraints(
-                tuple(stage_i), M, t=t + tableau.implicit.c[i] * dt
-            )
+            t_i = t + tableau.implicit.c[i] * dt
+            state_i = self.resolve_constraints(tuple(stage_i), M, t=t_i)
             is_last = i == last
             skip_nonlinear = is_last and full_gsa
             skip_linear = is_last and (full_gsa or implicit_only_sa)
             # Evaluated for the whole system at once: this is what pushes all
             # stage-`i` coefficients into the shared JAXFunction nodes, and it
             # transforms each field to physical space once for all equations.
+            #
+            # `t_i`, the same instant the constraints were just resolved at: a
+            # coupling reads the foreign field's lifting, and the homogeneous
+            # part it completes is the one sitting in `state_i`. Reading the two
+            # halves of one field at different times is the bug this shares a
+            # variable to prevent.
             reaction = (
-                None if skip_nonlinear else self.nonlinear_scalar_products(state_i, M)
+                None
+                if skip_nonlinear
+                else self.nonlinear_scalar_products(state_i, M, t_i)
             )
             for k, (g, slot) in enumerate(zip(integrators, slots, strict=True)):
                 stages[k].append(state_i[slot])

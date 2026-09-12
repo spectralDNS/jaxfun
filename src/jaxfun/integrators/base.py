@@ -714,7 +714,10 @@ class BaseIntegrator(TimeStepper[Array]):
         return self.testspace.forward(self._nonlinear_evaluator(uh, M))
 
     def nonlinear_rhs_scalar_product(
-        self, uh: IntegratorState, N: ScalarPadding = None
+        self,
+        uh: IntegratorState,
+        N: ScalarPadding = None,
+        t: Array | float | None = None,
     ) -> Array:
         """Return the nonlinear contribution in coefficient space.
 
@@ -722,10 +725,14 @@ class BaseIntegrator(TimeStepper[Array]):
         and terms linear in a single foreign field, which are applied as
         assembled operators instead.
 
+        `t` is the time `uh` belongs to. A coupled foreign field may carry a
+        boundary lifting that moves, and the coupling has to read it at the same
+        instant the coefficients it multiplies were solved at.
+
         Do *not* apply the mass inverse to complete the forward transformation,
         because the mass inverse may be required elsewhere.
         """
-        total = apply_field_couplings(self._coupling_slots, self._couplings, uh)
+        total = apply_field_couplings(self._coupling_slots, self._couplings, uh, t)
         if self.has_nonlinear:
             assert self._nonlinear_evaluator is not None
             M = physical_shape(self.testspace, N)

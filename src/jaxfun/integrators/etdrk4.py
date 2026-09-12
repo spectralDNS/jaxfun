@@ -63,15 +63,18 @@ def _phi_matrices(z: Array) -> tuple[Array, Array, Array]:
     return phi1, phi2, phi3
 
 
-class ETDRK4(BaseIntegrator):
-    # The phi-propagators fold the forcing into the matrix exponential at setup,
-    # which is only valid for a forcing that does not move. Carrying a moving
-    # one properly needs phi-weights against divided differences of it at the
-    # stage times; evaluating it once per step and reusing the constant-forcing
-    # weights would silently drop the forcing to first order.
-    supports_transient_boundary = False
+# Note: The ETDRK4 integrator is only valid for a constant forcing term. The
+# phi-propagators fold the forcing into the matrix exponential at setup,
+# which is only valid for a forcing that does not move. Carrying a moving
+# one properly needs phi-weights against divided differences of it at the
+# stage times; evaluating it once per step and reusing the constant-forcing
+# weights would silently drop the forcing to first order.
 
+
+class ETDRK4(BaseIntegrator):
     """Fourth-order exponential time differencing for semilinear systems."""
+
+    supports_transient_boundary = False
 
     def __init__(
         self,

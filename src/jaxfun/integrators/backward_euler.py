@@ -45,7 +45,7 @@ class BackwardEuler(BaseIntegrator):
         if forcing is not None:
             rhs = rhs + dt * jnp.asarray(forcing)
         if self.has_nonlinear:
-            rhs = rhs + dt * self.nonlinear_rhs_scalar_product(u_hat, N)
+            rhs = rhs + dt * self.nonlinear_rhs_scalar_product(u_hat, N, t + dt)
 
         if self._system_operator is not None:
             return solve_with_options(self._system_operator, rhs, self._solver_options)

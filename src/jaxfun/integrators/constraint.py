@@ -245,7 +245,7 @@ class ConstraintSolver(nnx.Module):
         return node_for(self._fields, trial)
 
     def initial_coefficients(
-        self, initial: sp.Expr | Array | None = None
+        self, initial: sp.Expr | Array | None = None, t: float | None = None
     ) -> Array | None:
         """Return coefficient-space data for the field's initial value.
 
@@ -256,7 +256,11 @@ class ConstraintSolver(nnx.Module):
         if init is None:
             return None
         if isinstance(init, sp.Expr):
-            return project(init, self.trialspace)
+            # Same reasoning as an evolved field: the stored coefficients are
+            # the homogeneous part, so the lifting taken out has to be the one
+            # at the time the run starts from.
+            moving = self._boundary is not None
+            return project(init, self.trialspace, t if moving else None)
         return jnp.asarray(init).reshape(self.trialspace.num_dofs)
 
     def setup(self) -> None:

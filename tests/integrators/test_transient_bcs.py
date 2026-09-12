@@ -285,3 +285,94 @@ def test_a_constraint_reads_its_wall_at_the_stage_time() -> None:
     early = float(jnp.abs(V.backward(v_hats[1], t=0.2)).max())
     late = float(jnp.abs(V.backward(v_hats[-1], t=1.0)).max())
     assert late < 0.6 * early, (early, late)
+
+
+def test_a_run_starting_after_zero_lifts_its_initial_state_there() -> None:
+    """A nonzero `time[0]` has to reach the initial state, not just the stepping.
+
+    The state stores the *homogeneous* part, so building it means taking a
+    lifting back out, and which lifting depends on when the run starts. A
+    constrained field is the sharper case: it is algebraic, so it is solved
+    outright from the wall at that instant rather than merely started there.
+    Resolving it at zero while stepping from `time[0]` leaves the first step
+    reading a field that belongs to a different time.
+    """
+    from jaxfun.integrators import ARS443, SystemIMEXRungeKutta
+
+    N = 12
+    t_start = 2.0
+    hom = {"left": {"D": 0}, "right": {"D": 0}}
+    R2 = R(2)
+    x, _ = R2.base_scalars()
+    t = R2.base_time()
+    wall = (1 - x**2) * sp.exp(-t)
+    V = TensorProduct(
+        FunctionSpace(N, Legendre.Legendre, bcs=hom, name="sVx", fun_str="Lsx"),
+        FunctionSpace(
+            N,
+            Legendre.Legendre,
+            bcs={"left": {"D": 0}, "right": {"D": wall}},
+            name="sVy",
+            fun_str="Lsy",
+        ),
+        name="sVsig",
+    )
+    assert isinstance(V, DirectSumTPS)
+    U = V.get_orthogonal()
+    v = TrialFunction(V, name="v")
+    q = TestFunction(V, name="q")
+    u = TrialFunction(U, name="u", transient=True)
+    w = TestFunction(U, name="w")
+
+    integrator = SystemIMEXRungeKutta(
+        ((u.diff(t) + u + v) * w, (Div(Grad(v)) - v + u) * q),
+        tableau=ARS443,
+        time=(t_start, t_start + 1.0),
+        initial=(sp.Integer(0), None),
+        sparse=True,
+    )
+    (slot,) = integrator.constraint_slots
+    state = integrator.initial_coefficients()
+    at_start = integrator.resolve_constraints(tuple(state), t=t_start)
+    at_zero = integrator.resolve_constraints(tuple(state), t=0.0)
+    # The wall decays by e^-2 over this interval, so the two are far apart --
+    # without which the assertion below could not tell them apart.
+    assert float(jnp.abs(at_start[slot] - at_zero[slot]).max()) > 1e-2
+    assert jnp.array_equal(state[slot], at_start[slot])
+
+    # A restart must land in the same place rather than re-deriving at zero.
+    coerced = integrator._coerce_state(tuple(state))
+    assert jnp.array_equal(coerced[slot], at_start[slot])
+
+
+def test_a_trange_override_moves_the_initial_state_with_it() -> None:
+    """`solve(trange=...)` changes where the run begins, lifting included.
+
+    `time[0]` is what the integrator was built with; `trange` overrides it per
+    call. The start time the stepping uses and the one the initial state is
+    lifted against are then two different numbers unless the override is
+    threaded through, and the state would be built for a time the run never
+    visits.
+    """
+    V, ue, t = _decaying_mode_1d(24, "trange")
+    (x,) = V.system.base_scalars()
+    integrator = IMEXRungeKutta(
+        _heat_equation(V, t),
+        tableau=ARK4_3_6L2SA,
+        time=(0.0, 1.0),
+        initial=ue.subs(t, 0),
+        sparse=True,
+    )
+    at_two = integrator.initial_coefficients(t=2.0)
+    at_zero = integrator.initial_coefficients(t=0.0)
+    assert float(jnp.abs(at_two - at_zero).max()) > 1e-2
+
+    started = integrator.solve(
+        dt=0.05,
+        trange=(2.0, 2.1),
+        steps=2,
+        n_batches=1,
+        return_batch_snapshots=True,
+        progress=False,
+    )[0]
+    assert jnp.array_equal(started, at_two)

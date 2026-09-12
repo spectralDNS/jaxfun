@@ -106,18 +106,32 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
         """
         return _advance(self, u_hat, dt, 1, N, _as_start_time(t))
 
+    @property
+    def start_time(self) -> float:
+        """Return the time the integration starts at."""
+        return 0.0 if self.time is None else float(self.time[0])
+
     @abstractmethod
-    def initial_coefficients(self, initial=None) -> StateT:
+    def initial_coefficients(self, initial=None, t: float | None = None) -> StateT:
         """Return coefficient-space data for an initial condition.
 
         A scalar integrator takes one initial condition, a system integrator one
         per field.
+
+        Args:
+            initial: Initial condition(s); the constructor's when omitted.
+            t: Time the boundary lifting is read at. `None` means `start_time`;
+                `solve` passes the time it is about to step from, which differs
+                when a `trange` overrides `self.time`.
         """
         ...
 
     @abstractmethod
-    def _coerce_state(self, state0: StateT) -> StateT:
-        """Coerce a restart state into the integrator's coefficient layout."""
+    def _coerce_state(self, state0: StateT, t: float | None = None) -> StateT:
+        """Coerce a restart state into the integrator's coefficient layout.
+
+        `t` carries the same meaning as in `initial_coefficients`.
+        """
         ...
 
     def setup(self, dt: float) -> None:
@@ -225,10 +239,13 @@ class TimeStepper[StateT: IntegratorState](ABC, nnx.Module):
         self.setup(dt)
         t_start, _, n_steps = self.resolve_time(dt, steps=steps, trange=trange)
 
+        # `t_start`, not `self.time[0]`: a `trange` override moves where the
+        # run begins, and the lifting the initial state is built against has to
+        # move with it.
         if state0 is None:
-            u_hat = self.initial_coefficients()
+            u_hat = self.initial_coefficients(t=t_start)
         else:
-            u_hat = self._coerce_state(state0)
+            u_hat = self._coerce_state(state0, t=t_start)
         if n_steps <= 0:
             if not return_batch_snapshots:
                 return u_hat
@@ -638,25 +655,28 @@ class BaseIntegrator(TimeStepper[Array]):
         """Return the assembled linear operator as a dense matrix."""
         return self._dense_matrix(self.linear_operator)
 
-    @property
-    def start_time(self) -> float:
-        """Return the time the integration starts at."""
-        return 0.0 if self.time is None else float(self.time[0])
-
-    def initial_coefficients(self, initial: sp.Expr | Array | None = None) -> Array:
+    def initial_coefficients(
+        self, initial: sp.Expr | Array | None = None, t: float | None = None
+    ) -> Array:
         """Return coefficient-space data for an initial condition."""
         # The state holds the *homogeneous* coefficients, so projecting takes
         # the boundary lifting back out -- and the one to take out is the
-        # lifting at the start time, not at zero. For steady data the two
-        # coincide and nothing changes.
+        # lifting at the time the run starts from, not at zero. For steady data
+        # every time gives the same answer and nothing changes.
         init = self.initial_condition if initial is None else initial
         if isinstance(init, sp.Expr):
-            t = self.start_time if self._transient_boundary else None
-            return project(init, self.trialspace, t)
+            start = self.start_time if t is None else t
+            return project(
+                init, self.trialspace, start if self._transient_boundary else None
+            )
         return jnp.asarray(init).reshape(self.trialspace.num_dofs)
 
-    def _coerce_state(self, state0: IntegratorState) -> Array:
-        """Coerce a restart state into this equation's coefficient layout."""
+    def _coerce_state(self, state0: IntegratorState, t: float | None = None) -> Array:
+        """Coerce a restart state into this equation's coefficient layout.
+
+        A restart state is already coefficients, so `t` changes nothing here;
+        it is accepted for the common signature.
+        """
         return jnp.asarray(state0).reshape(self.trialspace.num_dofs)
 
     def apply_mass(self, uh: Array) -> Array:

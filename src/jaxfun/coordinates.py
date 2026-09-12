@@ -111,6 +111,9 @@ def R(dim: int) -> CoordSys:
     Args:
         dim: Dimension of the Cartesian space (1, 2, or 3).
     """
+    if dim not in (1, 2, 3):
+        raise ValueError(f"dim must be 1, 2, or 3; got {dim}")
+
     return CartCoordSys(f"R{dim}", (x, y, z)[:dim])
 
 

@@ -527,7 +527,7 @@ def gradient(field: Expr | VectorLike, transpose: bool = False) -> TensorLike:
 def curl(v: VectorLike) -> VectorLike:
     """Return curl of a 3D vector field.
 
-        curl(v) = ∇×v = b^j×(∂v/∂q^j) = ε^{ijk} ∂v_k/∂q^j b_i / √g
+        curl(v) = ∇ × v = b^j×(∂v/∂q^j) = ε^{ijk} ∂v_k/∂q^j b_i / √g
 
     where {b^j} are the contravariant basis vectors, q^j the coordinates,
     ε^{ijk} the Levi-Civita symbol, and √g the scale factor product
@@ -540,7 +540,7 @@ def curl(v: VectorLike) -> VectorLike:
         doit: If True, evaluate derivatives; else return unevaluated form.
 
     Returns:
-        Vector representing ∇xv.
+        Vector representing curl(v), ∇ × v.
 
     Raises:
         AssertionError: If system dimension != 3 when required.

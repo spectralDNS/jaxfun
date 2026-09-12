@@ -886,7 +886,7 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
             g.setup(dt)
         self.A_pin.solve(jnp.zeros(self.VD.num_dofs, dtype=complex))
 
-    def initial_coefficients(self, initial=None) -> tuple[Array, ...]:
+    def initial_coefficients(self, initial=None, t=None) -> tuple[Array, ...]:
         """Return the state at rest, plus whatever the subclass contributes."""
         if initial is not None:
             return self._coerce_state(initial)
@@ -895,7 +895,7 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
             jnp.zeros(self.D1.num_dofs),
         ) + self.scalar_initial()
 
-    def _coerce_state(self, state0) -> tuple[Array, ...]:
+    def _coerce_state(self, state0, t=None) -> tuple[Array, ...]:
         """Coerce a restart state into one coefficient array per field."""
         v_hat, u0, *scalars = state0
         return (

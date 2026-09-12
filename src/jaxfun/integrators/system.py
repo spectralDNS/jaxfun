@@ -429,7 +429,9 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
             )
 
     def initial_coefficients(
-        self, initial: Sequence[sp.Expr | Array | None] | None = None
+        self,
+        initial: Sequence[sp.Expr | Array | None] | None = None,
+        t: float | None = None,
     ) -> tuple[Array, ...]:
         """Return coefficient-space data for the initial condition of each field.
 
@@ -445,20 +447,29 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
             self._check_state_length(initial, "initial condition")
         for slot, g in zip(self.transient_slots, self.integrators, strict=True):
             out[slot] = g.initial_coefficients(
-                None if initial is None else initial[slot]
+                None if initial is None else initial[slot], t=t
             )
         derive: list[int] = []
         for slot, c in zip(self.constraint_slots, self.constraints, strict=True):
-            given = c.initial_coefficients(None if initial is None else initial[slot])
+            given = c.initial_coefficients(
+                None if initial is None else initial[slot],
+                t=self.start_time if t is None else t,
+            )
             if given is None:
                 derive.append(slot)
                 # A placeholder, so the tuple the constraints read is complete.
                 out[slot] = jnp.zeros(c._state_shape)
             else:
                 out[slot] = given
-        return self.resolve_constraints(tuple(out), slots=tuple(derive))
+        # A constrained field is algebraic, so it is solved *at* the start
+        # time -- the wall it reads has to be the one the run begins with.
+        return self.resolve_constraints(
+            tuple(out), slots=tuple(derive), t=self.start_time if t is None else t
+        )
 
-    def _coerce_state(self, state0: IntegratorState) -> tuple[Array, ...]:
+    def _coerce_state(
+        self, state0: IntegratorState, t: float | None = None
+    ) -> tuple[Array, ...]:
         """Coerce a restart state into one coefficient array per field.
 
         The constrained entries are recomputed from the transient ones rather
@@ -473,10 +484,12 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
         self._check_state_length(state0, "restart state")
         out = list(state0)
         for slot, g in zip(self.transient_slots, self.integrators, strict=True):
-            out[slot] = g._coerce_state(state0[slot])
+            out[slot] = g._coerce_state(state0[slot], t=t)
         for slot, c in zip(self.constraint_slots, self.constraints, strict=True):
             out[slot] = jnp.zeros(c._state_shape)
-        return self.resolve_constraints(tuple(out))
+        return self.resolve_constraints(
+            tuple(out), t=self.start_time if t is None else t
+        )
 
     def _setup_impl(self, dt: float) -> None:
         """Precompute step-size-dependent data for every equation."""

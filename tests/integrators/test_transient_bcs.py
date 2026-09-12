@@ -133,6 +133,76 @@ def test_a_dirichlet_lifting_moves_only_through_the_time_derivative() -> None:
     assert integrator._linear_boundary is not None
     assert integrator._mass_boundary is not None
     assert float(jnp.abs(integrator._linear_boundary(0.3)).max()) == 0.0
+
+
+def _drifting_ramp_1d(N: int, tag: str):
+    """A problem with a moving wall and *no* linear spatial term.
+
+    `u_t = f(x)` with `f` steady, whose exact solution `(1+x)/2 * (1+t)` rides a
+    wall that moves. There is nothing for `a(v, B(t))` to come from, so the only
+    boundary contribution is `-<v, dB/dt>`.
+    """
+    R1 = R(1)
+    (x,) = R1.base_scalars()
+    t = R1.base_time()
+    ue = (1 + x) / 2 * (1 + t)
+    V = FunctionSpace(
+        N,
+        Legendre.Legendre,
+        bcs={"left": {"D": 0}, "right": {"D": 1 + t}},
+        name=f"ramp{tag}",
+        system=R1,
+    )
+    v = TestFunction(V)
+    u = TrialFunction(V, transient=True)
+    integrator = IMEXRungeKutta(
+        v * (u.diff(t) - sp.Rational(1, 2) * (1 + x)),
+        tableau=ARK4_3_6L2SA,
+        time=(0.0, 1.0),
+        initial=ue.subs(t, 0),
+        sparse=True,
+    )
+    return V, integrator, ue, x, t
+
+
+def test_the_lifting_rate_is_kept_without_a_linear_boundary_block() -> None:
+    """The two boundary blocks are independent; neither gates the other.
+
+    `a(v, B(t))` comes from the linear spatial term and `-<v, dB/dt>` from the
+    time derivative. An equation with no linear spatial term assembles the first
+    as `None` while still owing the second, so treating the linear block as the
+    gate returned `linear_forcing` and dropped the rate.
+    """
+    _V, integrator, _ue, _x, _t = _drifting_ramp_1d(16, "gate")
+    assert integrator._transient_boundary
+    assert integrator._linear_boundary is None, "no linear spatial term to assemble"
+    assert integrator._mass_boundary is not None
+    assert integrator.linear_forcing is not None, "the steady source is still there"
+
+    got = integrator.forcing_at(0.3)
+    assert got is not None
+    want = -integrator._mass_boundary.rate(0.3) + jnp.asarray(integrator.linear_forcing)
+    assert jnp.allclose(got, want)
+    # The rate is substantial here, so returning `linear_forcing` alone is a
+    # visibly different answer rather than a rounding difference.
+    assert not jnp.allclose(got, jnp.asarray(integrator.linear_forcing))
+
+
+def test_a_moving_wall_is_exact_without_a_linear_spatial_term() -> None:
+    """End-to-end: the dropped rate term was a 49% error, not a small one.
+
+    The exact solution is linear in `x` and in `t`, so a fourth-order scheme on a
+    spectral space should reach round-off. It does once the rate is carried; with
+    it dropped the answer is off by half.
+    """
+    V, integrator, ue, x, _t = _drifting_ramp_1d(16, "exact")
+    dt, steps = 0.01, 100
+    u_hat = integrator.solve(dt=dt, steps=steps, progress=False)
+    xj = V.mesh(kind="uniform", N=40)
+    got = V.evaluate(xj, u_hat, t=integrator.end_time(dt, steps))
+    want = lambdify((x,), ue.subs(_t, 1.0))(xj)
+    error = float(jnp.linalg.norm(got - want) / jnp.linalg.norm(want))
+    assert error < 1e-5, error
     assert float(jnp.abs(integrator._mass_boundary.rate(0.3)).max()) > 1e-2
 
 

@@ -751,13 +751,23 @@ class BaseIntegrator(TimeStepper[Array]):
         # the time derivative. The second is dropped for steady data because it
         # is then exactly zero -- and still is here, the rate coming from
         # differentiating the boundary values symbolically.
-        if self._linear_boundary is None:
+        #
+        # Built from whichever blocks exist rather than gated on the linear one:
+        # they are independent. An equation with no linear spatial term at all --
+        # a purely nonlinear right-hand side, or none -- has no `a(v, B(t))` to
+        # assemble but still owes `-<v, dB/dt>`, and treating the linear block as
+        # the gate silently dropped it.
+        if self._linear_boundary is None and self._mass_boundary is None:
             return self.linear_forcing
-        total = self._linear_boundary(t)
+        total: Array | None = None
+        if self._linear_boundary is not None:
+            total = self._linear_boundary(t)
         if self._mass_boundary is not None:
-            total = total - self._mass_boundary.rate(t)
+            rate = self._mass_boundary.rate(t)
+            total = -rate if total is None else total - rate
         if self.linear_forcing is not None:
-            total = total + jnp.asarray(self.linear_forcing)
+            forcing = jnp.asarray(self.linear_forcing)
+            total = forcing if total is None else total + forcing
         return total
 
     def linear_rhs(self, uh: Array, t: Array | float = 0.0) -> Array:

@@ -5,7 +5,13 @@ from typing import cast
 import jax.numpy as jnp
 import sympy as sp
 
-from jaxfun.galerkin.inner import BoundaryForcing, inner, inner_boundary
+from jaxfun.galerkin.inner import (
+    BoundaryForcing,
+    SourceForcing,
+    inner,
+    inner_boundary,
+    inner_source,
+)
 from jaxfun.la import BaseMatrix, Matrix
 from jaxfun.typing import Array, GalerkinAssembledForm
 
@@ -96,3 +102,23 @@ def assemble_boundary_term(expr: sp.Expr) -> BoundaryForcing | None:
     if sp.sympify(expr) == 0:
         return None
     return inner_boundary(expr, outer_sign=-1)
+
+
+def assemble_source_term(expr: sp.Expr) -> SourceForcing | None:
+    """Assemble a time-dependent source as a function of time.
+
+    The counterpart of `assemble_linear_term` for a source that moves. `expr`
+    holds only the weak form's time-dependent additive terms, which
+    `split_transient_terms` has already separated out.
+
+    Unlike `assemble_boundary_term` there is **no** `outer_sign` here, and the
+    asymmetry is real rather than an oversight. A boundary block is assembled
+    alongside an operator, so `inner` negates the linear part and
+    `split_operator_and_forcing` undoes it; the boundary term has to ask for the
+    same flip to land in the caller's convention. A source expression carries no
+    bilinear form at all, so neither flip fires and what comes back is already
+    `operator @ u + forcing`.
+    """
+    if sp.sympify(expr) == 0:
+        return None
+    return inner_source(expr)

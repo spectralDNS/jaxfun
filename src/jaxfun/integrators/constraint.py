@@ -19,7 +19,7 @@ from sympy.core.function import AppliedUndef
 from jaxfun.coordinates import get_system
 from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.forms import get_basisfunctions
-from jaxfun.galerkin.inner import BoundaryForcing, project
+from jaxfun.galerkin.inner import BoundaryForcing, SourceForcing, project
 from jaxfun.la import BaseMatrix
 from jaxfun.sharding import replicate
 from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
@@ -31,6 +31,7 @@ from jaxfun.utils import (
 from jaxfun.utils.operator_tools import (
     assemble_boundary_term,
     assemble_linear_term,
+    assemble_source_term,
 )
 from jaxfun.utils.sympy_factoring import split_linear_nonlinear_terms
 
@@ -45,6 +46,7 @@ from ._utils import (
     physical_shape,
     solve_with_options,
     split_couplings,
+    split_transient_terms,
     validate_solver_options,
     warm_operator_solve_cache,
 )
@@ -124,8 +126,16 @@ class ConstraintSolver(nnx.Module):
         self.nonlinear_expr = nonlinear_expr
         self.has_nonlinear = bool(sp.sympify(nonlinear_expr) != 0)
 
+        # Split before assembly for the reason `BaseIntegrator` does: `inner`
+        # coerces a linear form's coefficient with `float()`, so a moving source
+        # cannot reach it. An algebraic equation takes the source at the instant
+        # it is solved at, with no rate term -- there is no time derivative here
+        # for one to come from.
+        steady_expr, source_expr = split_transient_terms(
+            linear_expr, self.trialspace.system.base_time()
+        )
         operator, forcing = assemble_linear_term(
-            linear_expr, sparse=self.sparse, sparse_tol=self.sparse_tol
+            steady_expr, sparse=self.sparse, sparse_tol=self.sparse_tol
         )
         if operator is None:
             raise ValueError(
@@ -141,9 +151,10 @@ class ConstraintSolver(nnx.Module):
         # it, and a steady constraint keeps exactly the forcing it had.
         self._boundary: BoundaryForcing | None = nnx.data(None)
         if _values_vary_in_time(self.trialspace):
-            self._boundary = nnx.data(assemble_boundary_term(linear_expr))
+            self._boundary = nnx.data(assemble_boundary_term(steady_expr))
             if self._boundary is not None and forcing is not None:
                 forcing = forcing - self._boundary()
+        self._source: SourceForcing | None = nnx.data(assemble_source_term(source_expr))
 
         # Replicated for the same reason `BaseIntegrator.linear_forcing` is:
         # assembly places a right-hand side on the global spectral sharding, and
@@ -276,11 +287,17 @@ class ConstraintSolver(nnx.Module):
 
     def forcing_at(self, t: Array | float = 0.0) -> Array | None:
         """Return the constraint's forcing at time `t`."""
-        if self._boundary is None:
+        if self._boundary is None and self._source is None:
             return self.forcing
-        total = self._boundary(t)
+        total: Array | None = None
+        if self._source is not None:
+            total = self._source(t)
+        if self._boundary is not None:
+            block = self._boundary(t)
+            total = block if total is None else total + block
         if self.forcing is not None:
-            total = total + jnp.asarray(self.forcing)
+            forcing = jnp.asarray(self.forcing)
+            total = forcing if total is None else total + forcing
         return total
 
     def solve_field(

@@ -14,7 +14,7 @@ from sympy.core.function import AppliedUndef
 from jaxfun.coordinates import get_system
 from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.forms import get_basisfunctions
-from jaxfun.galerkin.inner import BoundaryForcing, project
+from jaxfun.galerkin.inner import BoundaryForcing, SourceForcing, project
 from jaxfun.la import BaseMatrix, IdentityMatrix, ZeroMatrix
 from jaxfun.sharding import pin_state, replicate, replicate_scalar
 from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
@@ -28,6 +28,7 @@ from jaxfun.utils import (
 from jaxfun.utils.operator_tools import (
     assemble_boundary_term,
     assemble_linear_term,
+    assemble_source_term,
 )
 from jaxfun.utils.sympy_factoring import time_derivative_as_operator
 
@@ -42,6 +43,7 @@ from ._utils import (
     physical_shape,
     solve_with_options,
     split_couplings,
+    split_transient_terms,
     validate_solver_options,
     warm_operator_solve_cache,
 )
@@ -482,12 +484,30 @@ class BaseIntegrator(TimeStepper[Array]):
                 self.mass_operator, self._state_shape, self._solver_options
             )
 
+        # The time-dependent terms are lifted out before assembly rather than
+        # taught to `inner`: `_linear_form_scale` coerces a term's coefficient
+        # with `float()`, which is what makes a moving source raise there today.
+        # Splitting additively is exact -- the two halves assemble to the same
+        # operator and the same steady forcing as the whole expression would,
+        # because `inner`'s sign flip and `split_operator_and_forcing`'s undo of
+        # it cancel within each half.
+        steady_expr, source_expr = split_transient_terms(
+            self.linear_expr, self.trialspace.system.base_time()
+        )
         linear_operator, linear_forcing = assemble_linear_term(
-            self.linear_expr, sparse=self.sparse, sparse_tol=self.sparse_tol
+            steady_expr, sparse=self.sparse, sparse_tol=self.sparse_tol
         )
         if linear_operator is None:
             linear_operator = ZeroMatrix(self._state_shape)
         self.linear_operator: BaseMatrix = nnx.data(linear_operator)
+
+        self._source: SourceForcing | None = nnx.data(assemble_source_term(source_expr))
+        self._transient_source = nnx.static(self._source is not None)
+        if self._transient_source and not self.supports_transient_forcing:
+            raise NotImplementedError(
+                f"{type(self).__name__} does not support time-dependent source "
+                "terms. Use IMEXRungeKutta, BackwardEuler or RK4."
+            )
 
         # Boundary blocks, kept uncontracted so they can be re-evaluated as the
         # lifting moves. `inner` has already folded the boundary contribution
@@ -498,7 +518,7 @@ class BaseIntegrator(TimeStepper[Array]):
         self._mass_boundary: BoundaryForcing | None = nnx.data(None)
         self._linear_boundary: BoundaryForcing | None = nnx.data(None)
         if self._transient_boundary:
-            if not self.supports_transient_boundary:
+            if not self.supports_transient_forcing:
                 raise NotImplementedError(
                     f"{type(self).__name__} does not support time-dependent "
                     "boundary data. Use IMEXRungeKutta or BackwardEuler."
@@ -534,8 +554,24 @@ class BaseIntegrator(TimeStepper[Array]):
         if self.has_nonlinear:
             self._setup_nonlinear_evaluator(trial)
 
-    supports_transient_boundary: bool = True
-    """Whether this stepper can carry boundary data that varies in time."""
+    supports_transient_forcing: bool = True
+    """Whether this stepper can carry a right-hand side that varies in time.
+
+    Covers both kinds: boundary data that moves, and source terms that do. A
+    scheme that folds the forcing into precomputed weights is valid only for a
+    forcing that stays put, and cannot tell the two apart.
+    """
+
+    @property
+    def _transient_forcing(self) -> bool:
+        """Whether anything on the right-hand side moves.
+
+        Distinct from `_transient_boundary`, which answers the narrower question
+        of whether this equation's *own* trial space lifts moving boundary data.
+        That one also decides whether the initial condition has a lifting to
+        project out, so it must keep its narrow meaning.
+        """
+        return bool(self._transient_boundary or self._transient_source)
 
     def _has_transient_boundary(self) -> bool:
         """Return True if any of the trial space's boundary values varies in time."""
@@ -752,16 +788,27 @@ class BaseIntegrator(TimeStepper[Array]):
         # is then exactly zero -- and still is here, the rate coming from
         # differentiating the boundary values symbolically.
         #
+        # A moving source joins them on the same footing: `inner` cannot
+        # assemble it at all (its coefficient is not a number), so it was lifted
+        # out of `linear_expr` at construction and is evaluated here instead.
+        #
         # Built from whichever blocks exist rather than gated on the linear one:
         # they are independent. An equation with no linear spatial term at all --
         # a purely nonlinear right-hand side, or none -- has no `a(v, B(t))` to
         # assemble but still owes `-<v, dB/dt>`, and treating the linear block as
         # the gate silently dropped it.
-        if self._linear_boundary is None and self._mass_boundary is None:
+        if (
+            self._linear_boundary is None
+            and self._mass_boundary is None
+            and self._source is None
+        ):
             return self.linear_forcing
         total: Array | None = None
+        if self._source is not None:
+            total = self._source(t)
         if self._linear_boundary is not None:
-            total = self._linear_boundary(t)
+            block = self._linear_boundary(t)
+            total = block if total is None else total + block
         if self._mass_boundary is not None:
             rate = self._mass_boundary.rate(t)
             total = -rate if total is None else total - rate

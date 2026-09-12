@@ -375,6 +375,17 @@ def compile_field_evaluator(
             f"{nonlinear_expr}. This usually means a coupled field was not "
             "declared through `explicit_trials`."
         )
+    # `compile_nonlinear_evaluator` lambdifies against the base scalars only, so
+    # a stray time symbol would survive as a free name and surface as a
+    # `NameError` from inside a traced evaluator, thousands of lines from the
+    # cause. Refuse it where it can still be pointed at.
+    time = functionspace.system.base_time()
+    if nonlinear_expr.has(time):
+        raise NotImplementedError(
+            f"Nonlinear term depends on {time}: {nonlinear_expr}. Time-dependent "
+            "data is supported in linear source terms and boundary values, not "
+            "in terms evaluated pointwise in physical space."
+        )
     evaluator = compile_nonlinear_evaluator(
         nonlinear_expr,
         functionspace,

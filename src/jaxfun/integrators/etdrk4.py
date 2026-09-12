@@ -74,7 +74,7 @@ def _phi_matrices(z: Array) -> tuple[Array, Array, Array]:
 class ETDRK4(BaseIntegrator):
     """Fourth-order exponential time differencing for semilinear systems."""
 
-    supports_transient_boundary = False
+    supports_transient_forcing = False
 
     def __init__(
         self,

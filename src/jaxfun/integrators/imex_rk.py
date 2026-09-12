@@ -58,7 +58,7 @@ class IMEXRungeKutta(BaseIntegrator):
         """
         # The stage values are computed up front because the forcing does not
         # depend on the state, so none of them has to wait for a solve.
-        if not self._transient_boundary:
+        if not self._transient_forcing:
             forcing = self.linear_forcing
             return (jnp.asarray(forcing) if forcing is not None else None), None
         c_i = self.tableau.implicit.c

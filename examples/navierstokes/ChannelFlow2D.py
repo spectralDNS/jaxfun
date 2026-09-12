@@ -808,6 +808,7 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         state: tuple[Array, ...],
         dt: float,
         N: ScalarPadding = None,
+        t: Array | float = 0.0,
         /,
     ) -> tuple[Array, ...]:
         """Advance one IMEX Runge-Kutta step.
@@ -873,10 +874,19 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         matrix values, and inside the jitted step those are tracers.
         """
         for g in self.integrators:
+            # `_step_impl` passes each sub-integrator its `linear_forcing`, not
+            # `forcing_at(t)`, so a moving wall would not merely freeze -- the
+            # boundary contribution is subtracted out of `linear_forcing` on the
+            # transient path and would be dropped entirely. Refuse it here.
+            if g._transient_boundary:  # noqa: SLF001
+                raise NotImplementedError(
+                    "KMM2D does not support time-dependent boundary data; the "
+                    "channel walls must be steady."
+                )
             g.setup(dt)
         self.A_pin.solve(jnp.zeros(self.VD.num_dofs, dtype=complex))
 
-    def initial_coefficients(self, initial=None) -> tuple[Array, ...]:
+    def initial_coefficients(self, initial=None, t=None) -> tuple[Array, ...]:
         """Return the state at rest, plus whatever the subclass contributes."""
         if initial is not None:
             return self._coerce_state(initial)
@@ -885,7 +895,7 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
             jnp.zeros(self.D1.num_dofs),
         ) + self.scalar_initial()
 
-    def _coerce_state(self, state0) -> tuple[Array, ...]:
+    def _coerce_state(self, state0, t=None) -> tuple[Array, ...]:
         """Coerce a restart state into one coefficient array per field."""
         v_hat, u0, *scalars = state0
         return (

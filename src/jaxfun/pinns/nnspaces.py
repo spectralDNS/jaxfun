@@ -8,11 +8,7 @@ import sympy as sp
 from flax import nnx
 
 from jaxfun.basespace import BaseSpace
-from jaxfun.coordinates import (
-    BaseScalar,
-    BaseTime,
-    CoordSys,
-)
+from jaxfun.coordinates import BaseScalar, BaseTime, CoordSys, R
 from jaxfun.galerkin import Chebyshev
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.typing import Activation, RankTag
@@ -53,8 +49,6 @@ class NNSpace(BaseSpace):
         leaf: CartesianNNSpace | None = None,
     ) -> None:
         """Initialize a neural network function space."""
-        from jaxfun.coordinates import CartCoordSys, x, y, z
-
         rank_tag = RankTag(rank) if isinstance(rank, int) else rank
         self.in_size = dims + int(transient)
         self.out_size: int = int(dims**rank_tag.value)
@@ -63,11 +57,7 @@ class NNSpace(BaseSpace):
         self.is_transient = transient
         self.global_index: int = 0
         self.leaf = leaf
-        system = (
-            CartCoordSys("N", {1: (x,), 2: (x, y), 3: (x, y, z)}[dims])
-            if system is None
-            else system
-        )
+        system = R(dims) if system is None else system
         BaseSpace.__init__(self, system, name)
 
     def base_variables(self) -> tuple[BaseScalar | BaseTime, ...] | sp.Tuple:

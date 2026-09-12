@@ -1,5 +1,5 @@
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass, replace
 from typing import Literal, TypeGuard, cast, overload
 
 import jax
@@ -73,6 +73,56 @@ type _LinearFactor = Array | tuple[Array, ...]
 
 
 @dataclass(frozen=True)
+class _BoundarySpec:
+    """Everything about a boundary block except the operator itself.
+
+    Kept apart because this half is static -- read as Python values, hashed and
+    compared when a jit cache is consulted -- while the operator is an array and
+    must travel as data. A frozen dataclass holding an array compares elementwise
+    and raises when JAX checks two treedefs for equality.
+    """
+
+    kind: Literal["1d", "separable", "multivar"]
+    space: DirectSumTPS | BCGeneric
+    key: tuple[OrthogonalSpace, ...] | None
+    sign: int
+    global_index: int
+
+    def contract(self, op: object, lifting: Array) -> Array:
+        if self.kind == "1d":
+            return _contract_1d(cast(Matrix | DiaMatrix, op), self.sign, lifting)
+        if self.kind == "multivar":
+            return _contract_multivar(cast(Array, op), self.sign, lifting)
+        return _contract_separable(list(cast(tuple, op)), self.sign, lifting)
+
+
+@dataclass(frozen=True)
+class _BoundaryBlock:
+    """One assembled boundary block, kept apart from its lifting.
+
+    `op` maps lifting coefficients to a test-space load vector, and is fixed:
+    the boundary basis functions do not move, so only the coefficients they are
+    contracted with can vary. `space`/`key` say where those coefficients live --
+    a `DirectSumTPS` and one of its `bndvals` keys, or, in one dimension, the
+    `BCGeneric` whose ordered values *are* the coefficients.
+    """
+
+    kind: Literal["1d", "separable", "multivar"]
+    op: object
+    space: DirectSumTPS | BCGeneric
+    key: tuple[OrthogonalSpace, ...] | None
+    sign: int
+    global_index: int
+
+    @property
+    def spec(self) -> _BoundarySpec:
+        """The block without its operator, safe to keep as pytree metadata."""
+        return _BoundarySpec(
+            self.kind, self.space, self.key, self.sign, self.global_index
+        )
+
+
+@dataclass(frozen=True)
 class _InnerContext:
     test_space: ComputationalSpaceType
     trial_space: TrialSpaceType | None
@@ -80,6 +130,9 @@ class _InnerContext:
     b_forms: list[InnerResultDict]
     num_quad_points: _NumQuadPoints
     all_linear: bool
+    # When set, the boundary blocks of every bilinear form are recorded here
+    # instead of being contracted into a load vector. See `inner_boundary`.
+    boundary_blocks: list[_BoundaryBlock] | None = None
 
 
 @overload
@@ -228,6 +281,131 @@ def _validate_inner_kind(
     return result
 
 
+class BoundaryForcing(nnx.Module):
+    """The boundary contribution to a weak form, as a function of time.
+
+    Calling it returns the load vector at a given time; `rate` returns its time
+    derivative. Both are traceable in `t`.
+    """
+
+    def __init__(
+        self,
+        blocks: Sequence[_BoundaryBlock],
+        rank: RankTag,
+        outer_sign: int = 1,
+    ) -> None:
+        # Operators are data -- they cross `_advance`'s jit boundary as traced
+        # arguments, like the stage operators do. Everything read as a Python
+        # value stays static.
+        self._ops = nnx.data(tuple(b.op for b in blocks))
+        self._specs = nnx.static(tuple(b.spec for b in blocks))
+        self._rank = nnx.static(rank)
+        # `split_operator_and_forcing` flips the sign of everything `inner`
+        # moved to the other side of the equation, so that an assembled term
+        # always reads `operator @ u + forcing`. A caller working in that
+        # convention asks for the same flip here; the default reproduces what
+        # `inner` itself returned.
+        self._outer_sign = nnx.static(outer_sign)
+
+    @property
+    def is_transient(self) -> bool:
+        """Return True if any contributing boundary value varies in time."""
+        return any(_block_is_transient(b) for b in self._specs)
+
+    def __call__(self, t: float | Array | None = None) -> Array:
+        """Return the boundary load vector at time `t`."""
+        return self._evaluate(t, rate=False)
+
+    def rate(self, t: float | Array | None = None) -> Array:
+        """Return d/dt of the boundary load vector at time `t`."""
+        return self._evaluate(t, rate=True)
+
+    def _evaluate(self, t: float | Array | None, rate: bool) -> Array:
+        if self._rank != RankTag.SCALAR:
+            raise NotImplementedError(
+                "Deferred boundary forcing is implemented for scalar equations; "
+                "assemble each component of a block system separately."
+            )
+        # One lifting evaluation per space, however many blocks read it.
+        liftings: dict[int, Array | dict] = {}
+        total: Array | None = None
+        for spec, op in zip(self._specs, self._ops, strict=True):
+            holder = id(spec.space)
+            if holder not in liftings:
+                liftings[holder] = _lifting_of(spec.space, t, rate)
+            values = liftings[holder]
+            # A key of `None` is the one-dimensional case, where the lifting is
+            # one flat vector rather than one block per tensor subspace.
+            fun = (
+                cast(Array, values)
+                if spec.key is None
+                else cast(dict, values)[spec.key]
+            )
+            term = spec.contract(op, fun)
+            total = term if total is None else total + term
+        assert total is not None
+        return self._outer_sign * total
+
+
+def _lifting_of(
+    space: DirectSumTPS | BCGeneric, t: float | Array | None, rate: bool
+) -> Array | dict:
+    """Return a space's lifting coefficients, or their time derivative.
+
+    One dimension keeps its coefficients as a flat ordered vector on the
+    `BCGeneric`; higher dimensions keep one block per tensor subspace.
+
+    `t=None` means *the lifting `inner` collapsed against* -- the space's cached
+    `bndvals`, or its one-dimensional equivalent. That is what makes
+    `BoundaryForcing()` reproduce the vector `inner` folded into the forcing,
+    which is in turn what lets a caller subtract the frozen copy back out and
+    put a live one in its place.
+    """
+    if isinstance(space, BCGeneric):
+        if rate:
+            return space.bnd_vals_rate(t)
+        return _frozen_bnd_vals(space) if t is None else space.bnd_vals(t)
+    if rate:
+        return space.lifting.rate(t)
+    return space.bndvals if t is None else space.lifting(t)
+
+
+def _block_is_transient(block: _BoundarySpec) -> bool:
+    space = block.space
+    if isinstance(space, BCGeneric):
+        return space.bcs.has_time(space.system.base_time())
+    return space.lifting.is_transient
+
+
+def inner_boundary(
+    expr: sp.Expr,
+    num_quad_points: int | tuple[int | None, ...] | None = None,
+    use_precomputed_matrices: bool = True,
+    outer_sign: int = 1,
+) -> BoundaryForcing | None:
+    """Assemble only the boundary blocks of `expr`, without contracting them.
+
+    The counterpart to `inner` for a lifting that moves: `inner` returns the
+    same terms already collapsed against the space's current `bndvals`.
+
+    Returns:
+        A `BoundaryForcing`, or None when the form has no inhomogeneous
+        boundary contribution.
+    """
+    # Runs the same assembly `inner` does, through the same context, so the
+    # operators are the ones `inner` would have used -- there is one definition
+    # of each contraction and both paths call it.
+    context = _prepare_inner_context(expr, num_quad_points)
+    blocks: list[_BoundaryBlock] = []
+    context = replace(context, boundary_blocks=blocks)
+    _assemble_inner_items(context, use_precomputed_matrices)
+    if not blocks:
+        return None
+    test_leaf = context.test_space.leaf
+    rank = RankTag.SCALAR if test_leaf is None else test_leaf.rank
+    return BoundaryForcing(blocks, rank, outer_sign)
+
+
 def inner_items(
     expr: sp.Expr,
     num_quad_points: int | tuple[int | None, ...] | None = None,
@@ -322,6 +500,40 @@ def _linear_sign(all_linear: bool) -> int:
     return 1 if all_linear else -1
 
 
+# The boundary block of a bilinear form contracts an assembled operator with the
+# lifting coefficients. Shared by the collapsed path below, which does it at
+# assembly time, and by `inner_boundary`, which keeps the operator so that a
+# lifting that moves in time can be contracted again at every step. One
+# definition, so the two cannot produce different numbers.
+
+
+def _frozen_bnd_vals(uf: BCGeneric) -> Array:
+    """Return the one-dimensional lifting as `inner` collapses it.
+
+    The counterpart of reading `DirectSumTPS.bndvals`, which likewise holds the
+    lifting as it stood when the space was built. Boundary data that varies in
+    time is therefore frozen at zero here, exactly as it is there -- a caller
+    who needs it to move wants `inner_boundary`, which keeps the block
+    uncontracted.
+    """
+    time = uf.system.base_time()
+    return uf.bnd_vals(0.0 if uf.bcs.has_time(time) else None)
+
+
+def _contract_1d(z: Matrix | DiaMatrix, sign: int, fun: Array) -> Array:
+    return sign * (z @ jnp.asarray(fun, dtype=z.dtype))
+
+
+def _contract_multivar(Am: Array, sign: int, fun: Array) -> Array:
+    return sign * jnp.einsum("ikjl,kl->ij", Am, fun)
+
+
+def _contract_separable(
+    mats_: list[Matrix | DiaMatrix], sign: int, fun: Array
+) -> Array:
+    return TPMatrix(mats_, sign) @ fun
+
+
 def _quad_points_for_space(
     num_quad_points: _NumQuadPoints,
     space: OrthogonalSpace,
@@ -392,9 +604,13 @@ def _assemble_bilinear_form(
             continue
         if isinstance(uf, BCGeneric) and context.test_space.dims == 1:
             sign = _linear_sign(context.all_linear)
+            if context.boundary_blocks is not None:
+                context.boundary_blocks.append(
+                    _BoundaryBlock("1d", z, uf, None, sign, global_indices[0])
+                )
+                continue
             bresult = GlobalArray(
-                global_indices[0],
-                sign * (z @ jnp.array(uf.bcs.orderedvals(), dtype=z.dtype)),
+                global_indices[0], _contract_1d(z, sign, _frozen_bnd_vals(uf))
             )
             continue
         if "linear" in coeffs and context.test_space.dims == 1:
@@ -431,18 +647,28 @@ def _assemble_bilinear_form(
     return aresult, bresult
 
 
+def _multivar_boundary_source(
+    trial_space: TrialSpaceType | None,
+    trial: list[OrthogonalSpace],
+    gi: list[tuple[int, int]],
+) -> tuple[DirectSumTPS, tuple[OrthogonalSpace, ...]]:
+    """Return the space holding this boundary block's lifting, and its key."""
+    assert isinstance(trial_space, DirectSumTPS | CartesianTensorProductSpace)
+    if isinstance(trial_space, DirectSumTPS):
+        return trial_space, tuple(trial)
+    assert isinstance(trial_space, CartesianTensorProductSpace)
+    dsspace = trial_space.flatten()[gi[1][1]]
+    assert isinstance(dsspace, DirectSumTPS)
+    return dsspace, tuple(trial)
+
+
 def _multivar_boundary_values(
     trial_space: TrialSpaceType | None,
     trial: list[OrthogonalSpace],
     gi: list[tuple[int, int]],
 ) -> Array:
-    assert isinstance(trial_space, DirectSumTPS | CartesianTensorProductSpace)
-    if isinstance(trial_space, DirectSumTPS):
-        return trial_space.bndvals[tuple(trial)]
-    assert isinstance(trial_space, CartesianTensorProductSpace)
-    dsspace = trial_space.flatten()[gi[1][1]]
-    assert isinstance(dsspace, DirectSumTPS)
-    return dsspace.bndvals[tuple(trial)]
+    space, key = _multivar_boundary_source(trial_space, trial, gi)
+    return space.bndvals[key]
 
 
 def _assemble_multivar_bilinear_form(
@@ -474,8 +700,13 @@ def _assemble_multivar_bilinear_form(
     Am = assemble_multivar(mats_, scales, context.test_space)
     if has_bcs:
         sign = _linear_sign(context.all_linear)
-        fun = _multivar_boundary_values(context.trial_space, trial, gi)
-        res = sign * jnp.einsum("ikjl,kl->ij", Am, fun)
+        space, key = _multivar_boundary_source(context.trial_space, trial, gi)
+        if context.boundary_blocks is not None:
+            context.boundary_blocks.append(
+                _BoundaryBlock("multivar", Am, space, key, sign, gi[0][0])
+            )
+            return aresult, bresult
+        res = _contract_multivar(Am, sign, space.bndvals[key])
         bresult = GlobalArray(gi[0][0], res)
 
     else:
@@ -493,19 +724,20 @@ def _assemble_multivar_bilinear_form(
     return aresult, bresult
 
 
-def _separable_boundary_values(
+def _separable_boundary_source(
     trial_space: TrialSpaceType | None,
     coeffs: CoeffDict,
     trial: list[OrthogonalSpace],
     gi: list[tuple[int, int]],
-) -> Array:
+) -> tuple[DirectSumTPS, tuple[OrthogonalSpace, ...]]:
+    """Return the space holding this boundary block's lifting, and its key."""
     if trial_space is not None:
         if isinstance(trial_space, DirectSumTPS):
-            return trial_space.bndvals[tuple(trial)]
+            return trial_space, tuple(trial)
         if isinstance(trial_space, CartesianTensorProductSpace):
             dsspace = trial_space.flatten()[gi[1][1]]
             assert isinstance(dsspace, DirectSumTPS)
-            return dsspace.bndvals[tuple(trial)]
+            return dsspace, tuple(trial)
         raise NotImplementedError(
             "BCs only implemented for TensorProductSpace"
             " and CartesianTensorProductSpace"
@@ -514,10 +746,20 @@ def _separable_boundary_values(
     jfs = coeffs["linear"]["jaxcoeff"].functionspace
     assert isinstance(jfs, DirectSumTPS | CartesianTensorProductSpace)
     if isinstance(jfs, DirectSumTPS):
-        return jfs.bndvals[tuple(trial)]
+        return jfs, tuple(trial)
     dsspace = jfs.flatten()[gi[1][1]]
     assert isinstance(dsspace, DirectSumTPS)
-    return dsspace.bndvals[tuple(trial)]
+    return dsspace, tuple(trial)
+
+
+def _separable_boundary_values(
+    trial_space: TrialSpaceType | None,
+    coeffs: CoeffDict,
+    trial: list[OrthogonalSpace],
+    gi: list[tuple[int, int]],
+) -> Array:
+    space, key = _separable_boundary_source(trial_space, coeffs, trial, gi)
+    return space.bndvals[key]
 
 
 def _assemble_separable_bilinear_form(
@@ -534,9 +776,14 @@ def _assemble_separable_bilinear_form(
 
     assert isinstance(context.test_space, TensorProductSpace | VectorTensorProductSpace)
     if has_bcs:
-        fun = _separable_boundary_values(context.trial_space, coeffs, trial, gi)
+        space, key = _separable_boundary_source(context.trial_space, coeffs, trial, gi)
         sign = _linear_sign(context.all_linear)
-        res = TPMatrix(mats_, sign) @ fun
+        if context.boundary_blocks is not None:
+            context.boundary_blocks.append(
+                _BoundaryBlock("separable", tuple(mats_), space, key, sign, gi[0][0])
+            )
+            return aresult, bresult
+        res = _contract_separable(mats_, sign, space.bndvals[key])
         bresult = GlobalArray(gi[0][0], res)
 
     else:
@@ -1029,20 +1276,46 @@ def assemble_multivar(
     return a
 
 
-def project1D(ue: sp.Expr, V: OrthogonalSpace | Composite | DirectSum) -> Array:
+@overload
+def _forward_at(V: ScalarSpaceType, uj: Array, t: float | Array | None) -> Array: ...
+@overload
+def _forward_at(
+    V: FunctionSpaceType, uj: Array, t: float | Array | None
+) -> Array | tuple[Array, ...]: ...
+def _forward_at(
+    V: FunctionSpaceType, uj: Array, t: float | Array | None
+) -> Array | tuple[Array, ...]:
+    """Forward transform, carrying `t` only to a space that lifts boundary data."""
+    if t is None or not isinstance(V, DirectSum | DirectSumTPS):
+        return V.forward(uj)
+    return V.forward(uj, t=t)
+
+
+def project1D(
+    ue: sp.Expr,
+    V: OrthogonalSpace | Composite | DirectSum,
+    t: float | Array | None = None,
+) -> Array:
     """Project scalar expression ue onto 1D space V.
 
     Args:
         ue: SymPy expression in physical coordinate.
         V: Orthogonal / Composite / DirectSum space.
+        t: Time at which to evaluate `ue` and, when `V` is a direct sum, its own
+            boundary lifting. `None` means neither depends on time.
 
     Returns:
         Coefficient vector uh.
     """
     if len(get_jaxfunctions(ue)) == 0:
-        uj = lambdify(V.system.base_scalars(), ue)(V.mesh())
+        args = V.system.base_scalars()
+        mesh = (V.mesh(),)
+        if t is not None:
+            args = (V.system.base_time(), *args)
+            mesh = (t, *mesh)
+        uj = lambdify(args, ue)(*mesh)
         uj = jnp.broadcast_to(uj, V.num_quad_points)
-        return V.forward(uj)
+        return _forward_at(V, uj, t)
 
     u = TrialFunction(V)
     v = TestFunction(V)
@@ -1052,19 +1325,34 @@ def project1D(ue: sp.Expr, V: OrthogonalSpace | Composite | DirectSum) -> Array:
 
 
 @overload
-def project(ue: sp.Tuple, V: CartesianProductSpace) -> tuple[Array, ...]: ...
-@overload
 def project(
-    ue: sp.Expr | sp.Tuple, V: CartesianTensorProductSpace
+    ue: sp.Tuple,
+    V: CartesianProductSpace,
+    t: float | Array | None = None,
 ) -> tuple[Array, ...]: ...
 @overload
-def project(ue: sp.Expr, V: ScalarSpaceType) -> Array: ...
-def project(ue: sp.Expr | sp.Tuple, V: FunctionSpaceType) -> Array | tuple[Array, ...]:
+def project(
+    ue: sp.Expr | sp.Tuple,
+    V: CartesianTensorProductSpace,
+    t: float | Array | None = None,
+) -> tuple[Array, ...]: ...
+@overload
+def project(
+    ue: sp.Expr, V: ScalarSpaceType, t: float | Array | None = None
+) -> Array: ...
+def project(
+    ue: sp.Expr | sp.Tuple,
+    V: FunctionSpaceType,
+    t: float | Array | None = None,
+) -> Array | tuple[Array, ...]:
     """Project expression onto (possibly tensor) space V.
 
     Args:
         ue: SymPy expression.
         V: Function space (may be tensor product/direct sum).
+        t: Time at which to evaluate `ue` and, when `V` lifts boundary data, its
+            own lifting. `None` means neither depends on time. Only supported
+            for scalar spaces, which is all the boundary lifting needs.
 
     Returns:
         Coefficient array shaped to V.num_dofs.
@@ -1081,15 +1369,21 @@ def project(ue: sp.Expr | sp.Tuple, V: FunctionSpaceType) -> Array | tuple[Array
             )
         assert isinstance(V, OrthogonalSpace | DirectSum)
         assert isinstance(ue, sp.Expr)
-        return project1D(ue, V)
+        return project1D(ue, V, t)
 
     if len(get_jaxfunctions(ue if isinstance(ue, sp.Expr) else sum(ue))) == 0:
         assert not isinstance(V, OrthogonalSpace | DirectSum | CartesianProductSpace)
         if V.rank == RankTag.SCALAR:
             assert isinstance(ue, sp.Expr)
-            uj = lambdify(V.system.base_scalars(), ue)(*V.mesh())
+            args = V.system.base_scalars()
+            mesh = V.mesh()
+            if t is not None:
+                args = (V.system.base_time(), *args)
+                mesh = (t, *mesh)
+            uj = lambdify(args, ue)(*mesh)
             uj = jnp.broadcast_to(uj, V.num_quad_points)
         else:
+            assert t is None, "`t` is only supported for scalar spaces"
             s = V.system.base_scalars()
             bv = V.system.base_vectors()
             if V.rank == RankTag.VECTOR:  # VectorTensorProductSpace
@@ -1100,7 +1394,7 @@ def project(ue: sp.Expr | sp.Tuple, V: FunctionSpaceType) -> Array | tuple[Array
                 assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
                 uj = (lambdify(s, (uei).doit())(*V.mesh()) for uei in ue)
             uj = jnp.stack([jnp.broadcast_to(ui, V.num_quad_points) for ui in uj])
-        return V.forward(place(uj, V._physical_sharding))
+        return _forward_at(V, place(uj, V._physical_sharding), t)
 
     u = TrialFunction(V)
     v = TestFunction(V)

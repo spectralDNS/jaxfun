@@ -1,4 +1,4 @@
-# Solve Poisson's equation in polar coordinates on parts of an annulus
+# Solve Poisson's equation in parabolic coordinates
 import os
 import sys
 

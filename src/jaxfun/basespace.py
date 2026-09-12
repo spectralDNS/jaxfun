@@ -1,6 +1,6 @@
 import sympy as sp
 
-from jaxfun.coordinates import CartCoordSys, CoordSys, x
+from jaxfun.coordinates import CoordSys, R
 
 n = sp.Symbol("n", integer=True, positive=True)  # index
 
@@ -36,7 +36,7 @@ class BaseSpace:
     ) -> None:
         self.name = name
         self.fun_str = fun_str
-        self.system: CoordSys = CartCoordSys("N", (x,)) if system is None else system
+        self.system: CoordSys = R(1) if system is None else system
 
     def clear_static_cache(self) -> None:
         """Drop everything memoized by `cache_static` on this space."""

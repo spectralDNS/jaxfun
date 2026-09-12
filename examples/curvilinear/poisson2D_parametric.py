@@ -46,8 +46,11 @@ C = get_CoordSys(
     # replace=((x0, 0), (y0, 0), (x1, 4), (y1, 0), (x2, 3), (y2, 2), (x3, 0), (y3, 3))
 )
 
-M = 20
+# Method of manufactured solution
+xi, eta = C.base_scalars()
 ue = (1 + xi**2) * (1 + eta**2)
+
+M = 20
 bcsx = {"left": {"D": ue.subs(xi, -1)}, "right": {"D": ue.subs(xi, 1)}}
 bcsy = {"left": {"D": ue.subs(eta, -1)}, "right": {"D": ue.subs(eta, 1)}}
 D0 = FunctionSpace(M, Chebyshev, bcsx, name="D0", fun_str="phi")
@@ -56,10 +59,6 @@ T = TensorProduct(D0, D1, system=C, name="T")
 
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
-
-# Method of manufactured solution
-xi, eta = T.system.base_scalars()
-ue = T.system.expr_psi_to_base_scalar(ue)
 
 # A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=False)
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")

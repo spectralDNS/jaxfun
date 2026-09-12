@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from scipy.fft import dct as scipy_dct, dst as scipy_dst, idct as scipy_idct
 
-from jaxfun.coordinates import CartCoordSys, x, y
+from jaxfun.coordinates import R
 from jaxfun.galerkin import FunctionSpace
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.la import DiaMatrix
@@ -172,9 +172,9 @@ def test_Domain_namedtuple() -> None:
 
 
 def test_lambdify_basic() -> None:
+    R2 = R(2)
+    x, y = R2.base_scalars()
     expr = x**2 + y**2
-    N = CartCoordSys("N", (x, y))
-    expr = N.expr_psi_to_base_scalar(expr)
     f = common.lambdify((x, y), expr)
     result = f(jnp.array([1.0, 2.0]), jnp.array([1.0, 2.0]))
     np.testing.assert_allclose(result, jnp.array([2.0, 8.0]))

@@ -23,12 +23,13 @@ from jaxfun.coordinates import get_system
 from jaxfun.galerkin import TensorProductSpace, TrialFunction
 from jaxfun.galerkin.arguments import JAXFunction
 from jaxfun.galerkin.forms import get_basisfunctions
+from jaxfun.galerkin.inner import BoundaryForcing
 from jaxfun.la import BaseMatrix
 from jaxfun.la.matrixprotocol import SolverNotApplicable
 from jaxfun.sharding import replicate
 from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
 from jaxfun.utils import get_time_independent, split_time_derivative_terms
-from jaxfun.utils.operator_tools import assemble_linear_term
+from jaxfun.utils.operator_tools import assemble_boundary_term, assemble_linear_term
 
 type SolverOptions = tuple[tuple[str, Any], ...]
 
@@ -151,8 +152,8 @@ def warm_operator_solve_cache(
         return
 
 
-type FieldCoupling = tuple[int, BaseMatrix, Array | None]
-type CoupledOperator = tuple[BaseMatrix, Array | None]
+type FieldCoupling = tuple[int, BaseMatrix, Array | None, BoundaryForcing | None]
+type CoupledOperator = tuple[BaseMatrix, Array | None, BoundaryForcing | None]
 
 
 def assemble_field_couplings(
@@ -163,12 +164,18 @@ def assemble_field_couplings(
     sparse: bool,
     sparse_tol: int,
 ) -> tuple[FieldCoupling, ...]:
-    """Assemble linear couplings into `(field slot, operator, forcing)` triples.
+    """Assemble linear couplings into `(field slot, operator, forcing, boundary)`.
 
     Each expression is bilinear in the test function and one foreign field, so
     `inner` assembles it as an operator between the two spaces -- rectangular
     when they differ in size. Applying that is what replaces evaluating the term
     pointwise on the padded mesh.
+
+    The foreign field carries its own boundary lifting, and that lifting may move
+    even when the coupled equation's own space has no boundary conditions at all.
+    `inner` would collapse it against the space's frozen `bndvals`, so it is kept
+    deferred here and evaluated at the stage time instead; see
+    `apply_field_couplings`.
     """
     if not coupling_exprs:
         return ()
@@ -184,15 +191,26 @@ def assemble_field_couplings(
         )
         if operator is None:  # pragma: no cover - a coupling always assembles one
             raise ValueError(f"Coupling term in {field} assembled no operator: {expr}")
+        # The frozen copy `inner` folded in comes back out, exactly as
+        # `BaseIntegrator.__init__` does for its own boundary blocks: both sides
+        # go through the same contraction, so what is removed is what was added.
+        # A coupling's only linear contribution *is* the lifting, so this leaves
+        # zero -- written as a subtraction rather than asserted, because that is
+        # what makes it true rather than merely observed.
+        boundary = assemble_boundary_term(expr)
+        if boundary is not None and forcing is not None:
+            forcing = forcing - boundary()
         # Replicated for the same reason as `BaseIntegrator.linear_forcing`.
-        out.append((field_order.index(node_for(field)), operator, replicate(forcing)))
+        out.append(
+            (field_order.index(node_for(field)), operator, replicate(forcing), boundary)
+        )
     return tuple(out)
 
 
 def split_couplings(
     couplings: Sequence[FieldCoupling],
 ) -> tuple[tuple[int, ...], tuple[CoupledOperator, ...]]:
-    """Split assembled triples into slots and `(operator, forcing)` pairs.
+    """Split assembled tuples into slots and `(operator, forcing, boundary)`.
 
     The slot indexes the state tuple, so it has to survive as a Python int. The
     integrator reaches `_advance` as a traced pytree, and everything stored under
@@ -200,8 +218,11 @@ def split_couplings(
     slots in a separate `nnx.static` attribute is what leaves them concrete.
     """
     return (
-        tuple(slot for slot, _, _ in couplings),
-        tuple((operator, forcing) for _, operator, forcing in couplings),
+        tuple(slot for slot, _, _, _ in couplings),
+        tuple(
+            (operator, forcing, boundary)
+            for _, operator, forcing, boundary in couplings
+        ),
     )
 
 
@@ -209,13 +230,23 @@ def apply_field_couplings(
     slots: Sequence[int],
     couplings: Sequence[CoupledOperator],
     uh: IntegratorState,
+    t: Array | float | None = None,
 ) -> Array | None:
-    """Sum every coupling operator applied to its field; None when there are none."""
+    """Sum every coupling operator applied to its field; None when there are none.
+
+    `t` is the time the foreign field's coefficients belong to -- the stage time,
+    not the step's -- because the deferred boundary block has to be read at the
+    same instant the homogeneous part it completes was solved at. `None` means
+    the lifting `inner` collapsed against, which is what a steady coupling wants
+    and what reproduces the assembled array exactly.
+    """
     total: Array | None = None
-    for slot, (operator, forcing) in zip(slots, couplings, strict=True):
+    for slot, (operator, forcing, boundary) in zip(slots, couplings, strict=True):
         term = operator @ cast(tuple[Array, ...], uh)[slot]
         if forcing is not None:
             term = term + jnp.asarray(forcing)
+        if boundary is not None:
+            term = term + boundary(t)
         total = term if total is None else total + term
     return total
 

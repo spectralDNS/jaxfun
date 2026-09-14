@@ -16,6 +16,7 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
+from jaxfun.coordinates import R
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev as Cheb
 from jaxfun.galerkin.Fourier import Fourier as FourierSpace
@@ -27,8 +28,6 @@ from jaxfun.operators import Constant, Div, Grad
 from jaxfun.utils.common import lambdify, n
 
 pytestmark = pytest.mark.integration
-
-xs, ys, ts = sp.symbols("x,y,t", real=True)
 
 
 def _rel_error(got, expected) -> float:
@@ -46,16 +45,16 @@ def test_imex_rk_1d_inhomogeneous_dirichlet() -> None:
     T = 0.5
     steps = 50
     dt = T / steps
+    R1 = R(1)
+    x, t = R1.x, R1.base_time()
 
-    steady = (1 + xs) / 2
-    ue = steady + sp.cos(sp.pi * xs / 2) * sp.exp(-nu_val * sp.pi**2 * ts / 4)
+    steady = (1 + x) / 2
+    ue = steady + sp.cos(sp.pi * x / 2) * sp.exp(-nu_val * sp.pi**2 * t / 4)
 
-    bcs = {"left": {"D": steady.subs(xs, -1)}, "right": {"D": steady.subs(xs, 1)}}
+    bcs = {"left": {"D": steady.subs(x, -1)}, "right": {"D": steady.subs(x, 1)}}
     V = FunctionSpace(N, Cheb, bcs=bcs, name="V", fun_str="psi")
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
-    (x,) = V.system.base_scalars()
-    t = V.system.base_time()
     nu = Constant("nu", nu_val)
 
     weak_form = v * (u.diff(t) - nu * Div(Grad(u)))
@@ -63,7 +62,7 @@ def test_imex_rk_1d_inhomogeneous_dirichlet() -> None:
         weak_form,
         tableau=ARK4_3_6L2SA,
         time=(0.0, T),
-        initial=V.system.expr_psi_to_base_scalar(ue.subs(ts, 0)),
+        initial=ue.subs(t, 0),
         sparse=True,
         sparse_tol=1000,
     )
@@ -71,7 +70,7 @@ def test_imex_rk_1d_inhomogeneous_dirichlet() -> None:
     uhat_T = integrator.solve(dt=dt, steps=steps, progress=False)
     xj = V.mesh()
     u_num = V.backward(uhat_T).real
-    u_exact = lambdify((x,), V.system.expr_psi_to_base_scalar(ue.subs(ts, T)))(xj)
+    u_exact = lambdify((x,), ue.subs(t, T))(xj)
     assert _rel_error(u_num, u_exact) < 1e-4
 
     # The boundary values themselves are held, not just the interior shape. The
@@ -94,21 +93,21 @@ def test_backward_euler_1d_reaches_inhomogeneous_steady_state() -> None:
     T = 6.0
     steps = 240
     dt = T / steps
+    R1 = R(1)
+    x, t = R1.x, R1.base_time()
 
-    steady = (1 + xs) / 2
-    bcs = {"left": {"D": steady.subs(xs, -1)}, "right": {"D": steady.subs(xs, 1)}}
+    steady = (1 + x) / 2
+    bcs = {"left": {"D": steady.subs(x, -1)}, "right": {"D": steady.subs(x, 1)}}
     V = FunctionSpace(N, Cheb, bcs=bcs, name="V", fun_str="psi")
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
-    (x,) = V.system.base_scalars()
-    t = V.system.base_time()
     nu = Constant("nu", nu_val)
 
     weak_form = v * (u.diff(t) - nu * Div(Grad(u)))
     integrator = BackwardEuler(
         weak_form,
         time=(0.0, T),
-        initial=V.system.expr_psi_to_base_scalar(steady + sp.cos(sp.pi * xs / 2)),
+        initial=steady + sp.cos(sp.pi * x / 2),
         sparse=True,
         sparse_tol=1000,
     )
@@ -129,19 +128,20 @@ def test_imex_rk_2d_boundary_values_vary_along_the_wall() -> None:
     T = 0.5
     steps = 50
     dt = T / steps
+    R2 = R(2)
+    x, y = R2.base_scalars()
+    t = R2.base_time()
 
-    steady = sp.cos(xs) * sp.sinh(ys)
-    transient = sp.cos(xs) * sp.cos(sp.pi * ys / 2)
-    ue = steady + transient * sp.exp(-nu_val * (1 + sp.pi**2 / 4) * ts)
+    steady = sp.cos(x) * sp.sinh(y)
+    transient = sp.cos(x) * sp.cos(sp.pi * y / 2)
+    ue = steady + transient * sp.exp(-nu_val * (1 + sp.pi**2 / 4) * t)
 
-    bcs = {"left": {"D": steady.subs(ys, -1)}, "right": {"D": steady.subs(ys, 1)}}
+    bcs = {"left": {"D": steady.subs(y, -1)}, "right": {"D": steady.subs(y, 1)}}
     F = FunctionSpace(M, FourierSpace, name="F", fun_str="E")
     D = FunctionSpace(M, Legendre, bcs=bcs, scaling=n + 1, name="D", fun_str="psi")
     V = TensorProduct(F, D, name="V")
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
-    x, y = V.system.base_scalars()
-    t = V.system.base_time()
     nu = Constant("nu", nu_val)
 
     weak_form = v * (u.diff(t) - nu * Div(Grad(u)))
@@ -149,7 +149,7 @@ def test_imex_rk_2d_boundary_values_vary_along_the_wall() -> None:
         weak_form,
         tableau=ARK4_3_6L2SA,
         time=(0.0, T),
-        initial=V.system.expr_psi_to_base_scalar(ue.subs(ts, 0)),
+        initial=ue.subs(t, 0),
         sparse=True,
         sparse_tol=1000,
     )
@@ -158,7 +158,7 @@ def test_imex_rk_2d_boundary_values_vary_along_the_wall() -> None:
     Np = 40
     xj = V.mesh(kind="uniform", N=(Np, Np), broadcast=True)
     u_num = V.evaluate_mesh(uhat_T, kind="uniform", N=(Np, Np)).real
-    u_exact = lambdify((x, y), V.system.expr_psi_to_base_scalar(ue.subs(ts, T)))(*xj)
+    u_exact = lambdify((x, y), ue.subs(t, T))(*xj)
     assert _rel_error(u_num, u_exact) < 1e-4
 
 
@@ -174,20 +174,21 @@ def test_imex_rk_2d_inhomogeneous_in_both_directions() -> None:
     T = 0.5
     steps = 50
     dt = T / steps
+    R2 = R(2)
+    x, y = R2.base_scalars()
+    t = R2.base_time()
 
-    steady = sp.sinh(xs) * sp.cos(ys)
-    transient = sp.cos(sp.pi * xs / 2) * sp.cos(sp.pi * ys / 2)
-    ue = steady + transient * sp.exp(-nu_val * sp.pi**2 * ts / 2)
+    steady = sp.sinh(x) * sp.cos(y)
+    transient = sp.cos(sp.pi * x / 2) * sp.cos(sp.pi * y / 2)
+    ue = steady + transient * sp.exp(-nu_val * sp.pi**2 * t / 2)
 
-    bcsx = {"left": {"D": steady.subs(xs, -1)}, "right": {"D": steady.subs(xs, 1)}}
-    bcsy = {"left": {"D": steady.subs(ys, -1)}, "right": {"D": steady.subs(ys, 1)}}
+    bcsx = {"left": {"D": steady.subs(x, -1)}, "right": {"D": steady.subs(x, 1)}}
+    bcsy = {"left": {"D": steady.subs(y, -1)}, "right": {"D": steady.subs(y, 1)}}
     Dx = FunctionSpace(M, Legendre, bcs=bcsx, scaling=n + 1, name="Dx", fun_str="phi")
     Dy = FunctionSpace(M, Legendre, bcs=bcsy, scaling=n + 1, name="Dy", fun_str="psi")
     V = TensorProduct(Dx, Dy, name="V")
     v = TestFunction(V, name="v")
     u = TrialFunction(V, name="u", transient=True)
-    x, y = V.system.base_scalars()
-    t = V.system.base_time()
     nu = Constant("nu", nu_val)
 
     weak_form = v * (u.diff(t) - nu * Div(Grad(u)))
@@ -195,7 +196,7 @@ def test_imex_rk_2d_inhomogeneous_in_both_directions() -> None:
         weak_form,
         tableau=ARK4_3_6L2SA,
         time=(0.0, T),
-        initial=V.system.expr_psi_to_base_scalar(ue.subs(ts, 0)),
+        initial=ue.subs(t, 0),
         sparse=True,
         sparse_tol=1000,
         solver_options={"auto_threshold": 1000},
@@ -205,5 +206,5 @@ def test_imex_rk_2d_inhomogeneous_in_both_directions() -> None:
     Np = 40
     xj = V.mesh(kind="uniform", N=(Np, Np), broadcast=True)
     u_num = V.evaluate_mesh(uhat_T, kind="uniform", N=(Np, Np)).real
-    u_exact = lambdify((x, y), V.system.expr_psi_to_base_scalar(ue.subs(ts, T)))(*xj)
+    u_exact = lambdify((x, y), ue.subs(t, T))(*xj)
     assert _rel_error(u_num, u_exact) < 1e-4

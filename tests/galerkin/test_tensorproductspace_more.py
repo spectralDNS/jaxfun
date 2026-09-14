@@ -81,8 +81,10 @@ def test_inner_linear_form_3d_outer_products():
 
 @pytest.mark.slow
 def test_directsum_two_inhomogeneous_bnd_evaluate():
-    from jaxfun.coordinates import x, y
+    from jaxfun.coordinates import R
 
+    R2 = R(2)
+    x, y = R2.base_scalars()
     ue = sp.exp(-(x**2 + y**2))
     N = 16
     bcsx = {"left": {"D": ue.subs(x, 0)}, "right": {"D": ue.subs(x, 1)}}
@@ -90,11 +92,7 @@ def test_directsum_two_inhomogeneous_bnd_evaluate():
     Dx = FunctionSpace(N, Legendre.Legendre, bcs=bcsx, name="Dx", domain=(0, 1))
     Dy = FunctionSpace(N, Legendre.Legendre, bcs=bcsy, name="Dy", domain=(0, 1))
     T = TensorProduct(Dx, Dy, name="T")
-    _v = TestFunction(T, name="v")
-    _u = TrialFunction(T, name="u")
-    ue = T.system.expr_psi_to_base_scalar(ue)
     uf = project(ue, T)
-    x, y = T.system.base_scalars()
     u0 = T.evaluate(jnp.array([0.5, 0.5]), uf)
     assert abs(u0 - ue.subs({x: 0.5, y: 0.5})) < ulp(100)
 

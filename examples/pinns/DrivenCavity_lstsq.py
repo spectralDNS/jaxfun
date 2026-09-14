@@ -12,9 +12,11 @@ import numpy as np
 
 try:
     import pyvista
+
+    has_pyvista = True
 except ImportError:
     print("pyvista not found, skipping some parts of the example")
-    pyvista = None
+    has_pyvista = False
 import sympy as sp
 from flax import nnx
 
@@ -94,7 +96,7 @@ plt.contourf(xx, yy, uvp[:, 2].reshape(xx.shape), 100)
 plt.colorbar()
 # plt.show()
 
-if pyvista is not None:
+if has_pyvista:
     m = pyvista.read("./data/cavity_5000.vtk")
     cen = m.cell_centers()
     pts = cen.points

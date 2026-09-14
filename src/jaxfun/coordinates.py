@@ -105,6 +105,18 @@ def CartCoordSys(
     return CoordSys(str(name), sp.Lambda(s, s))
 
 
+def R(dim: int) -> CoordSys:
+    """Return Cartesian coordinate system of dimension `dim`
+
+    Args:
+        dim: Dimension of the Cartesian space (1, 2, or 3).
+    """
+    if dim not in (1, 2, 3):
+        raise ValueError(f"dim must be 1, 2, or 3; got {dim}")
+
+    return CartCoordSys(f"R{dim}", (x, y, z)[:dim])
+
+
 class defaultdict(UserDict[str, str]):
     def __missing__(self, key: str) -> str:
         return key
@@ -1163,8 +1175,8 @@ class CoordSys(Basic):
         if self._gt is not None:
             return self._gt
         g = self.get_covariant_metric_tensor()
-        gt = self.expr_base_scalar_to_psi(sp.Matrix(g)).inv()  # ty:ignore[invalid-argument-type]
-        gt = sp.factor(self.simplify(self.expr_psi_to_base_scalar(gt)))
+        gt = sp.Matrix(g).inv()
+        gt = sp.factor(self.simplify(gt))
         gt = np.array(gt)
         self._gt = gt
         return gt
@@ -1369,7 +1381,6 @@ def get_CoordSys(
     assumptions: AssumptionKeys | bool = True,
     replace: Sequence[tuple[Any, Any]] = (),
     measure: Callable[..., Any] = sp.count_ops,
-    cartesian_name: str = "R",
 ) -> CoordSys:
     """Creates a curvilinear coordinate system with a Cartesian parent.
 
@@ -1383,7 +1394,6 @@ def get_CoordSys(
         assumptions: SymPy assumptions (e.g. sp.Q.real & sp.Q.positive).
         replace: (pattern, replacement) pairs for simplification assistance.
         measure: Custom complexity function used during simplification.
-        cartesian_name: Name for the automatically created Cartesian parent.
 
     Returns:
         A fully constructed CoordSys instance.
@@ -1395,10 +1405,7 @@ def get_CoordSys(
         name,
         transformation,
         vector_names=vector_names,
-        parent=CartCoordSys(
-            cartesian_name,
-            {1: (x,), 2: (x, y), 3: (x, y, z)}[len(position_vector)],
-        ),
+        parent=R(len(position_vector)),
         assumptions=assumptions,
         replace=replace,
         measure=measure,

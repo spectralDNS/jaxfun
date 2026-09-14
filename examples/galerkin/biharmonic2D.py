@@ -1,4 +1,4 @@
-# Solve Helmholtz' equation
+# Solve biharmonic equation in 2D
 import os
 import sys
 
@@ -7,57 +7,64 @@ import matplotlib.pyplot as plt
 import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
-from jaxfun.coordinates import x, y
+from jaxfun.coordinates import R
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
-
-# from jaxfun.galerkin.Chebyshev import Chebyshev as space
 from jaxfun.galerkin.functionspace import FunctionSpace
-
-# from jaxfun.Jacobi import Jacobi as space
 from jaxfun.galerkin.inner import inner
-from jaxfun.galerkin.Legendre import Legendre as space
+from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
-M = 50
-ue = sp.exp(-(x**2 + y**2))
+R2 = R(2)
+x, y = R2.base_scalars()
 
-bcsx = {"left": {"D": ue.subs(x, 0)}, "right": {"D": ue.subs(x, 1)}}
-bcsy = {"left": {"D": ue.subs(y, 0)}, "right": {"D": ue.subs(y, 1)}}
-Dx = FunctionSpace(
-    M, space, bcs=bcsx, name="Dx", fun_str="psi", scaling=n + 1, domain=(0, 1)
-)
-Dy = FunctionSpace(
-    M, space, bcs=bcsy, name="Dy", fun_str="phi", scaling=n + 1, domain=(0, 1)
-)
+# Method of manufactured solution
+if "PYTEST" in os.environ:
+    ue = (x - x**2) ** 2 * (x - y**2) ** 2
+    M = 20
+else:
+    ue = sp.exp(sp.cos(2 * sp.pi * (x - sp.S.Half / 2))) * sp.exp(
+        sp.sin(2 * (y - sp.S.Half))
+    )
+    M = 40
+
+bcsx = {
+    "left": {"D": ue.subs(x, -1), "N": ue.diff(x, 1).subs(x, -1)},
+    "right": {"D": ue.subs(x, 1), "N": ue.diff(x, 1).subs(x, 1)},
+}
+bcsy = {
+    "left": {"D": ue.subs(y, -1), "N": ue.diff(y, 1).subs(y, -1)},
+    "right": {"D": ue.subs(y, 1), "N": ue.diff(y, 1).subs(y, 1)},
+}
+
+Dx = FunctionSpace(M, Legendre, scaling=n + 1, bcs=bcsx, name="Dx", fun_str="psi")
+Dy = FunctionSpace(M, Legendre, scaling=n + 1, bcs=bcsy, name="Dy", fun_str="phi")
 T = TensorProduct(Dx, Dy, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 
-# Method of manufactured solution
-ue = T.system.expr_psi_to_base_scalar(ue)
-
-A, L = inner(
-    v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True, kind="system"
+A, b = inner(
+    Div(Grad(Div(Grad(u)))) * v - Div(Grad(Div(Grad(ue)))) * v,
+    sparse=True,
+    kind="system",
 )
-
-un = A.solve(L, method="kron", kron_method="banded", auto_threshold=10000)
+uh = A.solve(b, kron_method="rcm")
 
 N = 100
-uj = T.evaluate_mesh(un, kind="uniform", N=(N, N))
 xj = T.mesh(kind="uniform", N=(N, N))
+uj = T.evaluate_mesh(uh, kind="uniform", N=(N, N))
 uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
 if "PYTEST" in os.environ:
-    assert error < ulp(1000), error
+    assert error < ulp(100), error
     sys.exit(0)
 
 print("Error =", error)
 
 f, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4))
-xj = T.mesh(kind="uniform", N=(N, N), broadcast=False)
+xj = T.mesh(kind="uniform", N=(100, 100), broadcast=False)
 ax1.contourf(xj[0], xj[1], uj)
 ax2.contourf(xj[0], xj[1], uej)
 ax2.set_autoscalex_on(False)

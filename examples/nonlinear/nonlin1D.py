@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
 
+from jaxfun.coordinates import R
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.operators import Div, Grad
@@ -13,9 +14,9 @@ from jaxfun.pinns import FlaxFunction, Loss, Trainer, adam, lbfgs
 from jaxfun.pinns.mesh import Line
 from jaxfun.utils.common import Domain, lambdify, ulp
 
-x = sp.Symbol("x", real=True)
-N = 60
 # Method of manufactured solution
+R1 = R(1)
+x = R1.x
 ue = sp.exp(sp.cos(2 * sp.pi * x))
 
 domain = Domain(-1, 1)
@@ -23,10 +24,10 @@ bcs = {
     "left": {"D": float(ue.subs(x, domain[0]))},
     "right": {"D": float(ue.subs(x, domain[1]))},
 }
+N = 60
 D = FunctionSpace(N, Chebyshev, bcs=bcs, name="D", fun_str="psi", domain=domain)
 
 u = FlaxFunction(D, name="u", rngs=nnx.Rngs(101))
-ue = D.system.expr_psi_to_base_scalar(ue)
 
 N = 1000
 mesh = Line(float(domain.lower), float(domain.upper), key=nnx.Rngs(1001)())

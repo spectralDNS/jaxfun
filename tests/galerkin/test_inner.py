@@ -6,6 +6,7 @@ import sympy as sp
 from jax import Array
 from scipy.integrate import dblquad
 
+from jaxfun.coordinates import R
 from jaxfun.galerkin import (
     Composite,
     FunctionSpace,
@@ -494,7 +495,8 @@ def test_inner_padding_directsum_resolved(
 def test_inner_padding_directsumtps_resolved_2d(
     space: type[Legendre | Chebyshev],
 ) -> None:
-    from jaxfun.coordinates import x, y
+    R2 = R(2)
+    x, y = R2.base_scalars()
 
     f = sp.cos(x * 2 * sp.pi) * sp.cos(y * 2 * sp.pi)
     bcsx = {"left": {"D": f.subs(x, -1)}, "right": {"D": f.subs(x, 1)}}
@@ -502,8 +504,6 @@ def test_inner_padding_directsumtps_resolved_2d(
     Dx = FunctionSpace(36, space, bcs=bcsx, name="Dx")
     Dy = FunctionSpace(36, space, bcs=bcsy, name="Dy")
     T = TensorProduct(Dx, Dy, name="T")
-    x, y = T.system.base_scalars()
-    f = T.system.expr_psi_to_base_scalar(f)
     uf = JAXFunction(f, T)
     v = TestFunction(T)
     y0 = inner(v * uf**2, num_quad_points=None, kind="linear")

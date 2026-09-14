@@ -7,10 +7,12 @@ from jaxfun.coordinates import (
     BaseScalar,
     BaseVector,
     CartCoordSys,
+    R,
     get_CoordSys,
+    x,
+    y,
+    z,
 )
-
-x, y, z = sp.symbols("x y z", real=True)
 
 
 def test_cartesian_construction_defaults():
@@ -19,6 +21,11 @@ def test_cartesian_construction_defaults():
     assert len(N.base_vectors()) == 3
     assert {v._name for v in N.base_vectors()} == {"N.i", "N.j", "N.k"}
     assert all(isinstance(s, BaseScalar) for s in N.base_scalars())
+    R3 = R(3)
+    assert R3.is_cartesian
+    assert len(R3.base_vectors()) == 3
+    assert {v._name for v in R3.base_vectors()} == {"R3.i", "R3.j", "R3.k"}
+    assert all(isinstance(s, BaseScalar) for s in R3.base_scalars())
 
 
 def test_curvilinear_construction():

@@ -6,7 +6,7 @@ import sys
 import jax.numpy as jnp
 import sympy as sp
 
-from jaxfun.coordinates import BaseScalar, x
+from jaxfun.coordinates import R
 from jaxfun.galerkin import CartesianProduct
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 
@@ -17,6 +17,8 @@ from jaxfun.galerkin.Legendre import Legendre as space
 from jaxfun.utils.common import lambdify, ulp
 
 M = 60
+R1 = R(1)
+x = R1.x
 ue = sp.exp(sp.cos(2 * sp.pi * x))
 
 bcs = {"left": {"D": ue.subs(x, -1)}, "right": {"D": ue.subs(x, 1)}}
@@ -27,10 +29,6 @@ C = CartesianProduct(D, S, name="C")
 
 v, q = TestFunction(C, name="vq")
 u, s = TrialFunction(C, name="us")
-
-# Method of manufactured solution
-x: BaseScalar = C.system.x
-ue = C.system.expr_psi_to_base_scalar(ue)
 
 A, a = inner(s.diff(x) * v - ue.diff(x, 2) * v, kind="system", sparse=True)
 B, b = inner(u.diff(x) * q - s * q, kind="system", sparse=True)

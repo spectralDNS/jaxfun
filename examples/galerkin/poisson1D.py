@@ -1,4 +1,4 @@
-# Solve Poisson's equation
+# Solve Poisson's equation in 1D with Dirichlet boundary conditions
 import os
 import sys
 
@@ -7,15 +7,13 @@ import matplotlib.pyplot as plt
 import sympy as sp
 
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
-
-# from jaxfun.galerkin.Legendre import Legendre as space
 from jaxfun.galerkin.Chebyshev import Chebyshev as space
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
-M = 30
+M = 32
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
 D = FunctionSpace(M, space, bcs=bcs, name="D", fun_str="psi", scaling=n + 1)
 v = TestFunction(D)
@@ -23,13 +21,8 @@ u = TrialFunction(D)
 
 # Method of manufactured solution
 x = D.system.x  # use the same coordinate as u and v
-ue = 1 - x**2  # * sp.exp(sp.cos(2 * sp.pi * x))
+ue = (1 - x**2) * sp.exp(sp.cos(sp.pi * x))
 
-# A = inner(v*sp.Derivative(u, x, 2), sparse=True)
-# A = inner(-Dot(sp.sqrt(1-x**2)*Grad(v/sp.sqrt(1-x**2)), Grad(u)), sparse=True) # Cheb
-# A = inner(-Dot(Grad(v), Grad(u)), sparse=True) # Legendre
-# A = inner(v*Div(Grad(u)), sparse=True)
-# b = inner(v*sp.Derivative(ue, x, 2))
 A, b = inner(
     v * Div(Grad(u)) - v * sp.Derivative(ue, x, 2),
     sparse=True,
@@ -43,7 +36,7 @@ uj = D.backward(uh)
 uej = lambdify(x, ue)(xj)
 error = jnp.linalg.norm(uj - uej)
 if "PYTEST" in os.environ:
-    assert error < ulp(1000), error
+    assert error < jnp.sqrt(ulp(10)), error
     sys.exit(0)
 
 print("Error =", error)

@@ -5,7 +5,7 @@ from typing import cast
 import jax.numpy as jnp
 import sympy as sp
 
-from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.inner import BoundaryForcing, inner, inner_boundary
 from jaxfun.la import BaseMatrix, Matrix
 from jaxfun.typing import Array, GalerkinAssembledForm
 
@@ -72,3 +72,27 @@ def assemble_linear_term(
 
     linear_form = inner(expr, sparse=sparse, sparse_tol=sparse_tol)
     return split_operator_and_forcing(linear_form)
+
+
+def assemble_boundary_term(expr: sp.Expr) -> BoundaryForcing | None:
+    """Assemble the boundary blocks of `expr` without contracting them.
+
+    The counterpart of `assemble_linear_term` for boundary data that moves.
+    `assemble_linear_term` returns a forcing vector with the boundary
+    contribution already folded in at the space's current lifting; this returns
+    that contribution as a function of time instead, in the same
+    `operator @ u + forcing` convention, so a caller can subtract the frozen
+    copy and add back a live one.
+    """
+    # The convention is `split_operator_and_forcing`'s, not `inner`'s: the
+    # result is negated, which is what makes the subtraction remove exactly the
+    # copy `inner` folded in. That flip is the one applied to the tuple branch
+    # there, and an evolution equation's mass and stiffness terms always
+    # assemble an operator alongside the boundary block, so they always take it.
+    #
+    # No `sparse` flag because there is nothing to sparsify: the boundary
+    # operators are contracted straight into a vector rather than kept as a
+    # system to solve, and `inner` does not sparsify them either.
+    if sp.sympify(expr) == 0:
+        return None
+    return inner_boundary(expr, outer_sign=-1)

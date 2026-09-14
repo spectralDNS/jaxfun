@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
+from jaxfun.coordinates import R
 from jaxfun.galerkin import (
     CartesianProduct,
     Chebyshev,
@@ -46,7 +47,8 @@ def test_directsum_two_inhomogeneous_bnd_assembly_and_backward():
 
 
 def test_directsumtps_poisson_3d():
-    from jaxfun.coordinates import x, y, z
+    R3 = R(3)
+    x, y, z = R3.base_scalars()
 
     N = 20
     ue = sp.sin(2 * x) * sp.exp(2 * y + z * sp.I)
@@ -65,8 +67,6 @@ def test_directsumtps_poisson_3d():
     T = TensorProduct(F, Dy, Dz)
     v = TestFunction(T)
     u = TrialFunction(T)
-    ue = T.system.expr_psi_to_base_scalar(ue)
-    x, y, z = T.system.base_scalars()
 
     A, b = inner(Div(Grad(u)) * v - Div(Grad(ue)) * v, kind="system")
 
@@ -82,7 +82,8 @@ def test_directsumtps_poisson_3d():
 
 
 def test_directsumtps_biharmonic_dirichlet_3d():
-    from jaxfun.coordinates import x, y, z
+    R3 = R(3)
+    x, y, z = R3.base_scalars()
 
     N = 20
     ue = sp.sin(2 * x) * sp.exp(4 * y + z * sp.I)
@@ -108,8 +109,6 @@ def test_directsumtps_biharmonic_dirichlet_3d():
     T = TensorProduct(F, Dy, Dz)
     v = TestFunction(T)
     u = TrialFunction(T)
-    x, y, z = T.system.base_scalars()
-    ue = T.system.expr_psi_to_base_scalar(ue)
 
     if jax.config.jax_enable_x64:
         A, b = inner(

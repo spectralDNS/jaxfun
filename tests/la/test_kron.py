@@ -81,7 +81,6 @@ def _poisson_tpmats(N: int = 8) -> tuple[TPMatrices, Array]:
 
 def _biharmonic_tpmats(N: int = 8) -> tuple[TPMatrices, Array]:
     """Return (A, b) for a 2-D biharmonic problem on a Chebyshev composite space."""
-    from jaxfun.coordinates import x, y
     from jaxfun.galerkin import Chebyshev
 
     bcs_x = {
@@ -91,10 +90,10 @@ def _biharmonic_tpmats(N: int = 8) -> tuple[TPMatrices, Array]:
     Dx = FunctionSpace(N, Chebyshev.Chebyshev, bcs=bcs_x, scaling=sym_n + 1)
     T = TensorProduct(Dx, Dx)
     v, u = TestFunction(T), TrialFunction(T)
+    x, y = T.system.base_scalars()
     ue = (1 - x**2) ** 2 * (1 - y**2) ** 2
-    ue_sym = T.system.expr_psi_to_base_scalar(ue)
     A, b = inner(
-        Div(Grad(Div(Grad(u)))) * v - Div(Grad(Div(Grad(ue_sym)))) * v,
+        Div(Grad(Div(Grad(u)))) * v - Div(Grad(Div(Grad(ue)))) * v,
         sparse=True,
         kind="system",
     )

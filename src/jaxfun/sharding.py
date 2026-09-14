@@ -49,6 +49,23 @@ def replicate(x):
     return jax.device_put(x, replicated_sharding)
 
 
+def replicate_scalar(x: Array) -> Array:
+    """Constrain a small carrier array to a replicated sharding.
+
+    For a value that is conceptually one number -- the current time -- but is
+    carried as a shape-`(1,)` array so that it is never a rank-0 parameter. It
+    is multiplied into sharded results, so GSPMD would otherwise propose a
+    sharding for it backwards; `P("k")` on such an argument is the failure
+    `pin_state` describes. Stating the placement removes the freedom, exactly as
+    pinning the state does.
+
+    A no-op on one device.
+    """
+    if len(jax.devices()) <= 1:
+        return x
+    return jax.lax.with_sharding_constraint(x, replicated_sharding)
+
+
 def state_sharding(shape: tuple[int, ...]) -> NamedSharding:
     """Return the sharding a coefficient array of this shape should carry.
 

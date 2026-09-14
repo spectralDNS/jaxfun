@@ -1,4 +1,21 @@
-# Solve Poisson's equation in 2D
+# Solve Poisson's equation in 2D with periodic boundary conditions in x and
+# Dirichlet boundary conditions in y.
+#
+# Note that this solver may be run in parallel using SPMD, by setting the environment
+# variable `JAX_NUM_CPU_DEVICES` to the number of devices to use. Or specify the number
+# of devices in the code with `jax.config.update("jax_num_cpu_devices", 2)` before any
+# imports from jaxfun.
+#
+# The matrix A is using the TPMatricesWavenumberSolver, which is a *communication-free*
+# parallel solver for tensor product matrices with wavenumber decomposition. That is,
+# with a Fourier basis along the first (and even second for 3D) axis. The solver works
+# by sharding the LU-decomposition of the matrix and by running only over the local
+# wavenumbers on each device.
+#
+# In order to make the solver work also on distributed devices, one also needs to
+# initialize a distributed JAX environment. See, e.g., the `RayleighBenard.py` example.
+
+
 import os
 import sys
 
@@ -7,7 +24,8 @@ import matplotlib.pyplot as plt
 import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
-from jaxfun.galerkin.arguments import TestFunction, TrialFunction, x, y
+from jaxfun.coordinates import R
+from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
@@ -15,6 +33,9 @@ from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, n, ulp
+
+R2 = R(2)
+x, y = R2.base_scalars()
 
 ue = (1 - y**2) * (sp.cos(2 * x)) * sp.exp(sp.cos(sp.pi * y))
 
@@ -25,10 +46,6 @@ F = FunctionSpace(N, Fourier, name="F", fun_str="E")
 T = TensorProduct(F, D, name="T", real=True)
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
-
-# Method of manufactured solution
-x, y = T.system.base_scalars()
-ue = T.system.expr_psi_to_base_scalar(ue)
 
 # A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=True)
 A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")

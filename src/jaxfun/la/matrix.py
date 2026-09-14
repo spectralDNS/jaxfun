@@ -496,7 +496,6 @@ class Matrix(BaseMatrix):
                 raise IndexError(
                     f"Constraint index {idx} is out of range for matrix of size {n}"
                 )
-            val = complex(val) if isinstance(val, complex) else float(val)
             norm_constraints.append((idx % n, val))
         data = self.data
         for idx, _ in norm_constraints:

@@ -1,4 +1,4 @@
-# Solve Helmholtz' equation
+# Solve Helmholtz' equation in 1D with Dirichlet boundary conditions
 import os
 import sys
 
@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import sympy as sp
 
+from jaxfun.coordinates import R
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.functionspace import FunctionSpace
@@ -14,9 +15,10 @@ from jaxfun.operators import Div, Grad
 from jaxfun.typing import TestSpaceKind
 from jaxfun.utils.common import lambdify, n, ulp
 
-x = sp.Symbol("x", real=True)
 N = 60
 # Method of manufactured solution
+R1 = R(1)
+x = R1.x
 ue = sp.exp(sp.cos(2 * sp.pi * x))
 
 domain = (0, 1)
@@ -28,7 +30,6 @@ D = FunctionSpace(N, Chebyshev, bcs=bcs, name="D", fun_str="psi", domain=domain)
 P = D.get_testspace(kind=TestSpaceKind.PG, scaling=n + 1)
 v = TestFunction(P, name="v")
 u = TrialFunction(D, name="u")
-ue = D.system.expr_psi_to_base_scalar(ue)
 
 A, L = inner(
     v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True, kind="system"

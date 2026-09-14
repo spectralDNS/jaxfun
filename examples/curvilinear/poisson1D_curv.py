@@ -34,21 +34,19 @@ from jaxfun.utils.common import lambdify, n, ulp
 
 t = sp.Symbol("t", real=True)
 rv = (sp.sin(2 * sp.pi * t), sp.cos(2 * sp.pi * t), 2 * t)
+C = get_CoordSys("C", sp.Lambda((t,), rv))
 
 N = 50
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
-C = get_CoordSys("C", sp.Lambda((t,), rv))
 D = FunctionSpace(N, space, bcs, scaling=n + 1, system=C, name="D", fun_str="phi")
 v = TestFunction(D)
 u = TrialFunction(D)
 
 # Method of manufactured solution
-t = C.t  # use the same coordinate as u and v
-
+t = C.t  # use BaseScalar from the coordinate system, not the original symbol
 ue = sp.sin(4 * sp.pi * t)
-b = inner(-v * Div(Grad(ue)), kind="linear")
-# b = inner(-v*sp.Derivative(ue, t, 2))
-A = inner(-v * Div(Grad(u)), sparse=True, kind="bilinear")
+
+A, b = inner(-v * (Div(Grad(u)) - Div(Grad(ue))), sparse=True, kind="system")
 
 u_hat = A.solve(b)
 

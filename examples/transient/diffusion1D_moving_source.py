@@ -92,7 +92,7 @@ if "PYTEST" in os.environ:
 print("Relative L2 error =", float(error))
 plt.plot(xj, lambdify(x, ue.subs(t, 0))(xj), "--k", label="initial")
 plt.plot(xj, u_ex_j, "r", label=f"exact, t={T}")
-plt.plot(xj, u_num, "b:", label="IMEX RK4")
+plt.plot(xj, u_num, "b:", label="IMEX ARK4_3_6L2SA")
 plt.legend()
 plt.xlabel("x")
 plt.ylabel("u")

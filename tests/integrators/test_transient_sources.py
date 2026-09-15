@@ -24,6 +24,7 @@ import sympy as sp
 
 from jaxfun.coordinates import R
 from jaxfun.galerkin import (
+    DirectSum,
     Fourier,
     FunctionSpace,
     Legendre,
@@ -338,6 +339,7 @@ def _error_moving_source_and_walls(cls, steps, tag, **kw) -> float:
         name=f"both{tag}",
         system=R1,
     )
+    assert isinstance(V, DirectSum)
     v = TestFunction(V)
     u = TrialFunction(V, transient=True)
     integrator = cls(

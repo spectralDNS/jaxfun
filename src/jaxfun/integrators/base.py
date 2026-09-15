@@ -524,7 +524,15 @@ class BaseIntegrator(TimeStepper[Array]):
                     "boundary data. Use IMEXRungeKutta or BackwardEuler."
                 )
             self._mass_boundary = nnx.data(assemble_boundary_term(self.mass_expr))
-            self._linear_boundary = nnx.data(assemble_boundary_term(self.linear_expr))
+            # `steady_expr`, not `linear_expr`: the frozen copy being subtracted
+            # below came from assembling `steady_expr`, so the live blocks have
+            # to come from the same half or the two would not cancel. Handing
+            # over the unsplit expression would also route a moving source back
+            # into `inner`, where `_linear_form_scale` coerces its time factor
+            # with `float()`. Nothing is lost -- boundary blocks come only from
+            # bilinear forms, and a transient term carrying a TrialFunction is
+            # already refused by `split_transient_terms`.
+            self._linear_boundary = nnx.data(assemble_boundary_term(steady_expr))
             if self._linear_boundary is not None and linear_forcing is not None:
                 linear_forcing = linear_forcing - self._linear_boundary()
 

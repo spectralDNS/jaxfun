@@ -316,3 +316,64 @@ def test_a_time_dependent_nonlinear_term_is_refused() -> None:
             initial=sp.sin(sp.pi * x),
             sparse=True,
         )
+
+
+def _error_moving_source_and_walls(cls, steps, tag, **kw) -> float:
+    """`u = exp(-t) sin(2x)`, which satisfies neither the walls nor the PDE alone.
+
+    Deliberately not a heat-equation solution and deliberately nonzero at both
+    ends, so the lifting and the source are both moving and neither can stand in
+    for the other. `_manufactured_1d` above pins the source in isolation; this is
+    where the two halves of a moving right-hand side have to add up.
+    """
+    R1 = R(1)
+    (x,) = R1.base_scalars()
+    t = R1.base_time()
+    ue = sp.exp(-t) * sp.sin(2 * x)
+    f = sp.diff(ue, t) - NU * sp.diff(ue, x, 2)
+    V = FunctionSpace(
+        24,
+        Legendre.Legendre,
+        bcs={"left": {"D": ue.subs(x, -1)}, "right": {"D": ue.subs(x, 1)}},
+        name=f"both{tag}",
+        system=R1,
+    )
+    v = TestFunction(V)
+    u = TrialFunction(V, transient=True)
+    integrator = cls(
+        v * (u.diff(t) - Constant("nu", NU) * Div(Grad(u)) - f),
+        time=(0.0, 1.0),
+        initial=ue.subs(t, 0),
+        sparse=True,
+        **kw,
+    )
+    u_hat = integrator.solve(dt=1.0 / steps, steps=steps, progress=False)
+    xj = V.mesh(kind="uniform", N=60)
+    got = V.evaluate(xj, u_hat, t=integrator.end_time(1.0 / steps, steps))
+    want = lambdify((x,), ue.subs(t, 1.0))(xj)
+    return float(jnp.linalg.norm(got - want) / jnp.linalg.norm(want))
+
+
+@pytest.mark.parametrize(
+    ("cls", "kw", "tag", "design"),
+    [
+        (IMEXRungeKutta, {"tableau": IMEX_EULER}, "bie", 1),
+        (BackwardEuler, {}, "bbe", 1),
+        (IMEXRungeKutta, {"tableau": ARS222}, "ba2", 2),
+    ],
+)
+def test_a_moving_source_and_moving_walls_converge_together(
+    cls, kw, tag, design
+) -> None:
+    """Both kinds of moving forcing in one equation reach the scheme's order.
+
+    The two are assembled on separate paths -- the source is split out of the
+    weak form before assembly, the lifting stays in it as boundary blocks -- and
+    the split is what keeps them apart. Assembling the boundary blocks from the
+    unsplit form instead sends the source back through `inner`, where its time
+    factor cannot be coerced to a float and construction raises.
+    """
+    steps = [8, 16, 32, 64]
+    errors = [_error_moving_source_and_walls(cls, s, f"{tag}{s}", **kw) for s in steps]
+    got = _orders(errors)
+    assert all(design - 0.35 < o < design + 0.35 for o in got), (got, errors)

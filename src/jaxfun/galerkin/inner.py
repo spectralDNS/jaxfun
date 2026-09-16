@@ -1663,9 +1663,11 @@ def project(
         )
 
     if kind is ProjectionKind.L2:
-        return _l2_projection(form, V)
+        uh = _l2_projection(form, V)
+    else:
+        # See `project1D`: `v/sg` cancels the measure, so this is the transform's
+        # own metric-free projection rather than the L2 one.
+        A, b = inner(form / V.system.sg, kind=InnerKind.SYSTEM)
+        uh = A.solve(b)
 
-    # See `project1D`: `v/sg` cancels the measure, so this is the transform's
-    # own metric-free projection rather than the L2 one.
-    A, b = inner(form / V.system.sg, kind=InnerKind.SYSTEM)
-    return A.solve(b)
+    return uh.array if isinstance(uh, BlockArray) else uh

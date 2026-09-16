@@ -1445,6 +1445,11 @@ def _scale_quad_points(own: int | tuple[int, ...], scale: int) -> ScalarPadding:
     return own * scale
 
 
+def _tree_max(leaves: Sequence[Array]) -> Array:
+    """Return the largest magnitude across a pytree's leaves."""
+    return jnp.max(jnp.stack([jnp.abs(leaf).max() for leaf in leaves]))
+
+
 def _l2_projection(
     form: sp.Expr, V: FunctionSpaceType, max_doublings: int = 6
 ) -> Array:
@@ -1476,12 +1481,19 @@ def _l2_projection(
         )
         uh = A.solve(b)
         if previous is not None:
-            biggest = jnp.abs(uh).max()
+            # Through `jax.tree`, because a vector space solves to a
+            # `BlockArray` of one coefficient array per component rather than a
+            # single array, and it has to be measured the same way.
+            leaves = jax.tree.leaves(uh)
+            biggest = _tree_max(leaves)
             # sqrt(eps) rather than eps: the aim is to detect that refinement
             # has stopped paying, not to chase the last bits, and the suite runs
             # in float32 where those bits are not there to chase.
-            tol = jnp.sqrt(jnp.finfo(jnp.result_type(uh)).eps)
-            change = float(jnp.abs(uh - previous).max() / jnp.maximum(biggest, tol))
+            tol = jnp.sqrt(jnp.finfo(jnp.result_type(*leaves)).eps)
+            moved = _tree_max(
+                [x - y for x, y in zip(leaves, jax.tree.leaves(previous), strict=True)]
+            )
+            change = float(moved / jnp.maximum(biggest, tol))
             if change <= tol:
                 return uh
         previous = uh
@@ -1600,27 +1612,14 @@ def project(
         assert isinstance(ue, sp.Expr)
         return project1D(ue, V, t, kind)
 
-    u = TrialFunction(V)
-    v = TestFunction(V)
-    if V.rank == RankTag.SCALAR:
-        form = v * (u - _at_time(cast(sp.Expr, ue), V, t))
-    elif V.rank == RankTag.VECTOR:
-        assert isinstance(V, VectorTensorProductSpace)
-        assert t is None, "`t` is only supported for scalar spaces"
-        form = Dot(v, (u - ue))
-    else:
-        assert isinstance(V, CartesianTensorProductSpace)
-        assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
-        spaces = V.flatten()
-        return tuple(
-            project(cast(sp.Expr, uei), spaces[i], kind=kind)
-            for i, uei in enumerate(ue)
-        )
-
-    if kind is ProjectionKind.L2:
-        return _l2_projection(form, V)
-
-    if len(get_jaxfunctions(ue if isinstance(ue, sp.Expr) else sum(ue))) == 0:
+    # The transform gets first refusal, and must, because `form` below cannot
+    # even be *built* for a vector `ue` written as a plain SymPy expression:
+    # `u - ue` asks a VectorAdd to absorb an unevaluated trial function and it
+    # refuses. That is precisely the input this branch exists to serve, so the
+    # form has to stay unbuilt until the branch has declined.
+    if kind is ProjectionKind.INTERPOLATION and (
+        len(get_jaxfunctions(ue if isinstance(ue, sp.Expr) else sum(ue))) == 0
+    ):
         assert not isinstance(V, OrthogonalSpace | DirectSum | CartesianProductSpace)
         if V.rank == RankTag.SCALAR:
             assert isinstance(ue, sp.Expr)
@@ -1632,12 +1631,39 @@ def project(
             uj = lambdify(args, ue)(*mesh)
             uj = jnp.broadcast_to(uj, V.num_quad_points)
         else:
+            assert t is None, "`t` is only supported for scalar spaces"
             s = V.system.base_scalars()
             bv = V.system.base_vectors()
-            assert isinstance(ue, sp.Expr)
-            uj = (lambdify(s, Dot(ue, n).doit())(*V.mesh()) for n in bv)
+            if V.rank == RankTag.VECTOR:  # VectorTensorProductSpace
+                assert isinstance(ue, sp.Expr)
+                uj = (lambdify(s, Dot(ue, n).doit())(*V.mesh()) for n in bv)
+            else:
+                assert isinstance(V, CartesianTensorProductSpace)
+                assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
+                uj = (lambdify(s, (uei).doit())(*V.mesh()) for uei in ue)
             uj = jnp.stack([jnp.broadcast_to(ui, V.num_quad_points) for ui in uj])
         return _forward_at(V, place(uj, V._physical_sharding), t)
+
+    u = TrialFunction(V)
+    v = TestFunction(V)
+    if V.rank == RankTag.SCALAR:
+        form = v * (u - _at_time(cast(sp.Expr, ue), V, t))
+    elif V.rank == RankTag.VECTOR:
+        assert isinstance(V, VectorTensorProductSpace)
+        assert isinstance(ue, sp.Expr)
+        assert t is None, "`t` is only supported for scalar spaces"
+        form = Dot(v, u) - Dot(v, ue)
+    else:
+        assert isinstance(V, CartesianTensorProductSpace)
+        assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
+        spaces = V.flatten()
+        return tuple(
+            project(cast(sp.Expr, uei), spaces[i], kind=kind)
+            for i, uei in enumerate(ue)
+        )
+
+    if kind is ProjectionKind.L2:
+        return _l2_projection(form, V)
 
     # See `project1D`: `v/sg` cancels the measure, so this is the transform's
     # own metric-free projection rather than the L2 one.

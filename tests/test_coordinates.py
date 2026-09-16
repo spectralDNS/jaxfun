@@ -15,10 +15,12 @@ from jaxfun.galerkin import (
     TensorProduct,
     TensorProductSpace,
     TestFunction,
+    TrialFunction,
 )
-from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.inner import inner, project
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.operators import Div, Grad, dot
+from jaxfun.typing import ProjectionKind
 from jaxfun.utils.common import Domain, lambdify, ulp
 
 x, r, theta, z, phi = sp.symbols("x,r,theta,z,phi", real=True, positive=True)
@@ -137,14 +139,6 @@ def get_clustering_space(
     return C(8, system=system, name="F")
 
 
-coords = {
-    "polar": get_polar(),
-    "cylindrical": get_cylindrical(),
-    "polar_spherical": get_polar_spherical(),
-    "sphere": get_polar_spherical(),
-    "clustering": get_clustering(0.8, 0),
-}
-
 spaces: dict[str, Callable[..., OrthogonalSpace | TensorProductSpace]] = {
     "polar": lambda space: get_polar_space(space),
     "cylindrical": lambda space: get_cylindrical_space(space),
@@ -198,14 +192,7 @@ args1d = [
 
 @pytest.mark.parametrize("system,space", args1d)
 def test_forward_backward_1d_curvilinear(system, space) -> None:
-    """`forward` inverts `backward` whatever the metric.
-
-    It is metric-free, and on a curvilinear system that is exact rather than
-    approximate: with as many quadrature points as modes the Vandermonde is
-    square, so the weighted projection collapses to interpolation for any
-    positive weight. Weighting it by `sg` -- which `OrthogonalSpace.forward`
-    used to do -- scales every coefficient by `sg` instead.
-    """
+    """`forward` inverts `backward` whatever the metric."""
     V = spaces1d[system](space)
     assert V.system.sg != 1, "this test is pointless without a metric weight"
     rand = jax.random.normal(jax.random.PRNGKey(101), shape=(V.num_quad_points,))
@@ -230,6 +217,50 @@ def test_scalar_product_carries_the_measure(system, space) -> None:
     ref = inner(TestFunction(V) * ue)
     assert isinstance(ref, jnp.ndarray)
     assert jnp.allclose(got, ref, rtol=ulp(1000), atol=ulp(1000))
+
+
+@pytest.mark.parametrize("system,space", args1d)
+def test_project_kinds_differ_only_past_resolution(system, space) -> None:
+    """The two `ProjectionKind`s are each exact, in different inner products.
+
+    `INTERPOLATION` matches `ue` at the quadrature points -- testing with
+    ``v/sg`` cancels the measure, which is what makes the cheap transform a
+    projection in its own right. `L2` is orthogonal under ``sg*dxi`` instead.
+    They coincide whenever the space can represent `ue`, and only part company
+    once it cannot, which is the whole reason the distinction exists.
+    """
+    V = spaces1d[system](space)
+    assert V.system.sg != 1, "this test is pointless without a metric weight"
+    s = V.system.base_scalars()[0]
+    u, v = TrialFunction(V), TestFunction(V)
+
+    # INTERPOLATION is the discrete transform, exactly.
+    # Analytic everywhere and periodic, so it suits the Fourier spaces too, but
+    # with a complex pole close enough to the domain that none of these spaces
+    # resolves it -- which is the only regime where the two kinds differ.
+    ue = 1 / (sp.Rational(11, 10) - sp.cos(s))
+    uj = jnp.asarray(lambdify(s, ue, modules="jax")(V.mesh()))
+    interp = project(ue, V)
+    assert jnp.allclose(interp, V.forward(uj), rtol=ulp(1000), atol=ulp(1000))
+
+    # L2 agrees with a heavily over-integrated Galerkin solve. The loop stops
+    # once refinement stops paying, so it is held to that bar, not to eps.
+    l2 = project(ue, V, kind=ProjectionKind.L2)
+    M, b = inner(v * (u - ue), kind="system", num_quad_points=32 * V.num_quad_points)
+    settled = jnp.sqrt(jnp.finfo(jnp.result_type(l2)).eps)
+    assert jnp.abs(l2 - M.solve(b)).max() <= settled * jnp.abs(l2).max()
+
+    # Past resolution the two are genuinely different functions.
+    assert not jnp.allclose(interp, l2, rtol=ulp(1000), atol=ulp(1000))
+
+    # Within resolution they agree; a constant is in every space here.
+    for kind in ("interpolation", "l2"):
+        assert jnp.allclose(
+            project(sp.Integer(1) + 0 * s, V, kind=kind),
+            project(sp.Integer(1) + 0 * s, V),
+            rtol=ulp(1000),
+            atol=ulp(1000),
+        )
 
 
 @pytest.mark.parametrize("system,space", args)

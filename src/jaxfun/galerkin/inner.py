@@ -1,3 +1,4 @@
+import warnings
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal, TypeGuard, cast, overload
@@ -31,7 +32,10 @@ from jaxfun.typing import (
     InnerKind,
     InnerKindLike,
     InnerResultDict,
+    ProjectionKind,
+    ProjectionKindLike,
     RankTag,
+    ScalarPadding,
     ScalarSpaceType,
     TrialSpaceType,
 )
@@ -245,7 +249,7 @@ def inner(
           * TensorMatrix / TPMatrix objects for >1D
     """  # noqa: E501
     if kind is not None:
-        kind = _coerce_inner_kind(kind)
+        kind = InnerKind.coerce(kind)
     context = _prepare_inner_context(expr, num_quad_points)
     aresults, bresults = _assemble_inner_items(context, use_precomputed_matrices)
     result = _finalize_inner_result(
@@ -254,15 +258,6 @@ def inner(
     if kind is None:
         return result
     return _validate_inner_kind(result, kind)
-
-
-def _coerce_inner_kind(kind: InnerKind | str) -> InnerKind:
-    try:
-        return InnerKind(kind)
-    except ValueError as e:
-        valid = ", ".join(repr(member.value) for member in InnerKind)
-        e.add_note(f"Expected one of: {valid}")
-        raise
 
 
 def _validate_inner_kind(
@@ -1421,10 +1416,90 @@ def _forward_at(
     return V.forward(uj, t=t)
 
 
+def _at_time(ue: sp.Expr, V: FunctionSpaceType, t: float | Array | None) -> sp.Expr:
+    """Return `ue` with the system's time symbol replaced by `t`.
+
+    The forward transform carries a time by evaluating `ue` at a mesh, but the
+    over-integrated path assembles it symbolically through `inner`, where the
+    only way to pin the time is to substitute it. A traced time cannot go into
+    a SymPy expression at all, so it is refused rather than silently dropped.
+    """
+    if t is None:
+        return ue
+    if isinstance(t, Array):
+        raise NotImplementedError(
+            "project cannot over-integrate at a traced time; pass a float `t`, "
+            "or leave num_quad_points at the space's own quadrature."
+        )
+    return ue.subs(V.system.base_time(), t)
+
+
+class ProjectionNotConvergedWarning(UserWarning):
+    """An L2 projection's quadrature stopped improving before it settled."""
+
+
+def _scale_quad_points(own: int | tuple[int, ...], scale: int) -> ScalarPadding:
+    """Return `own` scaled up by `scale`, per axis for a tensor product."""
+    if isinstance(own, tuple):
+        return tuple(n * scale for n in own)
+    return own * scale
+
+
+def _l2_projection(
+    form: sp.Expr, V: FunctionSpaceType, max_doublings: int = 6
+) -> Array:
+    """Solve `inner(form)` at ever finer quadrature until the answer settles.
+
+    The L2 projection needs the load vector integrated more accurately than the
+    space itself resolves, and the number of points that takes is not something
+    a caller can be expected to know: it depends on how badly `ue` and the
+    metric are resolved, not on the space. So it is discovered instead, by
+    doubling until the coefficients stop moving.
+
+    The integrands here are analytic in practice -- a metric and a smooth `ue`
+    -- and Gauss quadrature converges geometrically on those, so this settles in
+    a few steps even for a sharply peaked map. What it cannot do is converge on
+    a non-smooth `ue`, where the quadrature error only falls algebraically; that
+    exits through `max_doublings` with a warning rather than silently returning
+    whichever value the loop happened to stop on. A spectral projection of such
+    an `ue` carries an O(1) error regardless of how exactly it is integrated, so
+    the warning is about the right thing to be suspicious of.
+    """
+    own = V.num_quad_points
+    previous: Array | None = None
+    change = float("inf")
+    for i in range(max_doublings + 1):
+        A, b = inner(
+            form,
+            kind=InnerKind.SYSTEM,
+            num_quad_points=_scale_quad_points(own, 2**i),
+        )
+        uh = A.solve(b)
+        if previous is not None:
+            biggest = jnp.abs(uh).max()
+            # sqrt(eps) rather than eps: the aim is to detect that refinement
+            # has stopped paying, not to chase the last bits, and the suite runs
+            # in float32 where those bits are not there to chase.
+            tol = jnp.sqrt(jnp.finfo(jnp.result_type(uh)).eps)
+            change = float(jnp.abs(uh - previous).max() / jnp.maximum(biggest, tol))
+            if change <= tol:
+                return uh
+        previous = uh
+    warnings.warn(
+        f"L2 projection did not converge in {max_doublings} quadrature doublings "
+        f"(last relative change {change:.2e}). The integrand is probably not "
+        f"smooth, in which case the projection error dominates this anyway.",
+        ProjectionNotConvergedWarning,
+        stacklevel=3,
+    )
+    return cast(Array, previous)
+
+
 def project1D(
     ue: sp.Expr,
     V: OrthogonalSpace | Composite | DirectSum,
     t: float | Array | None = None,
+    kind: ProjectionKindLike = ProjectionKind.INTERPOLATION,
 ) -> Array:
     """Project scalar expression ue onto 1D space V.
 
@@ -1433,10 +1508,19 @@ def project1D(
         V: Orthogonal / Composite / DirectSum space.
         t: Time at which to evaluate `ue` and, when `V` is a direct sum, its own
             boundary lifting. `None` means neither depends on time.
+        kind: `ProjectionKind.INTERPOLATION` (the default) matches `ue` at the
+            quadrature points; `ProjectionKind.L2` minimises the error in the
+            physical inner product, refining the quadrature until it settles.
 
     Returns:
         Coefficient vector uh.
     """
+    kind = ProjectionKind.coerce(kind)
+    u = TrialFunction(V)
+    v = TestFunction(V)
+    if kind is ProjectionKind.L2:
+        return _l2_projection(v * (u - _at_time(ue, V, t)), V)
+
     if len(get_jaxfunctions(ue)) == 0:
         args = V.system.base_scalars()
         mesh = (V.mesh(),)
@@ -1444,14 +1528,15 @@ def project1D(
             args = (V.system.base_time(), *args)
             mesh = (t, *mesh)
         uj = lambdify(args, ue)(*mesh)
-        uj = jnp.broadcast_to(uj, V.num_quad_points)
+        uj = jnp.broadcast_to(uj, V.num_quad_points)  # in case of scalar
         return _forward_at(V, uj, t)
 
-    u = TrialFunction(V)
-    v = TestFunction(V)
-    M, b = inner(v * (u - ue), kind=InnerKind.SYSTEM)
-    uh = M.solve(b)
-    return uh
+    # The transform is out of reach once `ue` carries a JAXFunction, so the same
+    # answer is had through `inner` by testing with `v/sg`: the measure cancels
+    # against it and what is left is the transform's own metric-free projection.
+    # Without the division this branch would quietly return the L2 one instead.
+    M, b = inner(v * (u - _at_time(ue, V, t)) / V.system.sg, kind=InnerKind.SYSTEM)
+    return M.solve(b)
 
 
 @overload
@@ -1459,21 +1544,27 @@ def project(
     ue: sp.Tuple,
     V: CartesianProductSpace,
     t: float | Array | None = None,
+    kind: ProjectionKindLike = ProjectionKind.INTERPOLATION,
 ) -> tuple[Array, ...]: ...
 @overload
 def project(
     ue: sp.Expr | sp.Tuple,
     V: CartesianTensorProductSpace,
     t: float | Array | None = None,
+    kind: ProjectionKindLike = ProjectionKind.INTERPOLATION,
 ) -> tuple[Array, ...]: ...
 @overload
 def project(
-    ue: sp.Expr, V: ScalarSpaceType, t: float | Array | None = None
+    ue: sp.Expr,
+    V: ScalarSpaceType,
+    t: float | Array | None = None,
+    kind: ProjectionKindLike = ProjectionKind.INTERPOLATION,
 ) -> Array: ...
 def project(
     ue: sp.Expr | sp.Tuple,
     V: FunctionSpaceType,
     t: float | Array | None = None,
+    kind: ProjectionKindLike = ProjectionKind.INTERPOLATION,
 ) -> Array | tuple[Array, ...]:
     """Project expression onto (possibly tensor) space V.
 
@@ -1483,23 +1574,51 @@ def project(
         t: Time at which to evaluate `ue` and, when `V` lifts boundary data, its
             own lifting. `None` means neither depends on time. Only supported
             for scalar spaces, which is all the boundary lifting needs.
+        kind: `ProjectionKind.INTERPOLATION` (the default) matches `ue` at the
+            quadrature points, which is the discrete transform and costs one.
+            `ProjectionKind.L2` minimises the error in the physical inner
+            product instead, refining the quadrature until the coefficients
+            settle. The two agree whenever `V` can represent `ue`.
 
     Returns:
         Coefficient array shaped to V.num_dofs.
     """
     from jaxfun.operators import Dot
 
+    # Coerced up front because the branches below test with `is`, and an
+    # uncoerced string compares equal to a StrEnum member without being one.
+    kind = ProjectionKind.coerce(kind)
     if V.dims == 1:
         if isinstance(V, CartesianProductSpace):
             assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
             spaces = V.flatten()
             return tuple(
-                project(cast(sp.Expr, uei), cast(ScalarSpaceType, spaces[i]))
+                project(cast(sp.Expr, uei), cast(ScalarSpaceType, spaces[i]), kind=kind)
                 for i, uei in enumerate(ue)
             )
         assert isinstance(V, OrthogonalSpace | DirectSum)
         assert isinstance(ue, sp.Expr)
-        return project1D(ue, V, t)
+        return project1D(ue, V, t, kind)
+
+    u = TrialFunction(V)
+    v = TestFunction(V)
+    if V.rank == RankTag.SCALAR:
+        form = v * (u - _at_time(cast(sp.Expr, ue), V, t))
+    elif V.rank == RankTag.VECTOR:
+        assert isinstance(V, VectorTensorProductSpace)
+        assert t is None, "`t` is only supported for scalar spaces"
+        form = Dot(v, (u - ue))
+    else:
+        assert isinstance(V, CartesianTensorProductSpace)
+        assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
+        spaces = V.flatten()
+        return tuple(
+            project(cast(sp.Expr, uei), spaces[i], kind=kind)
+            for i, uei in enumerate(ue)
+        )
+
+    if kind is ProjectionKind.L2:
+        return _l2_projection(form, V)
 
     if len(get_jaxfunctions(ue if isinstance(ue, sp.Expr) else sum(ue))) == 0:
         assert not isinstance(V, OrthogonalSpace | DirectSum | CartesianProductSpace)
@@ -1513,34 +1632,14 @@ def project(
             uj = lambdify(args, ue)(*mesh)
             uj = jnp.broadcast_to(uj, V.num_quad_points)
         else:
-            assert t is None, "`t` is only supported for scalar spaces"
             s = V.system.base_scalars()
             bv = V.system.base_vectors()
-            if V.rank == RankTag.VECTOR:  # VectorTensorProductSpace
-                assert isinstance(ue, sp.Expr)
-                uj = (lambdify(s, Dot(ue, n).doit())(*V.mesh()) for n in bv)
-            else:
-                assert isinstance(V, CartesianTensorProductSpace)
-                assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
-                uj = (lambdify(s, (uei).doit())(*V.mesh()) for uei in ue)
+            assert isinstance(ue, sp.Expr)
+            uj = (lambdify(s, Dot(ue, n).doit())(*V.mesh()) for n in bv)
             uj = jnp.stack([jnp.broadcast_to(ui, V.num_quad_points) for ui in uj])
         return _forward_at(V, place(uj, V._physical_sharding), t)
 
-    u = TrialFunction(V)
-    v = TestFunction(V)
-    if V.rank == RankTag.SCALAR:
-        A, b = inner(v * (u - ue), kind=InnerKind.SYSTEM)
-        uh = A.solve(b)
-
-    elif V.rank == RankTag.VECTOR:
-        assert isinstance(V, VectorTensorProductSpace)
-        A, b = inner(Dot(v, (u - ue)), kind=InnerKind.SYSTEM)
-        uh = A.solve(b)
-
-    else:
-        assert isinstance(V, CartesianTensorProductSpace)
-        assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components
-        spaces = V.flatten()
-        uh = tuple(project(cast(sp.Expr, uei), spaces[i]) for i, uei in enumerate(ue))
-
-    return uh
+    # See `project1D`: `v/sg` cancels the measure, so this is the transform's
+    # own metric-free projection rather than the L2 one.
+    A, b = inner(form / V.system.sg, kind=InnerKind.SYSTEM)
+    return A.solve(b)

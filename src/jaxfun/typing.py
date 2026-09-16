@@ -8,6 +8,7 @@ from typing import (
     Literal,
     NotRequired,
     Protocol,
+    Self,
     cast,
     overload,
 )
@@ -93,7 +94,42 @@ type Loss_Tuple = (
 )
 
 
-class PolynomialKind(StrEnum):
+class CoercibleStrEnum(StrEnum):
+    """A `StrEnum` that accepts one of its members, a member name, or a value.
+
+    Declaring members is all a subclass has to do; `coerce` comes with them.
+    """
+
+    @classmethod
+    def coerce(cls, value: str | Self) -> Self:
+        """Return the member `value` names, however it is spelled.
+
+        Name lookup runs ahead of value lookup so that a short alias resolves to
+        the member it aliases -- `PolynomialKind.L`, `TestSpaceKind.PG` -- and
+        so that the upper-case spelling of any member works.
+
+        Examples::
+
+            PolynomialKind.coerce("legendre")  # -> LEGENDRE  (value lookup)
+            PolynomialKind.coerce("L")  # -> LEGENDRE  (name lookup)
+            TestSpaceKind.coerce("PG")  # -> PETROV_GALERKIN  (name lookup)
+            InnerKind.coerce("system")  # -> SYSTEM  (value lookup)
+        """
+        if isinstance(value, cls):
+            return value
+        try:
+            return cls[value]  # by name, including any alias
+        except KeyError:
+            pass
+        try:
+            return cls(value)  # by value
+        except ValueError as e:
+            valid = ", ".join(repr(member.value) for member in cls)
+            e.add_note(f"Expected one of: {valid}")
+            raise
+
+
+class PolynomialKind(CoercibleStrEnum):
     LEGENDRE = "legendre"
     L = "legendre"
     CHEBYSHEV = "chebyshev"
@@ -103,42 +139,20 @@ class PolynomialKind(StrEnum):
     JACOBI = "jacobi"
     J = "jacobi"
 
-    @classmethod
-    def coerce(cls, value: str | PolynomialKind) -> PolynomialKind:
-        """Accept a value, member name, or short alias and return the canonical member.
 
-        Examples::
-
-            PolynomialKind.coerce("legendre")  # -> LEGENDRE  (value lookup)
-            PolynomialKind.coerce("L")  # -> LEGENDRE  (name lookup)
-            PolynomialKind.coerce("LEGENDRE")  # -> LEGENDRE  (name lookup)
-            PolynomialKind.coerce("C")  # -> CHEBYSHEV  (name lookup)
-        """
-        if isinstance(value, cls):
-            return value
-        try:
-            return cls[value]  # by name: "L"/"LEGENDRE", "C"/"CHEBYSHEV", ...
-        except KeyError:
-            pass
-        try:
-            return cls(value)  # by value: "legendre", "chebyshev", ...
-        except ValueError:
-            raise ValueError(f"{value!r} is not a valid {cls.__name__}") from None
-
-
-class SampleMethod(StrEnum):
+class SampleMethod(CoercibleStrEnum):
     UNIFORM = "uniform"
     LEGENDRE = "legendre"
     CHEBYSHEV = "chebyshev"
     RANDOM = "random"
 
 
-class MeshKind(StrEnum):
+class MeshKind(CoercibleStrEnum):
     QUADRATURE = "quadrature"
     UNIFORM = "uniform"
 
 
-class InnerKind(StrEnum):
+class InnerKind(CoercibleStrEnum):
     BILINEAR = "bilinear"
     LINEAR = "linear"
     SYSTEM = "system"
@@ -147,33 +161,41 @@ class InnerKind(StrEnum):
 type InnerKindLike = InnerKind | Literal["bilinear", "linear", "system"]
 
 
-class TestSpaceKind(StrEnum):
+class ProjectionKind(CoercibleStrEnum):
+    """How `project` should represent an expression in a space.
+
+    The two coincide whenever the space can represent the expression exactly,
+    and part company only once it cannot -- which is also the only time the
+    distinction is worth paying for.
+    """
+
+    INTERPOLATION = "interpolation"
+    """Match the expression at the quadrature points -- the discrete transform.
+
+    Cheap, and on a curvilinear system it is a projection in its own right:
+    testing with ``v/sg`` cancels the measure, leaving an exact, analytic mass.
+    The residual is orthogonal to the basis in the computational inner product.
+    """
+
+    L2 = "l2"
+    """Minimise the error in the physical L2 inner product, measure included.
+
+    The residual is orthogonal to the basis under ``sg*dxi``, which is the mass
+    a Galerkin discretisation assembles -- so an initial condition projected
+    this way is consistent with the equations it is fed to. Costs repeated
+    assembly, since the load vector has to be integrated more accurately than
+    the space itself resolves.
+    """
+
+
+type ProjectionKindLike = ProjectionKind | Literal["interpolation", "l2"]
+
+
+class TestSpaceKind(CoercibleStrEnum):
     GALERKIN = "Galerkin"
     G = "Galerkin"
     PETROV_GALERKIN = "Petrov-Galerkin"
     PG = "Petrov-Galerkin"
-
-    @classmethod
-    def coerce(cls, value: str | TestSpaceKind) -> TestSpaceKind:
-        """Accept a value, member name, or short alias and return the canonical member.
-
-        Examples::
-
-            TestSpaceKind.coerce("Galerkin")  # -> GALERKIN  (value lookup)
-            TestSpaceKind.coerce("G")  # -> GALERKIN  (name lookup)
-            TestSpaceKind.coerce("GALERKIN")  # -> GALERKIN  (name lookup)
-            TestSpaceKind.coerce("PG")  # -> PETROV_GALERKIN  (name lookup)
-        """
-        if isinstance(value, cls):
-            return value
-        try:
-            return cls[value]  # match by name: "G", "PG", "GALERKIN", "PETROV_GALERKIN"
-        except KeyError:
-            pass
-        try:
-            return cls(value)  # match by value: "Galerkin", "Petrov-Galerkin"
-        except ValueError:
-            raise ValueError(f"{value!r} is not a valid {cls.__name__}") from None
 
 
 @unique

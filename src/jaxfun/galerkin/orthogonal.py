@@ -345,9 +345,9 @@ class OrthogonalSpace(BaseSpace):
         """Forward transform (samples -> coefficients) using orthogonality.
 
         Note:
-            Metric-free, also on a curvilinear system.
-            Use `project` when the L2(sg) projection is wanted under over-integration,
-            where the two do part company.
+            This represents a forward discrete transform, not a projection.
+            The transform is metric-free, also on a curvilinear system.
+            Use `project` when the L2(sg) projection is wanted.
         """
         # Weighting this by `sg` would not make it "more correct" for curvilinear
         # coordinates. We compute the forward transform using a test function that is

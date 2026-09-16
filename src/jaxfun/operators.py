@@ -786,7 +786,7 @@ class Outer(Expr):
         return outer(self._expr1.doit(), self._expr2.doit())
 
 
-class Source(Expr):
+class Unevaluated(Expr):
     _expr: Expr
 
     def __new__(cls: type[Self], expr: Expr) -> Self:

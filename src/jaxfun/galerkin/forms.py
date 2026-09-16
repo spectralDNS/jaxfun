@@ -23,7 +23,7 @@ import jax.numpy as jnp
 import sympy as sp
 from sympy.core.function import AppliedUndef
 
-from jaxfun.coordinates import CoordSys, get_system as get_system
+from jaxfun.coordinates import BaseTime, CoordSys, get_system as get_system
 from jaxfun.typing import (
     CoeffDict,
     FunctionSpaceType,
@@ -325,6 +325,18 @@ def split(forms: sp.Expr) -> ResultDict:
     return result
 
 
+def _merge_would_hide_time(
+    g: InnerResultDict, d: InnerResultDict, time: BaseTime
+) -> bool:
+    """Return True if merging `d` into `g` would bury a time factor.
+
+    Only the branches that rewrite `coeff` into `multivar`/`jaxfunction` are at
+    risk; a plain `coeff += coeff` keeps a sum of time factors in `coeff`, which
+    is still separable and still recognised.
+    """
+    return any(sp.sympify(term.get("coeff", 1)).has(time) for term in (g, d))
+
+
 def add_result(
     res: list[InnerResultDict], d: InnerResultDict, system: CoordSys
 ) -> list[InnerResultDict]:
@@ -343,11 +355,20 @@ def add_result(
     Returns:
         Updated list with merged or appended dictionary.
     """
+    time = system.base_time()
     found_d: bool = False
     for g in res:
         if jnp.all(jnp.array([g[s] == d[s] for s in system.base_scalars()])):
             if "multivar" not in d and "jaxfunction" not in d:
                 g["coeff"] += d["coeff"]
+            elif _merge_would_hide_time(g, d, time):
+                # The branches below fold `coeff` into the coordinate-dependent
+                # factor and reset it to 1. That is fine for a numeric
+                # coefficient, but a *time* factor lives in `coeff` precisely so
+                # that a caller can see it is separable -- folding it in turns
+                # `exp(-t)*sqrt(x+y) + sqrt(x+y)` into one inseparable term and
+                # hides the time dependence inside `multivar`. Keep them apart.
+                continue
             elif "multivar" not in g and "jaxfunction" not in g:
                 g["multivar"] = d["coeff"] * d["multivar"]
                 g["coeff"] = 1

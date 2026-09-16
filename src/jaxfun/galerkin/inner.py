@@ -8,6 +8,7 @@ import sympy as sp
 from flax import nnx
 from jax import Array
 
+from jaxfun.coordinates import BaseTime
 from jaxfun.la import (
     BaseMatrix,
     BlockArray,
@@ -20,7 +21,7 @@ from jaxfun.la import (
     TPMatrices,
     TPMatrix,
 )
-from jaxfun.sharding import place
+from jaxfun.sharding import place, replicate
 from jaxfun.typing import (
     CoeffDict,
     ComputationalSpaceType,
@@ -34,7 +35,7 @@ from jaxfun.typing import (
     ScalarSpaceType,
     TrialSpaceType,
 )
-from jaxfun.utils.common import lambdify, matmat
+from jaxfun.utils.common import ArrayFn, lambdify, matmat
 
 from .arguments import (
     ArgumentTag,
@@ -404,6 +405,135 @@ def inner_boundary(
     test_leaf = context.test_space.leaf
     rank = RankTag.SCALAR if test_leaf is None else test_leaf.rank
     return BoundaryForcing(blocks, rank, outer_sign)
+
+
+class SourceForcing(nnx.Module):
+    """A source term's load vector as a function of time.
+
+    The time dependence of a supported source factors out of the quadrature:
+    each term is `g_k(t) * h_k(x)`, so `h_k` assembles once into a fixed vector
+    and a call costs one scalar evaluation and one axpy per term. Traceable in
+    `t`.
+    """
+
+    def __init__(
+        self, vectors: Sequence[Array], funs: Sequence[ArrayFn], rank: RankTag
+    ) -> None:
+        # The assembled vectors are data -- they cross `_advance`'s jit boundary
+        # as traced arguments, like the boundary operators do. The lambdified
+        # time factors are ordinary Python callables and stay static.
+        #
+        # Replicated, not sharded, for the reason `BaseIntegrator.linear_forcing`
+        # is: assembly places a load vector on the global spectral sharding, and
+        # these are stored on the integrator, so they are reached through
+        # `_advance`'s closure. JAX refuses to close over an array spanning
+        # devices the process cannot address.
+        self._vectors = nnx.data(tuple(replicate(v) for v in vectors))
+        self._funs = nnx.static(tuple(funs))
+        self._rank = nnx.static(rank)
+
+    def __call__(self, t: float | Array) -> Array:
+        """Return the source load vector at time `t`."""
+        if self._rank != RankTag.SCALAR:
+            raise NotImplementedError(
+                "Deferred source forcing is implemented for scalar equations; "
+                "assemble each component of a block system separately."
+            )
+        total: Array | None = None
+        for vector, fun in zip(self._vectors, self._funs, strict=True):
+            term = jnp.asarray(fun(t)) * jnp.asarray(vector)
+            total = term if total is None else total + term
+        assert total is not None
+        return total
+
+
+def _time_factor_of(b0: InnerResultDict, time: BaseTime) -> sp.Expr | None:
+    """Return the term's time factor, or None when it has none.
+
+    `separatevars` puts everything free of the coordinates into `coeff`, so a
+    source that is separable in time arrives with `t` there and nowhere else.
+    Anything else -- `t` riding inside a coordinate factor or a `multivar` --
+    would need the quadrature itself re-evaluated at every stage, and is
+    refused rather than silently mishandled.
+    """
+    coeff = sp.sympify(b0.get("coeff", 1))
+    elsewhere = [
+        (key, value)
+        for key, value in b0.items()
+        if key != "coeff" and sp.sympify(value).has(time)
+    ]
+    if elsewhere:
+        where = ", ".join(f"{key}: {value}" for key, value in elsewhere)
+        raise NotImplementedError(
+            f"Source term with `{time}` inside a coordinate factor ({where}). "
+            "Only sources separable in time are supported -- write the term as "
+            f"a sum of `g({time}) * h(x)` products. `sp.expand_trig` turns a "
+            "travelling wave into one; an expression like sqrt(x + t) has no "
+            "such form."
+        )
+    if not coeff.has(time):
+        return None
+    # The factor is lambdified against `time` alone, so anything else left free
+    # in it becomes an undefined name inside the generated function and surfaces
+    # as a `TypeError` from within a trace. A frequency written as a bare
+    # `sp.Symbol` rather than a number is the easy way to get here.
+    stray = coeff.free_symbols - {time}
+    if stray:
+        names = ", ".join(sorted(str(sym) for sym in stray))
+        raise ValueError(
+            f"Source term's time factor `{coeff}` has free symbol(s) {names} "
+            f"besides `{time}`. A source's time dependence is evaluated from "
+            f"`{time}` alone, so every parameter in it must be a number."
+        )
+    return coeff
+
+
+def inner_source(
+    expr: sp.Expr,
+    num_quad_points: int | tuple[int | None, ...] | None = None,
+) -> SourceForcing | None:
+    """Assemble the time-dependent linear forms of `expr` as a function of time.
+
+    The counterpart to `inner` for a source that moves. `expr` must hold linear
+    forms only -- the caller splits the time-dependent terms out of the weak
+    form first, which is what keeps `inner`'s own path untouched.
+
+    Returns:
+        A `SourceForcing`, or None when no term depends on time.
+    """
+    context = _prepare_inner_context(expr, num_quad_points)
+    if context.a_forms:
+        raise ValueError(
+            "inner_source expects an expression with no bilinear forms; "
+            "operators are assembled once and cannot depend on time."
+        )
+    time = context.test_space.system.base_time()
+    test_leaf = context.test_space.leaf
+    rank: RankTag = RankTag.SCALAR if test_leaf is None else test_leaf.rank
+
+    vectors: list[Array] = []
+    funs: list[ArrayFn] = []
+    for b0 in context.b_forms:
+        factor = _time_factor_of(b0, time)
+        if factor is None:
+            continue
+        # Assembled with the time factor replaced by one, through the same
+        # `_assemble_linear_form` `inner` uses -- so vector spaces, global
+        # indices, `multivar` and `jaxfunction` all keep working unchanged, and
+        # a constant `g` reproduces `inner`'s own vector.
+        steady = cast(InnerResultDict, {**b0, "coeff": sp.Integer(1)})
+        item = _assemble_linear_form(steady, context)
+        if item is None:  # pragma: no cover - a linear form always assembles one
+            raise ValueError(f"Source term assembled no load vector: {b0}")
+        vector = _finalize_inner_result(
+            [], [item], context.test_space, context.trial_space, False, 1000
+        )
+        vectors.append(cast(Array, vector))
+        funs.append(lambdify((time,), factor))
+
+    if not vectors:
+        return None
+    return SourceForcing(vectors, funs, rank)
 
 
 def inner_items(

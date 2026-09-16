@@ -376,3 +376,37 @@ def mesh_axes(V: ScalarSpaceType, N: ScalarPadding) -> tuple[Array, ...]:
         return (cast(Array, V.mesh(N=cast(int, N))),)  # ty: ignore[invalid-argument-type]
     mesh = V.mesh(N=N, broadcast=False)  # ty: ignore[invalid-argument-type,unknown-argument]
     return cast(tuple[Array, ...], mesh)
+
+
+def split_transient_terms(expr: sp.Expr, time: sp.Symbol) -> tuple[sp.Expr, sp.Expr]:
+    """Partition a weak form's additive terms into the time-free ones and the rest.
+
+    The two halves assemble separately and add back up exactly: `inner`'s sign
+    flip for a form containing bilinear parts and `split_operator_and_forcing`'s
+    undo of it cancel within each half, so lifting the source out changes
+    neither the operator nor the steady forcing.
+
+    A term that does not mention time is returned untouched -- not rebuilt, not
+    expanded -- so the steady assembly cannot drift. `sp.expand_trig` is applied
+    only to the terms that do, which is what brings a travelling wave
+    `sin(kx - wt)` into the separable form the source assembly supports.
+
+    Raises:
+        ValueError: if a time-dependent term contains a TrialFunction. Operators
+            are assembled and factorized once, at construction.
+    """
+    steady: list[sp.Expr] = []
+    transient: list[sp.Expr] = []
+    for term in sp.Add.make_args(sp.sympify(expr)):
+        if not term.has(time):
+            steady.append(term)
+            continue
+        _, trials = get_basisfunctions(term)
+        if trials not in (None, set()):
+            raise ValueError(
+                f"Time-dependent coefficient on a bilinear term: {term}. "
+                "Operators are assembled and factorized once, at construction, "
+                f"so only source terms and boundary data may depend on {time}."
+            )
+        transient.append(sp.expand(sp.expand_trig(term)))
+    return sp.Add(*steady), sp.Add(*transient)

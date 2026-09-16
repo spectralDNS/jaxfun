@@ -328,7 +328,12 @@ class OrthogonalSpace(BaseSpace):
         return self.vandermonde_derivative(k, N) @ c
 
     def mass_matrix(self) -> DiaMatrix:
-        """Return diagonal mass matrix (orthogonality) in sparse format."""
+        """Return diagonal mass matrix (orthogonality) in sparse format.
+
+        The *orthogonality* mass, equal to ``inner(v * u)`` only when
+        ``sg == 1``. On a curvilinear system the true mass carries the measure
+        and is generally dense, so ask `inner` for it there.
+        """
         return diags(
             [self.norm_squared() / float(self.domain_factor)],
             offsets=(0,),
@@ -337,26 +342,60 @@ class OrthogonalSpace(BaseSpace):
 
     @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
-        """Forward projection (samples -> coefficients) using orthogonality."""
+        """Forward transform (samples -> coefficients) using orthogonality.
+
+        Note:
+            Metric-free, also on a curvilinear system.
+            Use `project` when the L2(sg) projection is wanted under over-integration,
+            where the two do part company.
+        """
+        # Weighting this by `sg` would not make it "more correct" for curvilinear
+        # coordinates. We compute the forward transform using a test function that is
+        # the orthogonal basis itself divided by sg. Hence the forward transform becomes
+        # metric-free due to the integral measure (the two sgs cancel out). It is
+        # identical to what would be obtained by project, which on the other hand *is*
+        # using the curvilinear measure. project may use more quadrature points though,
+        # in which case the two will differ. Hence forward is the transform obtained by
+        # interpolation in quadrature points, while project is the L2(sg) projection.
+
         # u should be a padded array of length >= self.N
-        L = self.scalar_product(u)
+        L = self._scalar_product_ref(u)
         A = self.norm_squared() / float(self.domain_factor)
         return L / A
 
+    def _metric_weights(self, N: int) -> Array | float:
+        """Return `sg` sampled on the `N`-point quadrature mesh, or a scalar.
+
+        Kept apart from the (cached) basis values because `sg` reads
+        `self.system`, which TensorProduct replaces after construction.
+        """
+        sg = self.system.sg
+        if sp.sympify(sg).is_number:
+            return float(sg)
+        x = self.system.base_scalars()[0]
+        return lambdify(x, sg)(self.mesh(kind=MeshKind.QUADRATURE, N=N))
+
     @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
-        """Return vector of inner products <u, psi_i> (weighted)."""
+        """Return the load vector <u, psi_i>, carrying the curvilinear measure.
+
+        Note:
+            Contractually identical to ``inner(u * v)``.
+
+        """
+        return self._scalar_product_ref(u * self._metric_weights(u.shape[0]))
+
+    @jax.jit(static_argnums=0)
+    def _scalar_product_ref(self, u: Array) -> Array:
+        """Return the scalar product without the curvilinear measure.
+
+        What `forward` is built on; `scalar_product` applies `sg` on top.
+        """
         N: int = u.shape[0]
         assert N >= self.N, "Only truncation supported for forward transform"
-        Xj, wj = self.quad_points_and_weights(N)
+        _, wj = self.quad_points_and_weights(N)
         Pi = self.vandermonde(N)  # == self.eval_basis_functions(Xj)
-        sg = self.system.sg / self.domain_factor
-        if sp.sympify(sg).is_number:
-            wj = wj * float(sg)
-        else:
-            x = self.system.base_scalars()[0]
-            sg = lambdify(x, self.map_expr_true_domain(sg))(Xj)
-            wj = wj * sg
+        wj = wj / float(self.domain_factor)
         return (u * wj) @ jnp.conj(Pi)  # Truncated to (self.N,)
 
     @overload

@@ -294,8 +294,8 @@ class Chebyshev(Jacobi):
         return uh[: self.N] if n > self.N else uh
 
     @jax.jit(static_argnums=0)
-    def scalar_product(self, u: Array) -> Array:
-        """Return scalar product for function u.
+    def _scalar_product_ref(self, u: Array) -> Array:
+        """Return the scalar product without the curvilinear measure.
 
         Args:
             u: Function values at quadrature points.
@@ -305,7 +305,7 @@ class Chebyshev(Jacobi):
         """
         n: int = len(u)
         assert n >= self.N, "Only truncation supported for forward transform"
-        scale = _chebyshev_scalar_product_scale(n, self.domain_factor)
+        scale = _chebyshev_scalar_product_scale(n, float(self.domain_factor))
         uh = _scaled_dct(u, scale)
         return uh[: self.N] if n > self.N else uh
 

@@ -189,12 +189,12 @@ class ChebyshevU(Jacobi):
         Returns:
             Coefficient array of length self.N.
         """
-        uh = self.scalar_product(u)
-        return uh * (2 * self.domain_factor / jnp.pi)
+        uh = self._scalar_product_ref(u)
+        return uh * (2 * float(self.domain_factor) / jnp.pi)
 
     @jax.jit(static_argnums=0)
-    def scalar_product(self, u: Array) -> Array:
-        """Return scalar product for function u.
+    def _scalar_product_ref(self, u: Array) -> Array:
+        """Return the scalar product without the curvilinear measure.
 
         Args:
             u: Function values at quadrature points.
@@ -206,7 +206,11 @@ class ChebyshevU(Jacobi):
         assert len(u) >= self.N, "Only truncation supported for forward transform"
         uh = u * jnp.sin(jnp.pi / (n + 1) * jnp.arange(1, n + 1))
         uh = dst(uh, n=n, type=1)
-        uh = uh * (-1) ** jnp.arange(n) * jnp.pi / (2 * (n + 1) * self.domain_factor)
+        # `float`, because a symbolic `domain_factor` (a domain such as
+        # `(0, sp.pi)` gives `2/pi`) would make this dispatch to SymPy's
+        # `__rtruediv__`, which cannot sympify an array.
+        df = float(self.domain_factor)
+        uh = uh * (-1) ** jnp.arange(n) * jnp.pi / (2 * (n + 1) * df)
         if len(u) > self.N:
             uh = uh[: self.N]
         return uh

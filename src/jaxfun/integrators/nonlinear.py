@@ -18,6 +18,8 @@ from jaxfun.galerkin.arguments import (
 from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
 from jaxfun.utils import JAX_FUNCTION_BY_NAME, lambdify, normalize_explicit
 
+from ._utils import mesh_axes
+
 type NodeValueCache = dict[sp.Basic, Array]
 type NodeEvaluator = Callable[[NodeValueCache, ScalarPadding], Array]
 
@@ -251,8 +253,11 @@ class NonlinearCompiler:
             value = float(evaluated) if evaluated.is_real else complex(evaluated)
             out = jnp.asarray(value)
         elif free_symbols.issubset(set(spatial_symbols)):
-            # `N` has a lot of different shapes, trust the correct one is passed...
-            out = lambdify(spatial_symbols, evaluated, modules="jax")(*V.mesh(N=N))  # ty:ignore[invalid-argument-type]
+            # `N` has a lot of different shapes, trust the correct one is passed.
+            # `mesh_axes` because a 1D space returns the mesh as a bare array
+            # rather than a one-tuple, and splatting that spreads the
+            # quadrature points across the arguments one point each.
+            out = lambdify(spatial_symbols, evaluated, modules="jax")(*mesh_axes(V, N))
         else:
             names = ", ".join(sorted(str(sym) for sym in free_symbols))
             raise ValueError(

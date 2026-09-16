@@ -350,8 +350,6 @@ class OrthogonalSpace(BaseSpace):
         assert N >= self.N, "Only truncation supported for forward transform"
         Xj, wj = self.quad_points_and_weights(N)
         Pi = self.vandermonde(N)  # == self.eval_basis_functions(Xj)
-        # sg reads self.system, which TensorProduct replaces after construction,
-        # so the weights must stay separate from the (cached) basis values.
         sg = self.system.sg / self.domain_factor
         if sp.sympify(sg).is_number:
             wj = wj * float(sg)

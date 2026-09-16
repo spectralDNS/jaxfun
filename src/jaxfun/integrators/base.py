@@ -494,6 +494,7 @@ class BaseIntegrator(TimeStepper[Array]):
         steady_expr, source_expr = split_transient_terms(
             self.linear_expr, self.trialspace.system.base_time()
         )
+
         linear_operator, linear_forcing = assemble_linear_term(
             steady_expr, sparse=self.sparse, sparse_tol=self.sparse_tol
         )

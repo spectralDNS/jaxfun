@@ -162,7 +162,7 @@ args = list(
 
 
 def get_curve():
-    """A 1D system whose metric varies along it: sg = sqrt(1 + t**2)."""
+    """A 1D system whose metric varies along it: sg = sqrt(1 + x**2)."""
     return get_CoordSys("V", sp.Lambda((x,), (x, x**2 / 2)))
 
 

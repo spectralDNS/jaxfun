@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Literal, TypeGuard, cast, overload
 
 import jax
+import jax.core
 import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
@@ -555,6 +556,8 @@ def _prepare_inner_context(
     V = unwrap_single_testfunction(V)
     assert _has_testspace(V), "TestFunction has no associated function space"
     test_space = cast(ComputationalSpaceType, V.functionspace)
+    all_linear = U is None
+
     if isinstance(U, set):
         leaf = set(
             cast(
@@ -571,12 +574,7 @@ def _prepare_inner_context(
     allforms = split(expr * measure)
     a_forms = allforms["bilinear"]
     b_forms = allforms["linear"]
-    all_linear = not (
-        len(a_forms) > 0
-        and jnp.any(
-            jnp.array(["bilinear" in split_coeff(c0["coeff"]) for c0 in a_forms])
-        )
-    )
+
     num_quad_points = (
         num_quad_points if num_quad_points is not None else test_space.num_quad_points
     )
@@ -967,7 +965,7 @@ def _assemble_linear_factor(
 def _assemble_linear_form(
     b0: InnerResultDict, context: _InnerContext
 ) -> GlobalArray | None:
-    scale = _linear_form_scale(b0, len(context.a_forms) > 0)
+    scale = _linear_form_scale(b0, not context.all_linear)
     bs: list[_LinearFactor] = []
     global_index = 0
     is_multivar = "multivar" in b0 or "jaxfunction" in b0
@@ -1145,10 +1143,14 @@ def _finalize_inner_result(
                     cast(CartesianTensorProductSpace, trial_space.leaf),
                 )
 
-        elif all(isinstance(a, TensorMatrix) for a in aresults):
+        elif all(isinstance(a, TPMatrix | TensorMatrix) for a in aresults):
             if rank != RankTag.SCALAR:
                 raise NotImplementedError("Rank >0 TensorMatrix not implemented")
-            tensor_results = cast(list[TensorMatrix], aresults)
+            # One non-separable term makes the operator dense regardless, so a
+            # separable term beside it is expanded to join the sum.
+            tensor_results = [
+                _as_tensormatrix(cast(TPMatrix | TensorMatrix, a)) for a in aresults
+            ]
             aresult = sum(tensor_results[1:], tensor_results[0])
 
         else:
@@ -1161,6 +1163,14 @@ def _finalize_inner_result(
     if bresult is None:
         return aresult
     return aresult, bresult
+
+
+def _as_tensormatrix(a: TPMatrix | TensorMatrix) -> TensorMatrix:
+    """Return `a` as a `TensorMatrix`, expanding a separable operator."""
+    if isinstance(a, TensorMatrix):
+        return a
+    A0, A1 = (mat.todense() for mat in a.mats)
+    return TensorMatrix(a.coefficient * jnp.einsum("ik,jl->ikjl", A0, A1))
 
 
 @overload
@@ -1426,10 +1436,10 @@ def _at_time(ue: sp.Expr, V: FunctionSpaceType, t: float | Array | None) -> sp.E
     """
     if t is None:
         return ue
-    if isinstance(t, Array):
+    if isinstance(t, jax.core.Tracer | Array):
         raise NotImplementedError(
-            "project cannot over-integrate at a traced time; pass a float `t`, "
-            "or leave num_quad_points at the space's own quadrature."
+            "project cannot assemble symbolically at a JAX array or traced time; "
+            "pass a Python float `t`."
         )
     return ue.subs(V.system.base_time(), t)
 
@@ -1450,8 +1460,31 @@ def _tree_max(leaves: Sequence[Array]) -> Array:
     return jnp.max(jnp.stack([jnp.abs(leaf).max() for leaf in leaves]))
 
 
+def _solve_at(
+    form: sp.Expr,
+    V: FunctionSpaceType,
+    t: float | Array | None,
+    num_quad_points: ScalarPadding = None,
+) -> Array:
+    """Assemble and solve `form`, with the boundary lifting of `V` taken at `t`."""
+    A, b = inner(form, kind=InnerKind.SYSTEM, num_quad_points=num_quad_points)
+    # `inner` folds the lifting into `b` as the space holds it, which for
+    # boundary data that moves is time zero, while `ue` in the form has already
+    # been pinned at `t`. Left alone, the solve fits the homogeneous part to a
+    # mismatch between two times. `inner_boundary` returns that same folded
+    # contribution uncontracted, so it can be swapped for the one at `t`.
+    if t is not None and isinstance(V, DirectSum | DirectSumTPS):
+        forcing = inner_boundary(form, num_quad_points=num_quad_points)
+        if forcing is not None:
+            b = cast(Array, b) - forcing() + forcing(t)
+    return A.solve(b)
+
+
 def _l2_projection(
-    form: sp.Expr, V: FunctionSpaceType, max_doublings: int = 6
+    form: sp.Expr,
+    V: FunctionSpaceType,
+    t: float | Array | None = None,
+    max_doublings: int = 6,
 ) -> Array:
     """Solve `inner(form)` at ever finer quadrature until the answer settles.
 
@@ -1474,12 +1507,7 @@ def _l2_projection(
     previous: Array | None = None
     change = float("inf")
     for i in range(max_doublings + 1):
-        A, b = inner(
-            form,
-            kind=InnerKind.SYSTEM,
-            num_quad_points=_scale_quad_points(own, 2**i),
-        )
-        uh = A.solve(b)
+        uh = _solve_at(form, V, t, _scale_quad_points(own, 2**i))
         if previous is not None:
             # Through `jax.tree`, because a vector space solves to a
             # `BlockArray` of one coefficient array per component rather than a
@@ -1531,7 +1559,7 @@ def project1D(
     u = TrialFunction(V)
     v = TestFunction(V)
     if kind is ProjectionKind.L2:
-        return _l2_projection(v * (u - _at_time(ue, V, t)), V)
+        return _l2_projection(v * (u - _at_time(ue, V, t)), V, t)
 
     if len(get_jaxfunctions(ue)) == 0:
         args = V.system.base_scalars()
@@ -1547,8 +1575,7 @@ def project1D(
     # answer is had through `inner` by testing with `v/sg`: the measure cancels
     # against it and what is left is the transform's own metric-free projection.
     # Without the division this branch would quietly return the L2 one instead.
-    M, b = inner(v * (u - _at_time(ue, V, t)) / V.system.sg, kind=InnerKind.SYSTEM)
-    return M.solve(b)
+    return _solve_at(v * (u - _at_time(ue, V, t)) / V.system.sg, V, t)
 
 
 @overload
@@ -1663,11 +1690,10 @@ def project(
         )
 
     if kind is ProjectionKind.L2:
-        uh = _l2_projection(form, V)
+        uh = _l2_projection(form, V, t)
     else:
         # See `project1D`: `v/sg` cancels the measure, so this is the transform's
         # own metric-free projection rather than the L2 one.
-        A, b = inner(form / V.system.sg, kind=InnerKind.SYSTEM)
-        uh = A.solve(b)
+        uh = _solve_at(form / V.system.sg, V, t)
 
     return uh.array if isinstance(uh, BlockArray) else uh

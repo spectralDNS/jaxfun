@@ -18,10 +18,10 @@ from jaxfun.galerkin import (
 )
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
-from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.inner import inner, project
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.la import BaseMatrix, BlockArray, DiaMatrix, TPMatrices
-from jaxfun.typing import GalerkinAssembledForm
+from jaxfun.typing import GalerkinAssembledForm, ProjectionKind
 from jaxfun.utils import ulp
 
 
@@ -648,3 +648,95 @@ def test_inner_exact_multivar_2d():
     assert jnp.allclose(A[-1, -1, -1, -1], float(t), atol=jnp.sqrt(ulp(100))), abs(
         A[-1, -1, -1, -1] - float(t)
     )
+
+
+@pytest.mark.parametrize("bilinear", (False, True))
+@pytest.mark.parametrize(
+    "case",
+    ("r + 1", "g2 + 1", "r + g2", "r*g2 + 1", "r*g2 + r", "r*g2 + g2", "r + x"),
+)
+def test_inner_sums_terms_of_different_kinds(case: str, bilinear: bool) -> None:
+    """A form assembles to the sum of its terms, whatever kind each term is.
+
+    Terms sharing every separable factor are merged before assembly, and that
+    used to happen across kinds: a plain term beside a `multivar` one was
+    dropped, beside a `jaxfunction` one it raised, and a term carrying both
+    lost its `jaxfunction`. A bilinear form could not add a separable operator
+    to a non-separable one at all.
+    """
+    T = TensorProduct(Legendre(8, name="Lk"), Legendre(8, name="Lm"))
+    x, y = T.system.base_scalars()
+    v, u = TestFunction(T), TrialFunction(T)
+    r = sp.sqrt(x**2 + y**2 + 1)
+    g2 = JAXFunction(x * y, T) ** 2
+    names = {"r": r, "g2": g2, "r*g2": r * g2, "1": sp.S.One, "x": x}
+    terms = [names[name.strip()] for name in case.split("+")]
+
+    def assemble(expr: sp.Expr) -> Array:
+        if bilinear:
+            return inner(
+                v * u * expr, kind="bilinear", num_quad_points=(24, 24)
+            ).todense()
+        return cast(Array, inner(v * expr, kind="linear", num_quad_points=(24, 24)))
+
+    got = assemble(sp.Add(*terms))
+    expected = sum(assemble(term) for term in terms)
+    assert jnp.allclose(got, expected, atol=ulp(1000)), jnp.abs(got - expected).max()
+
+
+@pytest.mark.parametrize("dims", (1, 2))
+def test_linear_form_keeps_its_sign_beside_a_jaxfunction(dims: int) -> None:
+    """A term linear in a JAXFunction must not flip the plain terms beside it.
+
+    It is filed with the bilinear forms and contracted to a vector, and the
+    plain linear terms used to be negated as if moved across the equation. In a
+    system both move to the right-hand side, so they must agree there too.
+    """
+    if dims == 1:
+        V = Legendre(8, name="Ls")
+        (x,) = V.system.base_scalars()
+        g = JAXFunction(x, V)
+    else:
+        V = TensorProduct(Legendre(8, name="Lsx"), Legendre(8, name="Lsy"))
+        x, y = V.system.base_scalars()
+        g = JAXFunction(x * y, V)
+    v, u = TestFunction(V), TrialFunction(V)
+
+    def linear(expr: sp.Expr) -> Array:
+        return cast(Array, inner(v * expr, kind="linear"))
+
+    expected = linear(g) + linear(sp.S.One)
+    got = linear(g + 1)
+    assert jnp.allclose(got, expected, atol=ulp(1000)), jnp.abs(got - expected).max()
+    _, b = inner(v * (u - g - 1), kind="system")
+    assert jnp.allclose(cast(Array, b), expected, atol=ulp(1000))
+
+
+@pytest.mark.parametrize("route", ("l2", "jaxfunction"))
+@pytest.mark.parametrize("dims", (1, 2))
+def test_project_takes_a_moving_lifting_at_t(dims: int, route: str) -> None:
+    """Projecting at `t` puts a moving boundary lifting at `t` on every route.
+
+    `ue` is representable and meets the boundary data at every time, so the
+    routes that assemble through `inner` -- an L2 projection, or an `ue` holding
+    a JAXFunction -- have to reproduce the transform. Only `t != 0` tells a
+    lifting at `t` apart from one frozen at zero.
+    """
+    t = FunctionSpace(8, Legendre).system.base_time()
+    bcs = {"left": {"D": 0}, "right": {"D": sp.sin(t)}}
+    wall = FunctionSpace(10, Legendre, bcs=bcs, name="Dmove")
+    V = wall if dims == 1 else TensorProduct(wall, Legendre(10, name="Lmove"))
+    x, *y = V.system.base_scalars()
+    bubble = (1 - x**2) * x**2 * (y[0] if y else 1)
+    lifted = x * (1 + x) / 2 * sp.sin(V.system.base_time())
+
+    if route == "jaxfunction":
+        ue = lifted + JAXFunction(bubble, V.get_homogeneous())
+        kind = ProjectionKind.INTERPOLATION
+    else:
+        ue = lifted + bubble
+        kind = ProjectionKind.L2
+
+    got = project(ue, V, t=1.0, kind=kind)
+    expected = project(lifted + bubble, V, t=1.0)
+    assert jnp.allclose(got, expected, atol=ulp(1000)), jnp.abs(got - expected).max()

@@ -90,7 +90,10 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_here = os.path.dirname(os.path.abspath(__file__))
+# `spmd_bootstrap` and `OrrSommerfeld_eigs` sit one level up, shared with the 3D
+# solver; ChannelFlow2D is alongside.
+sys.path[:0] = [_here, os.path.dirname(_here)]
 
 import time
 

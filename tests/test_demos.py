@@ -9,7 +9,7 @@ root = Path(__file__).parent.parent
 # Modules that live in examples/ but are not demos: imported by a demo rather
 # than run on their own. `spmd_bootstrap` brings up `jax.distributed` for the
 # demos that can run under `mpirun`; running it on its own does nothing.
-NOT_DEMOS = {"OrrSommerfeld_eigs", "ChannelFlow2D", "spmd_bootstrap"}
+NOT_DEMOS = {"OrrSommerfeld_eigs", "ChannelFlow2D", "ChannelFlow3D", "spmd_bootstrap"}
 
 # Demos are grouped in subdirectories by topic, so this recurses. `notebooks/`
 # is not part of the suite: it holds paired .py/.ipynb sources, several of which
@@ -65,6 +65,15 @@ files = [f.stem for f in _all_files]
 SPMD_DEMOS = [
     "poisson2D_periodic",
     "schnakenberg",
+    # `SquireMode3D` splits both its solves and its transforms, and is the only
+    # demo that does either in three dimensions: two Fourier axes against one
+    # polynomial axis in `TPMatricesWavenumberSolver`, and the rank-4 batched
+    # `shard_map` transforms `KMM3D` writes out by hand. It asserts
+    # `solver.sharded` itself, so a size that quietly failed to divide fails the
+    # demo here rather than passing on the local path. `OrrSommerfeld3D` shards
+    # the same way but takes minutes, so it is left out, as the 2D
+    # Navier-Stokes demos are.
+    "SquireMode3D",
 ]
 
 # Demos whose own verification needs float64, so they enable it for themselves at

@@ -94,7 +94,7 @@ class BoundaryConditions(dict):
 
     def num_derivatives(self) -> int:
         """Return total derivative order count (used for basis offset)."""
-        n = {"D": 0, "R": 0, "N": 1, "N2": 2, "N3": 3, "N4": 4}
+        n = {"D": 0, "R": 0, "W": 1, "N": 1, "N2": 2, "N3": 3, "N4": 4}
         num_diff = 0
         for val in self.values():
             for k in val:
@@ -104,9 +104,13 @@ class BoundaryConditions(dict):
     def is_homogeneous(self) -> bool:
         """Return True if all boundary values (incl. Robin) equal zero."""
         for val in self.values():
-            for v in val.values():
-                if v != 0:
-                    return False
+            for k, v in val.items():
+                if k in "WR":
+                    if v[1] != 0:
+                        return False
+                else:
+                    if v != 0:
+                        return False
         return True
 
     def get_homogeneous(self) -> BoundaryConditions:
@@ -115,7 +119,10 @@ class BoundaryConditions(dict):
         for k, v in self.items():
             bc[k] = {}
             for s in v:
-                bc[k][s] = 0
+                if s in "WR":
+                    bc[k][s] = (v[s][0], 0)
+                else:
+                    bc[k][s] = 0
         return BoundaryConditions(bc)
 
     def has_time(self, t: sp.Symbol) -> bool:
@@ -174,6 +181,7 @@ def values_dtype(values: Iterable[sp.Expr]) -> jnp.dtype:
 dirichlet = BoundaryConditions({"left": {"D": 0}, "right": {"D": 0}})
 neumann = BoundaryConditions({"left": {"N": 0}, "right": {"N": 0}})
 biharmonic = BoundaryConditions({"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}})
+robin = BoundaryConditions({"left": {"R": (1, 0)}, "right": {"R": (1, 0)}})
 
 
 class Composite(OrthogonalSpace):
@@ -1072,7 +1080,7 @@ def get_bc_basis(bcs: BoundaryConditions, orthogonal: Jacobi) -> sp.Matrix:
     first_basis = bcs.num_derivatives()
     first = 0
     s = None
-    for first in range(first_basis + 1):
+    for first in range(first_basis + 2):
         try:
             s = _computematrix(first)
             break

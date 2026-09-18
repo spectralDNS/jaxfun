@@ -225,6 +225,50 @@ def test_batch_matches_one_at_a_time_sharded(method: str, bcs: bool) -> None:
     assert jnp.linalg.norm(batched - one_at_a_time) < ulp(100)
 
 
+def _batch_case_3d(N: int = 8) -> tuple:
+    """A sharded rank-3 coefficient array: two Fourier axes and one polynomial.
+
+    The batched transforms carry one extra axis, so a three-dimensional space
+    puts them at rank 4 -- which nothing else in the suite does, every other
+    batch case here being a rank-2 space. It is the shape a channel solver
+    works in, and the documented fallback for `KMM3D`
+    (examples/navierstokes/3D/ChannelFlow3D.py), which hand-writes the same
+    three transforms to form its vorticity between them.
+
+    Every extent is `N`, so both conditions `_use_spmd` applies in 3D hold at
+    any device count that divides it: the leading axis on the way out, and the
+    *middle* axis's quadrature count on the way in.
+    """
+    F0 = FunctionSpace(N, Fourier.Fourier, name="F0")
+    F1 = FunctionSpace(N, Fourier.Fourier, name="F1")
+    D = FunctionSpace(N, Legendre.Legendre, name="D")
+    T = TensorProduct(F0, F1, D, name="T3")
+    x, y, z = T.system.base_scalars()
+    uh = jax.device_put(
+        project(sp.sin(x) * sp.cos(y) * (1 - z**2), T), spectral_sharding
+    )
+    return T, uh
+
+
+@pytest.mark.parametrize(
+    "method", ("backward", "backward_primitive", "forward", "scalar_product")
+)
+def test_batch_matches_one_at_a_time_sharded_3d(method: str) -> None:
+    """The rank-4 batched transforms agree with the per-field ones."""
+    T, uh = _batch_case_3d()
+    spectral = method.startswith("backward")
+    arg = uh if spectral else jax.device_put(T.backward(uh), physical_sharding)
+    kwargs = {"k": (1, 0, 1)} if method == "backward_primitive" else {}
+
+    fields = jnp.stack([arg, 2.0 * arg, -arg])
+    batched = getattr(T, method + "_batch")(fields, **kwargs)
+    one_at_a_time = jnp.stack(
+        [getattr(T, method)(fields[i], **kwargs) for i in range(fields.shape[0])]
+    )
+    assert batched.shape == one_at_a_time.shape
+    assert jnp.linalg.norm(batched - one_at_a_time) < ulp(100)
+
+
 def _split_axes(x) -> tuple[int, ...]:
     """The axes of `x` that are actually spread over the mesh.
 

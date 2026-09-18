@@ -19,7 +19,10 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_here = os.path.dirname(os.path.abspath(__file__))
+# `spmd_bootstrap` and `OrrSommerfeld_eigs` sit one level up, shared with the 3D
+# solver; ChannelFlow2D is alongside.
+sys.path[:0] = [_here, os.path.dirname(_here)]
 
 import jax
 
@@ -47,7 +50,7 @@ from OrrSommerfeld_eigs import OrrSommerfeld
 from jaxfun.galerkin.inner import project
 from jaxfun.typing import Array, PolynomialKind, TestSpaceKind
 
-M, N = 32, 128  # Fourier modes (x), wall-normal modes (y)
+M, N = 32, 96  # Fourier modes (x), wall-normal modes (y)
 # Any M runs on any number of devices: the half spectrum stores M // 2 + 1
 # coefficients, which is odd for every power-of-two M, and `RFourier` pads that
 # up to a multiple of the device count itself. The padding is empty, so a power

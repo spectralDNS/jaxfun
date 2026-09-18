@@ -144,8 +144,10 @@ class Fourier(OrthogonalSpace):
         return jnp.fft.ifft(c, norm="forward")
 
     @jax.jit(static_argnums=0)
-    def scalar_product(self, c: Array) -> Array:
-        """Return inner products <c, E_k> via forward FFT.
+    def _scalar_product_ref(self, c: Array) -> Array:
+        """Return inner products <c, E_k> via forward FFT, without the measure.
+
+        `OrthogonalSpace.scalar_product` applies `sg` on top of this.
 
         Args:
             c: Physical samples (length N).
@@ -434,8 +436,8 @@ class RFourier(Fourier):
         return jnp.fft.irfft(c[: self.n_real], n=n, norm="forward")
 
     @jax.jit(static_argnums=0)
-    def scalar_product(self, c: Array) -> Array:
-        """Return inner products <c, E_k> for k >= 0 via forward real FFT.
+    def _scalar_product_ref(self, c: Array) -> Array:
+        """Return <c, E_k> for k >= 0 via forward real FFT, without the measure.
 
         Args:
             c: Real physical samples, at least self.num_quad_points of them.

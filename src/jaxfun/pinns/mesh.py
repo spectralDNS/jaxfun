@@ -44,10 +44,6 @@ type ParameterMesh = MultiParameterMesh | SingleParameterMesh
 type TimeMarchingDomainType = DomainType | Literal["initial-time", "end-time"]
 
 
-def _coerce_sample_method(kind: SampleMethodLike) -> SampleMethod:
-    return kind if isinstance(kind, SampleMethod) else SampleMethod(kind)
-
-
 def _normalize_points_args(N: NPointsType) -> tuple[int, ...]:
     return (N,) if isinstance(N, int) else N
 
@@ -56,8 +52,8 @@ def _normalize_kind(kind: KindType, n: int) -> list[SampleMethod]:
     if kind is None:
         return [SampleMethod.UNIFORM] * n
     if isinstance(kind, str | SampleMethod):
-        return [_coerce_sample_method(kind)] * n
-    return [_coerce_sample_method(k) for k in kind]
+        return [SampleMethod.coerce(kind)] * n
+    return [SampleMethod.coerce(k) for k in kind]
 
 
 class BaseMesh:
@@ -584,7 +580,7 @@ class Line(SingleParameterMesh):
         if N < 2:
             raise ValueError("N must be >= 2 for line sampling")
 
-        kind = _coerce_sample_method(kind)
+        kind = SampleMethod.coerce(kind)
 
         if kind == SampleMethod.UNIFORM:
             return jnp.linspace(self.left, self.right, N)[:, None]
@@ -654,7 +650,7 @@ class Line(SingleParameterMesh):
         """
         if kind is None:
             kind = SampleMethod.UNIFORM
-        kind = _coerce_sample_method(kind)
+        kind = SampleMethod.coerce(kind)
 
         if kind in (SampleMethod.UNIFORM, SampleMethod.RANDOM):
             return 1
@@ -1048,7 +1044,7 @@ class Rectangle(CartesianProductMesh):
         """
         if (
             isinstance(kind, str | SampleMethod)
-            and _coerce_sample_method(kind) == SampleMethod.RANDOM
+            and SampleMethod.coerce(kind) == SampleMethod.RANDOM
         ):
             Ni, Nx = cast(tuple[int, int], N)
             smesh = self.to_shapely()
@@ -1079,7 +1075,7 @@ class Rectangle(CartesianProductMesh):
         """
         if (
             isinstance(kind, str | SampleMethod)
-            and _coerce_sample_method(kind) == SampleMethod.RANDOM
+            and SampleMethod.coerce(kind) == SampleMethod.RANDOM
         ):
             return 1
         kind_list = _normalize_kind(kind, 2)

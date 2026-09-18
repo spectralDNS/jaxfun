@@ -18,9 +18,10 @@ from jaxfun.galerkin import (
     TrialFunction,
 )
 from jaxfun.galerkin.composite import DirectSum
-from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.inner import inner, project
 from jaxfun.la import TensorMatrix, TPMatrices, TPMatrix
 from jaxfun.operators import Dot
+from jaxfun.typing import ProjectionKind
 from jaxfun.utils.common import lambdify, ulp
 
 pytestmark = pytest.mark.integration
@@ -209,6 +210,53 @@ def test_inner_returns_matrix_and_vector_with_bcs():
     # A is dense matrix, b vector
     assert A.shape[0] == A.shape[1]
     assert cast(Array, b).shape[0] == A.shape[0]
+
+
+def test_vectortensorproductspace_project_kinds():
+    """Both projection kinds must accept a vector `ue` written symbolically.
+
+    The transform never builds a weak form, so it does not care. `L2` has to
+    assemble one, and `Dot(v, u - ue)` cannot be built at all here: a `VectorAdd`
+    refuses to absorb the unevaluated trial function. Keeping the subtraction
+    outside the `Dot` is what makes this reachable, and nothing else covers it.
+    """
+    N: int = 8
+    C = Chebyshev.Chebyshev(N)
+    T = TensorProduct(C, C)
+    V = CartesianProduct(T, T, name="Vk", rank=1)
+    x, y = V.system.base_scalars()
+    i, j = V.system.base_vectors()
+    u = TrialFunction(V)
+    v = TestFunction(V)
+
+    # `jax.tree.leaves` throughout: the transform hands back a tuple of
+    # coefficient arrays where an assembled solve hands back a BlockArray of
+    # the same, and the comparison should not care which.
+    ue = y * i + x * j  # representable, so the two kinds must agree
+    for a, b in zip(
+        jax.tree.leaves(project(ue, V)),
+        jax.tree.leaves(project(ue, V, kind=ProjectionKind.L2)),
+        strict=True,
+    ):
+        assert jnp.linalg.norm(a - b) < ulp(1000)
+
+    ue = sp.tanh(4 * x) * i + sp.tanh(4 * y) * j  # beyond what N=8 resolves
+    interp = jax.tree.leaves(project(ue, V))
+    l2 = jax.tree.leaves(project(ue, V, kind="l2"))
+
+    # Past resolution they minimise different errors, so they must differ.
+    assert max(jnp.abs(a - b).max() for a, b in zip(interp, l2, strict=True)) > ulp(
+        1000
+    )
+
+    # ...and L2 is the one that matches an over-integrated Galerkin solve. Held
+    # to the bar its own loop stops at, not to eps.
+    A, b = inner(
+        Dot(v, u) - Dot(v, ue), kind="system", num_quad_points=(16 * N, 16 * N)
+    )
+    settled = jnp.sqrt(jnp.finfo(jnp.result_type(*l2)).eps)
+    for got, ref in zip(l2, jax.tree.leaves(A.solve(b)), strict=True):
+        assert jnp.abs(got - ref).max() <= settled * jnp.abs(got).max()
 
 
 def test_vectortensorproductspace_project():

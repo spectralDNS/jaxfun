@@ -170,4 +170,4 @@ def FunctionSpace(
         C.name += "0"
         return DirectSum(C, B)
 
-    return space(N, domain=domain, **kw)
+    return space(N, domain=domain, system=system, **kw)

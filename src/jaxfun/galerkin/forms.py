@@ -19,7 +19,6 @@ Main entry points:
 
 from typing import Protocol, TypeGuard
 
-import jax.numpy as jnp
 import sympy as sp
 from sympy.core.function import AppliedUndef
 
@@ -325,6 +324,11 @@ def split(forms: sp.Expr) -> ResultDict:
     return result
 
 
+def _nonseparable_kinds(d: InnerResultDict) -> tuple[str, ...]:
+    """Return which of 'multivar' and 'jaxfunction' the term carries."""
+    return tuple(key for key in ("multivar", "jaxfunction") if key in d)
+
+
 def _merge_would_hide_time(
     g: InnerResultDict, d: InnerResultDict, time: BaseTime
 ) -> bool:
@@ -342,10 +346,11 @@ def add_result(
 ) -> list[InnerResultDict]:
     """Accumulate result dictionary into list merging like basis factors.
 
-    Two dictionaries are considered identical if they match on every
-    coordinate scalar key. Coefficients are combined:
-      * Without 'multivar': add coefficient
-      * With 'multivar': distribute & factor
+    Two dictionaries are merged if they match on every coordinate scalar key
+    and carry the same non-separable factors. Coefficients are combined:
+      * Neither 'multivar' nor 'jaxfunction': add coefficient
+      * One of them: distribute & factor
+    Anything else is appended as a term of its own.
 
     Args:
         res: Existing list of grouped term dictionaries.
@@ -356,35 +361,30 @@ def add_result(
         Updated list with merged or appended dictionary.
     """
     time = system.base_time()
-    found_d: bool = False
+    kinds = _nonseparable_kinds(d)
     for g in res:
-        if jnp.all(jnp.array([g[s] == d[s] for s in system.base_scalars()])):
-            if "multivar" not in d and "jaxfunction" not in d:
-                g["coeff"] += d["coeff"]
-            elif _merge_would_hide_time(g, d, time):
-                # The branches below fold `coeff` into the coordinate-dependent
-                # factor and reset it to 1. That is fine for a numeric
-                # coefficient, but a *time* factor lives in `coeff` precisely so
-                # that a caller can see it is separable -- folding it in turns
-                # `exp(-t)*sqrt(x+y) + sqrt(x+y)` into one inseparable term and
-                # hides the time dependence inside `multivar`. Keep them apart.
-                continue
-            elif "multivar" not in g and "jaxfunction" not in g:
-                g["multivar"] = d["coeff"] * d["multivar"]
-                g["coeff"] = 1
-            elif "multivar" in g and "multivar" in d:
-                g["multivar"] = (
-                    g["coeff"] * g["multivar"] + d["coeff"] * d["multivar"]
-                ).factor()
-                g["coeff"] = 1
-            elif "jaxfunction" in g and "jaxfunction" in d:
-                g["jaxfunction"] = (
-                    g["coeff"] * g["jaxfunction"] + d["coeff"] * d["jaxfunction"]
-                ).factor()
-                g["coeff"] = 1
-            found_d = True
-            break
+        if not all(g[s] == d[s] for s in system.base_scalars()):
+            continue
+        # Merging across kinds would have to carry a plain term's coefficient
+        # into the other term's factor, and a term holding both factors has no
+        # single one to sum into. Kept apart, the terms are assembled
+        # separately and add up to the same thing.
+        if _nonseparable_kinds(g) != kinds:
+            continue
+        if not kinds:
+            g["coeff"] += d["coeff"]
+        elif len(kinds) > 1 or _merge_would_hide_time(g, d, time):
+            # Folding `coeff` into the coordinate-dependent factor is fine for
+            # a numeric coefficient, but a *time* factor lives in `coeff`
+            # precisely so that a caller can see it is separable -- folding it
+            # in turns `exp(-t)*sqrt(x+y) + sqrt(x+y)` into one inseparable
+            # term and hides the time dependence inside `multivar`.
+            continue
+        else:
+            (key,) = kinds
+            g[key] = sp.factor(g["coeff"] * g[key] + d["coeff"] * d[key])
+            g["coeff"] = 1
+        return res
 
-    if not found_d:
-        res.append(d)
+    res.append(d)
     return res

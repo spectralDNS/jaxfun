@@ -30,16 +30,7 @@ from jaxfun.utils.common import Domain, ulp
         Ultraspherical.Ultraspherical,
     ),
 )
-def test_forward_backward(
-    space: type[
-        Legendre.Legendre
-        | Chebyshev.Chebyshev
-        | ChebyshevU.ChebyshevU
-        | Fourier.Fourier
-        | Jacobi.Jacobi
-        | Ultraspherical.Ultraspherical
-    ],
-) -> None:
+def test_forward_backward(space) -> None:
     D = space(8)
     x = D.system.x
     ue = project1D(sp.sin(x), D)
@@ -58,15 +49,7 @@ def test_forward_backward(
         Ultraspherical.Ultraspherical,
     ),
 )
-def test_forward_backward_composite(
-    space: type[
-        Legendre.Legendre
-        | Chebyshev.Chebyshev
-        | ChebyshevU.ChebyshevU
-        | Jacobi.Jacobi
-        | Ultraspherical.Ultraspherical
-    ],
-) -> None:
+def test_forward_backward_composite(space) -> None:
     D = FunctionSpace(8, space, bcs={"left": {"D": 0}, "right": {"D": 0}})
     assert isinstance(D, Composite)
     x = D.system.x
@@ -87,16 +70,7 @@ def test_forward_backward_composite(
         Ultraspherical.Ultraspherical,
     ),
 )
-def test_forward_backward_2d(
-    space: type[
-        Legendre.Legendre
-        | Chebyshev.Chebyshev
-        | ChebyshevU.ChebyshevU
-        | Fourier.Fourier
-        | Jacobi.Jacobi
-        | Ultraspherical.Ultraspherical
-    ],
-) -> None:
+def test_forward_backward_2d(space) -> None:
     D = space(8)
     T = TensorProduct(D, D)
     x, y = T.system.base_scalars()

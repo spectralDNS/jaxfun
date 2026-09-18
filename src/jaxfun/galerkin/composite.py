@@ -411,14 +411,25 @@ class Composite(OrthogonalSpace):
 
     @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
-        """Project physical samples u -> constrained coefficients."""
-        L = self.scalar_product(u)
+        """Project physical samples u -> constrained coefficients.
+
+        Metric-free, like `OrthogonalSpace.forward`: `_mass_matrix` is built
+        from the orthogonality mass, so the scalar product it inverts must be
+        the one without `sg` or the two would not cancel.
+        """
+        L = self._scalar_product_ref(u)
         return self._mass_matrix.solve(L)
 
     @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
         """Return right-hand side inner product vector <u, φ_i>."""
         P: Array = self.orthogonal.scalar_product(u)
+        return self.apply_stencil_right(P)
+
+    @jax.jit(static_argnums=0)
+    def _scalar_product_ref(self, u: Array) -> Array:
+        """Return <u, φ_i> without the curvilinear measure, for `forward`."""
+        P: Array = self.orthogonal._scalar_product_ref(u)
         return self.apply_stencil_right(P)
 
     @property

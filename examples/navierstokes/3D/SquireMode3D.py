@@ -134,7 +134,8 @@ def manufactured_field(
     horizontal mean, and `NL_u0`/`NL_v0` would be tested against zero -- which
     they pass whatever sign they carry.
     """
-    x, y, z = solver.VD.system.base_scalars()
+    system = solver.VD.system
+    x, y, z = system.base_scalars()
     th = kx * x + ky * y
     kh2 = kx**2 + ky**2
     # w in the biharmonic space: both it and its z-derivative vanish at the
@@ -162,15 +163,11 @@ def manufactured_field(
         "Hz": omx_e * v_e - omy_e * u_e,
     }
 
-    # Sanity, before anything is compared against it. `sp.simplify` cannot walk
-    # CoordSys base scalars, so the identities are checked on plain symbols.
-    a, b, c = sp.symbols("a b c", real=True)
-    sub = {x: a, y: b, z: c}
-    _u, _v, _w, _g = (fields[k].subs(sub) for k in ("u", "v", "w", "g"))
-    assert sp.simplify(sp.diff(_u, a) + sp.diff(_v, b) + sp.diff(_w, c)) == 0, (
+    # Sanity, before anything is compared against it.
+    assert system.simplify(sp.diff(u_e, x) + sp.diff(v_e, y) + sp.diff(w_e, z)) == 0, (
         "the manufactured field is not divergence-free"
     )
-    assert sp.simplify(sp.diff(_v, a) - sp.diff(_u, b) - _g) == 0, (
+    assert system.simplify(sp.diff(v_e, x) - sp.diff(u_e, y) - g_e) == 0, (
         "the manufactured g is not v_x - u_y"
     )
 
@@ -180,20 +177,12 @@ def manufactured_field(
     return fields, (w_hat, g_hat)
 
 
-#: Plain wall-normal symbol for the reference profiles below. A `CoordSys` base
-#: scalar cannot be used: each space carries its own, so substituting one into
-#: another's expression silently does nothing, and plain sympy's `lambdify`
-#: cannot print what is left.
-_Z = sp.Symbol("zz", real=True)
-
-
 def horizontal_mean(expr: sp.Expr, solver: KMM3D, Lx: float, Ly: float) -> sp.Expr:
     """Return the exact horizontal average of `expr`, as a function of `_Z`."""
-    x, y, z = solver.VD.system.base_scalars()
-    a, b = sp.symbols("a b", real=True)
-    flat = sp.expand_trig(sp.expand(expr.subs({x: a, y: b, z: _Z})))
-    mean = sp.integrate(sp.integrate(flat, (a, 0, Lx)), (b, 0, Ly)) / (Lx * Ly)
-    return sp.simplify(mean)
+    x, y, _ = solver.VD.system.base_scalars()
+    flat = sp.expand_trig(sp.expand(expr))
+    mean = sp.integrate(sp.integrate(flat, (x, 0, Lx)), (y, 0, Ly)) / (Lx * Ly)
+    return solver.VD.system.simplify(mean)
 
 
 def check_manufactured(Lx: float, Ly: float) -> None:
@@ -254,7 +243,7 @@ def check_manufactured(Lx: float, Ly: float) -> None:
     zq = solver.P1.mesh()
     for name, got, H in (("NL_u0", NL_u0, Hx), ("NL_v0", NL_v0, Hy)):
         mean = horizontal_mean(H, solver, Lx, Ly)
-        profile = sp.lambdify(_Z, mean, "numpy")(zq)
+        profile = lambdify(z, mean)(zq)
         ref = solver.P1.scalar_product(-jnp.broadcast_to(profile, zq.shape))
         size = float(jnp.abs(ref).max())
         assert size > 1e-6, (

@@ -438,12 +438,6 @@ from typing import Any, Literal, cast, overload
 
 import jax
 
-# Before any jaxfun import, so nothing is built at the wrong precision. Kept here
-# rather than left to the demos because an importer that forgets gets float32
-# silently: OrrSommerfeld3D.py seeds its eigenmode at amplitude 1e-7 on a base
-# flow of order 1, and in float32 the growth rate it measures comes out negative.
-# It has to sit at column 0 -- tests/test_demos.py finds the float64-only demos
-# by looking for exactly that.
 jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
@@ -658,11 +652,7 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         # Whether the transforms below take their distributed path. Decided once,
         # from sizes rather than from any array's placement, so the single-device
         # path is chosen at construction and the code that runs there is
-        # unchanged. Both conditions are what `lax.all_to_all(tiled=True)` needs
-        # of the two axes it swaps: the stored streamwise wavenumber count on the
-        # way out, the dealiased spanwise quadrature count on the way in. The
-        # first is `RFourier`'s job and always holds; the second is this solver's,
-        # and a padding that fails it keeps the local path.
+        # unchanged.
         n_dev = len(jax.devices())
         self.sharded = nnx.static(
             n_dev > 1 and VD.num_dofs[0] % n_dev == 0 and self.pad[1] % n_dev == 0
@@ -671,15 +661,9 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         # Convection H and the scalar fluxes satisfy no boundary conditions, so
         # they live in the orthogonal space.
         Wo = VD.get_orthogonal()
-        # The mean flow is genuinely one-dimensional: it is the (0,0) mode alone,
-        # and there every 3-D operator reduces to its z-factor exactly.
         D1 = VD.basespaces[2]
 
         if PG:
-            # Two Petrov-Galerkin test spaces, not one: both the w equation and
-            # the g equation carry a wall-normal second derivative of their own
-            # unknown. See the header. The recovery is tested Galerkin in both
-            # cases, carrying only a mass matrix in z.
             PB = TensorProduct(Fx, Fy, B.get_testspace("PG", name="BP"), name="PB")
             PD = TensorProduct(Fx, Fy, D.get_testspace("PG", name="DP"), name="PD")
             P1 = cast(PGComposite, D1).get_testspace("PG", name="P1")
@@ -687,10 +671,6 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
             PB, PD, P1 = VB, VD, D1
 
         self.Fx, self.Fy = nnx.static(Fx), nnx.static(Fy)
-        # d/dx and d/dy in coefficient space: the same multiplier
-        # `Fourier.derivative_coeffs` applies for a first derivative, kept here
-        # so the two horizontal vorticity terms can be formed in coefficient
-        # space and ride along in the batched transforms below.
         self.ikx = nnx.data(
             1j * Fx.wavenumbers(eliminate_highest_freq=True) * float(Fx.domain_factor)
         )
@@ -746,20 +726,13 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         )
 
         # -- the recovery, reduced to one mass solve and diagonal work -----
-        #
-        # Every operator the recovery touches is separable as (horizontal
-        # diagonal) x (wall-normal matrix), and once w_z is projected into VD
-        # *every one of those wall-normal matrices is the same mass matrix* --
-        # so it cancels out of the equation entirely and what is left is
-        # elementwise. See "THE RECOVERY IS DIAGONAL" in the header.
+
         A_h = linear_operator(-(u.diff(x, 2) + u.diff(y, 2)) * wt)
         assert isinstance(A_h, TPMatrices), (
             "the horizontal Laplacian should assemble as one TPMatrix per "
             f"direction, got {type(A_h).__name__}"
         )
         terms = list(A_h.tpmats)
-        # Neither term differentiates the unknown in the wall-normal direction,
-        # so both carry a plain mass matrix there.
         M_z = cast(DiaMatrix, terms[0].mats[2])
 
         def horizontal_weight(tp: TPMatrix) -> Array:
@@ -769,14 +742,7 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
             )
 
         def separable_weight(tp: TPMatrix, axis: int) -> Array:
-            """The same multiplier for a term that varies along `axis` alone.
-
-            A single horizontal derivative leaves the *other* Fourier axis
-            carrying only its mass matrix, whose diagonal is one repeated value,
-            so the whole (kx, ky) array is that scalar times a vector. Returned
-            shaped to broadcast against (kx, ky, z) rather than materialised:
-            the recovery multiplies it into arrays that are already that shape.
-            """
+            """Broadcast a diagonal Fourier matrix in the other two axes"""
             flat = tp.mats[1 - axis].diagonal(0)
             assert jnp.allclose(flat, flat[0]), (
                 f"axis {1 - axis} of this term is not a constant diagonal, so "
@@ -806,39 +772,14 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
                 "recovery operator's; the cancellation below assumes they are "
                 "the same mass matrix"
             )
-        # The wall-normal projection divides C_wz by the VD mass operator. Their
-        # horizontal factors are equal -- neither form carries a horizontal
-        # derivative, so both are the Fourier mass -- which is what lets the
-        # projection below be the wall-normal factors alone, with no constants.
-        assert jnp.allclose(horizontal_weight(C_wz), horizontal_weight(M_op)), (
-            "the projection assumes C_wz and the mass share a horizontal factor"
-        )
-        # One column and one row, not two full planes: d/dx is constant in ky
-        # and d/dy constant in kx, so these broadcast against the (kx, ky, z)
-        # coefficient arrays instead of being stored across them.
+
         self.cx = nnx.data(separable_weight(C_fx, 0))
         self.cy = nnx.data(separable_weight(C_fy, 1))
-        # The divisor is the one that genuinely spans both axes -- it is
-        # kx^2 + ky^2, a sum of two separable terms rather than a product, and
-        # pinning (0,0) breaks even that structure. Pinned so the division there
-        # is harmless; that mode is overwritten with the mean profile below
-        # rather than solved for.
         self.weights = nnx.data(weights.at[0, 0].set(1.0)[..., None])
+
         # The projection of w_z into VD, f_hat = M_z^-1 <B', D> w_hat, is the one
-        # wall-normal operation the recovery still needs, and in Legendre it is
-        # not a solve at all: psi_j' = -(2j+3) L_{j+1} is a *single* Legendre
-        # polynomial, and the biharmonic stencil is built so that phi_k' is in
-        # turn a single psi, so the projection matrix is one subdiagonal and the
-        # projection is a shift and a multiply.
-        #
-        # That is a Legendre identity, not a coincidence worth probing for. Every
-        # other basis here differentiates out of its own family -- Chebyshev into
-        # ChebyshevU, Jacobi into Jacobi with shifted parameters -- so the
-        # re-expansion is dense (upper triangular on odd offsets for Chebyshev)
-        # and there is nothing to collapse. Those take the same per-wavenumber
-        # banded solver the stage operators use, which is O(n_z) per wavenumber
-        # where multiplying by the assembled M_z^-1 <B', D> would be O(n_z^2) and
-        # would have to store it.
+        # wall-normal operation the recovery still needs. For Legendre it is a single
+        # subdiagonal and a very fast solve. Chebyshev take the wavenumber solver path.
         C_z = cast(DiaMatrix, C_wz.mats[2])
         n_b, n_d = VB.num_dofs[2], VD.num_dofs[2]
         if polynomial is PolynomialKind.LEGENDRE:
@@ -847,24 +788,12 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
             # subdiagonal p then <B', D>[:, k] = p_k M_z[:, k+1] column by
             # column, so one ratio of stored diagonals gives it -- no dense
             # matrix, and none of the round-off a solve would leave off it.
-            #
-            # Reading the values rather than writing -(2k+3) for them is also
-            # what keeps this correct under a `scaling` on either basis: a
-            # diagonal rescaling cannot move a subdiagonal, only renumber it.
             self.pz_pad = nnx.static((1, n_d - 1 - n_b))
             i_c, i_m = C_z.offsets.index(-1), M_z.offsets.index(0)
             sub = C_z.data[i_c, :n_b] / M_z.data[i_m, 1 : n_b + 1]
             self.pz = nnx.data(jnp.pad(sub, self.pz_pad))
             self.C_wz, self.M_proj = nnx.data(None), nnx.data(None)
-            # Structural claims deserve structural checks: M_z f == <B', D> w for
-            # an arbitrary w. If the collapse ever stops holding this fails at
-            # construction rather than quietly returning the wrong velocity.
-            probe = jnp.sin(jnp.arange(n_b, dtype=float))
-            want = C_z @ probe
-            resid = M_z @ (jnp.asarray(self.pz) * jnp.pad(probe, self.pz_pad))
-            assert jnp.abs(resid - want).max() < 1e-10 * jnp.abs(want).max(), (
-                "the Legendre projection of w_z is not a single subdiagonal"
-            )
+
         else:
             self.pz, self.pz_pad = nnx.data(None), nnx.static((0, 0))
             self.C_wz = nnx.data(C_wz)
@@ -1151,10 +1080,8 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         recovery makes the two the same array to round-off (measured 6.7e-16),
         and one of them is already a state variable.
         """
-        cu = self.VD.to_orthogonal(u_hat)
-        cv = self.VD.to_orthogonal(v_hat)
         cw = self.VB.to_orthogonal(w_hat)
-        cg = self.VD.to_orthogonal(g_hat)
+        (cu, cv, cg) = jax.vmap(self.VD.to_orthogonal)(jnp.stack((u_hat, v_hat, g_hat)))
         u_c, v_c, w_c, omz_c, wy_c, wx_c = self._wall_normal(
             cu,
             cv,

@@ -11,6 +11,7 @@ from .common import (
     ulp as ulp,
 )
 from .fastgl import leggauss as leggauss
+from .hdf5file import HDF5File as HDF5File, xdmf_from_hdf5 as xdmf_from_hdf5
 from .sympy_factoring import (
     drop_time_argument as drop_time_argument,
     get_time_independent as get_time_independent,

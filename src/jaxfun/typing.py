@@ -226,15 +226,15 @@ def cast_args(t: TensorLike) -> tuple[TensorLike, ...]:
         return cast(tuple[DyadicLike, ...], t.args)
 
 
-def cast_bv(t: sp.Tuple[BaseVector]) -> tuple[BaseVector, ...]:
+def cast_bv(t: sp.Tuple) -> tuple[BaseVector, ...]:
     return cast("tuple[BaseVector, ...]", t)
 
 
-def cast_bs(t: sp.Tuple[BaseScalar]) -> tuple[BaseScalar, ...]:
+def cast_bs(t: sp.Tuple) -> tuple[BaseScalar, ...]:
     return cast("tuple[BaseScalar, ...]", t)
 
 
-def cast_bd(t: sp.Tuple[BaseDyadic]) -> tuple[BaseDyadic, ...]:
+def cast_bd(t: sp.Tuple) -> tuple[BaseDyadic, ...]:
     return cast("tuple[BaseDyadic, ...]", t)
 
 
@@ -251,7 +251,7 @@ class ResultDict(TypedDict):
 
 
 class LinearCoeffDict(TypedDict, total=False):
-    scale: float
+    scale: complex
     jaxcoeff: NotRequired[Jaxc]
 
 

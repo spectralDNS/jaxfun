@@ -373,6 +373,7 @@ def test_direct_sum_batch_communicates_once() -> None:
     """
     VT, fields = _direct_sum_batch_case()
     hlo = jax.jit(VT.backward_batch).lower(fields).compile().as_text()
+    assert hlo is not None
     assert len(re.findall(r"\ball-to-all\(", hlo)) == 1, hlo
     assert "all-gather(" not in hlo
 

@@ -19,6 +19,7 @@ NOT_DEMOS = {
     "spmd_bootstrap",
     "BenchmarkTurbulentChannel3D",
     "channel_case",
+    "SnapshotFromCheckpoint",
 }
 
 # Demos are grouped in subdirectories by topic, so this recurses. `notebooks/`

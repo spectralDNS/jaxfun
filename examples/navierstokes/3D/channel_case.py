@@ -9,7 +9,8 @@ with a comment and is the place to start a new case from::
     [discretization]  polynomial, kind, tableau
     [time]            dt, t_transient, t_end, regrid_transient
     [output]          sample_every, checkpoint_every, log_every,
-                      checkpoint_dir, plot
+                      checkpoint_dir, plot, snapshot_every, snapshot_file,
+                      snapshot_closed, snapshot_float64
     [init]            seed
 
 Relative output paths are taken relative to the case file, not the working
@@ -40,6 +41,10 @@ SECTIONS: dict[str, tuple[str, ...]] = {
         "log_every",
         "checkpoint_dir",
         "plot",
+        "snapshot_every",
+        "snapshot_file",
+        "snapshot_closed",
+        "snapshot_float64",
     ),
     "init": ("seed",),
 }
@@ -73,6 +78,13 @@ class ChannelCase:
         log_every: Chunks between log lines.
         checkpoint_dir: Checkpoint directory.
         plot: File the profile figure is saved to.
+        snapshot_every: Chunks between ParaView snapshots; 0 writes none.
+        snapshot_file: HDF5 file the snapshots go to, with an XDMF sidecar
+            written beside it.
+        snapshot_closed: Store the snapshots on a mesh closed at the periodic
+            ends and at the two walls, so ParaView draws no seam and no missing
+            skin. Correct here because the velocity is zero on both walls.
+        snapshot_float64: Store snapshots in float64 instead of float32.
         seed: Seed of the turbulent initial condition.
         base_dir: Directory relative output paths are resolved against: the
             case file's, or the working directory without one.
@@ -99,6 +111,10 @@ class ChannelCase:
     log_every: int = 10
     checkpoint_dir: str = "turbulent_channel_ckpt"
     plot: str = "turbulent_channel_profiles.png"
+    snapshot_every: int = 0
+    snapshot_file: str = "snapshots.h5"
+    snapshot_closed: bool = True
+    snapshot_float64: bool = False
     seed: int = 1
     base_dir: Path = field(default_factory=Path.cwd)
 

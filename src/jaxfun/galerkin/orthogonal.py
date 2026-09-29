@@ -581,7 +581,7 @@ class OrthogonalSpace(BaseSpace):
         """Return number of spatial dimensions (always 1)."""
         return 1
 
-    def get_orthogonal(self) -> Self:
+    def get_orthogonal(self) -> OrthogonalSpace:
         """Return self (orthogonal space is self; overridden in Composite)."""
         return self
 

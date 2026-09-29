@@ -759,7 +759,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
 
         if isinstance(array, sp.Expr | sp.Tuple):
-            if V.rank == RankTag.VECTOR:
+            if cast(FunctionSpaceType, V).rank == RankTag.VECTOR:
                 assert isinstance(array, sp.Expr)
                 array = project(array, cast(VectorTensorProductSpace, V))
             else:
@@ -790,7 +790,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
 
     def doit(self, **hints: Any) -> Expr | AppliedUndef:
         hints["linear"] = hints.get("linear", False)
-        V = self.functionspace
+        V = cast(FunctionSpaceType, self.functionspace)
 
         if hints.get("linear", True):
             trial = TrialFunction(V).doit()

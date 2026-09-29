@@ -308,6 +308,17 @@ class Composite(OrthogonalSpace):
         P: Array = self.orthogonal.eval_basis_functions(X)
         return self.apply_stencil_right(P)
 
+    def norm_squared(self) -> Array:
+        raise NotImplementedError(
+            "Composite spaces do not support norm_squared(); use mass_matrix()"
+        )
+
+    def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
+        raise NotImplementedError(
+            "Composite spaces do not support derivative_coeffs(); "
+            "use backward_primitive()"
+        )
+
     def get_stencil_row(self, i: int) -> Array:
         """Return nonzero stencil row data for basis index i."""
         return self.S.get_row(i)

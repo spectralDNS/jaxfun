@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from abc import abstractmethod
 from collections.abc import Callable
 from functools import partial
 from numbers import Number
@@ -718,8 +717,8 @@ class Loss:
             key for i, eq in enumerate(self.residuals) for key in eq.keys
         )
 
-    @abstractmethod
-    def update_time(self, module: nnx.Module, march: Array) -> None: ...
+    def update_time(self, module: nnx.Module, march: Array) -> None:
+        raise NotImplementedError("update_time is only supported by TimeMarchingLoss")
 
     @property
     def local_mesh(self) -> jax.sharding.Mesh | None:

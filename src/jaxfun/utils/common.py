@@ -291,7 +291,7 @@ def _dst_modes(
     A, B = 0.5 * (P + Q), 0.5 * (P - Q)
     if tw is not None:
         A, B = tw * A, tw * B
-    return -A.imag + 1j * B.real
+    return cast(Array, -A.imag + 1j * B.real)
 
 
 @jax.jit(static_argnums=(1, 2, 3))

@@ -70,6 +70,23 @@
 # coarse grid and continue on a finer one. Averaging restarts after a change of
 # grid or Re_tau.
 #
+# SNAPSHOTS
+#
+# Checkpoints restart the solver; they hold spectral coefficients and nothing a
+# visualization tool can read. For pictures, `output.snapshot_every` writes the
+# physical velocity to one HDF5 file per run with an XDMF sidecar beside it,
+# which is what ParaView opens (see jaxfun.utils.hdf5file for why XDMF rather
+# than VTKHDF). A restart appends to the same file, and the sidecar is rewritten
+# after every snapshot, so a run killed at any point leaves a file that opens.
+#
+# The snapshots are written on the unpadded quadrature mesh: the same points a
+# plain backward transform lands on, with no interpolation, 2.25 times smaller
+# than the padded mesh the nonlinear terms use. `snapshot_closed` adds the two
+# walls and closes the periodic ends, which costs nothing here -- the velocity
+# is exactly zero at z = +-1 for every composite basis function -- and is only
+# cosmetic: the Gauss points exclude the endpoints, so without it ParaView draws
+# a slab with a seam and no skin at the walls.
+#
 # CASE FILES
 #
 # A run is described by a TOML case file (see channel_case.py for the keys, and
@@ -95,6 +112,7 @@
 #   python TurbulentChannel3D.py ~/runs/re180/case.toml  # fresh, or resume latest
 #   python TurbulentChannel3D.py case.toml --t-end 100   # keep going
 #   python TurbulentChannel3D.py case.toml --set grid.Nz=96 --set time.dt=5e-4
+#   python TurbulentChannel3D.py case.toml --set output.snapshot_every=10
 #   python TurbulentChannel3D.py fine.toml --restart-from coarse/turbulent_channel_ckpt
 #
 # Spatial discretization: Fourier x Fourier x (Chebyshev PG | Legendre Galerkin)
@@ -128,7 +146,7 @@ import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
 from channel_case import ChannelCase, parse_cli, pytest_case, to_dict
-from ChannelFlow3D import KMM3D
+from ChannelFlow3D import KMM3D, VelocityKind
 from flax import nnx
 
 from jaxfun import galerkin, integrators
@@ -136,6 +154,7 @@ from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.integrators import IMEXTableau
 from jaxfun.sharding import state_sharding
 from jaxfun.typing import Array, PolynomialKind, TestSpaceKind
+from jaxfun.utils.hdf5file import HDF5File
 
 MOMENTS = ("u", "v", "w", "uu", "vv", "ww", "uv", "uw", "vw", "dudz")
 
@@ -393,6 +412,18 @@ def build_solver(case: ChannelCase, **overrides: Any) -> TurbulentChannel:
 def plane_moments(solver: TurbulentChannel, state: tuple[Array, ...]) -> Array:
     """Compiled `TurbulentChannel.plane_moments`, with the solver traced."""
     return solver.plane_moments(state)
+
+
+@jax.jit
+def physical_velocity(
+    solver: TurbulentChannel, state: tuple[Array, ...]
+) -> tuple[Array, ...]:
+    """Compiled (u, v, w) on the quadrature mesh, with the solver traced.
+
+    Unpadded on purpose: `pad=None` evaluates the spectral field exactly at the
+    points `VD.mesh()` returns, which is the mesh the snapshot file stores.
+    """
+    return solver.velocity_from_state(state, kind=VelocityKind.PHYSICAL)
 
 
 def fluctuation_energy(solver: TurbulentChannel, moments: Array) -> float:
@@ -669,13 +700,15 @@ def run(
     checkpointer: ChannelCheckpointer | None,
     *,
     averaging_from: float,
+    snapshots: HDF5File | None = None,
 ) -> tuple[tuple[Array, ...], float, int]:
     """Advance from `t` to `case.t_end`, sampling statistics and checkpointing.
 
     Integrates in chunks of `case.sample_every` steps. After each chunk the
     plane moments are sampled once `t` has reached `averaging_from`; every
-    `case.checkpoint_every` chunks a checkpoint is started. Returns early if the
-    state stops being finite.
+    `case.checkpoint_every` chunks a checkpoint is started and every
+    `case.snapshot_every` chunks a velocity snapshot is written. Returns early if
+    the state stops being finite.
     """
     dt, every = case.dt, case.sample_every
     chunks = max(0, int(round((case.t_end - t) / (dt * every))))
@@ -708,6 +741,13 @@ def run(
                 " s/step)"
             )
             wall_time = time.time()
+        if case.snapshot_every and (i % case.snapshot_every == 0 or i == chunks):
+            # Another collective. The interval is tested against `case`, which
+            # every process has, and not against `snapshots`, which only the
+            # leader has: a process that skipped `to_host` would hang the rest.
+            u, v, w = to_host(physical_velocity(solver, state))
+            if snapshots is not None:
+                snapshots.write({"U": np.stack((u, v, w))}, time=t, step=step)
         if checkpointer is not None and (i % case.checkpoint_every == 0 or i == chunks):
             checkpointer.save(step, solver, state, t, stats, case)
     return state, t, step
@@ -815,6 +855,22 @@ def main(case: ChannelCase, args: Any) -> KMM3D:
         None if in_pytest else ChannelCheckpointer(case.path("checkpoint_dir"))
     )
 
+    snapshots = None
+    if not in_pytest and case.snapshot_every:
+        # `to_host` is a collective, so every process computes the mesh; only
+        # the leader goes on to open the file.
+        mesh = to_host(solver.VD.mesh(broadcast=False))
+        if is_leader():
+            snapshots = HDF5File.from_coords(
+                case.path("snapshot_file"),
+                mesh,
+                domains=[(0.0, case.Lx), (0.0, case.Ly), (-1.0, 1.0)],
+                dtype=np.float64 if case.snapshot_float64 else np.float32,
+                wrap_axes=(0, 1) if case.snapshot_closed else (),
+                wall_axes=(2,) if case.snapshot_closed else (),
+            )
+            echo(f"  snapshots -> {snapshots.xdmf_path}")
+
     source = (
         ChannelCheckpointer(args.restart_from)
         if args.restart_from is not None
@@ -846,9 +902,12 @@ def main(case: ChannelCase, args: Any) -> KMM3D:
         stats,
         checkpointer,
         averaging_from=average_from,
+        snapshots=snapshots,
     )
     if checkpointer is not None:
         checkpointer.close()
+    if snapshots is not None:
+        snapshots.close()
 
     if in_pytest:
         pytest_checks(solver, state, t, step, stats, case)

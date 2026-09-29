@@ -40,6 +40,13 @@ log_every = 10           # chunks between log lines
 # Relative paths are resolved against the directory of this file.
 checkpoint_dir = "turbulent_channel_ckpt"
 plot = "turbulent_channel_profiles.png"
+# Velocity fields for ParaView: an HDF5 file with an XDMF sidecar beside it.
+# The interval counts chunks, like checkpoint_every, so with sample_every = 100
+# this writes one snapshot per 1000 steps. 0 writes none.
+snapshot_every = 0
+snapshot_file = "snapshots.h5"
+snapshot_closed = true    # close the periodic ends and add the z = +-1 walls
+snapshot_float64 = false  # float32 is plenty for pictures and half the size
 
 [init]
 seed = 1   # seed of the turbulent initial condition

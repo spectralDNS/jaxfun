@@ -9,7 +9,17 @@ root = Path(__file__).parent.parent
 # Modules that live in examples/ but are not demos: imported by a demo rather
 # than run on their own. `spmd_bootstrap` brings up `jax.distributed` for the
 # demos that can run under `mpirun`; running it on its own does nothing.
-NOT_DEMOS = {"OrrSommerfeld_eigs", "ChannelFlow2D", "ChannelFlow3D", "spmd_bootstrap"}
+# `BenchmarkTurbulentChannel3D` is a manual timing benchmark rather than a
+# correctness check, and its runtime and variance make it unsuitable for the
+# automated suite. `channel_case` holds TurbulentChannel3D's case-file reader.
+NOT_DEMOS = {
+    "OrrSommerfeld_eigs",
+    "ChannelFlow2D",
+    "ChannelFlow3D",
+    "spmd_bootstrap",
+    "BenchmarkTurbulentChannel3D",
+    "channel_case",
+}
 
 # Demos are grouped in subdirectories by topic, so this recurses. `notebooks/`
 # is not part of the suite: it holds paired .py/.ipynb sources, several of which

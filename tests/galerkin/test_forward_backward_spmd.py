@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import pytest
 import sympy as sp
 
+from jaxfun.coordinates import R
 from jaxfun.galerkin import (
     Chebyshev,
     Fourier,
@@ -308,15 +309,86 @@ def test_batch_communicates_once_for_the_whole_batch() -> None:
     assert "all-gather(" not in hlo
 
 
-def test_direct_sum_batch_needs_single_device() -> None:
-    """A DirectSum cannot batch at all while sharding is active -- say so clearly."""
-    N = 8
+def _direct_sum_batch_case(N: int = 8, transient: bool = False) -> tuple:
+    """A sharded batch of fields on a space with inhomogeneous boundary values.
+
+    Unlike `_batch_case(bcs=True)`, the device count does not have to be 2: the
+    array that reaches the transform has already been mapped to the orthogonal
+    basis, so it carries `N` coefficients rather than the `N - 2` a composite
+    stores, and both of `_use_spmd`'s divisibility conditions hold at any count
+    that divides `N`.
+    """
     F = FunctionSpace(N, Fourier.Fourier, name="F")
-    Tb = FunctionSpace(N, Legendre.Legendre, {"left": {"D": 1}, "right": {"D": 0}})
+    right = sp.exp(-R(2).base_time()) if transient else 0
+    Tb = FunctionSpace(N, Legendre.Legendre, {"left": {"D": 1}, "right": {"D": right}})
     VT = TensorProduct(F, Tb, name="VT")
     x, y = VT.system.base_scalars()
-    c = project(sp.sin(x) * (1 - y**2), VT)
-    with pytest.raises(NotImplementedError, match="single-device host"):
-        VT.backward_batch(jnp.stack([c, c]))
-    with pytest.raises(NotImplementedError, match="single-device host"):
-        VT.backward_primitive_batch(jnp.stack([c, c]), k=(1, 0))
+    fields = jnp.stack(
+        [
+            jax.device_put(project(f, VT), spectral_sharding)
+            for f in (sp.sin(x) * (1 - y**2), sp.cos(x) * y, sp.sin(2 * x) * y**2)
+        ]
+    )
+    return VT, fields
+
+
+@pytest.mark.parametrize("method", ("backward", "backward_primitive", "forward"))
+def test_direct_sum_batch_matches_one_at_a_time_sharded(method: str) -> None:
+    """A sharded batch on a direct sum must equal the per-field result.
+
+    The boundary lifting is what used to keep a direct sum out of the batched
+    path entirely; it is now added to the batch and the transform handed to the
+    orthogonal space, so the answer must not depend on which one is used.
+    """
+    VT, fields = _direct_sum_batch_case()
+    if method == "forward":
+        fields = jnp.stack([VT.backward(fields[i]) for i in range(fields.shape[0])])
+    kwargs = {"k": (1, 0)} if method == "backward_primitive" else {}
+
+    batched = getattr(VT, method + "_batch")(fields, **kwargs)
+    one_at_a_time = jnp.stack(
+        [getattr(VT, method)(fields[i], **kwargs) for i in range(fields.shape[0])]
+    )
+    assert batched.shape == one_at_a_time.shape
+    assert jnp.linalg.norm(batched - one_at_a_time) < ulp(100)
+
+
+def test_direct_sum_batch_transposes_the_sharding() -> None:
+    """The batch axis stays whole on a direct sum too, and the round trip holds."""
+    VT, fields = _direct_sum_batch_case()
+    uj = VT.backward_batch(fields)
+    assert _split_axes(uj) == (2,)  # physical: last space axis
+
+    back = VT.forward_batch(uj)
+    assert _split_axes(back) == (1,)  # spectral: first space axis, never the batch
+    assert jnp.linalg.norm(back - fields) < ulp(100)
+
+
+def test_direct_sum_batch_communicates_once() -> None:
+    """The lifting rides along without a collective of its own.
+
+    A steady lifting is one array for the whole batch, broadcast over the
+    replicated batch axis, so it must not add a gather to the single
+    `all_to_all` the transform already costs.
+    """
+    VT, fields = _direct_sum_batch_case()
+    hlo = jax.jit(VT.backward_batch).lower(fields).compile().as_text()
+    assert len(re.findall(r"\ball-to-all\(", hlo)) == 1, hlo
+    assert "all-gather(" not in hlo
+
+
+def test_direct_sum_batch_transient_sharded() -> None:
+    """A moving boundary value gets one lifting per field, under sharding too."""
+    VT, fields = _direct_sum_batch_case(transient=True)
+    ts = jnp.linspace(0.0, 1.0, fields.shape[0])
+
+    batched = VT.backward_batch(fields, t=ts)
+    one_at_a_time = jnp.stack(
+        [VT.backward(fields[i], t=ts[i]) for i in range(fields.shape[0])]
+    )
+    assert jnp.linalg.norm(batched - one_at_a_time) < ulp(100)
+
+    # The times are what make the fields differ, so omitting them is an error
+    # rather than a default -- every field would be lifted at build time.
+    with pytest.raises(ValueError, match="one time per field"):
+        VT.backward_batch(fields)

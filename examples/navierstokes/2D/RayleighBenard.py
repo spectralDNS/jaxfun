@@ -518,18 +518,7 @@ def main() -> None:
     # ---------------------------------------------------------------------------
     # Plots
     # ---------------------------------------------------------------------------
-    # VT carries the inhomogeneous wall temperatures, so it is a direct sum, and
-    # a direct sum declines to batch while sharding is active: the boundary
-    # lifting it adds in is placed on the space's sharding, which the batch axis
-    # has no counterpart for. Plotting is a one-off, so transforming snapshot by
-    # snapshot there costs nothing worth avoiding. Indexed rather than iterated:
-    # a global array spanning another process's devices refuses `__iter__`.
-    n_snaps = snaps[2].shape[0]
-    T_phys = (
-        solver.VT.backward_batch(snaps[2])
-        if len(jax.devices()) == 1
-        else jnp.stack([solver.VT.backward(snaps[2][i]) for i in range(n_snaps)])
-    )
+    T_phys = solver.VT.backward_batch(snaps[2])
     u_final = solver.VD.backward(solver.velocity(final[0], final[1]))
     v_final = solver.VB.backward(final[0])
     x_plot, y_plot = solver.VT.mesh(broadcast=False)

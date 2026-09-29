@@ -10,8 +10,6 @@ from jaxfun.typing import Array, ArrayFun
 spmd_mesh = Mesh(jax.devices(), ("k",))
 spectral_sharding = NamedSharding(spmd_mesh, P("k"))
 physical_sharding = NamedSharding(spmd_mesh, P(None, "k"))
-
-
 replicated_sharding = NamedSharding(spmd_mesh, P())
 
 # The batched counterparts of `spectral_sharding` / `physical_sharding`, for the

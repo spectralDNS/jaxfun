@@ -83,11 +83,11 @@ from OrrSommerfeld_eigs import OrrSommerfeld
 from jaxfun.galerkin.inner import project
 from jaxfun.typing import Array, PolynomialKind, TestSpaceKind
 
-M, MY, N = 32, 32, 96  # Fourier modes (x), Fourier modes (y), wall-normal modes
-# Any M and MY run on any number of devices: the half spectrum on axis 0 stores
-# M // 2 + 1 coefficients, which is odd for every power-of-two M, and `RFourier`
+Nx, Ny, Nz = 32, 32, 96  # Fourier modes (x), Fourier modes (y), wall-normal modes
+# Any Nx and Ny run on any number of devices: the half spectrum on axis 0 stores
+# Nx // 2 + 1 coefficients, which is odd for every power-of-two Nx, and `RFourier`
 # pads that up to a multiple of the device count itself. What has to divide is
-# the *padded spanwise* count, 3*MY/2, which a power of two times 8 always does.
+# the *padded spanwise* count, 3*Ny/2, which a power of two times 8 always does.
 MY_ALIGNED = 8  # spanwise modes for the aligned tier, which is constant in y
 RE, ALFA = 8000.0, 1.0  # Reynolds number, in-plane wavenumber
 DT, T_END = 0.02, 50.0
@@ -99,7 +99,7 @@ POLYNOMIAL = PolynomialKind.CHEBYSHEV
 KIND = TestSpaceKind.PETROV_GALERKIN
 
 if "PYTEST" in os.environ:
-    M, MY, N, T_END = 16, 16, 48, 1.0
+    Nx, Ny, Nz, T_END = 16, 16, 48, 1.0
 
 
 def periods(alfa: float, theta: float) -> tuple[float, float]:
@@ -197,17 +197,17 @@ def solution_error(
     return e0, e1, e2, exact
 
 
-def run(label: str, theta: float, My: int) -> float:
+def run(label: str, theta: float, Ny: int) -> float:
     """Evolve the eigenmode at one angle and return the measured growth rate."""
     dt, t_end, amplitude = DT, T_END, AMPLITUDE
     nu = 1.0 / RE
     Lx, Ly = periods(ALFA, theta)
     ct, st = float(jnp.cos(theta)), float(jnp.sin(theta))
-    padding = (3 * M // 2, 3 * My // 2, N)
+    padding = (3 * Nx // 2, 3 * Ny // 2, Nz)
     solver = KMM3D(
-        M,
-        My,
-        N,
+        Nx,
+        Ny,
+        Nz,
         Lx,
         Ly,
         nu,
@@ -229,15 +229,15 @@ def run(label: str, theta: float, My: int) -> float:
     )
     echo(f"\n== {label} ==")
     echo(
-        f"  Re={RE:g} alfa={ALFA:g} theta={theta:.4f}  M={M} My={My} N={N} "
+        f"  Re={RE:g} alfa={ALFA:g} theta={theta:.4f}  Nx={Nx} Ny={Ny} Nz={Nz} "
         f"dt={dt} T={t_end}  sharded={bool(solver.sharded)}"
     )
     echo(f"  eigenvalue {eigval:.16f}")
 
     # Neither horizontal perturbation is seeded; the 2x2 recovery has to produce
-    # both. What is left over is the error of projecting the eigenfunction onto N
+    # both. What is left over is the error of projecting the eigenfunction onto Nz
     # wall-normal modes, not of the recovery, so it converges spectrally and the
-    # tolerance has to track N -- measured in 2D at Re=8000, alfa=1:
+    # tolerance has to track Nz -- measured in 2D at Re=8000, alfa=1:
     #
     #   N        48        64        96        128       160
     #   rel err  1.7e-05   3.4e-08   1.0e-12   7.6e-12   2.2e-11
@@ -246,7 +246,7 @@ def run(label: str, theta: float, My: int) -> float:
     # conditioning and the biharmonic mass solve inside `VB.forward`.
     zero = jnp.zeros(solver.D1.num_dofs)
     u_hat, v_hat = solver.velocity(state0[0], state0[1], zero, zero)
-    tol = 1e-8 if N >= 96 else 1e-3
+    tol = 1e-8 if Nz >= 96 else 1e-3
     for name, got_hat, expected in (
         ("u", u_hat, u_expected),
         ("v", v_hat, v_expected),
@@ -273,6 +273,7 @@ def run(label: str, theta: float, My: int) -> float:
         progress=is_leader(),
     )
     final = tuple(s[-1] for s in snaps)
+
     d1 = solver.diagnostics(final)
     echo("  final   " + "  ".join(f"{k}={v:.3e}" for k, v in d1.items()))
     echo(f"  Courant = {solver.courant(final, dt):.2f}")
@@ -345,7 +346,7 @@ def run(label: str, theta: float, My: int) -> float:
 def main() -> None:
     """Run both tiers and check they agree with each other and with theory."""
     aligned = run("aligned with x (the 2D problem embedded)", 0.0, MY_ALIGNED)
-    rotated = run("rotated 45 degrees", float(jnp.pi) / 4, MY)
+    rotated = run("rotated 45 degrees", float(jnp.pi) / 4, Ny)
     echo("\n== summary ==")
     echo(f"  aligned {aligned:+.12f}")
     echo(f"  rotated {rotated:+.12f}")

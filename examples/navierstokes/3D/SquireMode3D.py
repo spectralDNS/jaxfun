@@ -106,15 +106,15 @@ KX_CHECK, KY_CHECK = 2, 3
 
 # The Squire mode. `pad[1]` is a multiple of 8 so the sharded path engages at 2,
 # 4 and 8 devices; see the sharding notes in ChannelFlow3D.py's header.
-M, MY, N = 16, 16, 32
+Nx, Ny, Nz = 16, 16, 32
 PAD = (24, 24, 32)
 KX, KY = 1, 2
 NU = 0.01
 AMPLITUDE = 1e-6
 DT, T_END = 0.05, 2.0
 
-POLYNOMIAL = PolynomialKind.LEGENDRE
-KIND = TestSpaceKind.GALERKIN
+POLYNOMIAL = PolynomialKind.CHEBYSHEV
+KIND = TestSpaceKind.PETROV_GALERKIN
 
 if "PYTEST" in os.environ:
     T_END = 0.5
@@ -290,9 +290,9 @@ def main() -> KMM3D:
     echo("\n-- Squire mode, exact decay --------------------------------------")
     dt, t_end = DT, T_END
     solver = KMM3D(
-        M,
-        MY,
-        N,
+        Nx,
+        Ny,
+        Nz,
         Lx,
         Ly,
         NU,

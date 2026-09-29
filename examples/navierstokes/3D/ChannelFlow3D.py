@@ -197,7 +197,7 @@
 # nonlinear and linear caches as plain arrays. There are four such equations here
 # rather than two.
 #
-# DEALIASING: 3/2 IN BOTH FOURIER DIRECTIONS, NONE IN THE WALL-NORMAL
+# DEALIASING: DEFAULT 3/2 IN BOTH FOURIER DIRECTIONS, NONE IN THE WALL-NORMAL
 #
 # The matrices are assembled exactly from the precomputed composite stencils, so
 # quadrature error can only enter through the transform pair around the pointwise
@@ -206,7 +206,7 @@
 # quadrature can carry the excess; it folds back onto the retained modes. The
 # fold measured in 2-D at N=32, unchanged in kind here:
 #
-#   Fourier     exact fold at amplitude 1: mode k1+k2 lands on k1+k2-M
+#   Fourier     exact fold at amplitude 1: mode k1+k2 lands on k1+k2-Nx
 #   Chebyshev   exact fold at amplitude 1: T_{2N-j} is -T_j on the Gauss points
 #   Legendre    no exact fold: 0.97 at m=N+1, falling to 0.1-0.2 and spread over
 #               several modes by m=2N
@@ -234,7 +234,7 @@
 # Every physical field here is real, so its spectrum is Hermitian: the mode at
 # (-kx, -ky) is the conjugate of the one at (kx, ky) and carries no information.
 # The x direction is therefore built with `TensorProduct(..., real=True)`, which
-# stores only kx = 0, ..., M/2 and transforms with rfft/irfft. Nothing is
+# stores only kx = 0, ..., Nx/2 and transforms with rfft/irfft. Nothing is
 # approximated -- the equations for the reflected modes are the conjugates of
 # those kept -- but everything downstream runs on half the data.
 #
@@ -255,7 +255,7 @@
 # use the raw wavenumber while the transforms zero it -- so the two conventions
 # disagree unless it vanishes, and holding it at zero is bookkeeping.
 #
-# On the full spanwise axis the stored wavenumber at index My/2 is -My/2, a mode a
+# On the full spanwise axis the stored wavenumber at index Ny/2 is -Ny/2, a mode a
 # real field *can* carry, and zeroing it is a genuine one-mode truncation. It is
 # done for the same consistency reason -- `wavenumbers(eliminate_highest_freq=
 # True)` zeroes it for odd derivatives while the operators use the raw value --
@@ -567,9 +567,9 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
 
     def __init__(
         self,
-        M: int,
-        My: int,
-        N: int,
+        Nx: int,
+        Ny: int,
+        Nz: int,
         Lx: float,
         Ly: float,
         nu: float,
@@ -584,9 +584,9 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         """Assemble the velocity spaces, operators and sub-integrators.
 
         Args:
-            M: Number of Fourier modes along the streamwise direction.
-            My: Number of Fourier modes along the spanwise direction.
-            N: Number of modes along the wall-normal direction.
+            Nx: Number of Fourier modes along the streamwise direction.
+            Ny: Number of Fourier modes along the spanwise direction.
+            Nz: Number of modes along the wall-normal direction.
             Lx: Streamwise period.
             Ly: Spanwise period.
             nu: Kinematic viscosity.
@@ -598,7 +598,7 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
                 so that the last stage is the accepted solution.
             time: Optional default integration interval.
             padding: Shape of real space. Only required if padding is used,
-                otherwise real shape defaults to M, My, N.
+                otherwise real shape defaults to Nx, Ny, Nz.
             polynomial: Polynomial basis for the wall-normal direction, one of
                 the keys of `POLYNOMIALS`, by member name or short form. See
                 "CHOICE OF BASIS AND TEST SPACE" in the header: pair LEGENDRE
@@ -631,20 +631,20 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         self.Lx, self.Ly = nnx.static(Lx), nnx.static(Ly)
         # One per Fourier axis. On the halved streamwise axis this index is the
         # last stored wavenumber; on the full spanwise axis it is the mode whose
-        # stored wavenumber is -My/2. See "THE NYQUIST MODE" in the header.
-        self.nyquist = nnx.static((M // 2, My // 2))
-        self.pad = nnx.static((M, My, N) if padding is None else padding)
+        # stored wavenumber is -Ny/2. See "THE NYQUIST MODE" in the header.
+        self.nyquist = nnx.static((Nx // 2, Ny // 2))
+        self.pad = nnx.static((Nx, Ny, Nz) if padding is None else padding)
 
         hom = {"left": {"D": 0}, "right": {"D": 0}}
         bih = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
-        Fx = FunctionSpace(M, Fourier.Fourier, domain=Domain(0, Lx), name="Fx")
-        Fy = FunctionSpace(My, Fourier.Fourier, domain=Domain(0, Ly), name="Fy")
-        D = FunctionSpace(N, polspace, bcs=hom, name="D")
-        B = FunctionSpace(N, polspace, bcs=bih, name="B")
+        Fx = FunctionSpace(Nx, Fourier.Fourier, domain=Domain(0, Lx), name="Fx")
+        Fy = FunctionSpace(Ny, Fourier.Fourier, domain=Domain(0, Ly), name="Fy")
+        D = FunctionSpace(Nz, polspace, bcs=hom, name="D")
+        B = FunctionSpace(Nz, polspace, bcs=bih, name="B")
         VD = TensorProduct(Fx, Fy, D, name="VD", real=True)
         VB = TensorProduct(Fx, Fy, B, name="VB", real=True)
         # `real=True` substituted the half spectrum on axis 0, which stores
-        # M/2 + 1 wavenumbers rather than M, plus whatever padding the device
+        # Nx/2 + 1 wavenumbers rather than Nx, plus whatever padding the device
         # count needs to split them. Axis 1 keeps its full complex spectrum.
         Fx = cast(Fourier.RFourier, VD.basespaces[0])
         Fy = cast(Fourier.Fourier, VD.basespaces[1])
@@ -761,6 +761,7 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         )
         # `u` is the generic VD trial function: the projected w_z and g both
         # live in VD, so one set of operators serves both.
+
         C_fx = cast(TPMatrix, linear_operator(u.diff(x, 1) * wt))
         C_fy = cast(TPMatrix, linear_operator(u.diff(y, 1) * wt))
         C_wz = cast(TPMatrix, linear_operator(W.diff(z, 1) * wt))
@@ -773,9 +774,9 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
                 "the same mass matrix"
             )
 
-        self.cx = nnx.data(separable_weight(C_fx, 0))
-        self.cy = nnx.data(separable_weight(C_fy, 1))
-        self.weights = nnx.data(weights.at[0, 0].set(1.0)[..., None])
+        weights = weights.at[0, 0].set(1.0)[..., None]
+        self.cx = nnx.data(separable_weight(C_fx, 0) / weights)
+        self.cy = nnx.data(separable_weight(C_fy, 1) / weights)
 
         # The projection of w_z into VD, f_hat = M_z^-1 <B', D> w_hat, is the one
         # wall-normal operation the recovery still needs. For Legendre it is a single
@@ -897,8 +898,8 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         which is exactly why that mode needs its own equation.
         """
         f_hat = self.project_wz(w_hat)
-        u_hat = (self.cx * f_hat + self.cy * g_hat) / self.weights
-        v_hat = (self.cy * f_hat - self.cx * g_hat) / self.weights
+        u_hat = self.cx * f_hat + self.cy * g_hat
+        v_hat = self.cy * f_hat - self.cx * g_hat
         return (
             u_hat.at[0, 0].set(u0 + 0j),
             v_hat.at[0, 0].set(v0 + 0j),
@@ -930,8 +931,7 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         u_hat, v_hat = self.velocity(w_hat, g_hat, u0, v0)
         if kind == VelocityKind.SPECTRAL:
             return u_hat, v_hat, w_hat
-        u_p = self.VD.backward(u_hat, N=pad)
-        v_p = self.VD.backward(v_hat, N=pad)
+        u_p, v_p = self.VD.backward_batch(jnp.stack((u_hat, v_hat)), N=pad)
         w_p = self.VB.backward(w_hat, N=pad)
         if kind == VelocityKind.PHYSICAL:
             return u_p, v_p, w_p

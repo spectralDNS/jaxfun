@@ -22,6 +22,7 @@ dependencies = [
   "marimo>=0.19.10",
   "matplotlib>=3.9.3",
   "optax>=0.2.8",
+  "orbax-checkpoint>=0.11",
   "pre-commit>=4.3",
   "pytest-xdist[psutil]>=3.8",
   "sympy>=1.14",

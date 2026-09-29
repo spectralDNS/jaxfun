@@ -106,12 +106,8 @@ def test_index_order_2d(tmp_path) -> None:
 
     root = ET.parse(tmp_path / "t.xdmf").getroot()
     assert root is not None
-    assert (
-        cast(Element[str], root.find(".//Topology")).get("TopologyType") == "2DRectMesh"
-    )
-    assert (
-        cast(Element[str], root.find(".//Topology")).get("Dimensions") == f"{NY} {NX}"
-    )
+    assert cast(Element, root.find(".//Topology")).get("TopologyType") == "2DRectMesh"
+    assert cast(Element, root.find(".//Topology")).get("Dimensions") == f"{NY} {NX}"
     geometry = root.find(".//Geometry")
     assert geometry is not None
     assert geometry.get("GeometryType") == "VXVY"
@@ -167,7 +163,7 @@ def test_append_across_sessions(tmp_path) -> None:
         "grid_0000000020",
         "grid_0000000021",
     ]
-    assert [cast(Element[str], g.find("Time")).get("Value") for g in grids] == [
+    assert [cast(Element, g.find("Time")).get("Value") for g in grids] == [
         "0.1",
         "0.2",
         "0.3",
@@ -256,9 +252,9 @@ def test_from_coords_and_rebuild_sidecar(tmp_path) -> None:
     root = ET.parse(out).getroot()
     assert root is not None
     assert out == tmp_path / "t.xdmf"
-    assert cast(Element[str], root.find(".//Grid")).get("Name") == "Rebuilt"
+    assert cast(Element, root.find(".//Grid")).get("Name") == "Rebuilt"
     assert (
-        cast(Element[str], root.find(".//Topology")).get("Dimensions")
+        cast(Element, root.find(".//Topology")).get("Dimensions")
         == f"{NZ + 2} {NX + 1}"
     )
-    assert cast(Element[str], root.find(".//Grid/Grid/Time")).get("Value") == "2"
+    assert cast(Element, root.find(".//Grid/Grid/Time")).get("Value") == "2"

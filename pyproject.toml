@@ -23,7 +23,6 @@ dependencies = [
   "optax>=0.2.8",
   "sympy>=1.14",
 ]
-# HDF5 snapshot output for ParaView (jaxfun.utils.hdf5file).
 optional-dependencies.io = [
   "h5py>=3.11",
 ]

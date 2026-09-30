@@ -658,8 +658,9 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
             n_dev > 1 and VD.num_dofs[0] % n_dev == 0 and self.pad[1] % n_dev == 0
         )
 
-        # Convection H and the scalar fluxes satisfy no boundary conditions, so
-        # they live in the orthogonal space.
+        # The orthogonal space carries the velocity and vorticity on their way to
+        # the mesh. Convection H = omega x u vanishes at the walls, and is
+        # projected into VD so that its truncation does too.
         Wo = VD.get_orthogonal()
         D1 = VD.basespaces[2]
 
@@ -698,7 +699,7 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         q = TestFunction(PB, name="q")
         G = TrialFunction(VD, name="g", transient=True)
         s = TestFunction(PD, name="s")
-        h = TrialFunction(Wo, name="h")
+        h = TrialFunction(VD, name="h")
         u1 = TrialFunction(D1, name="u1", transient=True)
         w1 = TestFunction(P1, name="w1")
 
@@ -810,7 +811,7 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         self.C_gfy = nnx.data(linear_operator(-h.diff(x, 1) * s))
 
         # -- mean flow: -<H_x> + f_x and -<H_y> + f_y ----------------------
-        h1 = TrialFunction(D1.get_orthogonal(), name="h1")
+        h1 = TrialFunction(D1, name="h1")
         self.G_mean = nnx.data(linear_operator(-w1 * h1))
 
         # A constant force has only a (0,0) component, so it lands entirely on
@@ -1022,7 +1023,7 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         )(stacked)
 
     def _forward(self, *fields: Array) -> Array:
-        """Transform padded real fields back to orthogonal coefficient arrays.
+        """Transform padded real fields back to VD coefficient arrays.
 
         The inverse of `_wall_normal` + `_horizontal`, batched the same way and
         for the same reason, and turning the layout back over the same way: the
@@ -1030,7 +1031,7 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         is still real*, then one `all_to_all` back to split wavenumbers, then the
         spanwise and wall-normal transforms, local again.
         """
-        zspace = self.Wo.basespaces[2]
+        zspace = self.VD.basespaces[2]
         xforward = along(self.Fx.forward, 1)
         yforward = along(self.Fy.forward, 2)
         zforward = jax.vmap(zspace.forward)

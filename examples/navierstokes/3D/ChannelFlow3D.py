@@ -931,7 +931,9 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         u_hat, v_hat = self.velocity(w_hat, g_hat, u0, v0)
         if kind == VelocityKind.SPECTRAL:
             return u_hat, v_hat, w_hat
-        u_p, v_p = self.VD.backward_batch(jnp.stack((u_hat, v_hat)), N=pad)
+        # Index, don't unpack: iterating a multi-process array raises eagerly.
+        uv_p = self.VD.backward_batch(jnp.stack((u_hat, v_hat)), N=pad)
+        u_p, v_p = uv_p[0], uv_p[1]
         w_p = self.VB.backward(w_hat, N=pad)
         if kind == VelocityKind.PHYSICAL:
             return u_p, v_p, w_p
@@ -1243,24 +1245,24 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         return self.Wo.scalar_product(f)[0, 0, 0].real / self.vol
 
     def courant(self, state: tuple[Array, ...], dt: float) -> float:
-        """Return the advective Courant number on the padded mesh.
+        """Return the advective Courant number on the quadrature mesh.
 
         Only the diffusive terms are implicit, so the step size is limited by
         advection alone. This is the finite-difference form,
-        dt*(|u|/dx + |v|/dy + |w|/dz), and none of the three terms is the
-        spectral criterion.
+        dt*(|u|/dx + |v|/dy + |w|/dz), evaluated on the unpadded mesh -- the
+        padding only dealiases the nonlinear products, whose extra modes are
+        truncated before the step, so it has no bearing on stability. None of
+        the three terms is the spectral criterion.
 
         Along either Fourier direction the operator is i*k*u, so what binds is
-        dt*|u|*k_max, larger than dt*|u|/dx by k_max*dx = 2*pi/3 under the 3/2
-        padding; ARS443's explicit half is stable to about 2 on the imaginary
-        axis, so in two dimensions the two factors very nearly cancelled and the
-        number read ~1 at the stability boundary (0.76 ran, 1.15 diverged).
+        dt*|u|*k_max, larger than dt*|u|/dx by k_max*dx = pi. ARS443's explicit
+        half is stable to about 2 on the imaginary axis, and in two dimensions
+        (Orr-Sommerfeld, one periodic direction) the number read ~0.6 at the
+        stability boundary.
 
-        That calibration does NOT transfer here. It was measured on
-        Orr-Sommerfeld in two dimensions, with one periodic direction rather than
-        two, and the threshold moved with the padding even there (to ~0.6
-        unpadded). Read this number as a relative indicator across runs of one
-        configuration until it has been recalibrated, not as an absolute
+        That calibration does NOT transfer here, with two periodic directions
+        rather than one. Read this number as a relative indicator across runs of
+        one configuration until it has been recalibrated, not as an absolute
         stability margin.
 
         Along the wall-normal direction 1/dz understates the stiffness rather
@@ -1270,10 +1272,8 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         is that |w| is small where the points are dense, which is a property of
         the flow and not of the discretization.
         """
-        u_p, v_p, w_p = self.velocity_from_state(
-            state, pad=self.pad, kind=VelocityKind.PHYSICAL
-        )
-        xm, ym, zm = self.VD.mesh(N=self.pad, broadcast=False)
+        u_p, v_p, w_p = self.velocity_from_state(state, kind=VelocityKind.PHYSICAL)
+        xm, ym, zm = self.VD.mesh(broadcast=False)
         dx = float(self.Lx) / xm.shape[0]
         dy = float(self.Ly) / ym.shape[0]
         dz = jnp.abs(jnp.asarray(jnp.gradient(zm)))[None, None, :]

@@ -517,6 +517,45 @@ class ChannelStatistics:
         self.count = int(d["count"])
         self.t_first, self.t_last = d["t_first"], d["t_last"]
 
+    def save(self, path: str | os.PathLike) -> None:
+        """Write the statistics to an .npz file, which `load` reads back.
+
+        Besides what `load` needs (`z`, `Re_tau`, `sums`, `count`, `t_first`,
+        `t_last`), the file holds the `profiles` under their own keys once there
+        are samples, so `np.load(path)["U+"]` works without this class. A time
+        that is not set yet is stored as NaN.
+        """
+        data: dict[str, Any] = {
+            "z": self.z,
+            "Re_tau": self.Re_tau,
+            "sums": self.sums,
+            "count": self.count,
+            "t_first": np.nan if self.t_first is None else self.t_first,
+            "t_last": np.nan if self.t_last is None else self.t_last,
+        }
+        if self.count:
+            data |= self.profiles()
+        np.savez(path, **data)
+
+    @classmethod
+    def load(cls, path: str | os.PathLike) -> "ChannelStatistics":
+        """Return the statistics `save` wrote to `path`."""
+
+        def time(t: np.ndarray) -> float | None:
+            return None if np.isnan(t) else float(t)
+
+        with np.load(path) as d:
+            stats = cls(d["z"], float(d["Re_tau"]))
+            stats.load_dict(
+                {
+                    "sums": d["sums"],
+                    "count": d["count"],
+                    "t_first": time(d["t_first"]),
+                    "t_last": time(d["t_last"]),
+                }
+            )
+        return stats
+
 
 # -- checkpoints ---------------------------------------------------------------
 
@@ -625,6 +664,19 @@ class ChannelCheckpointer:
             ),
         )
 
+    def meta(self, step: int | None = None) -> dict[str, Any]:
+        """Return a checkpoint's metadata, without reading the state.
+
+        The keys are those `save` writes: the time, the step, the grid, the box,
+        the statistics (as `ChannelStatistics.to_dict`) and the case.
+        """
+        step = self.manager.latest_step() if step is None else step
+        if step is None:
+            raise FileNotFoundError(f"no checkpoint in {self.directory}")
+        return self.manager.restore(
+            step, args=ocp.args.Composite(meta=ocp.args.JsonRestore())
+        )["meta"]
+
     def restore(
         self,
         solver: TurbulentChannel,
@@ -645,12 +697,8 @@ class ChannelCheckpointer:
             The state, the time, the step counter, and whether the statistics
             were restored.
         """
-        step = self.manager.latest_step() if step is None else step
-        if step is None:
-            raise FileNotFoundError(f"no checkpoint in {self.directory}")
-        meta = self.manager.restore(
-            step, args=ocp.args.Composite(meta=ocp.args.JsonRestore())
-        )["meta"]
+        meta = self.meta(step)
+        step = meta["step"]
         for key, have in (
             ("Lx", float(solver.Lx)),
             ("Ly", float(solver.Ly)),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import cache
+from typing import cast
 
 import jax
 import jax.numpy as jnp
@@ -556,6 +557,12 @@ class CGComposite(Composite):
                     stencil=self.stencil,
                     scaling=self.scaling,
                 )
+
+        if kind == TestSpaceKind.GALERKIN_RECOMBINED:
+            # The PG test functions with the last few, which reach beyond the
+            # trial degree, swapped for trial functions: Galerkin, PG's band.
+            P = self.get_testspace(TestSpaceKind.PETROV_GALERKIN, scaling=scaling)
+            return cast(PGComposite, P).recombine(self, name=name, fun_str=fun_str)
 
         assert kind == TestSpaceKind.PETROV_GALERKIN, (
             f"Unsupported test space kind {kind!r} for Chebyshev CGComposite. "

@@ -22,9 +22,9 @@ Pz = 1.0         # dealiasing (padding) factor, wall-normal; 1 is no padding
 
 [discretization]
 # See "CHOICE OF BASIS AND TEST SPACE" in ChannelFlow3D.py for the pairing rule:
-# chebyshev with petrov_galerkin, legendre with galerkin.
+# chebyshev with galerkin_recombined, legendre with galerkin.
 polynomial = "chebyshev"
-kind = "petrov_galerkin"
+kind = "galerkin_recombined"
 tableau = "ARS443"   # any globally stiffly accurate IMEX tableau in jaxfun.integrators
 
 [time]

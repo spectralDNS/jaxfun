@@ -63,7 +63,7 @@
 # The biharmonic w equation is never excited here -- w stays zero by design --
 # and neither is advection by a base flow. OrrSommerfeld3D.py does both.
 #
-# Spatial discretization: Fourier x Fourier x (Legendre Galerkin | Chebyshev PG)
+# Spatial discretization: Fourier x Fourier x (Legendre Galerkin | Chebyshev GR)
 # Time discretization: any globally stiffly accurate IMEX Runge-Kutta tableau
 # ruff: noqa: E402
 import os
@@ -107,14 +107,14 @@ KX_CHECK, KY_CHECK = 2, 3
 # The Squire mode. `pad[1]` is a multiple of 8 so the sharded path engages at 2,
 # 4 and 8 devices; see the sharding notes in ChannelFlow3D.py's header.
 Nx, Ny, Nz = 16, 16, 32
-PAD = (24, 24, 32)
+PAD = (24, 24, 48)
 KX, KY = 1, 2
 NU = 0.01
 AMPLITUDE = 1e-6
 DT, T_END = 0.05, 2.0
 
 POLYNOMIAL = PolynomialKind.CHEBYSHEV
-KIND = TestSpaceKind.PETROV_GALERKIN
+KIND = TestSpaceKind.GALERKIN_RECOMBINED
 
 if "PYTEST" in os.environ:
     T_END = 0.5

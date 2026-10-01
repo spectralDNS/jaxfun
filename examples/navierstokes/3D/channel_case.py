@@ -100,7 +100,7 @@ class ChannelCase:
     Py: float = 1.5
     Pz: float = 1.0
     polynomial: str = "chebyshev"
-    kind: str = "petrov_galerkin"
+    kind: str = "galerkin_recombined"
     tableau: str = "ARS443"
     dt: float = 0.001
     t_transient: float = 20.0

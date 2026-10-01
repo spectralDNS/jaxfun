@@ -47,7 +47,7 @@
 # directly and checks its exact decay, along with every assembled forcing
 # operator against a symbolic reference.
 #
-# Spatial discretization: Fourier x Fourier x (Legendre Galerkin | Chebyshev PG)
+# Spatial discretization: Fourier x Fourier x (Legendre Galerkin | Chebyshev GR)
 # Time discretization: any globally stiffly accurate IMEX Runge-Kutta tableau
 # ruff: noqa: E402
 import os
@@ -96,7 +96,7 @@ N_OS = 100  # modes in the Orr-Sommerfeld eigenproblem itself
 # Wall-normal basis and test space; see "CHOICE OF BASIS AND TEST SPACE" in
 # ChannelFlow3D.py for the pairing rule.
 POLYNOMIAL = PolynomialKind.CHEBYSHEV
-KIND = TestSpaceKind.PETROV_GALERKIN
+KIND = TestSpaceKind.GALERKIN_RECOMBINED
 
 if "PYTEST" in os.environ:
     Nx, Ny, Nz, T_END = 16, 16, 48, 1.0

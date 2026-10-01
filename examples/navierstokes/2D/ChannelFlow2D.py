@@ -160,30 +160,39 @@
 # from four y-diagonals to three, by testing it against the Galerkin space, was
 # worth 1.18x on the whole solver. Widest band in the v equation, measured:
 #
-#                            N=24   N=48   N=96
-#   Legendre   Galerkin         5      5      5     <- the default
-#   Legendre   Petrov-Galerkin  7      7      7
-#   Chebyshev  Galerkin        10     24     87
-#   Chebyshev  Petrov-Galerkin  7      7      7     <- the fast pairing
-#   ChebyshevU Galerkin        10     22     74
+#                                N=24   N=48   N=96
+#   Legendre   Galerkin             5      5      5     <- the default
+#   Legendre   Galerkin-recombined  7      7      7
+#   Chebyshev  Galerkin            10     24     87
+#   Chebyshev  Galerkin-recombined  7      7      7     <- the fast pairing
+#   ChebyshevU Galerkin            10     22     74
 #
-# So pair LEGENDRE with GALERKIN and CHEBYSHEV with PETROV_GALERKIN. The other
-# two cells of that square are legal and give the same answer, but neither is
-# ever the right choice:
+# So pair LEGENDRE with GALERKIN and CHEBYSHEV with GALERKIN_RECOMBINED ("GR").
+# Both are the Galerkin method. The GR test functions span the trial space and
+# give the same solution, but they are combined so that the operators stay
+# banded: they are the Petrov-Galerkin (ChebPhi) test functions, with the last
+# few, which reach beyond the trial degree, swapped for trial functions. The
+# other two cells of that square are legal and give the same answer, but neither
+# is ever the right choice:
 #
-#   Legendre + PG      works, but Legendre's Galerkin operators are already
-#                      banded, and PG only widens them (7 against 5). PG buys
-#                      sparsity that Legendre does not need.
+#   Legendre + GR      works, but Legendre's Galerkin operators are already
+#                      banded, and GR only widens them (7 against 5).
 #   Chebyshev + G      works, but differentiating a Chebyshev expansion in
 #                      coefficient space is dense upper triangular -- T_n' spreads
 #                      over every lower T_k of the same parity -- where Legendre's
 #                      weight of 1 lets integration by parts collapse the same
 #                      operators to a few diagonals. So the band grows like N.
-#                      This is exactly what PG exists to avoid: the ChebPhi test
-#                      functions restore a fixed bandwidth.
+#                      This is exactly what GR exists to avoid.
 #
-# ChebyshevU has no PG test space implemented, so it is Galerkin only, and
-# Galerkin leaves it dense -- asking for PG raises NotImplementedError from the
+# Plain Petrov-Galerkin is deliberately not offered, although it has GR's band.
+# Its test space does not span the trial space, so the convection term does not
+# conserve energy discretely, and the test functions vanish to high order at the
+# walls, where the equations are then barely enforced. In a turbulent channel at
+# Re_tau = 180 that fed a spurious layer one grid cell thick at the walls,
+# visible as kinks in the near-wall rms profiles. GR has neither problem.
+#
+# ChebyshevU has no GR test space implemented, so it is Galerkin only, and
+# Galerkin leaves it dense -- asking for GR raises NotImplementedError from the
 # space rather than falling back. It is here for completeness.
 #
 # Which of the two is faster is a performance question, not a correctness one,
@@ -243,7 +252,7 @@
 # operator, continuity and the mean flow at once; RayleighBenard.py subclasses
 # it and checks the onset of convection.
 #
-# Spatial discretization: Fourier x (Legendre Galerkin | Chebyshev Petrov-Galerkin)
+# Spatial discretization: Fourier x (Legendre Galerkin | Chebyshev Galerkin-recombined)
 # Time discretization: any globally stiffly accurate IMEX Runge-Kutta tableau
 # ruff: noqa: E402
 from enum import StrEnum
@@ -272,7 +281,7 @@ from jaxfun.galerkin import (
     TestFunction,
     TrialFunction,
 )
-from jaxfun.galerkin.composite import PGComposite
+from jaxfun.galerkin.composite import Composite
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.integrators import ARS443, IMEXRungeKutta, IMEXTableau
 from jaxfun.integrators.base import TimeStepper
@@ -391,10 +400,11 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
             polynomial: Polynomial basis for the wall-normal direction, one
                 of the keys of `POLYNOMIALS`, by member name or short form.
                 See "CHOICE OF BASIS AND TEST SPACE" in the header: pair
-                LEGENDRE with GALERKIN and CHEBYSHEV with PETROV_GALERKIN.
-            kind: Test space kind, either GALERKIN or PETROV_GALERKIN. Short
-                forms G or PG. CHEBYSHEVU has no PG test space yet and
-                raises NotImplementedError if asked for one.
+                LEGENDRE with GALERKIN and CHEBYSHEV with GALERKIN_RECOMBINED.
+            kind: Test space kind, either GALERKIN or GALERKIN_RECOMBINED. Short
+                forms G or GR. PETROV_GALERKIN is refused; see the header.
+                CHEBYSHEVU has no GR test space yet and raises
+                NotImplementedError if asked for one.
         """
         if not tableau.is_stiffly_accurate:
             raise ValueError(
@@ -406,7 +416,13 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
             )
         polynomial = PolynomialKind.coerce(polynomial)
         kind = TestSpaceKind.coerce(kind)
-        PG = kind is TestSpaceKind.PETROV_GALERKIN
+        if kind is TestSpaceKind.PETROV_GALERKIN:
+            raise ValueError(
+                "Petrov-Galerkin is not supported: its test space does not span the "
+                "trial space, so the convection term does not conserve energy. Use "
+                "GALERKIN_RECOMBINED ('GR'), which has the same band and is Galerkin."
+            )
+        GR = kind is TestSpaceKind.GALERKIN_RECOMBINED
         if polynomial not in POLYNOMIALS:
             raise NotImplementedError(
                 f"{polynomial.name} is not available here; pick one of "
@@ -452,10 +468,10 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         # and at k=0 every 2-D operator reduces to its y-factor exactly.
         D1 = VD.basespaces[1]
 
-        if PG:
-            BP = B.get_testspace("PG", name="BP")
+        if GR:
+            BP = B.get_testspace("GR", name="BP")
             PB = TensorProduct(F, BP, name="PB")
-            P1 = cast(PGComposite, D1).get_testspace("PG", name="P1")
+            P1 = cast(Composite, D1).get_testspace("GR", name="P1")
 
         else:
             PB = VB

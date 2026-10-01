@@ -115,7 +115,7 @@
 #   python TurbulentChannel3D.py case.toml --set output.snapshot_every=10
 #   python TurbulentChannel3D.py fine.toml --restart-from coarse/turbulent_channel_ckpt
 #
-# Spatial discretization: Fourier x Fourier x (Chebyshev PG | Legendre Galerkin)
+# Spatial discretization: Fourier x Fourier x (Chebyshev GR | Legendre Galerkin)
 # Time discretization: ARS443 IMEX Runge-Kutta
 # ruff: noqa: E402
 import os

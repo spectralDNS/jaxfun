@@ -902,6 +902,15 @@ class PGComposite(Composite):
         self.order = order
         assert self.order > 0, "Order must be positive for Petrov-Galerkin composite."
 
+    def recombine(
+        self,
+        trial: Composite,
+        name: str | None = None,
+        fun_str: str | None = None,
+    ) -> GalerkinRecombined:
+        """Return these test functions cropped to span `trial`."""
+        return GalerkinRecombined(self, trial, name=name, fun_str=fun_str)
+
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
     ) -> DiaMatrix | Matrix | None:
@@ -968,6 +977,107 @@ class PGComposite(Composite):
             )
             return scaling @ z
         return z
+
+
+class GalerkinRecombined(Composite):
+    """Petrov-Galerkin test functions cropped to span the trial space.
+
+    The test functions of a `PGComposite` reach a higher polynomial degree than
+    the trial functions: its last `order` functions lie outside the trial
+    space. Replacing exactly those by the trial basis functions of the same
+    index, scaled like the functions they replace, gives a test space that
+    spans the trial space -- the method is Galerkin -- while every other test
+    function, and so the banded structure of the operator matrices, is the
+    Petrov-Galerkin one.
+
+    Args:
+        pg: The Petrov-Galerkin test space.
+        trial: The trial space it tests.
+        name: Space name.
+        fun_str: Symbol stem for basis functions.
+    """
+
+    def __init__(
+        self,
+        pg: PGComposite,
+        trial: Composite,
+        name: str | None = None,
+        fun_str: str | None = None,
+    ) -> None:
+        super().__init__(
+            trial.N,
+            type(trial.orthogonal),
+            trial.bcs,
+            domain=trial.domain,
+            name=name if name is not None else pg.name,
+            fun_str=fun_str if fun_str is not None else pg.fun_str,
+            system=trial.system,
+            stencil=trial.stencil,
+            scaling=trial.scaling,
+        )
+        S_pg = np.asarray(pg.S.todense())
+        S_trial = np.asarray(trial.S.todense())
+        assert S_pg.shape[0] == S_trial.shape[0], "test and trial dimensions differ"
+        replaced = np.any(S_pg[:, trial.N :] != 0, axis=1)
+        # Scale each replacement like the PG function it replaces, by matching
+        # their leading coefficients, so that all rows of a matrix are of one
+        # size and the round-off of the last few is not weighted up by k^q.
+        k = np.arange(S_pg.shape[0])
+        S_trial = S_trial * np.where(replaced, S_pg[k, k] / S_trial[k, k], 1.0)[:, None]
+        S = np.where(replaced[:, None], S_trial, S_pg[:, : trial.N])
+        self.S = _from_dense_exact(S)
+        self.ST = self.S.T
+        self.P = self.S @ self.ST
+        self.P.lu_factor()
+        self._mass_matrix = self._compute_mass_matrix()
+        self._mass_matrix.lu_factor()
+        self._pg = pg
+        self._replaced = np.flatnonzero(replaced)
+        self._replaced_rows = S_trial[self._replaced]
+
+    def _matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
+    ) -> DiaMatrix | Matrix | None:
+        """Return the PG matrix with the replaced rows tested by trial functions.
+
+        The replaced rows come from the derivative recurrence of the orthogonal
+        basis rather than from quadrature, which would lose about N^(2j-1) in
+        accuracy for the j'th derivative.
+        """
+        z = self._pg._matrices(i, trial, q)
+        if z is None or q != 0:
+            return None
+        u, j = trial
+        uo = u.orthogonal
+        # (T_m^{(j)}, T_p)_w for the replaced rows' modes p and the trial modes m.
+        # Only trial modes from the lowest replaced one up can reach those rows,
+        # and a narrow trial space (a boundary lifting) may have none of them.
+        lo = int(self._replaced_rows.nonzero()[1].min())
+        G = np.zeros((self.N, uo.N))
+        if lo < uo.N:
+            k = min(uo.N, self.N)
+            modes = jnp.arange(lo, uo.N)
+            D = jax.vmap(lambda m: uo.derivative_coeffs(jnp.eye(uo.N)[m], j))(modes)
+            h = np.asarray(self.orthogonal.norm_squared())[:k]
+            G[:k, lo:] = (np.asarray(D)[:, :k] * h[None, :]).T
+        rows = self._replaced_rows @ G
+        if isinstance(u, Composite):
+            rows = rows @ np.asarray(u.ST.todense())
+        Z = np.asarray(z.todense()).copy()
+        Z[self._replaced] = rows
+        return _from_dense_exact(Z)
+
+
+def _from_dense_exact(a: np.ndarray) -> DiaMatrix:
+    """Return `a` as a DiaMatrix keeping every diagonal with a nonzero entry.
+
+    `DiaMatrix.from_dense` prunes relative to the largest entry, which would drop
+    the Petrov-Galerkin rows: they are scaled down by about k^-q against the
+    order-one trial rows that replace the last few.
+    """
+    n, m = a.shape
+    offsets = tuple(k for k in range(-(n - 1), m) if np.any(a.diagonal(k) != 0))
+    return DiaMatrix.from_dense(jnp.asarray(a), offsets=offsets)
 
 
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:

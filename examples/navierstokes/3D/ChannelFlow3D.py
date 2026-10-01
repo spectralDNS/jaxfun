@@ -272,28 +272,28 @@
 # measured here at 16 x 16 x 24 and matching the 2-D table exactly (the extra
 # Fourier axis is diagonal and changes no bandwidth):
 #
-#                            N=24   N=48   N=96
-#   Legendre   Galerkin         5      5      5     <- the default
-#   Legendre   Petrov-Galerkin  7      7      7
-#   Chebyshev  Galerkin        10     24     87
-#   Chebyshev  Petrov-Galerkin  7      7      7     <- the fast pairing
-#   ChebyshevU Galerkin        10     22     74
+#                                N=24   N=48   N=96
+#   Legendre   Galerkin             5      5      5     <- the default
+#   Legendre   Galerkin-recombined  7      7      7
+#   Chebyshev  Galerkin            10     24     87
+#   Chebyshev  Galerkin-recombined  7      7      7     <- the fast pairing
+#   ChebyshevU Galerkin            10     22     74
 #
-# So pair LEGENDRE with GALERKIN and CHEBYSHEV with PETROV_GALERKIN. The other
-# two cells of that square are legal and give the same answer, but Legendre's
-# Galerkin operators are already banded and PG only widens them, while Chebyshev
-# under plain Galerkin grows like N -- differentiating a Chebyshev expansion in
-# coefficient space is dense upper triangular, where Legendre's weight of 1 lets
-# integration by parts collapse the same operators to a few diagonals.
-# ChebyshevU has no PG test space implemented and is Galerkin only.
+# So pair LEGENDRE with GALERKIN and CHEBYSHEV with GALERKIN_RECOMBINED ("GR").
+# Both are the Galerkin method; GR combines the test functions so that
+# Chebyshev's operators stay banded instead of growing like N. Plain
+# Petrov-Galerkin, which has GR's band but not its span, is refused: its
+# convection term does not conserve energy discretely, and in a Re_tau = 180
+# channel that fed a spurious layer one grid cell thick at the walls, visible as
+# kinks in the near-wall rms profiles. ChannelFlow2D.py's header has the details.
 #
-# Under PG there are *two* Petrov-Galerkin test spaces to build, not one. The w
+# Under GR there are *two* recombined test spaces to build, not one. The w
 # equation needs one for the biharmonic space, as in 2-D. The g equation needs
 # its own, because it too carries a wall-normal second derivative: tested against
-# the Galerkin space its Chebyshev diffusion operator goes dense exactly as the
-# w equation's would. The recovery, by contrast, is tested Galerkin in both
-# cases -- it carries no wall-normal derivative of its unknown at all, only a
-# mass matrix, so there is nothing for PG to sparsify.
+# the trial space itself its Chebyshev diffusion operator goes dense exactly as
+# the w equation's would. The recovery, by contrast, is tested against the trial
+# space in both cases -- it carries no wall-normal derivative of its unknown at
+# all, only a mass matrix, so there is nothing for GR to sparsify.
 #
 # Accuracy is the more portable reason to prefer Chebyshev: its transform
 # round-trips at machine epsilon where the dense Legendre Vandermonde accumulates
@@ -429,7 +429,7 @@
 # genuinely oblique eigenmode, which means solving the coupled Orr-Sommerfeld /
 # Squire eigenproblem rather than reusing OrrSommerfeld_eigs.py as both demos do.
 #
-# Spatial discretization: Fourier x Fourier x (Legendre Galerkin | Chebyshev PG)
+# Spatial discretization: Fourier x Fourier x (Legendre Galerkin | Chebyshev GR)
 # Time discretization: any globally stiffly accurate IMEX Runge-Kutta tableau
 # ruff: noqa: E402
 from enum import StrEnum
@@ -453,7 +453,7 @@ from jaxfun.galerkin import (
     TestFunction,
     TrialFunction,
 )
-from jaxfun.galerkin.composite import PGComposite
+from jaxfun.galerkin.composite import Composite
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.integrators import ARS443, IMEXRungeKutta, IMEXTableau
 from jaxfun.integrators.base import TimeStepper
@@ -602,9 +602,10 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
             polynomial: Polynomial basis for the wall-normal direction, one of
                 the keys of `POLYNOMIALS`, by member name or short form. See
                 "CHOICE OF BASIS AND TEST SPACE" in the header: pair LEGENDRE
-                with GALERKIN and CHEBYSHEV with PETROV_GALERKIN.
-            kind: Test space kind, either GALERKIN or PETROV_GALERKIN. Short
-                forms G or PG. CHEBYSHEVU has no PG test space yet and raises
+                with GALERKIN and CHEBYSHEV with GALERKIN_RECOMBINED.
+            kind: Test space kind, either GALERKIN or GALERKIN_RECOMBINED. Short
+                forms G or GR. PETROV_GALERKIN is refused; see the header.
+                CHEBYSHEVU has no GR test space yet and raises
                 NotImplementedError if asked for one.
         """
         if not tableau.is_stiffly_accurate:
@@ -617,7 +618,13 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
             )
         polynomial = PolynomialKind.coerce(polynomial)
         kind = TestSpaceKind.coerce(kind)
-        PG = kind is TestSpaceKind.PETROV_GALERKIN
+        if kind is TestSpaceKind.PETROV_GALERKIN:
+            raise ValueError(
+                "Petrov-Galerkin is not supported: its test space does not span the "
+                "trial space, so the convection term does not conserve energy. Use "
+                "GALERKIN_RECOMBINED ('GR'), which has the same band and is Galerkin."
+            )
+        GR = kind is TestSpaceKind.GALERKIN_RECOMBINED
         if polynomial not in POLYNOMIALS:
             raise NotImplementedError(
                 f"{polynomial.name} is not available here; pick one of "
@@ -663,10 +670,10 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         Wo = VD.get_orthogonal()
         D1 = VD.basespaces[2]
 
-        if PG:
-            PB = TensorProduct(Fx, Fy, B.get_testspace("PG", name="BP"), name="PB")
-            PD = TensorProduct(Fx, Fy, D.get_testspace("PG", name="DP"), name="PD")
-            P1 = cast(PGComposite, D1).get_testspace("PG", name="P1")
+        if GR:
+            PB = TensorProduct(Fx, Fy, B.get_testspace("GR", name="BP"), name="PB")
+            PD = TensorProduct(Fx, Fy, D.get_testspace("GR", name="DP"), name="PD")
+            P1 = cast(Composite, D1).get_testspace("GR", name="P1")
         else:
             PB, PD, P1 = VB, VD, D1
 

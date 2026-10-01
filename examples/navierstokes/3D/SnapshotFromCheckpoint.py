@@ -45,6 +45,7 @@ import argparse
 import contextlib
 import os
 import sys
+from typing import Any
 
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [_here, os.path.dirname(_here)]
@@ -177,7 +178,7 @@ def write_spectra(
     for step in steps:
         state, t, step, _ = source.restore(solver, stats, step)
         amax, rss, mean = to_host(wall_normal_spectrum(solver, state))
-        spectrum = {"k": np.arange(amax.shape[1]), "t": t}
+        spectrum: dict[str, Any] = {"k": np.arange(amax.shape[1]), "t": t}
         for i, name in enumerate(SPECTRUM_FIELDS):
             spectrum[f"{name}_max"] = amax[i]
             spectrum[f"{name}_rss"] = rss[i]

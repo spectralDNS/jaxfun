@@ -185,11 +185,8 @@
 #                      This is exactly what GR exists to avoid.
 #
 # Plain Petrov-Galerkin is deliberately not offered, although it has GR's band.
-# Its test space does not span the trial space, so the convection term does not
-# conserve energy discretely, and the test functions vanish to high order at the
-# walls, where the equations are then barely enforced. In a turbulent channel at
-# Re_tau = 180 that fed a spurious layer one grid cell thick at the walls,
-# visible as kinks in the near-wall rms profiles. GR has neither problem.
+# The two differ only in the last few test functions, but PG's exceed the trial
+# degree, so its test space does not span the trial space.
 #
 # ChebyshevU has no GR test space implemented, so it is Galerkin only, and
 # Galerkin leaves it dense -- asking for GR raises NotImplementedError from the
@@ -418,9 +415,8 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         kind = TestSpaceKind.coerce(kind)
         if kind is TestSpaceKind.PETROV_GALERKIN:
             raise ValueError(
-                "Petrov-Galerkin is not supported: its test space does not span the "
-                "trial space, so the convection term does not conserve energy. Use "
-                "GALERKIN_RECOMBINED ('GR'), which has the same band and is Galerkin."
+                "Petrov-Galerkin is not supported: Use GALERKIN_RECOMBINED ('GR'),"
+                "which has the same band and is Galerkin."
             )
         GR = kind is TestSpaceKind.GALERKIN_RECOMBINED
         if polynomial not in POLYNOMIALS:

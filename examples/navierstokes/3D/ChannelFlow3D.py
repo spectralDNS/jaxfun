@@ -118,14 +118,6 @@
 # with cx, cy and W plain (kx, ky) arrays: two elementwise multiplies and a
 # divide per row, and no wall-normal work whatever.
 #
-# The projection is not extra work bought back elsewhere -- it is work that was
-# being done twice. Writing the old form factored, u_hat = (W x M_z)^-1
-# (cx x <B',D>) w_hat + ...), the M_z^-1 applied to the w term *is* this
-# projection, and it was being recomputed inside each of the two solves while
-# the g terms, which never needed it, were dragged through it as well. Hoisting
-# it leaves one wall-normal solve per stage where there were two, on one array
-# rather than two.
-#
 # What that remaining projection costs depends on the wall-normal basis, and by
 # more than a constant. In Legendre it is not a solve at all: M_z^-1 <B', D>
 # collapses to a single subdiagonal, because differentiating that basis stays
@@ -282,10 +274,7 @@
 # So pair LEGENDRE with GALERKIN and CHEBYSHEV with GALERKIN_RECOMBINED ("GR").
 # Both are the Galerkin method; GR combines the test functions so that
 # Chebyshev's operators stay banded instead of growing like N. Plain
-# Petrov-Galerkin, which has GR's band but not its span, is refused: its
-# convection term does not conserve energy discretely, and in a Re_tau = 180
-# channel that fed a spurious layer one grid cell thick at the walls, visible as
-# kinks in the near-wall rms profiles. ChannelFlow2D.py's header has the details.
+# Petrov-Galerkin, which has GR's band but not its span, is refused.
 #
 # Under GR there are *two* recombined test spaces to build, not one. The w
 # equation needs one for the biharmonic space, as in 2-D. The g equation needs
@@ -620,9 +609,8 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         kind = TestSpaceKind.coerce(kind)
         if kind is TestSpaceKind.PETROV_GALERKIN:
             raise ValueError(
-                "Petrov-Galerkin is not supported: its test space does not span the "
-                "trial space, so the convection term does not conserve energy. Use "
-                "GALERKIN_RECOMBINED ('GR'), which has the same band and is Galerkin."
+                "Petrov-Galerkin is not supported: Use GALERKIN_RECOMBINED ('GR'),"
+                "which has the same band and is Galerkin."
             )
         GR = kind is TestSpaceKind.GALERKIN_RECOMBINED
         if polynomial not in POLYNOMIALS:

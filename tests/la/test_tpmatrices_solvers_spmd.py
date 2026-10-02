@@ -25,7 +25,7 @@ from jaxfun.galerkin import Chebyshev, FunctionSpace, Legendre, TensorProduct
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import inner
-from jaxfun.la import TPMatrices
+from jaxfun.la import DiagonalMatrix, TPMatrices, TPMatrix
 from jaxfun.la.tpmatrix import tpmats_to_kron, tpmats_wavenumber_factor
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import ulp
@@ -143,3 +143,133 @@ def test_solve_needs_no_communication(poly) -> None:
     _, A, b, _ = _poisson_fourier_poly_2d(N, poly)
     wn = tpmats_wavenumber_factor(A)
     assert _collectives(wn, b) == {}
+
+
+# ---------------------------------------------------------------------------
+# Two Fourier axes against one polynomial axis
+# ---------------------------------------------------------------------------
+#
+# `tpmats_wavenumber_factor` was written for any number of diagonal axes -- it
+# builds each wavenumber's weight as an outer product over all of them -- but
+# until `KMM3D` (examples/navierstokes/3D/ChannelFlow3D.py) nothing used more
+# than one, sharded or otherwise. What is new here is not the factorisation but
+# the indexing around it: the flat wavenumber index runs over the *product* of
+# the Fourier extents while the device split falls on axis 0 alone, which is
+# exactly the distinction `_check_shardable` exists to enforce.
+#
+# Small enough that the dense Kronecker reference is cheap (8*8*6 = 384 dofs),
+# and the leading axis still divides by 1, 2 and 4.
+N3 = 8
+
+
+def _poisson_fourier_fourier_poly_3d(n: int, poly):
+    """Fourier x Fourier x poly Poisson: two diagonal axes, one banded."""
+    F0, F1 = FunctionSpace(n, Fourier), FunctionSpace(n, Fourier)
+    D = FunctionSpace(n, poly, {"left": {"D": 0}, "right": {"D": 0}})
+    T = TensorProduct(F0, F1, D)
+    v, u = TestFunction(T), TrialFunction(T)
+    x, y, z = T.system.base_scalars()
+    ue = sp.cos(2 * x) * sp.cos(2 * y) * (1 - z**2)
+    A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
+    return T, cast(TPMatrices, A), b, ue
+
+
+def test_sharded_solve_two_fourier_axes_matches_kron() -> None:
+    """Two Fourier axes distribute over one, and the answer is unchanged.
+
+    Legendre only. The Chebyshev operator is ill-conditioned enough that the
+    *dense* float32 solve is the inaccurate one: it parts from the banded answer
+    by 1.6e-2 while the banded residual stays at 1.5e-8, and both numbers are
+    identical on 1, 2 and 4 devices -- so it says nothing about sharding. The
+    residual test below covers Chebyshev instead.
+    """
+    _, A, b, _ = _poisson_fourier_fourier_poly_3d(N3, Legendre.Legendre)
+    wn = tpmats_wavenumber_factor(A)
+    ref = tpmats_to_kron(A.tpmats).solve(b.flatten()).reshape(b.shape)
+    uh = wn.solve(b)
+    assert uh.shape == b.shape
+    assert float(jnp.max(jnp.abs(uh - ref))) < ulp(100)
+
+
+@POLY_SPACES
+def test_two_fourier_axes_residual_is_small(poly) -> None:
+    """Well-conditioned for both bases, and it catches a mis-owned factor.
+
+    A device solving with another device's factors leaves its own wavenumbers
+    unsolved, which shows up here however the dense reference behaves.
+    """
+    _, A, b, _ = _poisson_fourier_fourier_poly_3d(N3, poly)
+    wn = tpmats_wavenumber_factor(A)
+    uh = wn.solve(b)
+    assert uh.shape == b.shape
+    residual = float(jnp.max(jnp.abs(A @ uh - b))) / float(jnp.max(jnp.abs(b)))
+    assert residual < jnp.sqrt(ulp(10)), f"relative residual {residual:.2e}"
+
+
+@POLY_SPACES
+def test_two_fourier_axes_need_no_communication(poly) -> None:
+    """Still embarrassingly parallel with a second diagonal axis."""
+    _, A, b, _ = _poisson_fourier_fourier_poly_3d(N3, poly)
+    wn = tpmats_wavenumber_factor(A)
+    assert _collectives(wn, b) == {}
+
+
+def test_two_fourier_axes_factor_locally() -> None:
+    """Each device holds its own share of the blocks, not everyone's.
+
+    There are `N3 * N3` wavenumber pairs, and the polynomial offsets here are
+    all even, so `_parity_split_dia` decouples the two index parities and the
+    block count comes out at twice the pair count -- each block half the width.
+    What matters is that whatever that count is, it divides across the mesh.
+    """
+    n_dev = jax.device_count()
+    _, A, b, _ = _poisson_fourier_fourier_poly_3d(N3, Legendre.Legendre)
+    wn = tpmats_wavenumber_factor(A)
+    assert wn.L.sharding == b.sharding
+    for name, fac in (("L", wn.L), ("U", wn.U)):
+        n_F = fac.shape[0]
+        assert n_F % (N3 * N3) == 0, (
+            f"{name} has {n_F} blocks, not a multiple of the {N3 * N3} pairs"
+        )
+        local = fac.addressable_shards[0].data.shape[0]
+        assert local == n_F // n_dev, (
+            f"{name} block is {local}, expected {n_F}/{n_dev} = {n_F // n_dev}"
+        )
+
+
+def test_pinned_zero_mode_is_a_free_slot_when_sharded() -> None:
+    """The (0,0) pin `KMM3D` recovers its horizontal velocities through.
+
+    The horizontal Laplacian is singular at (0, 0), and adding a
+    one-hot x one-hot x mass term makes that block exactly the mass matrix --
+    so the solve returns whatever profile is put there and leaves every other
+    wavenumber alone. "Alone" is meant exactly: the assertion is 0.0, not a
+    tolerance. Sharded, because the pinned block lives on one device and the
+    property has to survive that.
+    """
+    F0, F1 = FunctionSpace(N3, Fourier), FunctionSpace(N3, Fourier)
+    D = FunctionSpace(N3, Legendre.Legendre, {"left": {"D": 0}, "right": {"D": 0}})
+    T = TensorProduct(F0, F1, D)
+    v, u = TestFunction(T), TrialFunction(T)
+    x, y, _ = T.system.base_scalars()
+    A = cast(TPMatrices, inner(-(u.diff(x, 2) + u.diff(y, 2)) * v, sparse=True))
+    terms = list(A.tpmats)
+    mass = terms[0].mats[2]
+    e0 = jnp.zeros(T.num_dofs[0]).at[0].set(1.0)
+    e1 = jnp.zeros(T.num_dofs[1]).at[0].set(1.0)
+    pin = TPMatrix(
+        [DiagonalMatrix(e0), DiagonalMatrix(e1), mass], 1.0, terms[0].global_indices
+    )
+    wn = tpmats_wavenumber_factor(terms + [pin])
+
+    key = jax.random.key(0)
+    rhs = jax.random.normal(key, T.num_dofs)
+    profile = jnp.arange(1.0, T.num_dofs[2] + 1.0)
+
+    base = wn.solve(rhs)
+    injected = wn.solve(rhs.at[0, 0].set(mass @ profile))
+
+    got = float(jnp.max(jnp.abs(injected[0, 0] - profile)))
+    assert got < jnp.sqrt(ulp(10)), f"the pin did not inject the profile: {got:.2e}"
+    off = float(jnp.max(jnp.abs(injected - base).at[0, 0].set(0.0)))
+    assert off == 0.0, f"the pin disturbed other wavenumbers by {off:.2e}"

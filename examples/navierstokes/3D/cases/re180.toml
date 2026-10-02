@@ -1,0 +1,52 @@
+# Turbulent channel flow at Re_tau = 180, the case of Kim, Moin & Moser (1987).
+#
+# A template: copy it anywhere and run it from there with
+#
+#   python <jaxfun>/examples/navierstokes/3D/TurbulentChannel3D.py case.toml
+#
+# Every key is optional; a missing one keeps the default shown here. Units are
+# the half-height h and the friction velocity u_tau, so nu = 1/Re_tau.
+
+[flow]
+Re_tau = 180.0
+Lx = 6.283185307179586   # streamwise period
+Ly = 3.141592653589793   # spanwise period (the wall-normal extent is fixed, 2)
+
+[grid]
+Nx = 64          # Fourier modes, streamwise
+Ny = 64          # Fourier modes, spanwise
+Nz = 64          # wall-normal modes
+Px = 1.5         # dealiasing (padding) factor, streamwise
+Py = 1.5         # dealiasing (padding) factor, spanwise
+Pz = 1.0         # dealiasing (padding) factor, wall-normal; 1 is no padding
+
+[discretization]
+# See "CHOICE OF BASIS AND TEST SPACE" in ChannelFlow3D.py for the pairing rule:
+# chebyshev with galerkin_recombined, legendre with galerkin.
+polynomial = "chebyshev"
+kind = "galerkin_recombined"
+tableau = "ARS443"   # any globally stiffly accurate IMEX tableau in jaxfun.integrators
+
+[time]
+dt = 0.001
+t_transient = 20.0       # time, in 1/u_tau, before statistics are collected
+t_end = 30.0              # so t_end - t_transient of averaging
+regrid_transient = 5.0   # extra transient after a restart on a new grid, Pz or Re_tau
+
+[output]
+sample_every = 100       # steps per chunk; statistics are sampled once per chunk
+checkpoint_every = 100   # chunks between checkpoints
+log_every = 10           # chunks between log lines
+# Relative paths are resolved against the directory of this file.
+checkpoint_dir = "turbulent_channel_ckpt"
+plot = "turbulent_channel_profiles.png"
+# Velocity fields for ParaView: an HDF5 file with an XDMF sidecar beside it.
+# The interval counts chunks, like checkpoint_every, so with sample_every = 100
+# this writes one snapshot per 1000 steps. 0 writes none.
+snapshot_every = 0
+snapshot_file = "snapshots.h5"
+snapshot_closed = true    # close the periodic ends and add the z = +-1 walls
+snapshot_float64 = false  # float32 is plenty for pictures and half the size
+
+[init]
+seed = 1   # seed of the turbulent initial condition

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import cache
+from typing import cast
 
 import jax
 import jax.numpy as jnp
@@ -487,7 +488,9 @@ class Chebyshev(Jacobi):
             # Size by N rather than num_quad_points: a space may hold more
             # quadrature points than modes (a boundary space does), and A
             # has to match the shape of the matrices it multiplies below.
-            A = self.A(self.N).power(q)
+            # The power needs q modes to spare, since x**q links two modes
+            # below N also through modes above it.
+            A = self.A(self.N + q).power(q).crop(self.N, self.N)
 
         if i == 0 and j == 0:
             M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
@@ -556,6 +559,12 @@ class CGComposite(Composite):
                     stencil=self.stencil,
                     scaling=self.scaling,
                 )
+
+        if kind == TestSpaceKind.GALERKIN_RECOMBINED:
+            # The PG test functions with the last few, which reach beyond the
+            # trial degree, swapped for trial functions: Galerkin, PG's band.
+            P = self.get_testspace(TestSpaceKind.PETROV_GALERKIN, scaling=scaling)
+            return cast(PGComposite, P).recombine(self, name=name, fun_str=fun_str)
 
         assert kind == TestSpaceKind.PETROV_GALERKIN, (
             f"Unsupported test space kind {kind!r} for Chebyshev CGComposite. "

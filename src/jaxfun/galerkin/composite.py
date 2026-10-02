@@ -94,7 +94,7 @@ class BoundaryConditions(dict):
 
     def num_derivatives(self) -> int:
         """Return total derivative order count (used for basis offset)."""
-        n = {"D": 0, "R": 0, "N": 1, "N2": 2, "N3": 3, "N4": 4}
+        n = {"D": 0, "R": 0, "W": 1, "N": 1, "N2": 2, "N3": 3, "N4": 4}
         num_diff = 0
         for val in self.values():
             for k in val:
@@ -104,9 +104,13 @@ class BoundaryConditions(dict):
     def is_homogeneous(self) -> bool:
         """Return True if all boundary values (incl. Robin) equal zero."""
         for val in self.values():
-            for v in val.values():
-                if v != 0:
-                    return False
+            for k, v in val.items():
+                if k in "WR":
+                    if v[1] != 0:
+                        return False
+                else:
+                    if v != 0:
+                        return False
         return True
 
     def get_homogeneous(self) -> BoundaryConditions:
@@ -115,7 +119,10 @@ class BoundaryConditions(dict):
         for k, v in self.items():
             bc[k] = {}
             for s in v:
-                bc[k][s] = 0
+                if s in "WR":
+                    bc[k][s] = (v[s][0], 0)
+                else:
+                    bc[k][s] = 0
         return BoundaryConditions(bc)
 
     def has_time(self, t: sp.Symbol) -> bool:
@@ -174,6 +181,7 @@ def values_dtype(values: Iterable[sp.Expr]) -> jnp.dtype:
 dirichlet = BoundaryConditions({"left": {"D": 0}, "right": {"D": 0}})
 neumann = BoundaryConditions({"left": {"N": 0}, "right": {"N": 0}})
 biharmonic = BoundaryConditions({"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}})
+robin = BoundaryConditions({"left": {"R": (1, 0)}, "right": {"R": (1, 0)}})
 
 
 class Composite(OrthogonalSpace):
@@ -299,6 +307,17 @@ class Composite(OrthogonalSpace):
         """Evaluate all constrained basis functions at X."""
         P: Array = self.orthogonal.eval_basis_functions(X)
         return self.apply_stencil_right(P)
+
+    def norm_squared(self) -> Array:
+        raise NotImplementedError(
+            "Composite spaces do not support norm_squared(); use mass_matrix()"
+        )
+
+    def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
+        raise NotImplementedError(
+            "Composite spaces do not support derivative_coeffs(); "
+            "use backward_primitive()"
+        )
 
     def get_stencil_row(self, i: int) -> Array:
         """Return nonzero stencil row data for basis index i."""
@@ -828,7 +847,7 @@ def _ds_forward(space: DirectSum, uj: Array, bvals: Array) -> Array:
 
 
 class PGComposite(Composite):
-    """Composite basis with Petrov-Galerkin test functions (stencil on test side).
+    """Composite basis with Petrov-Galerkin [1] test functions (stencil on test side).
 
     Args:
         N: Target (unconstrained) number of modes of underlying orthogonal.
@@ -850,6 +869,11 @@ class PGComposite(Composite):
         S_test: Sparse (DiaMatrix) stencil matrix for test functions.
         scaling: Scaling expression applied to user stencil.
         order: Highest derivative order for trial functions.
+
+    References:
+        [1] M. Mortensen, A Generic and Strictly Banded Spectral Petrov-Galerkin
+            Method for Differential Equations with Polynomial Coefficients,
+            SIAM J. Sci. Comput. 45 (2023) A123-A146. doi:10.1137/22M1492842
     """
 
     def __init__(
@@ -882,6 +906,15 @@ class PGComposite(Composite):
         )
         self.order = order
         assert self.order > 0, "Order must be positive for Petrov-Galerkin composite."
+
+    def recombine(
+        self,
+        trial: Composite,
+        name: str | None = None,
+        fun_str: str | None = None,
+    ) -> GalerkinRecombined:
+        """Return these test functions cropped to span `trial`."""
+        return GalerkinRecombined(self, trial, name=name, fun_str=fun_str)
 
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
@@ -949,6 +982,141 @@ class PGComposite(Composite):
             )
             return scaling @ z
         return z
+
+
+class GalerkinRecombined(Composite):
+    r"""Petrov-Galerkin [2] test functions cropped to span the trial space.
+
+    The test functions of a `PGComposite` reach a higher polynomial degree than
+    the trial functions: its last `order` functions lie outside the trial
+    space. Replacing exactly those by the trial basis functions of the same
+    index, scaled like the functions they replace, gives a test space that
+    spans the trial space -- the method is Galerkin -- while every other test
+    function, and so the banded structure of the operator matrices, is the
+    Petrov-Galerkin one.
+
+    For example, the Chebyshev Dirichlet basis functions are
+    `\phi_k = T_k - T_{k+2}`, k = 0, 1, ..., N-3. Testing with `\phi_k` itself
+    gives a dense (upper triangular) stiffness matrix, but testing with the
+    recombination `\psi_k = \phi_k - (k+1)/(k+3) \phi_{k+2}` makes it banded.
+    Since every `\psi_k` is a combination of trial functions, the method is
+    still Galerkin. The last two, k = N-4 and N-3, would need `\phi_{N-2}` and
+    `\phi_{N-1}`, which are not in the trial space, so they are kept as
+    `\psi_k = \phi_k`.
+
+    The other `\psi_k` are the Petrov-Galerkin test functions up to scaling, so
+    this space reuses the `PGComposite` and its precomputed matrices. Create it with
+    `V.get_testspace("GR")`, where `V` is the trial space.
+
+    Note that the recombination is only used to get strictly banded matrices
+    without any additional effort or the need for tailored solvers, like those
+    of Shen [1]. The results of using the recombined basis should be identical
+    to using the original Galerkin basis, up to round-off error.
+
+    Args:
+        pg: The Petrov-Galerkin test space.
+        trial: The trial space it tests.
+        name: Space name.
+        fun_str: Symbol stem for basis functions.
+
+    References:
+        [1] J. Shen, Efficient spectral-Galerkin method II. Direct solvers of
+            second- and fourth-order equations using Chebyshev polynomials,
+            SIAM J. Sci. Comput. 16 (1995) 74-87. doi:10.1137/0916006
+        [2] M. Mortensen, A Generic and Strictly Banded Spectral Petrov-Galerkin
+            Method for Differential Equations with Polynomial Coefficients,
+            SIAM J. Sci. Comput. 45 (2023) A123-A146. doi:10.1137/22M1492842
+
+    """
+
+    def __init__(
+        self,
+        pg: PGComposite,
+        trial: Composite,
+        name: str | None = None,
+        fun_str: str | None = None,
+    ) -> None:
+        super().__init__(
+            trial.N,
+            type(trial.orthogonal),
+            trial.bcs,
+            domain=trial.domain,
+            name=name if name is not None else pg.name,
+            fun_str=fun_str if fun_str is not None else pg.fun_str,
+            system=trial.system,
+            stencil=trial.stencil,
+            scaling=trial.scaling,
+        )
+        S_pg = np.asarray(pg.S.todense())
+        S_trial = np.asarray(trial.S.todense())
+        assert S_pg.shape[0] == S_trial.shape[0], "test and trial dimensions differ"
+        replaced = np.any(S_pg[:, trial.N :] != 0, axis=1)
+        # Scale each replacement like the PG function it replaces, by matching
+        # their leading coefficients, so that all rows of a matrix are of one
+        # size and the round-off of the last few is not weighted up by k^q.
+        k = np.arange(S_pg.shape[0])
+        S_trial = S_trial * np.where(replaced, S_pg[k, k] / S_trial[k, k], 1.0)[:, None]
+        S = np.where(replaced[:, None], S_trial, S_pg[:, : trial.N])
+        self.S = _from_dense_exact(S)
+        self.ST = self.S.T
+        self.P = self.S @ self.ST
+        self.P.lu_factor()
+        self._mass_matrix = self._compute_mass_matrix()
+        self._mass_matrix.lu_factor()
+        self._pg = pg
+        self._replaced = np.flatnonzero(replaced)
+        self._replaced_rows = S_trial[self._replaced]
+
+    def _matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
+    ) -> DiaMatrix | Matrix | None:
+        """Return the PG matrix with the replaced rows tested by trial functions.
+
+        The replaced rows come from the derivative and x-multiplication
+        recurrences of the orthogonal basis rather than from quadrature, which
+        would lose about N^(2j-1) in accuracy for the j'th derivative.
+        """
+        z = self._pg._matrices(i, trial, q)
+        if z is None:
+            return None
+        u, j = trial
+        uo = u.orthogonal
+        # (x^q T_m^{(j)}, T_p)_w for the replaced rows' modes p and the trial
+        # modes m. Only trial modes from q below the lowest replaced one up can
+        # reach those rows, and a narrow trial space (a boundary lifting) may
+        # have none.
+        lo = max(int(self._replaced_rows.nonzero()[1].min()) - q, 0)
+        G = np.zeros((self.N, uo.N))
+        if lo < uo.N:
+            modes = jnp.arange(lo, uo.N)
+            D = jax.vmap(lambda m: uo.derivative_coeffs(jnp.eye(uo.N)[m], j))(modes)
+            D = np.asarray(D)
+            if q > 0:
+                # x Q = A^T Q, so x maps coefficients c to A c. Room for q more
+                # modes keeps the truncation of A out of the product.
+                A = np.asarray(cast(Jacobi, uo).A(uo.N + q).power(q).todense())
+                D = np.pad(D, ((0, 0), (0, q))) @ A.T
+            k = min(D.shape[1], self.N)
+            h = np.asarray(self.orthogonal.norm_squared())[:k]
+            G[:k, lo:] = (D[:, :k] * h[None, :]).T
+        rows = self._replaced_rows @ G
+        if isinstance(u, Composite):
+            rows = rows @ np.asarray(u.ST.todense())
+        Z = np.asarray(z.todense()).copy()
+        Z[self._replaced] = rows
+        return _from_dense_exact(Z)
+
+
+def _from_dense_exact(a: np.ndarray) -> DiaMatrix:
+    """Return `a` as a DiaMatrix keeping every diagonal with a nonzero entry.
+
+    `DiaMatrix.from_dense` prunes relative to the largest entry, which would drop
+    the Petrov-Galerkin rows: they are scaled down by about k^-q against the
+    order-one trial rows that replace the last few.
+    """
+    r, c = np.nonzero(a)
+    offsets = tuple(sorted(set((c - r).tolist())))
+    return DiaMatrix.from_dense(jnp.asarray(a), offsets=offsets)
 
 
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
@@ -1072,7 +1240,7 @@ def get_bc_basis(bcs: BoundaryConditions, orthogonal: Jacobi) -> sp.Matrix:
     first_basis = bcs.num_derivatives()
     first = 0
     s = None
-    for first in range(first_basis + 1):
+    for first in range(first_basis + 2):
         try:
             s = _computematrix(first)
             break

@@ -30,8 +30,8 @@ tableau = "ARS443"   # any globally stiffly accurate IMEX tableau in jaxfun.inte
 [time]
 dt = 0.001
 t_transient = 20.0       # time, in 1/u_tau, before statistics are collected
-t_end = 1.0              # so t_end - t_transient of averaging
-regrid_transient = 5.0   # extra transient after a restart on a new grid or Re_tau
+t_end = 30.0              # so t_end - t_transient of averaging
+regrid_transient = 5.0   # extra transient after a restart on a new grid, Pz or Re_tau
 
 [output]
 sample_every = 100       # steps per chunk; statistics are sampled once per chunk

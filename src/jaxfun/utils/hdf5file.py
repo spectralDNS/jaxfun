@@ -209,7 +209,7 @@ class HDF5File:
                 f"an XDMF rectilinear mesh is 1D, 2D or 3D, not {self.dim}D"
             )
         self.dtype = np.dtype(dtype)
-        if self.dtype.itemsize not in (4, 8):
+        if self.dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
             raise ValueError(f"fields must be float32 or float64, not {self.dtype}")
         self.shape = tuple(len(c) for c in coords)
         self.wrap_axes = tuple(sorted(set(wrap_axes)))
@@ -322,6 +322,10 @@ class HDF5File:
             existing = self.steps
             step = existing[-1] + 1 if existing else 0
         step = int(step)
+        # Convert every field before touching the file, so that a bad one leaves
+        # the file as it was rather than an old snapshot deleted or a new one
+        # half written.
+        arrays = {field: self._prepare(field, value) for field, value in fields.items()}
         snaps = self._f.require_group(_SNAPSHOT_GROUP)
         key = _STEP_KEY.format(step)
         if key in snaps:
@@ -334,29 +338,31 @@ class HDF5File:
         g = snaps.create_group(key)
         g.attrs["step"] = step
         g.attrs["time"] = float(time)
-        for field, value in fields.items():
-            a = np.asarray(value)
-            if a.shape == self.shape:
-                pass
-            elif a.ndim == self.dim + 1 and a.shape[1:] == self.shape:
-                # (d, *mesh) -> (*mesh, d): a component axis, innermost in XDMF.
-                a = np.moveaxis(a, 0, -1)
-            else:
-                raise ValueError(
-                    f"field {field!r} has shape {a.shape}; expected {self.shape} for a "
-                    f"scalar or {(self.dim, *self.shape)} for a vector"
-                )
-            walls = self.wall_values.get(field, (0.0, 0.0))
-            a = self._augment_field(a, walls)
-            if a.ndim > self.dim:  # keep the component axis innermost
-                comps = [_to_xdmf_order(a[..., i]) for i in range(a.shape[-1])]
-                a = np.stack(comps, axis=-1).astype(self.dtype, copy=False)
-                a = np.ascontiguousarray(a)
-            else:
-                a = _to_xdmf_order(a, self.dtype)
+        for field, a in arrays.items():
             g.create_dataset(field, data=a, compression=self.compression)
         self._f.flush()
         self._write_xdmf()
+
+    def _prepare(self, field: str, value: ArrayLike) -> np.ndarray:
+        """Return `value` checked against the mesh and laid out for storage."""
+        a = np.asarray(value)
+        if a.shape == self.shape:
+            pass
+        elif a.ndim == self.dim + 1 and a.shape[1:] == self.shape:
+            # (d, *mesh) -> (*mesh, d): a component axis, innermost in XDMF.
+            a = np.moveaxis(a, 0, -1)
+        else:
+            raise ValueError(
+                f"field {field!r} has shape {a.shape}; expected {self.shape} for a "
+                f"scalar or {(self.dim, *self.shape)} for a vector"
+            )
+        walls = self.wall_values.get(field, (0.0, 0.0))
+        a = self._augment_field(a, walls)
+        if a.ndim > self.dim:  # keep the component axis innermost
+            comps = [_to_xdmf_order(a[..., i]) for i in range(a.shape[-1])]
+            a = np.stack(comps, axis=-1).astype(self.dtype, copy=False)
+            return np.ascontiguousarray(a)
+        return _to_xdmf_order(a, self.dtype)
 
     def _write_xdmf(self) -> None:
         """Rewrite the sidecar from the HDF5 file's contents, atomically."""

@@ -71,8 +71,8 @@ class ChannelCase:
         dt: Time step, in h/u_tau.
         t_transient: Time before statistics are collected.
         t_end: Time to integrate to.
-        regrid_transient: Extra transient after a restart on a new grid or
-            Re_tau.
+        regrid_transient: Extra transient after a restart on a new grid,
+            wall-normal padding or Re_tau.
         sample_every: Steps per chunk; statistics are sampled once per chunk.
         checkpoint_every: Chunks between checkpoints.
         log_every: Chunks between log lines.

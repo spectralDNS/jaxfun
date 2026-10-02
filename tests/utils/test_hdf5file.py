@@ -239,6 +239,19 @@ def test_bad_field_shape_raises(tmp_path) -> None:
         f.write({"u": np.zeros((NZ, NY, NX))}, time=0.0)
 
 
+def test_bad_field_leaves_the_file_unchanged(tmp_path) -> None:
+    V = space_3d()
+    shape = (NX, NY, NZ)
+    with HDF5File(tmp_path / "t.h5", V) as f:
+        f.write({"u": np.zeros(shape)}, time=0.0, step=3)
+        for step in (3, 4):  # replacing a snapshot, and adding one
+            with pytest.raises(ValueError, match="expected"):
+                f.write({"u": np.ones(shape), "v": np.ones((NZ, NY, NX))}, 1.0, step)
+        assert f.steps == [3]
+    with h5py.File(tmp_path / "t.h5") as h:
+        assert np.all(np.asarray(h["snapshots/0000000003/u"]) == 0.0)
+
+
 def test_from_coords_and_rebuild_sidecar(tmp_path) -> None:
     x = np.linspace(0, 1, NX, endpoint=False)
     z = np.linspace(-0.9, 0.9, NZ)

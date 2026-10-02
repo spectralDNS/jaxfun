@@ -68,7 +68,7 @@
 # in the composite coefficients. Every composite basis function satisfies the
 # boundary conditions, so no-slip survives exactly. Use this to spin up on a
 # coarse grid and continue on a finer one. Averaging restarts after a change of
-# grid or Re_tau.
+# grid, wall-normal padding or Re_tau.
 #
 # SNAPSHOTS
 #
@@ -118,6 +118,7 @@
 # Spatial discretization: Fourier x Fourier x (Chebyshev GR | Legendre Galerkin)
 # Time discretization: ARS443 IMEX Runge-Kutta
 # ruff: noqa: E402
+import math
 import os
 import sys
 import tempfile
@@ -685,8 +686,9 @@ class ChannelCheckpointer:
     ) -> tuple[tuple[Array, ...], float, int, bool]:
         """Restore a checkpoint into `solver`'s layout.
 
-        Loads `stats` too when the checkpoint was written on the same grid and
-        at the same Re_tau, and leaves it untouched otherwise.
+        Loads `stats` too when the checkpoint was written on the same grid, with
+        the same wall-normal padding and at the same Re_tau, and leaves it
+        untouched otherwise.
 
         Args:
             solver: The solver to restart; its grid may differ from the saved one.
@@ -721,10 +723,18 @@ class ChannelCheckpointer:
         )["state"]
         state = tuple(saved[name] for name in FIELDS)
         same_grid = tuple(meta["grid"]) == tuple(solver.grid)
-        if tuple(s.shape for s in state) != state_shapes(solver):
+        # Equal shapes do not imply an equal grid: the half spectrum is padded to
+        # the device count, so on 4 devices Nx = 64, 66, 68 and 70 all store 36.
+        if not same_grid or tuple(s.shape for s in state) != state_shapes(solver):
             state = regrid(state, tuple(meta["grid"]), solver)
 
-        compatible = same_grid and meta["Re_tau"] == float(solver.Re_tau)
+        # The statistics live on the padded wall-normal mesh, which the grid
+        # does not fix: Pz may have changed since the checkpoint was written.
+        compatible = (
+            same_grid
+            and meta["Re_tau"] == float(solver.Re_tau)
+            and np.shape(meta["stats"]["sums"]) == stats.sums.shape
+        )
         if compatible:
             stats.load_dict(meta["stats"])
         return state, float(meta["t"]), int(meta["step"]), compatible
@@ -750,7 +760,7 @@ def run(
     averaging_from: float,
     snapshots: HDF5File | None = None,
 ) -> tuple[tuple[Array, ...], float, int]:
-    """Advance from `t` to `case.t_end`, sampling statistics and checkpointing.
+    """Advance from `t` to the first chunk end at or after `case.t_end`.
 
     Integrates in chunks of `case.sample_every` steps. After each chunk the
     plane moments are sampled once `t` has reached `averaging_from`; every
@@ -759,7 +769,8 @@ def run(
     the state stops being finite.
     """
     dt, every = case.dt, case.sample_every
-    chunks = max(0, int(round((case.t_end - t) / (dt * every))))
+    # The tolerance keeps rounding error in t from adding a chunk.
+    chunks = max(0, math.ceil((case.t_end - t) / (dt * every) - 1e-9))
     wall_time = time.time()
     for i in range(1, chunks + 1):
         state = solver.solve(
@@ -929,7 +940,7 @@ def main(case: ChannelCase, args: Any) -> KMM3D:
         state, t, step, restored = source.restore(solver, stats, args.step)
         echo(f"  restarted from {source.directory} at t={t:.3f} (step {step})")
         if not restored:
-            echo("  new grid or Re_tau: statistics start over")
+            echo("  new grid, padding or Re_tau: statistics start over")
             average_from = max(case.t_transient, t + case.regrid_transient)
         if source is not checkpointer:
             source.close()

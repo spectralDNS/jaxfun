@@ -847,7 +847,7 @@ def _ds_forward(space: DirectSum, uj: Array, bvals: Array) -> Array:
 
 
 class PGComposite(Composite):
-    """Composite basis with Petrov-Galerkin test functions (stencil on test side).
+    """Composite basis with Petrov-Galerkin [1] test functions (stencil on test side).
 
     Args:
         N: Target (unconstrained) number of modes of underlying orthogonal.
@@ -869,6 +869,11 @@ class PGComposite(Composite):
         S_test: Sparse (DiaMatrix) stencil matrix for test functions.
         scaling: Scaling expression applied to user stencil.
         order: Highest derivative order for trial functions.
+
+    References:
+        [1] M. Mortensen, A Generic and Strictly Banded Spectral Petrov-Galerkin
+            Method for Differential Equations with Polynomial Coefficients,
+            SIAM J. Sci. Comput. 45 (2023) A123-A146. doi:10.1137/22M1492842
     """
 
     def __init__(
@@ -980,7 +985,7 @@ class PGComposite(Composite):
 
 
 class GalerkinRecombined(Composite):
-    """Petrov-Galerkin test functions cropped to span the trial space.
+    r"""Petrov-Galerkin [2] test functions cropped to span the trial space.
 
     The test functions of a `PGComposite` reach a higher polynomial degree than
     the trial functions: its last `order` functions lie outside the trial
@@ -990,11 +995,38 @@ class GalerkinRecombined(Composite):
     function, and so the banded structure of the operator matrices, is the
     Petrov-Galerkin one.
 
+    For example, the Chebyshev Dirichlet basis functions are
+    `\phi_k = T_k - T_{k+2}`, k = 0, 1, ..., N-3. Testing with `\phi_k` itself
+    gives a dense (upper triangular) stiffness matrix, but testing with the
+    recombination `\psi_k = \phi_k - (k+1)/(k+3) \phi_{k+2}` makes it banded.
+    Since every `\psi_k` is a combination of trial functions, the method is
+    still Galerkin. The last two, k = N-4 and N-3, would need `\phi_{N-2}` and
+    `\phi_{N-1}`, which are not in the trial space, so they are kept as
+    `\psi_k = \phi_k`.
+
+    The other `\psi_k` are the Petrov-Galerkin test functions up to scaling, so
+    this space reuses the `PGComposite` and its precomputed matrices. Create it with
+    `V.get_testspace("GR")`, where `V` is the trial space.
+
+    Note that the recombination is only used to get strictly banded matrices
+    without any additional effort or the need for tailored solvers, like those
+    of Shen [1]. The results of using the recombined basis should be identical
+    to using the original Galerkin basis, up to round-off error.
+
     Args:
         pg: The Petrov-Galerkin test space.
         trial: The trial space it tests.
         name: Space name.
         fun_str: Symbol stem for basis functions.
+
+    References:
+        [1] J. Shen, Efficient spectral-Galerkin method II. Direct solvers of
+            second- and fourth-order equations using Chebyshev polynomials,
+            SIAM J. Sci. Comput. 16 (1995) 74-87. doi:10.1137/0916006
+        [2] M. Mortensen, A Generic and Strictly Banded Spectral Petrov-Galerkin
+            Method for Differential Equations with Polynomial Coefficients,
+            SIAM J. Sci. Comput. 45 (2023) A123-A146. doi:10.1137/22M1492842
+
     """
 
     def __init__(
@@ -1040,26 +1072,33 @@ class GalerkinRecombined(Composite):
     ) -> DiaMatrix | Matrix | None:
         """Return the PG matrix with the replaced rows tested by trial functions.
 
-        The replaced rows come from the derivative recurrence of the orthogonal
-        basis rather than from quadrature, which would lose about N^(2j-1) in
-        accuracy for the j'th derivative.
+        The replaced rows come from the derivative and x-multiplication
+        recurrences of the orthogonal basis rather than from quadrature, which
+        would lose about N^(2j-1) in accuracy for the j'th derivative.
         """
         z = self._pg._matrices(i, trial, q)
-        if z is None or q != 0:
+        if z is None:
             return None
         u, j = trial
         uo = u.orthogonal
-        # (T_m^{(j)}, T_p)_w for the replaced rows' modes p and the trial modes m.
-        # Only trial modes from the lowest replaced one up can reach those rows,
-        # and a narrow trial space (a boundary lifting) may have none of them.
-        lo = int(self._replaced_rows.nonzero()[1].min())
+        # (x^q T_m^{(j)}, T_p)_w for the replaced rows' modes p and the trial
+        # modes m. Only trial modes from q below the lowest replaced one up can
+        # reach those rows, and a narrow trial space (a boundary lifting) may
+        # have none.
+        lo = max(int(self._replaced_rows.nonzero()[1].min()) - q, 0)
         G = np.zeros((self.N, uo.N))
         if lo < uo.N:
-            k = min(uo.N, self.N)
             modes = jnp.arange(lo, uo.N)
             D = jax.vmap(lambda m: uo.derivative_coeffs(jnp.eye(uo.N)[m], j))(modes)
+            D = np.asarray(D)
+            if q > 0:
+                # x Q = A^T Q, so x maps coefficients c to A c. Room for q more
+                # modes keeps the truncation of A out of the product.
+                A = np.asarray(cast(Jacobi, uo).A(uo.N + q).power(q).todense())
+                D = np.pad(D, ((0, 0), (0, q))) @ A.T
+            k = min(D.shape[1], self.N)
             h = np.asarray(self.orthogonal.norm_squared())[:k]
-            G[:k, lo:] = (np.asarray(D)[:, :k] * h[None, :]).T
+            G[:k, lo:] = (D[:, :k] * h[None, :]).T
         rows = self._replaced_rows @ G
         if isinstance(u, Composite):
             rows = rows @ np.asarray(u.ST.todense())
@@ -1075,8 +1114,8 @@ def _from_dense_exact(a: np.ndarray) -> DiaMatrix:
     the Petrov-Galerkin rows: they are scaled down by about k^-q against the
     order-one trial rows that replace the last few.
     """
-    n, m = a.shape
-    offsets = tuple(k for k in range(-(n - 1), m) if np.any(a.diagonal(k) != 0))
+    r, c = np.nonzero(a)
+    offsets = tuple(sorted(set((c - r).tolist())))
     return DiaMatrix.from_dense(jnp.asarray(a), offsets=offsets)
 
 

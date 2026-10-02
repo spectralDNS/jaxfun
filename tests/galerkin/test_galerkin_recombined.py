@@ -39,13 +39,16 @@ def _tol() -> float:
     return 1e3 * float(jnp.finfo(jnp.result_type(float)).eps)
 
 
-def _exact(test_rows, trial_rows, j: int, family) -> np.ndarray:
-    """Return (trial^{(j)}, test)_w exactly for the given (float) stencil rows.
+def _exact(test_rows, trial_rows, j: int, family, q: int = 0) -> np.ndarray:
+    """Return (x^q trial^{(j)}, test)_w exactly for the given (float) stencil rows.
 
     Quadrature would not do as a reference: it loses about N^(2j-1) to
     cancellation, already ~1e-12 at N = 24 for j = 4.
     """
-    der = npcheb.chebder if family is Chebyshev else nplegendre.legder
+    if family is Chebyshev:
+        der, mulx = npcheb.chebder, npcheb.chebmulx
+    else:
+        der, mulx = nplegendre.legder, nplegendre.legmulx
     N = test_rows.shape[1]
     if family is Chebyshev:  # (T_n, T_n)_w / pi
         norms = [Fraction(1)] + [Fraction(1, 2)] * (N - 1)
@@ -59,7 +62,10 @@ def _exact(test_rows, trial_rows, j: int, family) -> np.ndarray:
         c = np.array([Fraction(float(v)) for v in r], dtype=object)
         for _ in range(j):
             c = der(c)
-        trial.append(list(c) + [Fraction(0)] * (N - len(c)))
+        for _ in range(q):
+            c = mulx(c)
+        c = list(c[:N])  # modes from N up are orthogonal to every test function
+        trial.append(c + [Fraction(0)] * (N - len(c)))
     out = np.zeros((len(test), len(trial)))
     for k, v in enumerate(test):
         for l, u in enumerate(trial):
@@ -82,9 +88,10 @@ def test_coerce():
     assert kind.coerce("Galerkin-recombined") is kind.GR
 
 
+@pytest.mark.parametrize("q", [0, 1, 2])
 @pytest.mark.parametrize("family", [Chebyshev, Legendre])
 @pytest.mark.parametrize("bcs,bands", CASES)
-def test_spans_trial_space_with_pg_band(family, bcs, bands):
+def test_spans_trial_space_with_pg_band(family, bcs, bands, q):
     N = 24
     B = FunctionSpace(N, family, bcs=bcs)
     G = B.get_testspace("GR")
@@ -102,15 +109,17 @@ def test_spans_trial_space_with_pg_band(family, bcs, bands):
     replaced = np.any(np.asarray(pg.S.todense())[:, N:] != 0, axis=1)
     assert 0 < replaced.sum() < B.dim and replaced[-1]
     for j, offsets in bands.items():
-        form = u.diff(x, j) if j else u
+        form = x**q * (u.diff(x, j) if j else u)
         A = np.asarray(inner(form * v, sparse=True, kind="bilinear").todense())
         ref = np.array(
             inner(form * TestFunction(pg), sparse=True, kind="bilinear").todense()
         )
-        ref[replaced] = _exact(Sg[replaced], St, j, family)
+        ref[replaced] = _exact(Sg[replaced], St, j, family, q)
         err = np.abs(A - ref).max(axis=1)
         assert np.all(err <= _tol() * np.abs(ref).max(axis=1)), (j, err.max())
-        assert _offsets(inner(form * v, sparse=True, kind="bilinear")) == offsets
+        # x^q widens the band by q on either side.
+        band = list(range(offsets[0] - q, offsets[-1] + q + 1, 2))
+        assert _offsets(inner(form * v, sparse=True, kind="bilinear")) == band
 
 
 @pytest.mark.parametrize("family", [Chebyshev, Legendre])

@@ -194,9 +194,8 @@ class Ultraspherical(Jacobi):
             DiaMatrix diagonal mass matrix or None if derivative combo unsupported.
         """
         u, j = trial
-        assert isinstance(u, Ultraspherical), (
-            "Trial space must be Ultraspherical for Ultraspherical matrices"
-        )
+        if not isinstance(u, Ultraspherical):
+            return None
         A = None
         if q != 0:
             if self.N != trial[0].N:

@@ -118,6 +118,8 @@
 # Spatial discretization: Fourier x Fourier x (Chebyshev GR | Legendre Galerkin)
 # Time discretization: ARS443 IMEX Runge-Kutta
 # ruff: noqa: E402
+from __future__ import annotations
+
 import math
 import os
 import sys
@@ -146,7 +148,7 @@ from typing import Any
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
-from channel_case import ChannelCase, parse_cli, pytest_case, to_dict
+from channel_case import ChannelCase, load_case, parse_cli, pytest_case, to_dict
 from ChannelFlow3D import KMM3D, VelocityKind
 from flax import nnx
 
@@ -390,6 +392,20 @@ def _tableau(name: str) -> IMEXTableau:
     return tableau
 
 
+def get_solver_and_state(
+    casename: str,
+) -> tuple[TurbulentChannel, tuple[Array, ...], float, int, ChannelStatistics]:
+    """Return solver, state and stats at latest checkpoint."""
+
+    case = load_case(casename)
+    solver = build_solver(case)
+    source = ChannelCheckpointer(case.path("checkpoint_dir"))
+    z = to_host(solver.VD.mesh(N=solver.pad, broadcast=False)[2])
+    stats = ChannelStatistics(z, float(solver.Re_tau))
+    state, t, step, _ = source.restore(solver, stats, source.latest_step())
+    return solver, state, t, step, stats
+
+
 def build_solver(case: ChannelCase, **overrides: Any) -> TurbulentChannel:
     """Build the solver `case` describes; `overrides` replace case fields."""
     case = replace(case, **overrides) if overrides else case
@@ -539,7 +555,7 @@ class ChannelStatistics:
         np.savez(path, **data)
 
     @classmethod
-    def load(cls, path: str | os.PathLike) -> "ChannelStatistics":
+    def load(cls, path: str | os.PathLike) -> ChannelStatistics:
         """Return the statistics `save` wrote to `path`."""
 
         def time(t: np.ndarray) -> float | None:

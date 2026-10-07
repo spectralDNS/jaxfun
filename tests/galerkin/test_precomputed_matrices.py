@@ -5,7 +5,7 @@ DiaMatrix type, transpose symmetry, and correctness of entries against
 brute-force numerical quadrature.
 
 Spaces covered:
-  * Chebyshev      -- (0,0), (0,1), (1,0), (0,2), (2,0)
+  * Chebyshev      -- (0,0), (0,j), (j,0) for any j
   * Legendre       -- (0,0), (0,1), (1,0), (0,2), (2,0)
   * Fourier        -- any (i,j); always diagonal
   * ChebyshevU     -- (0,0) only
@@ -14,9 +14,11 @@ Spaces covered:
 
 from __future__ import annotations
 
+from fractions import Fraction
 from typing import cast
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from jaxfun.galerkin import FunctionSpace, TestFunction, TrialFunction, inner
@@ -106,7 +108,7 @@ _MASS_ONLY = [
 ]
 
 _POLY5_SUPPORTED = [(0, 0), (0, 1), (1, 0), (0, 2), (2, 0)]
-_POLY5_UNSUPPORTED = [(1, 1), (1, 2), (2, 1), (3, 0), (0, 3)]
+_POLY5_UNSUPPORTED = [(1, 1), (1, 2), (2, 1)]
 _MASS_ONLY_UNSUPPORTED = [(0, 1), (1, 0), (0, 2), (2, 0)]
 
 
@@ -384,6 +386,45 @@ class TestPoly5SecondDerivativeMatrixGWithCoefficient:
         assert err / max(scale, 1.0) < ulp(100), (
             f"N={N}: relative err {err / scale:.2e}"
         )
+
+
+def _exact_chebyshev_derivative(N: int, j: int) -> jnp.ndarray:
+    """Return (T_m, T_n^(j))_w from the exact derivative recurrence, in rationals."""
+    columns = []
+    for k in range(N):
+        c = [Fraction(int(m == k)) for m in range(N)]
+        for _ in range(j):
+            d = [Fraction(0)] * (N + 1)
+            for m in range(N - 1, 0, -1):
+                d[m - 1] = d[m + 1] + 2 * m * c[m]
+            d[0] /= 2
+            c = d[:N]
+        columns.append([float(cm) for cm in c])
+    h = np.full(N, np.pi / 2)
+    h[0] = np.pi
+    return jnp.asarray(h[:, None] * np.array(columns).T)
+
+
+class TestChebyshevHigherDerivatives:
+    """(0, j) and (j, 0) for j > 2, from powers of the derivative recurrence."""
+
+    @pytest.mark.parametrize("j", [3, 4])
+    def test_values_match_exact(self, j):
+        N = 16
+        v = Chebyshev(N)
+        M = v.matrices(0, (v, j))
+        assert M is not None
+        # Every entry, zeros included: the power has no cancellation.
+        assert jnp.allclose(
+            M.todense(), _exact_chebyshev_derivative(N, j), rtol=ulp(1000), atol=0
+        )
+
+    @pytest.mark.parametrize("j", [3, 4])
+    def test_transpose(self, j):
+        v, u = Chebyshev(6), Chebyshev(10)
+        M_fwd, M_bwd = v.matrices(0, (u, j)), u.matrices(j, (v, 0))
+        assert M_fwd is not None and M_bwd is not None
+        assert jnp.array_equal(M_fwd.todense(), M_bwd.T.todense())
 
 
 class TestLegendreGalerkinCompositeSweep:

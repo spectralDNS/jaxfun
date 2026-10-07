@@ -183,6 +183,30 @@ def test_cached_basis_survives_shard_map() -> None:
     assert jnp.linalg.norm(uj.real - ue) < ulp(100)
 
 
+def test_lazy_mass_matrix_survives_shard_map() -> None:
+    """A composite space builds its mass matrix on first use, here inside the
+    sharded forward's `shard_map`, and must not keep that map's mesh."""
+    N = 8
+    F = FunctionSpace(N, Fourier.Fourier, name="F")
+    D = FunctionSpace(N, Chebyshev.Chebyshev, {"left": {"D": 0}, "right": {"D": 0}})
+    # `project` transforms forward too, so it gets its own copies of F and D.
+    T0 = TensorProduct(F, D, name="T0")
+    x, y = T0.system.base_scalars()
+    uh = project(sp.sin(x) * (1 - y**2), T0)
+    T = TensorProduct(F, D, name="T")
+    D = T.basespaces[1]
+    assert "_mass_matrix" not in D.__dict__
+
+    uj = jax.device_put(T.backward(uh), physical_sharding)
+    assert jnp.linalg.norm(T.forward(uj) - uh) < ulp(100)
+    assert "_mass_matrix" in D.__dict__
+
+    # Mixed with a sharded array outside the shard_map. Built with the manual
+    # mesh, this raised "Mesh for all inputs should be equal".
+    scaled = jax.jit(lambda u: u * D.mass_matrix().data.sum())(uj)
+    assert jnp.isfinite(scaled).all()
+
+
 def _batch_case(N: int = 8, bcs: bool = False) -> tuple:
     """A sharded coefficient array and the space it belongs to.
 

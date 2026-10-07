@@ -285,7 +285,9 @@ class Stencil:
             a[i, i + j] = np.asarray(c)[i]
         for i, r in self.overrides.items():
             a[i] = r[:cols]
-        return _from_dense_exact(a)
+        # tol=0: an overridden row may be far larger than the rule's rows (as in
+        # GalerkinRecombined), and the default pruning would drop the rule's.
+        return DiaMatrix.from_dense(jnp.asarray(a), tol=0)
 
 
 class Composite(OrthogonalSpace):
@@ -314,7 +316,7 @@ class Composite(OrthogonalSpace):
         stencil: The `Stencil`, unscaled; `S` has the scaling applied.
         S: Sparse (DiaMatrix) stencil matrix.
         ST: Pre-computed transpose of S for efficiency.
-        P: Sparse (DiaMatrix) representing S @ S.T.
+        P: Sparse (DiaMatrix) representing S @ S.T, built on first use.
         scaling: Scaling expression applied to user stencil.
     """
 
@@ -356,10 +358,16 @@ class Composite(OrthogonalSpace):
         self.stencil: Stencil = stencil.resolved(shape, self.bcs, self.orthogonal)
         self.S: DiaMatrix = self.stencil.scaled(scaling).matrix(shape)
         self.ST: DiaMatrix = self.S.T
-        self.P: DiaMatrix = self.S @ self.ST
-        self.P.lu_factor()  # Pre-factor to allow jitted solves
-        self._mass_matrix: DiaMatrix = self._compute_mass_matrix()
-        self._mass_matrix.lu_factor()
+
+    @functools.cached_property
+    def P(self) -> DiaMatrix:
+        """Return S S^T, factorized, which maps orthogonal coefficients back."""
+        return _factorized(lambda: self.S @ self.ST)
+
+    @functools.cached_property
+    def _mass_matrix(self) -> DiaMatrix:
+        """Return the mass matrix, factorized, which `forward` solves with."""
+        return _factorized(self._compute_mass_matrix)
 
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:
         """Return quadrature nodes/weights (delegated to underlying basis)."""
@@ -1156,8 +1164,9 @@ class GalerkinRecombined(Composite):
         G = np.zeros((self.N, uo.N))
         if lo < uo.N:
             modes = jnp.arange(lo, uo.N)
-            D = jax.vmap(lambda m: uo.derivative_coeffs(jnp.eye(uo.N)[m], j))(modes)
-            D = np.asarray(D)
+            derivative = jax.vmap(lambda m: uo.derivative_coeffs(jnp.eye(uo.N)[m], j))
+            # One jit compiles once; eager vmap compiles every primitive.
+            D = np.asarray(jax.jit(derivative)(modes))
             if q > 0:
                 # x Q = A^T Q, so x maps coefficients c to A c. Room for q more
                 # modes keeps the truncation of A out of the product.
@@ -1171,7 +1180,9 @@ class GalerkinRecombined(Composite):
             rows = rows @ np.asarray(u.ST.todense())
         Z = np.asarray(z.todense()).copy()
         Z[self._replaced] = rows
-        return _from_dense_exact(Z)
+        # tol=0: the PG rows are about k^-q times the replaced ones, and the
+        # default pruning, relative to the largest entry, would drop them.
+        return DiaMatrix.from_dense(jnp.asarray(Z), tol=0)
 
 
 def _check_in_span(
@@ -1196,16 +1207,22 @@ def _check_in_span(
         )
 
 
-def _from_dense_exact(a: np.ndarray) -> DiaMatrix:
-    """Return `a` as a DiaMatrix keeping every diagonal with a nonzero entry.
+_NO_MESH = jax.sharding.AbstractMesh((), ())
 
-    `DiaMatrix.from_dense` prunes relative to the largest entry, which would drop
-    the Petrov-Galerkin rows: they are scaled down by about k^-q against the
-    order-one trial rows that replace the last few.
+
+def _factorized(build: Callable[[], DiaMatrix]) -> DiaMatrix:
+    """Return `build()` with its LU factors cached on it.
+
+    Only the transforms need these matrices, so a space builds them on first
+    use, which may come inside `jit` or a `shard_map`. They are evaluated
+    eagerly, so that no tracer is cached, and outside any mesh: arrays made
+    inside a `shard_map` keep its manual axes and clash with sharded arrays
+    later.
     """
-    r, c = np.nonzero(a)
-    offsets = tuple(sorted(set((c - r).tolist())))
-    return DiaMatrix.from_dense(jnp.asarray(a), offsets=offsets)
+    with jax.sharding.use_abstract_mesh(_NO_MESH), jax.ensure_compile_time_eval():
+        A = build()
+        A.lu_factor()
+    return A
 
 
 def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:

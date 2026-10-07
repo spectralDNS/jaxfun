@@ -30,21 +30,31 @@ from .orthogonal import OrthogonalSpace
 n = sp.Symbol("n", integer=True)
 
 
-@jax.jit(static_argnums=(0, 1))
+@jax.jit(static_argnums=(0, 1, 2))
 def _dense_derivative_matrix_data(
     test_modes: int, trial_modes: int, derivative: int
 ) -> Array:
-    """Return dense Chebyshev first/second derivative coupling matrices."""
+    """Return the dense Chebyshev derivative coupling (T_m, T_n^(derivative))_w."""
     rows = jnp.arange(test_modes)[:, None]
     cols = jnp.arange(trial_modes)[None, :]
     offsets = cols - rows
     mask = (offsets >= derivative) & ((offsets - derivative) % 2 == 0)
-    values = jax.lax.select(
-        derivative == 1,
-        jnp.broadcast_to(jnp.pi * cols, (test_modes, trial_modes)),
-        cols * (cols**2 - rows**2) * jnp.pi / 2,
-    )
-    return jnp.where(mask, values, 0.0)
+    if derivative == 1:
+        return jnp.where(mask, jnp.pi * cols, 0.0)
+    if derivative == 2:
+        return jnp.where(mask, cols * (cols**2 - rows**2) * jnp.pi / 2, 0.0)
+    # Higher orders from T_n^(j) = sum_m D^j[m, n] T_m, with T_n' = sum_m D[m, n]
+    # T_m. D has no negative entries, so neither has D^j: the power is free of
+    # the cancellation that makes quadrature lose about N^(2j-1) in accuracy.
+    k = jnp.arange(trial_modes)
+    d = k[None, :] - k[:, None]
+    D = jnp.where((d > 0) & (d % 2 == 1), 2.0 * k[None, :], 0.0)
+    D = D.at[0].multiply(0.5)
+    Dj = jnp.linalg.matrix_power(D, derivative)
+    if test_modes > trial_modes:
+        Dj = jnp.pad(Dj, ((0, test_modes - trial_modes), (0, 0)))
+    h = jnp.full((test_modes, 1), jnp.pi / 2).at[0].set(jnp.pi)
+    return h * Dj[:test_modes]
 
 
 def _dense_derivative_matrix(
@@ -458,13 +468,11 @@ class Chebyshev(Jacobi):
 
             (i, j):
               (0,0): Diagonal mass-matrix.
-              (0,1): First derivative.
-              (1,0): Transpose of (0,1).
-              (0,2): Second derivative.
-              (2,0): Transpose of (0,2).
+              (0,j): j'th derivative, for any j > 0.
+              (i,0): Transpose of (0,i).
 
         Args:
-            i: Derivative order for test function. Should be 0.
+            i: Derivative order for test function.
             trial: Tuple (u, j) with trial space u and derivative order j.
             q: polynomial degree of coefficient.
 
@@ -475,7 +483,7 @@ class Chebyshev(Jacobi):
         assert isinstance(u, Chebyshev), (
             "Trial space must be Chebyshev for Chebyshev matrices"
         )
-        if (i, j) not in ((0, 0), (0, 1), (1, 0), (0, 2), (2, 0)):
+        if i != 0 and j != 0:
             return None
 
         A = None
@@ -496,7 +504,7 @@ class Chebyshev(Jacobi):
             M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
             return M if A is None else A.T @ M
 
-        if i in (1, 2) and j == 0:
+        if i > 0 and j == 0:
             m = u._matrices(j, (self, i), q=q)
             if m is not None:
                 m = m.T

@@ -917,6 +917,22 @@ class TestLU:
                 f"Matrix.lu_solve failed for axis={ax}"
             )
 
+    @pytest.mark.parametrize("pivot", [False, True])
+    def test_lu_keeps_L_of_a_large_matrix(self, pivot):
+        """L's multipliers are pruned against L, not against U's scale.
+
+        Scaled so that eps * max|U| * n is far above the multipliers, about 0.5,
+        which one tolerance for both factors dropped, leaving L = I.
+        """
+        n = 8
+        s = 10 / (float(ulp(1.0)) * n)
+        one = jnp.ones(n)
+        A = diags([0.5 * s * one[1:], s * one, 0.25 * s * one[1:]], (-1, 0, 1))
+        lu = A.lu_factor(pivot=pivot)
+        assert -1 in lu.L.offsets
+        x = jax.random.normal(jax.random.PRNGKey(5), shape=(n,))
+        assert jnp.allclose(lu.solve(A.matvec(x)), x, atol=ulp(100))
+
 
 class TestDiagonalLUShortcut:
     """`LUFactors.solve` divides directly when both factors are diagonal."""

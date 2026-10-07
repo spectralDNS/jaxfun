@@ -52,4 +52,4 @@ def test_integer_scalar_N_is_coerced_to_int(n):
 
 def test_non_integer_N_is_rejected():
     with pytest.raises(TypeError):
-        Chebyshev.Chebyshev(6.0)
+        Chebyshev.Chebyshev(6.0)  # ty: ignore[invalid-argument-type]

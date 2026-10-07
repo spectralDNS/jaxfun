@@ -6,6 +6,7 @@ import warnings
 from typing import TYPE_CHECKING, NamedTuple, TypedDict, overload
 
 import jax
+import jax.core
 import jax.numpy as jnp
 from flax import nnx
 
@@ -172,22 +173,27 @@ class DiaMatrix(BaseMatrix):
         """Build a DiaMatrix from a dense 2-D array.
 
         Args:
-            a: Dense matrix of shape ``(n, m)``.
+            a: Dense matrix of shape ``(n, m)``. A traced ``a`` needs ``offsets``.
             offsets: Which diagonals to store.  Defaults to all diagonals
-                with at least one non-zero entry.
+                with an entry larger than ``tol`` ulps of the largest entry.
+            tol: See ``offsets``; 0 keeps every diagonal with a nonzero entry.
         """
         import numpy as np
 
-        from jaxfun.utils.common import ulp
-
-        if offsets is None:
+        # Concrete input is sliced on the host: the device path below compiles
+        # anew for every shape, which dominates for the small matrices built
+        # once at setup.
+        if offsets is None or not isinstance(a, jax.core.Tracer):
             a_np = np.asarray(a)
             n, m = a_np.shape
-            max_abs = np.abs(a_np).max()
-            atol = (np.nextafter(max_abs, max_abs + 1) - max_abs) * tol
-            offsets = tuple(
-                k for k in range(-(n - 1), m) if np.any(np.abs(a_np.diagonal(k)) > atol)
-            )
+            if offsets is None:
+                max_abs = np.abs(a_np).max()
+                atol = (np.nextafter(max_abs, max_abs + 1) - max_abs) * tol
+                offsets = tuple(
+                    k
+                    for k in range(-(n - 1), m)
+                    if np.any(np.abs(a_np.diagonal(k)) > atol)
+                )
 
             if not offsets:
                 empty = jnp.zeros((0, m), dtype=a_np.dtype)
@@ -207,10 +213,7 @@ class DiaMatrix(BaseMatrix):
                     data[p, col_start : col_start + diag_len] = a_np[rows, cols]
             return cls(data=jnp.asarray(data), offsets=offsets, shape=(n, m))
 
-        a = jnp.asarray(a)
         n, m = a.shape
-
-        atol: Array = ulp(jnp.abs(a).max()) * tol
 
         if not offsets:
             empty = jnp.zeros((0, m), dtype=a.dtype)
@@ -477,16 +480,12 @@ class DiaMatrix(BaseMatrix):
                     "use pivot=True."
                 )
 
-            _lu_tol = (
-                float(jnp.finfo(self.data.dtype).eps)
-                * float(jnp.max(jnp.abs(band_lu)))
-                * n
-            )
+            l_tol, u_tol = _lu_prune_tols(band_lu, center, n)
 
             l_offsets = tuple(
                 off
                 for off in range(-p, 1)
-                if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > _lu_tol
+                if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > l_tol
             )
             l_data_rows: list[Array] = []
             for off in l_offsets:
@@ -499,7 +498,7 @@ class DiaMatrix(BaseMatrix):
             u_offsets = tuple(
                 off
                 for off in range(0, q + 1)
-                if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > _lu_tol
+                if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > u_tol
             )
             u_data_rows = [
                 band_lu[center + u].astype(self.data.dtype) for u in u_offsets
@@ -555,14 +554,12 @@ class DiaMatrix(BaseMatrix):
         # offset -t (L[i, i-t] = band_lu[center-t, i-t]).  Skip near-zero rows
         # using a relative tolerance (floating-point residuals from elimination
         # can leave structurally-zero diagonals with tiny non-zero entries).
-        _lu_tol = (
-            float(jnp.finfo(self.data.dtype).eps) * float(jnp.max(jnp.abs(band_lu))) * n
-        )
+        l_tol, u_tol = _lu_prune_tols(band_lu, center, n)
 
         l_offsets = tuple(
             off
             for off in range(-2 * p, 1)
-            if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > _lu_tol
+            if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > l_tol
         )
         l_data_rows: list[Array] = []
         for off in l_offsets:
@@ -581,7 +578,7 @@ class DiaMatrix(BaseMatrix):
         u_offsets = tuple(
             off
             for off in range(0, q_eff + 1)
-            if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > _lu_tol
+            if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > u_tol
         )
         u_data_rows = [band_lu[center + u].astype(self.data.dtype) for u in u_offsets]
         U = DiaMatrix(
@@ -2141,6 +2138,20 @@ def _lu_banded_kernel(
         elim_step, (band, perm0), jnp.arange(n, dtype=int)
     )
     return band_lu, perm
+
+
+def _lu_prune_tols(band_lu: Array, center: int, n: int) -> tuple[float, float]:
+    """Return the tolerances below which a diagonal of L, and of U, is dropped.
+
+    Elimination can leave structurally-zero diagonals with tiny residuals.
+    L holds dimensionless multipliers while U carries the scale of the matrix,
+    so each is measured against its own largest entry: against U's, the whole
+    of L is dropped once the entries of the matrix are large enough.
+    """
+    eps = float(jnp.finfo(band_lu.dtype).eps) * n
+    l_max = float(jnp.max(jnp.abs(band_lu[:center]), initial=0.0))
+    u_max = float(jnp.max(jnp.abs(band_lu[center:])))
+    return eps * l_max, eps * u_max
 
 
 def _prefix_pays(p: int, q: int, n_stored: int, n: int) -> bool:

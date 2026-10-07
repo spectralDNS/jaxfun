@@ -102,10 +102,14 @@ class OrthogonalSpace(BaseSpace):
         self.orthogonal: Self = self
         self.stencil = {0: 1}
         self.S: DiaMatrix = diags([jnp.ones(N)], offsets=(0,), shape=(N, N))
-        self.P: DiaMatrix = self.S
         self.leaf: CartesianProductSpace | None = None
         self.global_index: int = 0
         super().__init__(system, name, fun_str)
+
+    @property
+    def P(self) -> DiaMatrix:
+        """Return S S^T, which for an orthogonal space is S itself."""
+        return self.S
 
     @abstractmethod
     def norm_squared(self) -> Array:

@@ -54,7 +54,7 @@ uej = jnp.stack(
     ]
 )
 
-error = jnp.linalg.norm(uj - uej) / (2 * N**2)
+error = jnp.linalg.norm(uj - uej) / jnp.sqrt(uj.size)
 if "PYTEST" in os.environ:
     assert error < ulp(1000), error
     sys.exit(0)

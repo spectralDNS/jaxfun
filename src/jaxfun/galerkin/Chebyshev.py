@@ -542,23 +542,27 @@ class CGComposite(Composite):
         fun_str: str | None = None,
         scaling: sp.Expr | None = None,
     ) -> Composite:
-        """Return test space (same as self for Galerkin)."""
+        """Return the test space of `kind`, scaled by `scaling` only.
+
+        The test space does not inherit this space's scaling, so the Galerkin
+        one is this space itself only when neither is scaled.
+        """
         kind = TestSpaceKind.coerce(kind)
         if kind == TestSpaceKind.GALERKIN:
-            if name is None and fun_str is None and scaling is None:
+            unchanged = name is None and fun_str is None and scaling is None
+            if unchanged and self.scaling == 1:
                 return self
-            else:
-                return CGComposite(
-                    N=self.orthogonal.dim,
-                    orthogonal=Chebyshev,
-                    bcs=self.bcs,
-                    domain=self.domain,
-                    name=name if name is not None else self.name,
-                    fun_str=fun_str if fun_str is not None else self.fun_str,
-                    system=self.system,
-                    stencil=self.stencil,
-                    scaling=self.scaling,
-                )
+            return CGComposite(
+                N=self.orthogonal.dim,
+                orthogonal=Chebyshev,
+                bcs=self.bcs,
+                domain=self.domain,
+                name=name if name is not None else self.name,
+                fun_str=fun_str if fun_str is not None else self.fun_str,
+                system=self.system,
+                stencil=self.stencil,
+                scaling=scaling,
+            )
 
         if kind == TestSpaceKind.GALERKIN_RECOMBINED:
             # The PG test functions with the last few, which reach beyond the

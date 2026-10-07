@@ -7,6 +7,7 @@ operator matrices keep the Petrov-Galerkin band.
 from __future__ import annotations
 
 from fractions import Fraction
+from typing import cast
 
 import jax.numpy as jnp
 import numpy as np
@@ -22,7 +23,7 @@ from jaxfun.galerkin import (
     inner,
 )
 from jaxfun.galerkin.Chebyshev import Chebyshev
-from jaxfun.galerkin.composite import GalerkinRecombined
+from jaxfun.galerkin.composite import Composite, GalerkinRecombined
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.la.tpmatrix import TPMatrices, TPMatricesWavenumberSolver
@@ -123,21 +124,36 @@ def test_spans_trial_space_with_pg_band(family, bcs, bands, q):
 
 
 @pytest.mark.parametrize("family", [Chebyshev, Legendre])
-@pytest.mark.parametrize("bcs", [DIRICHLET, BIHARMONIC])
-def test_solution_is_the_galerkin_solution(family, bcs):
+@pytest.mark.parametrize(
+    "bcs,order",
+    [
+        (DIRICHLET, 2),
+        (BIHARMONIC, 4),
+        # The PG functions vanish with their first order - 1 derivatives at both
+        # ends, so they lie in trial spaces with other conditions on those too.
+        ({"left": {"N": 0}, "right": {"N": 0}}, 2),
+        ({"left": {"D": 0}, "right": {"N": 0}}, 2),
+        ({"left": {"R": (1, 0)}, "right": {"R": (1, 0)}}, 2),
+        ({"left": {"D": 0, "N2": 0}, "right": {"D": 0, "N2": 0}}, 4),
+    ],
+)
+def test_solution_is_the_galerkin_solution(family, bcs, order):
     N = 30
     B = FunctionSpace(N, family, bcs=bcs)
+    G = B.get_testspace("GR")
+    St, Sg = np.asarray(B.S.todense()), np.asarray(G.S.todense())
+    assert np.abs(Sg - (Sg @ np.linalg.pinv(St)) @ St).max() < _tol()
     x = B.system.x
     u = TrialFunction(B)
     ue = (1 - x**2) ** 2 * (x**3 + x + 1)
-    if bcs is BIHARMONIC:
+    if order == 4:
         f = ue.diff(x, 4) - 3 * ue.diff(x, 2) + 5 * ue
     else:
         f = ue.diff(x, 2) - 5 * ue
     sols, conds = [], []
-    for V in (B, B.get_testspace("GR")):
+    for V in (B, G):
         v = TestFunction(V)
-        if bcs is BIHARMONIC:
+        if order == 4:
             form = u.diff(x, 4) * v - 3 * u.diff(x, 2) * v + 5 * u * v
         else:
             form = u.diff(x, 2) * v - 5 * u * v
@@ -147,6 +163,32 @@ def test_solution_is_the_galerkin_solution(family, bcs):
     # Both are the Galerkin solution; they differ only by each solve's round-off.
     tol = _tol() * max(conds)
     assert np.abs(sols[0] - sols[1]).max() < tol * np.abs(sols[0]).max()
+
+
+@pytest.mark.parametrize("family", [Chebyshev, Legendre])
+def test_single_neumann_condition_is_refused(family):
+    """Order-1 PG functions vanish only themselves, so they miss u'(-1) = 0."""
+    B = FunctionSpace(12, family, bcs={"left": {"N": 0}})
+    with pytest.raises(ValueError, match="not Galerkin"):
+        B.get_testspace("GR")
+
+
+def test_stencil_is_pg_rule_with_trial_rows():
+    B = cast(Composite, FunctionSpace(12, Chebyshev, bcs=BIHARMONIC))
+    G = B.get_testspace("GR")
+    pg = B.get_testspace("PG")
+    # PG's rule, with the last rows, which leave the trial space, overridden.
+    assert G.stencil.rule == pg.stencil.rule
+    assert sorted(G.stencil.overrides) == list(range(B.dim - 4, B.dim))
+    assert G.dim == B.dim
+    # A copy built from the stencil alone is the same basis.
+    H = G.get_homogeneous()
+    assert np.array_equal(np.asarray(H.S.todense()), np.asarray(G.S.todense()))
+    for V in (B, G):
+        for i in (0, 3, V.dim - 1):
+            assert np.isclose(
+                V.eval_basis_function(0.3, i), V.eval_basis_functions(0.3)[i]
+            )
 
 
 def test_stage_operator_takes_the_banded_wavenumber_solver():

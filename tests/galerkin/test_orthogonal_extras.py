@@ -1,6 +1,9 @@
 import jax.numpy as jnp
+import numpy as np
+import pytest
 
 from jaxfun.galerkin import Chebyshev, Legendre, MeshKind
+from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.utils.common import Domain, ulp
 
 
@@ -37,3 +40,16 @@ def test_chebyshev_uniform_mesh_and_reference_roundtrip():
     umesh = C.mesh(kind=MeshKind.UNIFORM, N=5)
     assert umesh.shape[0] == 5
     assert jnp.allclose(umesh, jnp.linspace(-3.0, 1.0, 5))
+
+
+@pytest.mark.parametrize("n", [jnp.arange(6, 9)[0], np.int64(6)])
+def test_integer_scalar_N_is_coerced_to_int(n):
+    C = Chebyshev.Chebyshev(n)
+    assert type(C.N) is int and C.num_dofs == 6
+    D = FunctionSpace(n, Legendre.Legendre, bcs={"left": {"D": 1}, "right": {"D": 0}})
+    assert type(D.N) is int and D.num_dofs == 4
+
+
+def test_non_integer_N_is_rejected():
+    with pytest.raises(TypeError):
+        Chebyshev.Chebyshev(6.0)

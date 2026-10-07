@@ -23,6 +23,7 @@ Keys like "D", "N", "N2", "R", "W" correspond to Dirichlet, Neuman with first/se
 derivatives, Robin, weighted, etc., as interpreted by BoundaryConditions.
 """
 
+import operator
 from typing import overload
 
 from jaxfun.coordinates import CoordSys
@@ -120,6 +121,7 @@ def FunctionSpace(
     from jaxfun.galerkin.Chebyshev import CGComposite, Chebyshev
     from jaxfun.galerkin.Legendre import Legendre, LGComposite
 
+    N = operator.index(N)
     if domain is None or isinstance(domain, Domain):
         domain = domain
     else:

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import copy
 import functools
+import itertools
 from collections.abc import Callable, Iterable, Iterator
-from typing import TYPE_CHECKING, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -184,6 +185,109 @@ biharmonic = BoundaryConditions({"left": {"D": 0, "N": 0}, "right": {"D": 0, "N"
 robin = BoundaryConditions({"left": {"R": (1, 0)}, "right": {"R": (1, 0)}})
 
 
+class Stencil:
+    r"""The coefficients that combine orthogonal functions into a composite basis.
+
+    Basis function k is :math:`\sum_j c_j(k) P_{k+j}`, where `rule` maps each
+    shift j >= 0 to its coefficient :math:`c_j(n)`, an expression in `n`. The
+    rule gives almost every basis on its own. `overrides` holds the rows it
+    cannot give, as coefficients of all the orthogonal functions: rows where
+    the rule is singular, or rows replaced on purpose, as in
+    `GalerkinRecombined`.
+
+    Args:
+        rule: Shift -> coefficient, an expression in `n`.
+        overrides: Row -> its coefficients of the orthogonal functions.
+    """
+
+    def __init__(
+        self,
+        rule: dict[int, Any],
+        overrides: dict[int, np.ndarray] | None = None,
+    ) -> None:
+        self.rule: dict[int, sp.Expr] = {
+            int(j): sp.sympify(c) for j, c in sorted(rule.items())
+        }
+        self.overrides: dict[int, np.ndarray] = {
+            int(i): np.asarray(r, dtype=float) for i, r in (overrides or {}).items()
+        }
+
+    @property
+    def is_pure(self) -> bool:
+        """Whether the rule alone gives every row."""
+        return not self.overrides
+
+    def scaled(self, scaling: sp.Expr) -> Stencil:
+        """Return the stencil with basis function k divided by `scaling` at k."""
+        if scaling == sp.S.One:
+            return self
+        s = sp.lambdify(n, scaling)
+        return Stencil(
+            {j: c / scaling for j, c in self.rule.items()},
+            {i: r / float(s(i)) for i, r in self.overrides.items()},
+        )
+
+    def with_overrides(self, overrides: dict[int, np.ndarray]) -> Stencil:
+        """Return the stencil with `overrides` added to its own."""
+        return Stencil(self.rule, {**self.overrides, **overrides})
+
+    def coefficients(self, rows: int) -> dict[int, Array]:
+        """Return the rule's coefficient of each shift for rows 0, ..., rows-1."""
+        k = jnp.arange(rows)
+        modules = ["jax", {"gamma": jax.scipy.special.gamma}]
+        return {
+            j: jnp.broadcast_to(
+                jnp.atleast_1d(sp.lambdify(n, c, modules=modules)(k)).astype(float),
+                (rows,),
+            )
+            for j, c in self.rule.items()
+        }
+
+    def singular_rows(self, shape: tuple[int, int]) -> list[int]:
+        """Return the rows, not overridden, where the rule is not finite."""
+        rows, cols = shape
+        bad: set[int] = set()
+        for j, c in self.coefficients(rows).items():
+            finite = np.isfinite(np.asarray(c))[: max(0, cols - j)]
+            bad.update(np.flatnonzero(~finite).tolist())
+        return sorted(bad - set(self.overrides))
+
+    def resolved(
+        self, shape: tuple[int, int], bcs: BoundaryConditions, orthogonal: Jacobi
+    ) -> Stencil:
+        """Return the stencil with the rows where the rule is singular solved
+        from `bcs`, each normalized like its neighbours by the rule's leading
+        coefficient."""
+        singular = self.singular_rows(shape)
+        if not singular:
+            return self
+        c0 = self.coefficients(shape[0]).get(0)
+
+        def lead(i: int) -> float:
+            return float(c0[i]) if c0 is not None and np.isfinite(c0[i]) else 1.0
+
+        return self.with_overrides(
+            {i: lead(i) * _resolve_row(i, bcs, orthogonal) for i in singular}
+        )
+
+    def matrix(self, shape: tuple[int, int]) -> DiaMatrix:
+        """Return the (rows, N) matrix S of the basis functions' coefficients."""
+        rows, cols = shape
+        coefficients = self.coefficients(rows)
+        if self.is_pure:
+            return diags(list(coefficients.values()), tuple(self.rule), shape=shape)
+        # Clear the overridden rows first: the rule may not be finite there.
+        keep = np.ones(rows, dtype=bool)
+        keep[list(self.overrides)] = False
+        a = np.zeros(shape)
+        for j, c in coefficients.items():
+            i = np.flatnonzero(keep[: max(0, cols - j)])
+            a[i, i + j] = np.asarray(c)[i]
+        for i, r in self.overrides.items():
+            a[i] = r[:cols]
+        return _from_dense_exact(a)
+
+
 class Composite(OrthogonalSpace):
     """Composite basis enforcing boundary conditions via a stencil.
 
@@ -200,14 +304,14 @@ class Composite(OrthogonalSpace):
         name: Space name.
         fun_str: Symbol stem for basis functions.
         system: Optional coordinate system.
-        stencil: Optional custom stencil dict {shift: sympy_expr}.
+        stencil: Optional custom stencil, a `Stencil` or a dict {shift: sympy_expr}.
         alpha: Jacobi alpha (for Jacobi-based bases).
         beta: Jacobi beta.
         scaling: SymPy expression scaling the stencil diagonals.
 
     Attributes:
         orthogonal: Instance of underlying orthogonal basis.
-        stencil: Ordered dict of diagonal shift -> expression / scaling.
+        stencil: The `Stencil`, unscaled; `S` has the scaling applied.
         S: Sparse (DiaMatrix) stencil matrix.
         ST: Pre-computed transpose of S for efficiency.
         P: Sparse (DiaMatrix) representing S @ S.T.
@@ -225,7 +329,7 @@ class Composite(OrthogonalSpace):
         name: str = "Composite",
         fun_str: str = "phi",
         system: CoordSys | None = None,
-        stencil: dict | None = None,
+        stencil: Stencil | dict | None = None,
         alpha: Number | float = 0,  # Used if orthogonal is Jacobi; ignored otherwise.
         beta: Number | float = 0,  # Used if orthogonal is Jacobi; ignored otherwise.
         scaling: sp.Expr | None = None,
@@ -243,9 +347,14 @@ class Composite(OrthogonalSpace):
                 "orthogonal bases. Provide custom stencil dict otherwise."
             )
             stencil = get_stencil_matrix(self.bcs, self.orthogonal)
+        stencil = stencil if isinstance(stencil, Stencil) else Stencil(stencil)
+        # One basis function per mode the boundary conditions leave free.
+        shape = (N - self.bcs.num_bcs(), N)
+        # The stencil is kept unscaled, so that copies of this space, and test
+        # spaces made from it, apply a scaling exactly once.
         self.scaling = scaling
-        self.stencil = {(si[0]): si[1] / scaling for si in sorted(stencil.items())}
-        self.S: DiaMatrix = self.stencil_to_diamatrix()
+        self.stencil: Stencil = stencil.resolved(shape, self.bcs, self.orthogonal)
+        self.S: DiaMatrix = self.stencil.scaled(scaling).matrix(shape)
         self.ST: DiaMatrix = self.S.T
         self.P: DiaMatrix = self.S @ self.ST
         self.P.lu_factor()  # Pre-factor to allow jitted solves
@@ -296,11 +405,7 @@ class Composite(OrthogonalSpace):
     @jax.jit(static_argnums=(0, 2))
     def eval_basis_function(self, X: float, i: int) -> float:
         """Evaluate single constrained basis function φ_i at X."""
-        row: Array = self.get_stencil_row(i)
-        psi: Array = jnp.array(
-            [self.orthogonal.eval_basis_function(X, i + j) for j in self.stencil]
-        )
-        return matmat(row, psi)
+        return matmat(self.get_stencil_row(i), self.orthogonal.eval_basis_functions(X))
 
     @jax.jit(static_argnums=0)
     def eval_basis_functions(self, X: float) -> Array:
@@ -322,43 +427,6 @@ class Composite(OrthogonalSpace):
     def get_stencil_row(self, i: int) -> Array:
         """Return nonzero stencil row data for basis index i."""
         return self.S.get_row(i)
-
-    def stencil_width(self) -> int:
-        """Return max diagonal shift minus min shift (stencil width)."""
-        return max(self.stencil) - min(self.stencil)
-
-    def stencil_to_diamatrix(
-        self,
-        stencil: dict[int, sp.Expr] | None = None,
-        shape: tuple[int, int] | None = None,
-    ) -> DiaMatrix:
-        """Convert a symbolic stencil to a DiaMatrix.
-
-        Args:
-            stencil: Diagonal shift -> expression in `n`. Defaults to this
-                basis's own stencil.
-            shape: Shape of the result. Defaults to the basis stencil's shape,
-                which is what maps composite coefficients to orthogonal ones.
-
-        Both are overridden by the derivative stencils, which share the basis
-        stencil's shape but carry their own, narrower, set of diagonals.
-        """
-        diagonals: dict = cast(dict, self.stencil) if stencil is None else stencil
-        if shape is None:
-            shape = (self.N - self.stencil_width(), self.N)
-        k = jnp.arange(self.N - 1)
-        return diags(
-            [
-                jnp.atleast_1d(
-                    sp.lambdify(
-                        n, val, modules=["jax", {"gamma": jax.scipy.special.gamma}]
-                    )(k)
-                ).astype(float)
-                for val in diagonals.values()
-            ],
-            tuple(int(key) for key in diagonals),
-            shape=shape,
-        )
 
     @property
     def reference_domain(self) -> Domain:
@@ -453,16 +521,17 @@ class Composite(OrthogonalSpace):
 
     @property
     def dim(self) -> int:
-        """Return dimension of composite space."""
-        return self.orthogonal.dim - self.stencil_width()
+        """Return dimension of composite space, one per row of `S`."""
+        return self.S.shape[0]
 
     def get_homogeneous(self) -> Composite:
-        """Return new Composite with homogeneous boundary values."""
-        bc = self.bcs.get_homogeneous()
+        """Return the space with homogeneous boundary values, scaled as this one."""
+        if self.bcs.is_homogeneous():
+            return self
         return Composite(
             N=self.orthogonal.dim,
             orthogonal=self.orthogonal.__class__,
-            bcs=bc,
+            bcs=self.bcs.get_homogeneous(),
             domain=self.domain,
             name=self.name + "0",
             fun_str=self.fun_str,
@@ -470,6 +539,7 @@ class Composite(OrthogonalSpace):
             stencil=self.stencil,
             alpha=self.orthogonal.alpha,
             beta=self.orthogonal.beta,
+            scaling=self.scaling,
         )
 
     def get_orthogonal(self) -> OrthogonalSpace:
@@ -483,13 +553,17 @@ class Composite(OrthogonalSpace):
         fun_str: str | None = None,
         scaling: sp.Expr | None = None,
     ) -> Composite:
-        """Return test space (same as self for Galerkin)."""
+        """Return the Galerkin test space, scaled by `scaling` only.
+
+        The test space does not inherit this space's scaling, so it is this
+        space itself only when neither is scaled.
+        """
         kind = TestSpaceKind.coerce(kind)
         if kind != TestSpaceKind.GALERKIN:
             raise NotImplementedError(
                 f"Unsupported test space kind {kind!r} for Composite. "
             )
-        if name is None and fun_str is None:
+        if name is None and fun_str is None and scaling is None and self.scaling == 1:
             return self
 
         return Composite(
@@ -501,7 +575,7 @@ class Composite(OrthogonalSpace):
             fun_str=fun_str if fun_str is not None else self.fun_str,
             system=self.system,
             stencil=self.stencil,
-            scaling=scaling if scaling is not None else self.scaling,
+            scaling=scaling,
             alpha=self.orthogonal.alpha,
             beta=self.orthogonal.beta,
         )
@@ -564,7 +638,6 @@ class BCGeneric(Composite):
             self, N, domain=domain, system=system, name=name, fun_str=fun_str
         )
         self.bcs = bcs
-        self.stencil = None
         self._num_quad_points = num_quad_points
         self.orthogonal = orthogonal(
             bcs.num_bcs() + bcs.num_derivatives(),
@@ -576,13 +649,11 @@ class BCGeneric(Composite):
         S = get_bc_basis(bcs, self.orthogonal)
         self.orthogonal.N = S.shape[1]
         self.orthogonal._num_quad_points = num_quad_points
-        self.S = DiaMatrix.from_dense(S.__array__().astype(float))
+        S = S.__array__().astype(float)
+        # No rule: every lifting function is given outright.
+        self.stencil = Stencil({}, dict(enumerate(S)))
+        self.S = DiaMatrix.from_dense(S)
         self.ST: DiaMatrix = self.S.T
-
-    @property
-    def dim(self) -> int:
-        """Return dimension of boundary space."""
-        return self.S.shape[0]
 
     @property
     def num_dofs(self) -> int:
@@ -1036,18 +1107,8 @@ class GalerkinRecombined(Composite):
         name: str | None = None,
         fun_str: str | None = None,
     ) -> None:
-        super().__init__(
-            trial.N,
-            type(trial.orthogonal),
-            trial.bcs,
-            domain=trial.domain,
-            name=name if name is not None else pg.name,
-            fun_str=fun_str if fun_str is not None else pg.fun_str,
-            system=trial.system,
-            stencil=trial.stencil,
-            scaling=trial.scaling,
-        )
-        S_pg = np.asarray(pg.S.todense())
+        # PG's unscaled rows: its scaling, if any, is applied below to all rows.
+        S_pg = np.asarray(pg.stencil.matrix(pg.S.shape).todense())
         S_trial = np.asarray(trial.S.todense())
         assert S_pg.shape[0] == S_trial.shape[0], "test and trial dimensions differ"
         replaced = np.any(S_pg[:, trial.N :] != 0, axis=1)
@@ -1056,16 +1117,22 @@ class GalerkinRecombined(Composite):
         # size and the round-off of the last few is not weighted up by k^q.
         k = np.arange(S_pg.shape[0])
         S_trial = S_trial * np.where(replaced, S_pg[k, k] / S_trial[k, k], 1.0)[:, None]
-        S = np.where(replaced[:, None], S_trial, S_pg[:, : trial.N])
-        self.S = _from_dense_exact(S)
-        self.ST = self.S.T
-        self.P = self.S @ self.ST
-        self.P.lu_factor()
-        self._mass_matrix = self._compute_mass_matrix()
-        self._mass_matrix.lu_factor()
+        _check_in_span(S_pg[~replaced, : trial.N], S_trial, pg, trial)
+        rows = np.flatnonzero(replaced)
+        super().__init__(
+            trial.N,
+            type(trial.orthogonal),
+            trial.bcs,
+            domain=trial.domain,
+            name=name if name is not None else pg.name,
+            fun_str=fun_str if fun_str is not None else pg.fun_str,
+            system=trial.system,
+            stencil=pg.stencil.with_overrides({int(i): S_trial[i] for i in rows}),
+            scaling=pg.scaling,
+        )
         self._pg = pg
-        self._replaced = np.flatnonzero(replaced)
-        self._replaced_rows = S_trial[self._replaced]
+        self._replaced = rows
+        self._replaced_rows = np.asarray(self.S.todense())[rows]
 
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
@@ -1105,6 +1172,28 @@ class GalerkinRecombined(Composite):
         Z = np.asarray(z.todense()).copy()
         Z[self._replaced] = rows
         return _from_dense_exact(Z)
+
+
+def _check_in_span(
+    rows: np.ndarray, S_trial: np.ndarray, pg: PGComposite, trial: Composite
+) -> None:
+    """Raise unless the kept PG `rows` lie in the span of the trial stencil.
+
+    The PG test functions vanish together with their first `order` - 1
+    derivatives at both ends, so they satisfy any trial conditions on lower
+    derivatives -- Dirichlet, Neumann, mixed or Robin for order 2 -- but not,
+    for instance, a single Neumann condition, which gets order 1. Both stencils
+    are upper triangular, so the leading square block gives the coefficients.
+    """
+    M = S_trial.shape[0]
+    coef = np.linalg.solve(S_trial[:, :M].T, rows[:, :M].T).T
+    err = np.abs(rows - coef @ S_trial).max(axis=1) / np.abs(rows).max(axis=1)
+    if np.any(err > np.sqrt(np.finfo(rows.dtype).eps)):
+        raise ValueError(
+            f"the {type(pg).__name__} test functions do not satisfy the boundary "
+            f"conditions {dict(trial.bcs)} of the trial space, so recombining "
+            "them is not Galerkin; use get_testspace('PG') instead"
+        )
 
 
 def _from_dense_exact(a: np.ndarray) -> DiaMatrix:
@@ -1154,39 +1243,58 @@ def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
         elif orthogonal.name == "Chebyshev":
             return {0: 1, 2: 2 * (-n - 2) / (n + 3), 4: (n + 1) / (n + 3)}
 
-    bc = {"D": 0, "N": 1, "N2": 2, "N3": 3, "N4": 4}
-    lr = {"L": 0, "R": 1}
-    lra = {"L": "left", "R": "right"}
-    s = []
-    r = []
-    for key in bcs.orderednames():
-        k, v = key[0], key[1:]
-        if v in "WR":  # Robin conditions
-            k0 = 0 if v == "R" else 1
-            alfa = bcs[lra[k]][v][0]
-            f = [
-                orthogonal.bnd_values(k=k0)[lr[k]],
-                orthogonal.bnd_values(k=k0 + 1)[lr[k]],
-            ]
-            s.append(
-                [
-                    sp.simplify(f[0](n + j) + alfa * f[1](n + j))
-                    for j in range(1, 1 + bcs.num_bcs())
-                ]
-            )
-            r.append(-sp.simplify(f[0](n) + alfa * f[1](n)))
-        else:
-            f = orthogonal.bnd_values(k=bc[v])[lr[k]]
-            s.append([sp.simplify(f(n + j)) for j in range(1, 1 + bcs.num_bcs())])
-            r.append(-sp.simplify(f(n)))
-    A = sp.Matrix(s)
-    b = sp.Matrix(r)
+    traces = _bc_traces(bcs, orthogonal)
+    shifts = range(1, 1 + len(traces))
+    A = sp.Matrix([[sp.simplify(g(n + j)) for j in shifts] for g in traces])
+    b = sp.Matrix([-sp.simplify(g(n)) for g in traces])
     M = sp.simplify(A.solve(b))
     d = {0: 1}
     for i, s in enumerate(M):
         if s != 0:
             d[i + 1] = s
     return d
+
+
+def _bc_traces(bcs: BoundaryConditions, orthogonal: Jacobi) -> list[Callable]:
+    """Return, per boundary condition, its value on orthogonal function j."""
+    bc = {"D": 0, "N": 1, "N2": 2, "N3": 3, "N4": 4}
+    lr = {"L": 0, "R": 1}
+    lra = {"L": "left", "R": "right"}
+    traces: list[Callable] = []
+    for key in bcs.orderednames():
+        k, v = key[0], key[1:]
+        if v in "WR":  # Robin conditions
+            k0 = 0 if v == "R" else 1
+            alfa = bcs[lra[k]][v][0]
+            f0 = orthogonal.bnd_values(k=k0)[lr[k]]
+            f1 = orthogonal.bnd_values(k=k0 + 1)[lr[k]]
+            traces.append(lambda j, f0=f0, f1=f1, a=alfa: f0(j) + a * f1(j))
+        else:
+            traces.append(orthogonal.bnd_values(k=bc[v])[lr[k]])
+    return traces
+
+
+def _resolve_row(i: int, bcs: BoundaryConditions, orthogonal: Jacobi) -> np.ndarray:
+    """Return basis function i where the stencil rule is singular.
+
+    The rule meets the conditions with the next few orthogonal functions, and
+    fails where those cannot: for instance where one of them satisfies a Robin
+    condition by itself, as T_1 does u(-1) + u'(-1) = 0. Take the first set of
+    later functions that can, which gives this row one wider shift.
+    """
+    traces = _bc_traces(bcs, orthogonal)
+    N = orthogonal.N
+    b = np.array([-float(g(i)) for g in traces])
+    for last in range(len(traces) + 1, N - i):
+        for shifts in itertools.combinations(range(1, last), len(traces) - 1):
+            J = np.array([*shifts, last])
+            T = np.array([[float(g(i + j)) for j in J] for g in traces])
+            if np.linalg.cond(T) < 1e12:
+                row = np.zeros(N)
+                row[i] = 1.0
+                row[i + J] = np.linalg.solve(T, b)
+                return row
+    raise ValueError(f"no basis function {i} satisfies the conditions {dict(bcs)}")
 
 
 def get_bc_basis(bcs: BoundaryConditions, orthogonal: Jacobi) -> sp.Matrix:

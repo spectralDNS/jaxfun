@@ -16,6 +16,7 @@ Subclasses must implement:
 
 from __future__ import annotations
 
+import operator
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Self, cast, overload
 
@@ -89,6 +90,9 @@ class OrthogonalSpace(BaseSpace):
         fun_str: str = "psi",
         **kw,
     ) -> None:
+        # N sets array shapes, so it must be a static Python int, not a
+        # (numpy/jax) integer scalar that would end up as pytree data.
+        N = operator.index(N)
         self.N: int = N
         self._num_quad_points: int = N
         if domain is None:

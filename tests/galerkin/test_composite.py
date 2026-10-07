@@ -1,7 +1,20 @@
-import jax.numpy as jnp
-import pytest
+from typing import cast
 
-from jaxfun.galerkin import Chebyshev, ChebyshevU, FunctionSpace, JAXFunction, Legendre
+import jax.numpy as jnp
+import numpy as np
+import pytest
+from numpy.polynomial import chebyshev as npcheb, legendre as nplegendre
+
+from jaxfun.galerkin import (
+    Chebyshev,
+    ChebyshevU,
+    FunctionSpace,
+    JAXFunction,
+    Legendre,
+    TestFunction,
+    TrialFunction,
+    inner,
+)
 from jaxfun.galerkin.composite import (
     BCGeneric,
     BoundaryConditions,
@@ -10,6 +23,7 @@ from jaxfun.galerkin.composite import (
     get_bc_basis,
     get_stencil_matrix,
 )
+from jaxfun.utils.common import n
 
 
 def test_boundary_conditions_basic():
@@ -101,3 +115,68 @@ def test_get_homogeneous(space):
     C = Composite(8, space, bcs)
     H = C.get_homogeneous()
     assert H.bcs.is_homogeneous()
+
+
+@pytest.mark.parametrize(
+    "space,alpha,side,row",
+    [
+        # T_1 satisfies u(-1) + u'(-1) = 0 by itself, T_2 does u(-1) + u'(-1)/4.
+        (Chebyshev.Chebyshev, 1, "left", 0),
+        (Chebyshev.Chebyshev, 0.25, "left", 1),
+        (Chebyshev.Chebyshev, -1, "right", 0),
+        (Legendre.Legendre, 1, "left", 0),
+        (Legendre.Legendre, 1 / 3, "left", 1),
+        (Legendre.Legendre, 2, "left", None),
+    ],
+)
+def test_single_robin_condition(space, alpha, side, row):
+    """Where one orthogonal function meets the condition alone, the two-term
+    rule is singular in the row before it, which skips one function instead."""
+    N = 12
+    B = cast(Composite, FunctionSpace(N, space, bcs={side: {"R": (alpha, 0)}}))
+    val, der = (
+        (npcheb.chebval, npcheb.chebder)
+        if space is Chebyshev.Chebyshev
+        else (nplegendre.legval, nplegendre.legder)
+    )
+    S = np.asarray(B.S.todense())
+    x = -1 if side == "left" else 1
+    assert B.dim == N - 1 and np.linalg.matrix_rank(S) == N - 1
+    bc = [val(x, r) + alpha * val(x, der(r)) for r in S]
+    # The derivative term reaches about alpha N^2.
+    assert np.abs(bc).max() < 10 * np.finfo(S.dtype).eps * N**2 * max(1, abs(alpha))
+    assert sorted(B.stencil.overrides) == ([] if row is None else [row])
+
+
+def _dense(V) -> np.ndarray:
+    return np.asarray(V.S.todense())
+
+
+@pytest.mark.parametrize("space", [Chebyshev.Chebyshev, Legendre.Legendre])
+def test_scaling_is_applied_once(space):
+    N = 10
+    bcs = {"left": {"D": 0}, "right": {"D": 0}}
+    U = cast(Composite, FunctionSpace(N, space, bcs=bcs))
+    B = cast(Composite, FunctionSpace(N, space, bcs=bcs, scaling=n + 1))
+    k = np.arange(U.dim)[:, None]
+    assert np.allclose(_dense(B), _dense(U) / (k + 1))
+    # A copy keeps the scaling, applied once.
+    assert B.get_homogeneous() is B
+    C = Composite(N, space, {"left": {"D": 1}, "right": {"D": 2}}, scaling=n + 1)
+    H = C.get_homogeneous()
+    assert H.scaling == n + 1 and np.allclose(_dense(H), _dense(B))
+    # A test space does not inherit it: unscaled unless asked, then scaled once.
+    assert U.get_testspace("G") is U
+    V = B.get_testspace("G")
+    assert V is not B and V.scaling == 1 and np.allclose(_dense(V), _dense(U))
+    assert np.allclose(_dense(B.get_testspace("G", name="v")), _dense(U))
+    W = B.get_testspace("G", scaling=n + 2)
+    assert np.allclose(_dense(W), _dense(U) / (k + 2))
+    # The precomputed matrices, Legendre's from scaled derivative stencils, too.
+    x = B.system.x
+    u, v = TrialFunction(B), TestFunction(W)
+    for form in (u.diff(x, 2) * v, u.diff(x, 1) * v, u * v):
+        A = np.asarray(inner(form, sparse=True, kind="bilinear").todense())
+        ref = inner(form, use_precomputed_matrices=False, kind="bilinear")
+        ref = np.asarray(ref.todense())
+        assert np.abs(A - ref).max() < 1e3 * np.finfo(A.dtype).eps * np.abs(ref).max()

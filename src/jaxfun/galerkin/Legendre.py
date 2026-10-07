@@ -9,7 +9,7 @@ import sympy as sp
 from jax import Array
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.composite import BCGeneric, Composite, PGComposite
+from jaxfun.galerkin.composite import BCGeneric, Composite, PGComposite, Stencil
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TestSpaceKind
 from jaxfun.utils.common import Domain, cache_static, jit_vmap, n
@@ -373,9 +373,13 @@ class LGComposite(Composite):
         conditions at each end.
         """
         stencils = [self.S]
-        stencil = _differentiate_stencil(cast(dict, self.stencil))
+        if not self.stencil.is_pure:
+            return tuple(stencils)  # the rule's derivative misses overridden rows
+        stencil = _differentiate_stencil(self.stencil.rule)
         while stencil is not None:
-            stencils.append(self.stencil_to_diamatrix(stencil, shape=self.S.shape))
+            # Scaling basis function k scales its derivatives alike.
+            G = Stencil(stencil).scaled(self.scaling).matrix(self.S.shape)
+            stencils.append(G)
             stencil = _differentiate_stencil(stencil)
         return tuple(stencils)
 
@@ -386,23 +390,27 @@ class LGComposite(Composite):
         fun_str: str | None = None,
         scaling: sp.Expr | None = None,
     ) -> Composite:
-        """Return test space (same as self for Galerkin)."""
+        """Return the test space of `kind`, scaled by `scaling` only.
+
+        The test space does not inherit this space's scaling, so the Galerkin
+        one is this space itself only when neither is scaled.
+        """
         kind = TestSpaceKind.coerce(kind)
         if kind == TestSpaceKind.GALERKIN:
-            if name is None and fun_str is None and scaling is None:
+            unchanged = name is None and fun_str is None and scaling is None
+            if unchanged and self.scaling == 1:
                 return self
-            else:
-                return LGComposite(
-                    N=self.orthogonal.dim,
-                    orthogonal=Legendre,
-                    bcs=self.bcs,
-                    domain=self.domain,
-                    name=name if name is not None else self.name,
-                    fun_str=fun_str if fun_str is not None else self.fun_str,
-                    system=self.system,
-                    stencil=self.stencil,
-                    scaling=scaling if scaling is not None else self.scaling,
-                )
+            return LGComposite(
+                N=self.orthogonal.dim,
+                orthogonal=Legendre,
+                bcs=self.bcs,
+                domain=self.domain,
+                name=name if name is not None else self.name,
+                fun_str=fun_str if fun_str is not None else self.fun_str,
+                system=self.system,
+                stencil=self.stencil,
+                scaling=scaling,
+            )
 
         if kind == TestSpaceKind.GALERKIN_RECOMBINED:
             # The PG test functions with the last few, which reach beyond the

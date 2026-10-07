@@ -72,25 +72,28 @@
 # the whole solver stays in one basis. Two places where that
 # has to be got right, both silent if wrong:
 #
-#   * T carries a wall-normal second derivative, so under Petrov-Galerkin it
+#   * T carries a wall-normal second derivative, so under GALERKIN_RECOMBINED it
 #     needs a test space of its own, exactly as the v equation does. Without one
 #     the Chebyshev diffusion operator goes from 4 diagonals to N/2 of them.
 #   * Buoyancy is a right-hand side of the *v* equation, so `C_T` is tested
 #     against `self.PB` -- whatever the v equation itself uses -- not against
-#     `self.VB`. Under Galerkin those are the same object; under PG they are not.
+#     `self.VB`. Under Galerkin those are the same object; under GR they are not.
 #
 # See "CHOICE OF BASIS AND TEST SPACE" in ChannelFlow2D.py for which pairings are
 # worth using. The temperature shifts the balance a little -- it adds a pair of
 # transforms, favouring Chebyshev, and one more banded solve, favouring Legendre
 # -- but not enough to change the recommendation either way.
 #
-# Spatial discretization: Fourier x (Legendre Galerkin | Chebyshev Petrov-Galerkin)
+# Spatial discretization: Fourier x (Legendre Galerkin | Chebyshev Galerkin-recombined)
 # Time discretization: any globally stiffly accurate IMEX Runge-Kutta tableau
 # ruff: noqa: E402
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_here = os.path.dirname(os.path.abspath(__file__))
+# `spmd_bootstrap` and `OrrSommerfeld_eigs` sit one level up, shared with the 3D
+# solver; ChannelFlow2D is alongside.
+sys.path[:0] = [_here, os.path.dirname(_here)]
 
 import time
 
@@ -144,11 +147,11 @@ TABLEAU = ARS443
 MODE = 0
 CRITICAL = True  # run the linear-stability verification
 # Wall-normal basis and test space, forwarded to KMM2D and reused for the
-# temperature. Pair CHEBYSHEV with PG and LEGENDRE with GALERKIN -- see "CHOICE
+# temperature. Pair CHEBYSHEV with GR and LEGENDRE with GALERKIN -- see "CHOICE
 # OF BASIS" in ChannelFlow2D.py. Chebyshev gains as N grows; where the two cross
 # depends on the machine, so measure before caring.
 POLYNOMIAL = PolynomialKind.CHEBYSHEV
-KIND = TestSpaceKind.PETROV_GALERKIN
+KIND = TestSpaceKind.GALERKIN_RECOMBINED
 
 if "PYTEST" in os.environ:
     M, N, T_END, N_SNAPSHOTS, CRITICAL = 16, 16, 0.2, 2, False
@@ -196,7 +199,7 @@ class RayleighBenard(KMM2D):
             padding: Shape of real space, as in `KMM2D`.
             polynomial: Wall-normal basis, passed straight through to
                 `KMM2D` and reused for the temperature.
-            kind: GALERKIN or PETROV_GALERKIN, likewise.
+            kind: GALERKIN or GALERKIN_RECOMBINED, likewise.
         """
         nu = float((Pr / Ra) ** 0.5)
         super().__init__(
@@ -224,14 +227,14 @@ class RayleighBenard(KMM2D):
         self.VT = nnx.static(VT)
 
         # The temperature carries a wall-normal second derivative, so under
-        # Petrov-Galerkin it needs a test space of its own for the same reason
+        # GALERKIN_RECOMBINED it needs a test space of its own for the same reason
         # the v equation does. `DirectSum.get_testspace` forwards to the
         # homogeneous summand, which is the only part a test function sees --
         # the lifting is trial-side data.
-        if self.testkind is TestSpaceKind.PETROV_GALERKIN:
+        if self.testkind is TestSpaceKind.GALERKIN_RECOMBINED:
             PT = TensorProduct(
                 self.F,
-                Tb.get_testspace("PG", name="TbP"),
+                Tb.get_testspace("GR", name="TbP"),
                 system=self.system,
                 name="PT",
             )
@@ -245,7 +248,7 @@ class RayleighBenard(KMM2D):
         s = TestFunction(PT, name="s")
         # Buoyancy is a right-hand side of the *v* equation, so it has to be
         # tested against whatever the v equation is tested against -- self.PB,
-        # which is self.VB under Galerkin and the PG test space otherwise.
+        # which is self.VB under Galerkin and the GR test space otherwise.
         q = TestFunction(self.PB, name="q")
         g = TrialFunction(self.Wo, name="g")
 
@@ -515,18 +518,7 @@ def main() -> None:
     # ---------------------------------------------------------------------------
     # Plots
     # ---------------------------------------------------------------------------
-    # VT carries the inhomogeneous wall temperatures, so it is a direct sum, and
-    # a direct sum declines to batch while sharding is active: the boundary
-    # lifting it adds in is placed on the space's sharding, which the batch axis
-    # has no counterpart for. Plotting is a one-off, so transforming snapshot by
-    # snapshot there costs nothing worth avoiding. Indexed rather than iterated:
-    # a global array spanning another process's devices refuses `__iter__`.
-    n_snaps = snaps[2].shape[0]
-    T_phys = (
-        solver.VT.backward_batch(snaps[2])
-        if len(jax.devices()) == 1
-        else jnp.stack([solver.VT.backward(snaps[2][i]) for i in range(n_snaps)])
-    )
+    T_phys = solver.VT.backward_batch(snaps[2])
     u_final = solver.VD.backward(solver.velocity(final[0], final[1]))
     v_final = solver.VB.backward(final[0])
     x_plot, y_plot = solver.VT.mesh(broadcast=False)

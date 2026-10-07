@@ -13,13 +13,16 @@
 # The companion demo is RayleighBenard.py, which verifies the same solver against
 # the onset of convection instead.
 #
-# Spatial discretization: Fourier x (Legendre Galerkin | Chebyshev Petrov-Galerkin)
+# Spatial discretization: Fourier x (Legendre Galerkin | Chebyshev Galerkin-recombined)
 # Time discretization: any globally stiffly accurate IMEX Runge-Kutta tableau
 # ruff: noqa: E402
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_here = os.path.dirname(os.path.abspath(__file__))
+# `spmd_bootstrap` and `OrrSommerfeld_eigs` sit one level up, shared with the 3D
+# solver; ChannelFlow2D is alongside.
+sys.path[:0] = [_here, os.path.dirname(_here)]
 
 import jax
 
@@ -57,12 +60,12 @@ DT, T_END = 0.02, 100.0
 AMPLITUDE = 1e-7  # eigenmode amplitude; small enough that the dynamics stay linear
 N_OS = 100  # modes in the Orr-Sommerfeld eigenproblem itself
 # Wall-normal basis and test space, as in RayleighBenard.py; see "CHOICE OF BASIS
-# AND TEST SPACE" in ChannelFlow2D.py for the pairing rule. Chebyshev-PG is the
+# AND TEST SPACE" in ChannelFlow2D.py for the pairing rule. Chebyshev-GR is the
 # faster of the two here, this box being narrow enough (M=32) that the
 # wall-normal transform still decides the step -- though by how much, or whether
 # at all, depends on the machine. Both give the growth rate to the same 5e-07.
 POLYNOMIAL = PolynomialKind.CHEBYSHEV
-KIND = TestSpaceKind.PETROV_GALERKIN
+KIND = TestSpaceKind.GALERKIN_RECOMBINED
 
 if "PYTEST" in os.environ:
     M, N, T_END = 16, 48, 1.0

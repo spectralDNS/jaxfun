@@ -54,7 +54,9 @@ def _quad_matrix(space, dv: int, du: int, q: int = 0) -> jnp.ndarray:
     """Compute integral matrix numerically via the space's own quadrature.
 
     Entry (i, j) = integral phi_i^{(dv)} * phi_j^{(du)} dx (with weight).
-    Uses inner() with use_precomputed_matrices=False to bypass any table lookup.
+    Uses inner() with use_precomputed_matrices=False to bypass any table lookup,
+    and q points more than modes, since N points integrate x**q exactly only
+    for q <= 1.
     """
     v = TestFunction(space)
     u = TrialFunction(space)
@@ -62,6 +64,7 @@ def _quad_matrix(space, dv: int, du: int, q: int = 0) -> jnp.ndarray:
     A = inner(
         x**q * v.diff(x, dv) * u.diff(x, du),
         use_precomputed_matrices=False,
+        num_quad_points=space.N + q,
         kind="bilinear",
     )
     return A.todense()
@@ -70,13 +73,17 @@ def _quad_matrix(space, dv: int, du: int, q: int = 0) -> jnp.ndarray:
 def _quad_matrix_composite(
     test_space, trial_space, du: int, q: int = 0, dv: int = 0
 ) -> jnp.ndarray:
-    """Compute integral matrix for PG test space via numerical quadrature."""
+    """Compute integral matrix for PG test space via numerical quadrature.
+
+    Uses q points more than modes, as `_quad_matrix` does.
+    """
     v = TestFunction(test_space)
     u = TrialFunction(trial_space)
     x = test_space.system.x
     A = inner(
         x**q * v.diff(x, dv) * u.diff(x, du),
         use_precomputed_matrices=False,
+        num_quad_points=max(test_space.N, trial_space.N) + q,
         kind="bilinear",
     )
     return A.todense()
@@ -756,7 +763,7 @@ class TestMassOnlyMassMatrix:
         )
 
 
-@pytest.mark.parametrize("space_fn", _MASS_ONLY)
+@pytest.mark.parametrize("space_fn", _POLY5 + _MASS_ONLY)
 class TestWithCoefficientMatrix:
     @pytest.mark.parametrize("N,q", [(6, 1), (8, 2), (10, 3)])
     def test_values_match_quadrature(self, space_fn, N, q):

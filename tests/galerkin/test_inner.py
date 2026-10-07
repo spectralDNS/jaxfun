@@ -9,6 +9,8 @@ from scipy.integrate import dblquad
 from jaxfun.coordinates import R
 from jaxfun.galerkin import (
     Composite,
+    DirectSum,
+    DirectSumTPS,
     FunctionSpace,
     InnerKind,
     JAXFunction,
@@ -731,6 +733,7 @@ def test_project_takes_a_moving_lifting_at_t(dims: int, route: str) -> None:
     lifted = x * (1 + x) / 2 * sp.sin(V.system.base_time())
 
     if route == "jaxfunction":
+        assert isinstance(V, DirectSum | DirectSumTPS)
         ue = lifted + JAXFunction(bubble, V.get_homogeneous())
         kind = ProjectionKind.INTERPOLATION
     else:

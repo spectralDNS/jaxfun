@@ -19,12 +19,12 @@ classifiers = [
 dependencies = [
   "flax>=0.12.8",
   "jax>=0.11",
-  "marimo>=0.19.10",
   "matplotlib>=3.9.3",
   "optax>=0.2.8",
-  "pre-commit>=4.3",
-  "pytest-xdist[psutil]>=3.8",
   "sympy>=1.14",
+]
+optional-dependencies.io = [
+  "h5py>=3.11",
 ]
 
 [tool.pytest.ini_options]
@@ -79,7 +79,10 @@ exclude = [ "sandbox", "examples/notebooks", "**/*.ipynb" ]
 dev = [
   "ipython>=8.37.0",
   "pytest>=8.4.1",
+  "pytest-xdist[psutil]>=3.8",
+  "orbax-checkpoint>=0.11",
   "pyvista>=0.46.2",
+  "h5py>=3.11",
   "ruff>=0.16.0",
   "soap-jax",
   "mpi4py>=4.1.1",
@@ -89,7 +92,7 @@ dev = [
   "marimo[recommended]>=0.23.9",
   "pre-commit>=4.3.0",
   "shapely>=2.1.0",
-  "ty>=0.0.63",
+  "ty>=0.0.83",
   "urllib3>=2.6.3",
 ]
 

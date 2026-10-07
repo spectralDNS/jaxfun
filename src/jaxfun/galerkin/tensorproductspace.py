@@ -923,6 +923,17 @@ class TensorProductSpace:
             c = fns[ax](c)
         return c
 
+    def _stencil_axes(self) -> tuple[int, ...]:
+        """The axes whose basis is not already the orthogonal one.
+
+        An orthogonal space carries the identity as both `S` and `P`, so its
+        products map every coefficient to itself -- which is why the 1-D
+        `OrthogonalSpace.to_orthogonal` returns its argument untouched rather
+        than multiplying by anything. Skipping those axes is exact, not an
+        approximation, and it saves a pass over the whole array per axis.
+        """
+        return tuple(i for i, s in enumerate(self.basespaces) if not s.is_orthogonal)
+
     def to_orthogonal(self, c: Array) -> Array:
         """Return coefficients c mapped to underlying orthogonal basis.
 
@@ -932,14 +943,12 @@ class TensorProductSpace:
         Returns:
             Array of coefficients in the orthogonal basis.
         """
-        sharding = self._spectral_sharding
-        S = [s.S for s in self.basespaces]
         z = c
-        for i, Si in enumerate(S):
-            z = Si.rmatvec(z, axis=i)
+        for i in self._stencil_axes():
+            z = self.basespaces[i].S.rmatvec(z, axis=i)
 
         # Sharded if possible, otherwise replicated -- and never under a trace.
-        return place(z, sharding)
+        return place(z, self._spectral_sharding)
 
     def from_orthogonal(self, c: Array) -> Array:
         """Return coefficients c mapped from underlying orthogonal basis.
@@ -950,14 +959,53 @@ class TensorProductSpace:
         Returns:
             Array of coefficients in the original basis.
         """
-        sharding = self._spectral_sharding
-        P = [(s.P, s.S) for s in self.basespaces]
         z = c
-        for i, (Pi, Si) in enumerate(P):
-            z = Pi.solve(Si.matvec(z, axis=i), axis=i)
+        for i in self._stencil_axes():
+            s = self.basespaces[i]
+            z = s.P.solve(s.S.matvec(z, axis=i), axis=i)
 
         # Sharded if possible, otherwise replicated -- and never under a trace.
-        return place(z, sharding)
+        return place(z, self._spectral_sharding)
+
+    @property
+    def _batched_spectral_sharding(self) -> NamedSharding | None:
+        """`_spectral_sharding`'s counterpart for an array with a batch axis.
+
+        A property rather than an attribute so that `DirectSumTPS`, which builds
+        its own `__init__` rather than calling this one, gets it for free.
+        """
+        return None if self._spectral_sharding is None else batched_spectral_sharding
+
+    def to_orthogonal_batch(self, c: Array) -> Array:
+        """Map several coefficient arrays at once to the orthogonal basis.
+
+        Args:
+            c: Coefficient arrays stacked along one leading batch axis.
+
+        Returns:
+            The coefficients in the orthogonal basis, batch axis first.
+
+        A `vmap` of `to_orthogonal` rather than the same products at `axis=1+i`,
+        and the difference is a collective. `DiaMatrix.rmatvec` flattens every
+        axis it is not contracting into one before it multiplies, so an explicit
+        batch axis gets merged with the split axis and XLA has to gather it.
+        Under `vmap` the batch stays outside that reshape and the split axis is
+        untouched. The values are identical either way.
+        """
+        return place(jax.vmap(self.to_orthogonal)(c), self._batched_spectral_sharding)
+
+    def from_orthogonal_batch(self, c: Array) -> Array:
+        """Map several coefficient arrays at once back from the orthogonal basis.
+
+        Args:
+            c: Coefficient arrays in the orthogonal basis, batch axis first.
+
+        Returns:
+            The coefficients in this space's basis, batch axis first.
+
+        The inverse of `to_orthogonal_batch`; see it for why this is a `vmap`.
+        """
+        return place(jax.vmap(self.from_orthogonal)(c), self._batched_spectral_sharding)
 
 
 def _halve_leading_fourier(
@@ -1200,40 +1248,6 @@ class DirectSumTPS(TensorProductSpace):
     ) -> Array:
         return self.orthogonal.backward(self.to_orthogonal(c, t, lifting=lifting), N=N)
 
-    def _apply_backward(
-        self, c: Array, nq: tuple[int, ...], t: float | Array | None = None
-    ) -> Array:
-        """Lift the boundary values, then transform in the orthogonal space.
-
-        The same redirection `backward` makes, as the hook `backward_batch`
-        vmaps over -- a direct sum keeps no transform cache of its own. `t`
-        defaults to `None` because the inherited hook supplies no time; a
-        moving lifting reaches it through `backward_batch`'s own `vmap`.
-        """
-        return self.orthogonal._apply_backward(self.to_orthogonal(c, t), nq)
-
-    def _require_local_batch(self, what: str) -> None:
-        """Refuse batching while sharding is active.
-
-        Lifting the boundary values adds the field to a boundary contribution
-        that `to_orthogonal` has already placed on the space's sharding, and a
-        traced array carries no placement to match it against. A plain tensor
-        product space does no such mixing: it batches a sharded array through
-        the same `shard_map` its unbatched transforms use, carrying the batch
-        axis along replicated. A direct sum cannot, and this is also what keeps
-        it out of that inherited path -- which applies the base space's own
-        per-axis transforms and would skip the lifting entirely. The two
-        conditions are complements, `self._spectral_sharding` being set exactly
-        when `_use_spmd` can return True, so neither case is ever reached twice
-        or missed.
-        """
-        if self._spectral_sharding:
-            raise NotImplementedError(
-                f"{what} on a DirectSum space needs a single-device host: the "
-                "boundary lifting is placed on the space's sharding, which a "
-                "traced array cannot carry. Transform the fields one at a time."
-            )
-
     def _batch_times(
         self, t: Array | Sequence[float] | None, n: int, what: str
     ) -> Array | None:
@@ -1281,17 +1295,18 @@ class DirectSumTPS(TensorProductSpace):
         Returns:
             The transformed fields, batch axis first.
 
+        The lifting is applied to the batch and the transform itself is handed
+        to the orthogonal space, so a sharded batch takes the same distributed
+        path a plain tensor product does -- one `all_to_all` for the whole
+        batch, with the batch axis carried along replicated.
+
         Unlike the steady case, a batch given `t` agrees with transforming the
         fields one at a time only to round-off, not bit-for-bit: each field
         carries its own lifting, so the projection that builds it is batched
         along with the transform.
         """
-        self._require_local_batch("backward_batch")
         ts = self._batch_times(t, c.shape[0], "backward_batch")
-        if ts is None:
-            return super().backward_batch(c, N=N)
-        nq = self._resolve_quad_points(N)
-        return jax.vmap(lambda ci, ti: self._apply_backward(ci, nq, ti))(c, ts)
+        return self.orthogonal.backward_batch(self.to_orthogonal_batch(c, ts), N=N)
 
     def forward_batch(
         self, u: Array, t: Array | Sequence[float] | None = None
@@ -1305,11 +1320,8 @@ class DirectSumTPS(TensorProductSpace):
         Returns:
             The transformed arrays, batch axis first.
         """
-        self._require_local_batch("forward_batch")
         ts = self._batch_times(t, u.shape[0], "forward_batch")
-        if ts is None:
-            return super().forward_batch(u)
-        return jax.vmap(lambda ui, ti: self._apply_forward(ui, ti))(u, ts)
+        return self.from_orthogonal_batch(self.orthogonal.forward_batch(u), ts)
 
     def forward(
         self,
@@ -1320,16 +1332,6 @@ class DirectSumTPS(TensorProductSpace):
     ) -> Array:
         d = self.orthogonal.forward(u)
         return self.from_orthogonal(d, t, lifting=lifting)
-
-    def _apply_forward(self, u: Array, t: float | Array | None = None) -> Array:
-        """Transform in the orthogonal space, then take the lifting back out.
-
-        The same redirection `forward` makes, as the hook `forward_batch` vmaps
-        over -- a direct sum keeps no transform cache of its own. `t` defaults
-        to `None` because the inherited hook supplies no time; a moving lifting
-        reaches it through `forward_batch`'s own `vmap`.
-        """
-        return self.from_orthogonal(self.orthogonal._apply_forward(u), t)
 
     def scalar_product(self, u: Array) -> NoReturn:
         raise RuntimeError(
@@ -1395,31 +1397,9 @@ class DirectSumTPS(TensorProductSpace):
         Returns:
             The evaluated fields, batch axis first.
         """
-        self._require_local_batch("backward_primitive_batch")
         ts = self._batch_times(t, c.shape[0], "backward_primitive_batch")
-        if ts is None:
-            return super().backward_primitive_batch(c, k, N=N)
-        nq = self._resolve_quad_points(N)
-        return jax.vmap(lambda ci, ti: self._apply_backward_primitive(ci, k, nq, ti))(
-            c, ts
-        )
-
-    def _apply_backward_primitive(
-        self,
-        c: Array,
-        k: tuple[int, ...],
-        nq: tuple[int, ...],
-        t: float | Array | None = None,
-    ) -> Array:
-        """Lift the boundary values, then differentiate in the orthogonal space.
-
-        The same redirection `backward_primitive` makes, as the hook
-        `backward_primitive_batch` vmaps over. `t` defaults to `None` because
-        the inherited hook supplies no time; a moving lifting reaches it
-        through `backward_primitive_batch`'s own `vmap`.
-        """
-        return self.orthogonal._apply_backward_primitive(
-            self.to_orthogonal(c, t), k, nq
+        return self.orthogonal.backward_primitive_batch(
+            self.to_orthogonal_batch(c, ts), k, N=N
         )
 
     def _lifting_values(
@@ -1448,6 +1428,98 @@ class DirectSumTPS(TensorProductSpace):
         # trace would capture tracers there.
         self.bndvals = self.lifting(t)
 
+    def _lifting_batch(self, shape: tuple[int, ...], ts: Array | None) -> Array:
+        """The lifting's orthogonal contribution for a batch of fields.
+
+        Steady (`ts is None`): the boundary data does not depend on the field,
+        so one block serves the whole batch. It is left unbatched and broadcast
+        at the add, which costs nothing -- the batch axis is the replicated one,
+        so every device already holds the slice it needs.
+
+        Transient: one block per field. Under sharding they are built in a
+        Python loop rather than a `vmap`, because a lifting is assembled by
+        `project`, which takes the `shard_map` path of its own target space --
+        in 3D that target is itself a `TensorProduct` -- and `vmap` over
+        `shard_map` is a corner nothing else here relies on. The loop traces
+        fine (`ts.shape[0]` is static and the plans are traceable in `t`), and
+        it costs one projection per field on a lower-dimensional mesh, while
+        the n-D transform that follows stays batched either way.
+        """
+        if ts is None:
+            return self._lifting_orthogonal(shape)
+        if self._spectral_sharding is None:
+            return jax.vmap(lambda ti: self._lifting_orthogonal(shape, ti))(ts)
+        return jnp.stack(
+            [self._lifting_orthogonal(shape, ts[i]) for i in range(ts.shape[0])]
+        )
+
+    def to_orthogonal_batch(self, c: Array, t: Array | None = None) -> Array:
+        """Map several coefficient arrays at once to the orthogonal basis.
+
+        Args:
+            c: Coefficient arrays stacked along one leading batch axis.
+            t: One time per field, as for `backward_batch`, or `None` for a
+                steady lifting.
+
+        Returns:
+            The coefficients in the orthogonal basis, batch axis first.
+
+        Overrides rather than inherits: the inherited version applies this
+        space's own per-axis stencils and would drop the boundary lifting
+        entirely.
+        """
+        z = self.get_homogeneous().to_orthogonal_batch(c)
+        return z + self._lifting_batch(z.shape[1:], t)
+
+    def from_orthogonal_batch(self, c: Array, t: Array | None = None) -> Array:
+        """Map several coefficient arrays at once back from the orthogonal basis.
+
+        Args:
+            c: Coefficient arrays in the orthogonal basis, batch axis first.
+            t: One time per field, as for `forward_batch`.
+
+        Returns:
+            The coefficients in this space's basis, batch axis first.
+
+        The inverse of `to_orthogonal_batch`, and an override for the same
+        reason. Unlike the unbatched `from_orthogonal` it states no placement
+        for the lifting: the target is known statically here, and the broadcast
+        against the batched sharding needs no resharding to begin with.
+        """
+        return self.get_homogeneous().from_orthogonal_batch(
+            c - self._lifting_batch(c.shape[1:], t)
+        )
+
+    def _lifting_orthogonal(
+        self,
+        shape: tuple[int, ...],
+        t: float | Array | None = None,
+        lifting: dict | None = None,
+    ) -> Array:
+        """The lifting's contribution in the orthogonal basis, padded to `shape`.
+
+        `to_orthogonal` adds this and `from_orthogonal` subtracts it -- the two
+        differ by that sign and by nothing else, which is why it is built here
+        rather than twice. The boundary blocks are the entries of `tpspaces`
+        that the lifting has a value for; `_lifting_plans` never files one for
+        the all-homogeneous key, which is the block `get_homogeneous` handles.
+
+        Each block is placed on the unbatched `spectral_sharding` by the
+        `to_orthogonal` that builds it, and stays there: the batched callers
+        broadcast it over their batch axis, which is the replicated one, so no
+        resharding is needed to add it to a batched array.
+        """
+        bndvals = self._lifting_values(t, lifting)
+        result: Array = jnp.zeros(1)
+        for f, v in self.tpspaces.items():
+            if f not in bndvals:
+                continue
+            ai = v.to_orthogonal(bndvals[f])  # sharded if possible
+            result = result + jnp.pad(
+                ai, [(0, shape[i] - ai.shape[i]) for i in range(len(shape))]
+            )
+        return result
+
     def to_orthogonal(
         self,
         c: Array,
@@ -1456,19 +1528,7 @@ class DirectSumTPS(TensorProductSpace):
         lifting: dict | None = None,
     ) -> Array:
         result = self.get_homogeneous().to_orthogonal(c)
-        bndvals = self._lifting_values(t, lifting)
-
-        for f, v in self.tpspaces.items():
-            inp = bndvals.get(f, c)
-            if inp is c:
-                continue
-            ai = v.to_orthogonal(inp)  # sharded if possible
-            result = result + jnp.pad(
-                ai,
-                [(0, result.shape[i] - ai.shape[i]) for i in range(c.ndim)],
-            )
-
-        return result
+        return result + self._lifting_orthogonal(result.shape, t, lifting)
 
     def from_orthogonal(
         self,
@@ -1479,19 +1539,7 @@ class DirectSumTPS(TensorProductSpace):
     ) -> Array:
         # Note that c may be replicated, because the orthogonal space is not the
         # same as the original space, so we can't assume the sharding is compatible.
-
-        result: Array = jnp.zeros(1)
-        bndvals = self._lifting_values(t, lifting)
-
-        for f, v in self.tpspaces.items():
-            inp = bndvals.get(f, c)
-            if inp is c:
-                continue
-            ai = -v.to_orthogonal(inp)  # sharded if possible
-            result = result + jnp.pad(
-                ai,
-                [(0, c.shape[i] - ai.shape[i]) for i in range(c.ndim)],
-            )
+        result = -self._lifting_orthogonal(c.shape, t, lifting)
         # Match c's sharding where there is one to match; a traced c has none.
         target = None if isinstance(c, jax.core.Tracer) else c.sharding
         result = c + place(result, target)

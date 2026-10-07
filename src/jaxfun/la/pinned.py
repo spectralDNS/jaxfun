@@ -161,9 +161,7 @@ class PinnedSystem(BaseMatrix):
 
     def astype(self, dtype) -> PinnedSystem:
         """Return a copy with the underlying matrix cast to ``dtype``."""
-        from jaxfun.la.pinned import PinnedSystem  # local to avoid re-import issues
-
-        return PinnedSystem(self.matrix.astype(dtype), self.constraints)
+        return type(self)(self.matrix.astype(dtype), self.constraints)
 
     def __len__(self) -> int:
         return min(self.shape)

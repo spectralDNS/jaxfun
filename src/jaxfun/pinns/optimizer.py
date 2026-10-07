@@ -561,7 +561,7 @@ class Trainer:
                 raise ValueError(
                     "Module must be provided if opt is not a NamedOptimizer"
                 )
-            module: nnx.Module = opt.module  # ty:ignore[invalid-assignment]
+            module: nnx.Module = opt.module
 
         if alpha <= 0 or alpha >= 1:
             raise ValueError("alpha must be in the range (0, 1)")

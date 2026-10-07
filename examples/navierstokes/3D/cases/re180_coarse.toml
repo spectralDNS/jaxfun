@@ -1,0 +1,21 @@
+# Coarse spin-up of the Re_tau = 180 channel (see re180.toml for every key).
+#
+# Get through the initial transient cheaply here, then continue on the full grid:
+#
+#   python TurbulentChannel3D.py re180_coarse.toml
+#   python TurbulentChannel3D.py re180.toml --restart-from <dir>/coarse_ckpt
+#
+# The restart regrids the state exactly and starts the statistics over.
+
+[grid]
+Nx = 32
+Ny = 32
+Nz = 48
+
+[time]
+dt = 0.002
+t_end = 20.0
+
+[output]
+checkpoint_dir = "coarse_ckpt"
+plot = "coarse_profiles.png"

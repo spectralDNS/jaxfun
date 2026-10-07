@@ -23,6 +23,7 @@ from jaxfun.la import (
     TPMatrices,
     TPMatrix,
 )
+from jaxfun.operators import Contract
 from jaxfun.sharding import place, replicate
 from jaxfun.typing import (
     CoeffDict,
@@ -143,69 +144,93 @@ class _InnerContext:
 
 @overload
 def inner(
-    expr: sp.Expr,
+    a: sp.Expr,
+    b: sp.Expr | None = None,
+    /,
+    *,
     sparse: bool = False,
     sparse_tol: int = 1000,
     num_quad_points: int | tuple[int | None, ...] | None = None,
     use_precomputed_matrices: bool = True,
-    *,
     kind: Literal[InnerKind.BILINEAR, "bilinear"],
 ) -> BaseMatrix: ...
 @overload
 def inner(
-    expr: sp.Expr,
+    a: sp.Expr,
+    b: sp.Expr | None = None,
+    /,
+    *,
     sparse: bool = False,
     sparse_tol: int = 1000,
     num_quad_points: int | tuple[int | None, ...] | None = None,
     use_precomputed_matrices: bool = True,
-    *,
     kind: Literal[InnerKind.LINEAR, "linear"],
 ) -> Array | BlockArray: ...
 @overload
 def inner(
-    expr: sp.Expr,
+    a: sp.Expr,
+    b: sp.Expr | None = None,
+    /,
+    *,
     sparse: bool = False,
     sparse_tol: int = 1000,
     num_quad_points: int | tuple[int | None, ...] | None = None,
     use_precomputed_matrices: bool = True,
-    *,
     kind: Literal[InnerKind.SYSTEM, "system"],
 ) -> tuple[BaseMatrix, Array | BlockArray]: ...
 @overload
 def inner(
-    expr: sp.Expr,
+    a: sp.Expr,
+    b: sp.Expr | None = None,
+    /,
+    *,
     sparse: bool = False,
     sparse_tol: int = 1000,
     num_quad_points: int | tuple[int | None, ...] | None = None,
     use_precomputed_matrices: bool = True,
-    *,
     kind: None = None,
 ) -> GalerkinAssembledForm: ...
 @overload
 def inner(
-    expr: sp.Expr,
+    a: sp.Expr,
+    b: sp.Expr | None = None,
+    /,
+    *,
     sparse: bool = False,
     sparse_tol: int = 1000,
     num_quad_points: int | tuple[int | None, ...] | None = None,
     use_precomputed_matrices: bool = True,
-    *,
     kind: InnerKindLike,
 ) -> GalerkinAssembledForm: ...
 def inner(
-    expr: sp.Expr,
+    a: sp.Expr,
+    b: sp.Expr | None = None,
+    /,
+    *,
     sparse: bool = False,
     sparse_tol: int = 1000,
     num_quad_points: int | tuple[int | None, ...] | None = None,
     use_precomputed_matrices: bool = True,
-    *,
     kind: InnerKind | str | None = None,
 ) -> GalerkinAssembledForm:
     r"""Assemble Galerkin inner products (bilinear / linear forms).
 
-    Supports expressions of the forms:
+    Called with two arguments, ``inner(a, b)`` is the (weighted) L2 inner
+    product ``(a, b)``, with the contraction of the two equal-rank arguments
+    implied (see ``jaxfun.operators.contract``)::
+
+        inner(u, v)  # scalars, or vectors (dot product)
+        inner(Grad(u), Grad(v))  # vectors u, v: double contraction
+        inner(Div(Grad(u)) + f, v)
+
+    The test function may be in either argument, and is the conjugated one.
+
+    Called with one argument, ``inner(expr)`` assembles a complete weak form
+    whose integrand is written out explicitly, as one of:
         a(u, v) - L(v)
         a(u, v)
         L(v)
+    ``inner(a, b)`` is the same as ``inner(Contract(a, b))``.
 
     Finds test / trial functions, splits expression into coefficients and
     separated coordinate factors, constructs (tensor) matrices and load
@@ -216,11 +241,18 @@ def inner(
       * JAXFunction (produces linear contributions)
 
     Args:
-        expr: SymPy expression containing TestFunction (mandatory) and
-            optionally TrialFunction, JAXFunction, scalar
+        a: With ``b``, the first argument of the inner product. Without ``b``,
+            the integrand: a SymPy expression containing TestFunction
+            (mandatory) and optionally TrialFunction, JAXFunction, scalar
             coordinate-dependent factors.
+        b: Optional second argument of the inner product, of the same rank
+            as ``a``.
         sparse: If True, sparsify (1D) matrix/tensor factors (DiaMatrix).
         sparse_tol: Zero tolerance (integer multiple of ulp) for sparsify.
+            Only used when assembling the bilinear form using Vandermonde
+            matrices. When use_precomputed_matrices is True, and precomputed
+            matrices exists, the precomputed matrices are already sparse and
+            this argument is ignored.
         num_quad_points: Number of quadrature points to use for evaluating
             the inner products. Can be an integer (1D) or a tuple of integers
             for each dimension. If None, the default number of quadrature
@@ -234,8 +266,8 @@ def inner(
             use tuple(int(1.5 * n) for n in test_space.num_quad_points).
         use_precomputed_matrices: If True, use precomputed sparse matrices if
             available for the given test/trial derivative orders. If False,
-            always compute matrices via quadrature. Setting to False can be
-            useful for testing.
+            always compute matrices via quadrature and Vandermonde matrices.
+            Setting to False can be useful for testing.
         kind: Optional expected result kind. If omitted, the assembled result
             is returned unchanged. If provided, accepts ``InnerKind`` or its
             string values (``"bilinear"``, ``"linear"``, ``"system"``) and
@@ -251,6 +283,7 @@ def inner(
     """  # noqa: E501
     if kind is not None:
         kind = InnerKind.coerce(kind)
+    expr = a if b is None else Contract(a, b)
     context = _prepare_inner_context(expr, num_quad_points)
     aresults, bresults = _assemble_inner_items(context, use_precomputed_matrices)
     result = _finalize_inner_result(

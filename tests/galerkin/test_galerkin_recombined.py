@@ -107,7 +107,9 @@ def test_spans_trial_space_with_pg_band(family, bcs, bands, q):
     # The rows that stay PG must be PG's own (exact, recurrence-built) rows; the
     # replaced ones are checked against exact rational arithmetic.
     pg = B.get_testspace("PG")
-    replaced = np.any(np.asarray(pg.S.todense())[:, N:] != 0, axis=1)
+    # The replaced rows are those whose full PG functions reach beyond mode N.
+    full = np.asarray(pg.stencil.matrix((B.dim, N + pg.order)).todense())
+    replaced = np.any(full[:, N:] != 0, axis=1)
     assert 0 < replaced.sum() < B.dim and replaced[-1]
     for j, offsets in bands.items():
         form = x**q * (u.diff(x, j) if j else u)

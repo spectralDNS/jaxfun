@@ -1,6 +1,6 @@
 """
-Extended differential operators (Divergence, Gradient, Curl, Cross, Dot, Outer)
-for curvilinear coordinate systems.
+Extended differential operators (Divergence, Gradient, Curl, Cross, Dot,
+Contract, Outer) for curvilinear coordinate systems.
 
 The expressions and notation adopted from:
 
@@ -102,7 +102,7 @@ def from_cartesian(v: TensorLike) -> TensorLike:
     ... )
     >>> v = C.position_vector(True)
     >>> v
-    (r*cos(theta))*R.i + (r*sin(theta))*R.j + z*R.k
+    (r*cos(theta))*R3.i + (r*sin(theta))*R3.j + z*R3.k
     >>> from_cartesian(v)
     r*C.b_r + z*C.b_z
     """
@@ -391,6 +391,74 @@ def dot(t1: TensorLike, t2: TensorLike) -> TensorLike | Expr:
     if g0 == 0:
         return rank_zero
     return g0 * t1.args[0] | t2.args[1]
+
+
+def _rank_of(t: TensorLike | Expr) -> RankTag:
+    if _is_vectorlike(t):
+        return RankTag.VECTOR
+    if _is_dyadiclike(t):
+        return RankTag.DYADIC
+    return RankTag.SCALAR
+
+
+def contract(t1: TensorLike | Expr, t2: TensorLike | Expr) -> Expr:
+    """Return the full contraction of two tensors of equal rank.
+
+    Scalars are multiplied, vectors are contracted with the dot product and
+    dyadics with the double contraction
+
+        A:B = tr(A·Bᵀ) = A^{ij} B^{kl} g_ik g_jl,
+
+    which is A_ij B_ij in Cartesian coordinates. The result is always a scalar.
+
+    For unevaluated full contraction, use Contract.
+
+    Args:
+        t1: First scalar, Vector or Dyadic.
+        t2: Second scalar, Vector or Dyadic, of the same rank as t1.
+
+    Returns:
+        Scalar expression.
+
+    Raises:
+        TypeError: If t1 and t2 have different ranks.
+
+    Examples:
+        >>> from jaxfun.coordinates import CartCoordSys, x, y
+        >>> from jaxfun.operators import contract
+        >>> N = CartCoordSys("N", (x, y))
+        >>> A = N.x * (N.i | N.i) + N.y * (N.i | N.j)
+        >>> B = (N.i | N.j) + 2 * (N.j | N.j)
+        >>> contract(A, B)
+        y
+    """
+    rank1, rank2 = _rank_of(t1), _rank_of(t2)
+    if rank1 != rank2:
+        raise TypeError(
+            "contract needs operands of equal rank, got "
+            f"{rank1.name.lower()} and {rank2.name.lower()}"
+        )
+    if _is_vectorlike(t1) and _is_vectorlike(t2):
+        return dot(t1, t2)
+    if not (_is_dyadiclike(t1) and _is_dyadiclike(t2)):
+        return t1 * t2
+
+    if isinstance(t1, DyadicZero) or isinstance(t2, DyadicZero):
+        return sp.S.Zero
+    if isinstance(t1, DyadicAdd):
+        return fromiter(Add, (contract(i, t2) for i in cast_args(t1)))
+    if isinstance(t2, DyadicAdd):
+        return fromiter(Add, (contract(t1, i) for i in cast_args(t2)))
+    if isinstance(t1, DyadicMul):
+        d1, m1 = next(iter(t1.components.items()))
+        return m1 * contract(d1, t2)
+    if isinstance(t2, DyadicMul):
+        d2, m2 = next(iter(t2.components.items()))
+        return m2 * contract(t1, d2)
+
+    # (a⊗b):(c⊗d) = tr((a⊗b)·(d⊗c)) = (a·c)(b·d), with the metric from dot
+    assert isinstance(t1, BaseDyadic) and isinstance(t2, BaseDyadic)
+    return dot(t1.args[0], t2.args[0]) * dot(t1.args[1], t2.args[1])
 
 
 @overload
@@ -691,6 +759,41 @@ class Dot(Expr):
 
     def doit(self, **hints: Any) -> TensorLike | Expr:
         return dot(
+            self._expr1.doit(**hints),
+            self._expr2.doit(**hints),
+        )
+
+
+class Contract(Expr):
+    """Unevaluated full contraction delegating to custom contract().
+
+    Args:
+        expr1: Left scalar, vector or dyadic.
+        expr2: Right scalar, vector or dyadic, of the same rank as expr1.
+
+    Examples:
+        >>> from jaxfun.coordinates import CartCoordSys, x, y
+        >>> from jaxfun.operators import Contract
+        >>> N = CartCoordSys("N", (x, y))
+        >>> Contract(N.x * N.i, N.i + N.j).doit()
+        x
+    """
+
+    _expr1: TensorLike | Expr
+    _expr2: TensorLike | Expr
+
+    def __new__(
+        cls: type[Self], expr1: TensorLike | Expr, expr2: TensorLike | Expr
+    ) -> Self:
+        expr1 = sp.sympify(expr1)
+        expr2 = sp.sympify(expr2)
+        obj: Self = Expr.__new__(cls, expr1, expr2)
+        obj._expr1 = expr1
+        obj._expr2 = expr2
+        return obj
+
+    def doit(self, **hints: Any) -> Expr:
+        return contract(
             self._expr1.doit(**hints),
             self._expr2.doit(**hints),
         )

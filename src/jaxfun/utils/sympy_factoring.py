@@ -14,7 +14,7 @@ type Dependent = TrialFunction | sp.Function
 
 # Operators treated as linear in the dependent field.
 _LINEAR_UNARY = {"Grad", "Div", "Curl", "Derivative"}
-_LINEAR_BINARY = {"Dot", "Cross", "Outer"}
+_LINEAR_BINARY = {"Dot", "Cross", "Outer", "Contract"}
 _TIME_INDEPENDENT_TRIALS: dict[TrialFunction, TrialFunction] = {}
 
 

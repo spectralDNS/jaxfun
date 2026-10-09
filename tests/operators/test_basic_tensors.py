@@ -7,6 +7,7 @@ import sympy.vector as sp_vector
 from jaxfun.coordinates import BaseDyadic, get_CoordSys
 from jaxfun.operators import (
     Constant,
+    Contract,
     Cross,
     Curl,
     Div,
@@ -14,6 +15,7 @@ from jaxfun.operators import (
     Grad,
     Identity,
     Outer,
+    contract,
     cross,
     curl,
     divergence,
@@ -205,6 +207,41 @@ def test_dot_zero_cases():
 def test_dot_of_vectors_unevaluated():
     expr = Dot(N.i + N.j, N.i + N.j)
     assert expr.doit() == 2
+
+
+# ---------------- Full contraction ---------------- #
+def test_contract_scalars_and_vectors():
+    assert contract(2 * N.x, N.y) == 2 * N.x * N.y
+    assert contract(N.x * N.i + N.j, N.i + N.y * N.j) == N.x + N.y
+
+
+def test_contract_dyadic_cartesian_is_frobenius():
+    A = N.x * (N.i | N.i) + 2 * (N.i | N.j) + N.y * (N.j | N.i) + (N.k | N.k)
+    B = (N.i | N.i) + (N.i | N.j) + 3 * (N.j | N.i) - N.z * (N.k | N.k)
+    expected = (A.to_matrix(N).T * B.to_matrix(N)).trace()
+    assert sp.expand(contract(A, B) - expected) == 0
+
+
+def test_contract_dyadic_cylindrical_metric():
+    A = (C.b_r | C.b_theta) + C.r * (C.b_theta | C.b_theta)
+    B = 2 * (C.b_r | C.b_theta) + (C.b_theta | C.b_r) + (C.b_theta | C.b_theta)
+    res = contract(A, B)
+    assert sp.expand(res - (C.r**5 + 2 * C.r**2)) == 0
+    cart = contract(C.to_cartesian(A), C.to_cartesian(B))
+    assert sp.expand(C.simplify(cart) - res) == 0
+
+
+def test_contract_zero_and_unevaluated():
+    A = N.x * (N.i | N.j)
+    assert contract(sp_vector.DyadicZero(), A) == 0
+    assert Contract(A, N.i | N.j).doit() == contract(A, N.i | N.j) == N.x
+
+
+def test_contract_rank_mismatch():
+    with pytest.raises(TypeError, match="vector and dyadic"):
+        contract(N.i, N.i | N.j)
+    with pytest.raises(TypeError, match="scalar and vector"):
+        contract(N.x, N.i)
 
 
 # ---------------- Gradient / Divergence / Curl ---------------- #

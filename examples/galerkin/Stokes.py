@@ -21,7 +21,7 @@ from jaxfun.galerkin import (
     inner,
 )
 from jaxfun.la.blockmatrix import BlockArray
-from jaxfun.operators import Constant, Div, Dot, Grad
+from jaxfun.operators import Constant, Div, Grad
 
 R2 = R(2)
 x, y = R2.base_scalars()
@@ -44,11 +44,9 @@ W = CartesianProduct(V, Q, name="W")
 u, p = TrialFunction(W, name="up")
 v, q = TestFunction(W, name="vq")
 
-A, a = inner(
-    Dot(nu * Div(Grad(u)), v), sparse=True, kind="system", num_quad_points=(N, N)
-)
-B, b = inner(q * Div(u), sparse=True, kind="system", num_quad_points=(N, N))
-Dp = inner(p * Div(v), sparse=True, kind="bilinear", num_quad_points=(N, N))
+A, a = inner(-nu * Grad(u), Grad(v), sparse=True, kind="system", num_quad_points=(N, N))
+B, b = inner(Div(u), q, sparse=True, kind="system", num_quad_points=(N, N))
+Dp = inner(p, Div(v), sparse=True, kind="bilinear", num_quad_points=(N, N))
 
 C = A + B + Dp
 c = a + b  # ty:ignore[unsupported-operator]

@@ -8,6 +8,7 @@ from scipy.integrate import dblquad
 
 from jaxfun.coordinates import R
 from jaxfun.galerkin import (
+    CartesianProduct,
     Composite,
     DirectSum,
     DirectSumTPS,
@@ -15,14 +16,17 @@ from jaxfun.galerkin import (
     InnerKind,
     JAXFunction,
     TensorProduct,
+    TensorProductSpace,
     TestFunction,
     TrialFunction,
+    VectorTensorProductSpace,
 )
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import inner, project
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.la import BaseMatrix, BlockArray, DiaMatrix, TPMatrices
+from jaxfun.operators import Div, Dot, Grad
 from jaxfun.typing import GalerkinAssembledForm, ProjectionKind
 from jaxfun.utils import ulp
 
@@ -101,6 +105,64 @@ def test_inner_kind_rejects_mismatches_and_unknown_strings() -> None:
 
     with pytest.raises(ValueError, match="'unknown' is not a valid InnerKind"):
         inner(v * u, kind=cast(InnerKind, "unknown"))
+
+
+# ---------------- Two-argument inner(a, b) ---------------- #
+def test_inner_two_args_scalar() -> None:
+    V = Legendre(8)
+    x = V.system.x
+    u = TrialFunction(V)
+    v = TestFunction(V)
+    A = inner(u, v, kind="bilinear").todense()
+    assert jnp.allclose(A, inner(u * v, kind="bilinear").todense())
+    assert jnp.allclose(A, inner(v, u, kind="bilinear").todense())
+    assert jnp.allclose(
+        cast(Array, inner(x, v, kind="linear")),
+        cast(Array, inner(x * v, kind="linear")),
+    )
+
+
+def test_inner_two_args_system() -> None:
+    D = FunctionSpace(8, Legendre, bcs={"left": {"D": 1}, "right": {"D": 2}})
+    x = D.system.x
+    u = TrialFunction(D)
+    v = TestFunction(D)
+    A0, b0 = inner(u.diff(x, 2) + x, v, kind="system")
+    A1, b1 = inner((u.diff(x, 2) + x) * v, kind="system")
+    assert jnp.allclose(A0.todense(), A1.todense())
+    assert jnp.allclose(cast(Array, b0), cast(Array, b1))
+
+
+def _dirichlet_vector_space(
+    N: int,
+) -> tuple[TensorProductSpace, VectorTensorProductSpace]:
+    D = FunctionSpace(N, Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    T = TensorProduct(D, D)
+    return T, CartesianProduct(T, T, rank=1)
+
+
+def test_inner_two_args_vector() -> None:
+    _, V = _dirichlet_vector_space(6)
+    u = TrialFunction(V)
+    v = TestFunction(V)
+    M = inner(u, v, kind="bilinear").todense()
+    assert jnp.allclose(M, inner(Dot(u, v), kind="bilinear").todense())
+
+
+def test_inner_two_args_vector_laplacian() -> None:
+    # Grad(u) is rank 2, so the double contraction gives (grad u, grad v)
+    _, V = _dirichlet_vector_space(6)
+    u = TrialFunction(V)
+    v = TestFunction(V)
+    A = inner(Grad(u), Grad(v), kind="bilinear").todense()
+    B = inner(Dot(Div(Grad(u)), v), kind="bilinear").todense()
+    assert jnp.allclose(A, -B)
+
+
+def test_inner_two_args_rank_mismatch() -> None:
+    T, V = _dirichlet_vector_space(6)
+    with pytest.raises(TypeError, match="vector and scalar"):
+        inner(TrialFunction(V), TestFunction(T))
 
 
 # Some data from shenfun

@@ -1592,7 +1592,7 @@ class DiagonalMatrix(DiaMatrix):
     def diagonal_or_none(self) -> Array:
         return self.data[0]
 
-    def matvec(self, x: Array, axis: int = 0) -> Array:
+    def matvec(self, x: Array, axis: int = 0) -> Array:  # ty: ignore[invalid-attribute-override]
         diagonal = self.diagonal()
         if x.ndim == 1:
             return diagonal * x
@@ -1605,7 +1605,7 @@ class DiagonalMatrix(DiaMatrix):
         shape[axis] = diagonal.shape[0]
         return diagonal.reshape(tuple(shape)) * x
 
-    def rmatvec(self, x: Array, axis: int = -1) -> Array:
+    def rmatvec(self, x: Array, axis: int = -1) -> Array:  # ty: ignore[invalid-attribute-override]
         """Multiply ``x @ A`` contracting ``axis`` of ``x``.
 
         A diagonal matrix is its own transpose, so this is the elementwise

@@ -1342,7 +1342,7 @@ class TPMatricesDenseLUFactors(nnx.Pytree):
 
 
 def tpmats_dense_lu_factor(
-    A: TPMatrix | list[TPMatrix],
+    A: TPMatrix | Sequence[TPMatrix],
 ) -> TPMatricesDenseLUFactors:
     """Assemble and LU-factorize the dense Kronecker product of a :class:`TPMatrices`.
 
@@ -1420,7 +1420,7 @@ def _diagonalize_axis(
     return V, W, evals[: len(mats)]
 
 
-def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
+def tpmats_lu_factor(A: TPMatrix | Sequence[TPMatrix]) -> TPMatricesLUFactors:
     """Compute diagonalization-based LU factors for a sum of :class:`TPMatrix`.
 
     Simultaneously diagonalizes the factor matrices on each axis so that the

@@ -1005,8 +1005,6 @@ class PGComposite(Composite):
     @property
     def dim(self) -> int:
         """Return dimension of the test space, one function per trial function."""
-        # Not N - bcs.num_bcs(): the bcs, which define the PG functions, number
-        # 2 * order.
         return self.N - self.order
 
     def recombine(

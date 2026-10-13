@@ -87,7 +87,7 @@ def linop(f):
     return LinearOperator(
         shape=(ndofs, ndofs),
         dtype=float,
-        matvec=lambda z: np.asarray(f(jnp.asarray(z, dtype=float))),
+        matvec=lambda z: np.asarray(f(jnp.asarray(z, dtype=float))),  # ty: ignore[unknown-argument]
     )
 
 

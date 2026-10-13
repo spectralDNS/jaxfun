@@ -1,4 +1,3 @@
-import jax
 import jax.numpy as jnp
 import numpy as np
 import sympy as sp
@@ -7,7 +6,7 @@ from sympy import Expr, Number, Symbol
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, diags
-from jaxfun.utils.common import Domain, cache_static
+from jaxfun.utils.common import Domain, cache_static, jit_method
 
 from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
@@ -129,7 +128,7 @@ class Ultraspherical(Jacobi):
             g /= g[N // 2]
         return jnp.asarray(1.0 / (bm * g)), jnp.asarray(g)
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
         """
         Args:

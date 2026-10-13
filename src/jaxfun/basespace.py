@@ -1,6 +1,7 @@
 import sympy as sp
 
 from jaxfun.coordinates import CoordSys, R
+from jaxfun.utils.common import clear_jit_cache
 
 n = sp.Symbol("n", integer=True, positive=True)  # index
 
@@ -39,5 +40,7 @@ class BaseSpace:
         self.system: CoordSys = R(1) if system is None else system
 
     def clear_static_cache(self) -> None:
-        """Drop everything memoized by `cache_static` on this space."""
+        """Drop everything memoized by `cache_static` or compiled by `jit_method`
+        on this space."""
         self.__dict__.pop("_static_cache", None)
+        clear_jit_cache(self)

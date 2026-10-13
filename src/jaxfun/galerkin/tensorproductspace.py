@@ -27,7 +27,7 @@ from jaxfun.sharding import (
     spectral_sharding,
 )
 from jaxfun.typing import ArrayFun, MeshKind, RankTag
-from jaxfun.utils.common import jit_vmap, lambdify
+from jaxfun.utils.common import jit_method, lambdify
 
 from .composite import (
     BCGeneric,
@@ -453,16 +453,16 @@ class TensorProductSpace:
             c = fns[ax](c)
         return c
 
-    @jit_vmap(in_axes=(0, None), static_argnums=(0,), ndim=1)
+    @jit_method
     def _evaluate_single_device(self, x: Array, c: Array) -> Array:
         """Evaluate expansion at scattered points — single-device path."""
         dim = len(self)
         T = self.basespaces
         C = [
-            T[i].eval_reconstruction(T[i].map_reference_domain(x[i]))
+            T[i].eval_reconstruction(T[i].map_reference_domain(x[..., i]))
             for i in range(dim)
         ]
-        path = "i,j,ij" if dim == 2 else "i,j,k,ijk"
+        path = "...i,...j,ij" if dim == 2 else "...i,...j,...k,ijk"
         z = jnp.einsum(path, *C, c)
         return z.real if self.is_hermitian_half else z
 

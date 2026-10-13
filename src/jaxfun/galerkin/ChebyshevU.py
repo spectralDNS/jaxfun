@@ -7,7 +7,7 @@ from sympy import Expr, Symbol
 from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.la import DiaMatrix, Matrix, diags
-from jaxfun.utils.common import Domain, cache_static, dst, jit_vmap
+from jaxfun.utils.common import Domain, cache_static, dst, jit_method, jit_vmap
 
 from .Jacobi import Jacobi
 
@@ -106,7 +106,7 @@ class ChebyshevU(Jacobi):
         weights = jnp.full(N, jnp.pi / (N + 1)) * (1 - points**2)
         return points, weights
 
-    @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
+    @jit_vmap(in_axes=(0, None), static_argnums=2)
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single Chebyshev polynomial U_i at points X.
 
@@ -162,7 +162,7 @@ class ChebyshevU(Jacobi):
     def norm_squared(self) -> Array:
         return jnp.full(self.N, jnp.pi / 2)
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def backward(self, c: Array, N: int | None = None) -> Array:
         """Return Chebyshev series U_k evaluated at quadrature points.
 
@@ -179,7 +179,7 @@ class ChebyshevU(Jacobi):
         d = dst(c, n=n, type=1)
         return (d / (2 * jnp.sin((jnp.arange(n) + 1) * jnp.pi / (n + 1))))[::-1]
 
-    @jax.jit(static_argnums=0)
+    @jit_method
     def forward(self, u: Array) -> Array:
         """Return Chebyshev coefficients for function values at quadrature points.
 
@@ -192,7 +192,6 @@ class ChebyshevU(Jacobi):
         uh = self._scalar_product_ref(u)
         return uh * (2 * float(self.domain_factor) / jnp.pi)
 
-    @jax.jit(static_argnums=0)
     def _scalar_product_ref(self, u: Array) -> Array:
         """Return the scalar product without the curvilinear measure.
 
@@ -215,7 +214,7 @@ class ChebyshevU(Jacobi):
             uh = uh[: self.N]
         return uh
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
         """
         Args:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import inspect
+import weakref
 from collections.abc import Callable
-from functools import cache, wraps
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast
+from functools import cache, partial, update_wrapper, wraps
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -24,6 +26,7 @@ n = Symbol("n", integer=True)
 
 __all__ = (
     "cache_static",
+    "clear_jit_cache",
     "dct",
     "diff",
     "diffx",
@@ -32,6 +35,8 @@ __all__ = (
     "idct",
     "jacn",
     "JAX_FUNCTION_BY_NAME",
+    "jit_method",
+    "jit_vmap",
     "matmat",
     "tosparse",
     "lambdify",
@@ -107,42 +112,140 @@ def cache_static[FuncT: Callable[..., Any]](func: FuncT) -> FuncT:
     return cast(FuncT, wrapper)
 
 
+# Methods compiled by `jit_method`, per live instance and keyed by its `id`.
+# `jax.jit` with a static `self` would key JAX's global cache on the instance
+# instead, which holds it alive until evicted and never sees `_cache_key`. The
+# table is kept off the instance so that a copy, deep or shallow, does not
+# inherit closures bound to the original; a finalizer drops an instance's entry
+# before its `id` can be reused.
+_jit_caches: dict[int, dict[Any, Callable[..., Any]]] = {}
+
+
+def _jit_cache(instance: Any) -> dict[Any, Callable[..., Any]]:
+    key = id(instance)
+    cache = _jit_caches.get(key)
+    if cache is None:
+        cache = _jit_caches[key] = {}
+        weakref.finalize(instance, _jit_caches.pop, key, None)
+    return cache
+
+
+def clear_jit_cache(instance: Any) -> None:
+    """Drop every method `jit_method` has compiled for `instance`."""
+    _jit_caches.get(id(instance), {}).clear()
+
+
+class _JitMethod:
+    """Method descriptor behind `jit_method`."""
+
+    def __init__(self, func: Callable[..., Any], static_argnums: tuple[int, ...]):
+        update_wrapper(self, func)
+        self.func = func
+        # The compiled function has `self` bound, so its arguments count from
+        # the one after it. Names are passed too, so that a static argument may
+        # equally be given by keyword.
+        params = list(inspect.signature(func).parameters.values())[1:]
+        self.signature = inspect.Signature(params)
+        self.static_argnums = tuple(i - 1 for i in static_argnums if i > 0)
+        self.static_argnames = tuple(
+            params[i].name
+            for i in self.static_argnums
+            if i < len(params)
+            and params[i].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        )
+
+    def __get__(self, instance: Any, owner: type | None = None) -> Any:
+        if instance is None:
+            return self
+        return self.compiled(instance)
+
+    def __call__(self, instance: Any, /, *args: Any, **kwargs: Any) -> Any:
+        return self.compiled(instance)(*args, **kwargs)
+
+    def compiled(self, instance: Any) -> Callable[..., Any]:
+        """Return the method compiled for `instance` in its current state."""
+        cache = _jit_cache(instance)
+        key = (self, getattr(instance, "_cache_key", ()))
+        if key not in cache:
+            ref = weakref.ref(instance)
+            func = self.func
+
+            def bound(*args: Any, **kwargs: Any) -> Any:
+                return func(ref(), *args, **kwargs)
+
+            update_wrapper(bound, func, assigned=("__name__", "__qualname__"))
+            bound.__signature__ = self.signature  # ty: ignore[unresolved-attribute]
+            cache[key] = jax.jit(
+                bound,
+                static_argnums=self.static_argnums,
+                static_argnames=self.static_argnames,
+            )
+        return cache[key]
+
+
+@overload
+def jit_method[FuncT: Callable[..., Any]](func: FuncT, /) -> FuncT: ...
+@overload
+def jit_method[FuncT: Callable[..., Any]](
+    *, static_argnums: int | tuple[int, ...] = ()
+) -> Callable[[FuncT], FuncT]: ...
+def jit_method[FuncT: Callable[..., Any]](
+    func: FuncT | None = None, /, *, static_argnums: int | tuple[int, ...] = ()
+) -> FuncT | Callable[[FuncT], FuncT]:
+    """Decorator that JIT compiles a method separately for each instance.
+
+    `self` is static: its attributes are read when the method is traced and
+    compiled into the result. The compiled method is kept per instance and per
+    `_cache_key` (see `cache_static`), and is released with the instance.
+
+    Use as `@jit_method` or `@jit_method(static_argnums=...)`.
+
+    Args:
+        func: The method, when used without arguments.
+        static_argnums (optional): Positions of further arguments to treat as
+            static, counted as in the signature, so that the first argument
+            after `self` is 1. Such an argument is static also when passed by
+            keyword. Listing `self` (0) has no effect.
+    """
+    nums = (static_argnums,) if isinstance(static_argnums, int) else static_argnums
+
+    def wrap(f: FuncT) -> FuncT:
+        return cast(FuncT, _JitMethod(f, tuple(nums)))
+
+    return wrap if func is None else wrap(func)
+
+
 def jit_vmap[FuncT: Callable[..., Array]](
     in_axes: int | None | tuple[int | None, ...] = 0,
     out_axes: Any = 0,
-    static_argnums: int | tuple[int, ...] | None = 0,
-    ndim: int = 0,
+    static_argnums: int | tuple[int, ...] = (),
 ) -> Callable[[FuncT], FuncT]:
-    """Decorator that JIT compiles a function and applies vmap if the first argument is
-    an array with dimensions > ndim. If the first argument is a scalar, or an array of
-    dimensions = ndim, then the function is merely jitted.
+    """Decorator that JIT compiles a method written for a scalar `x`.
 
-    The decorator can only be used with class methods.
+    Called with an array `x`, the method is vmapped over each of its axes, which
+    then lead the result in the same order. Keyword arguments are never mapped.
+    The method is compiled per instance, as by `jit_method`.
 
     Args:
-        in_axes (optional): An integer, None, or sequence of values specifying which
-            input array axes to map over. Defaults to (None, 0).
-        out_axes (optional): Standard Python container (tuple/list/dict) thereof
-            indicating where the mapped axis should appear in the output. Defaults to 0.
-        static_argnums (optional): optional, an int or
-            collection of ints that specify which positional arguments to treat as
-            static (trace- and compile-time constant). Defaults to 0.
-        ndim (optional): Number of dimensions of the first argument that should not
-            trigger vmap. Defaults to 0 (scalar).
+        in_axes (optional): How the positional arguments after `self` are mapped,
+            as for `jax.vmap`, with the first entry for `x`. Defaults to 0.
+        out_axes (optional): Where the mapped axes appear in the output, as for
+            `jax.vmap`. Defaults to 0.
+        static_argnums (optional): Further static arguments, as for `jit_method`.
     """
-    in_axes = (None,) + in_axes if isinstance(in_axes, tuple) else (None, in_axes)
 
     def wrap(func: FuncT) -> FuncT:
         @wraps(func)
         def wrapper(self: Any, x: Any, /, *args: Any, **kwargs: Any) -> Array:
             x = jnp.asarray(x)
-            if x.ndim == ndim:
-                return func(self, x, *args, **kwargs)
+            f = partial(func, self, **kwargs)
+            # A trailing argument left at its default has no entry to map.
+            axes = in_axes[: 1 + len(args)] if isinstance(in_axes, tuple) else in_axes
+            for _ in range(x.ndim):
+                f = jax.vmap(f, in_axes=axes, out_axes=out_axes)
+            return f(x, *args)
 
-            mapped = jax.vmap(func, in_axes=in_axes, out_axes=out_axes)
-            return mapped(self, x, *args, **kwargs)
-
-        return cast(FuncT, jax.jit(wrapper, static_argnums=static_argnums))
+        return jit_method(static_argnums=static_argnums)(cast(FuncT, wrapper))
 
     return wrap
 

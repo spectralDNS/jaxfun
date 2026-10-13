@@ -12,7 +12,7 @@ from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.composite import BCGeneric, Composite, PGComposite, Stencil
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TestSpaceKind
-from jaxfun.utils.common import Domain, cache_static, jit_vmap, n
+from jaxfun.utils.common import Domain, cache_static, jit_method, jit_vmap, n
 from jaxfun.utils.fastgl import leggauss
 
 from .Jacobi import Jacobi
@@ -175,7 +175,7 @@ class Legendre(Jacobi):
         x, w = leggauss(N)
         return x, w
 
-    @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
+    @jit_vmap(in_axes=(0, None), static_argnums=2)
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single Legendre polynomial P_i at X.
 
@@ -221,7 +221,7 @@ class Legendre(Jacobi):
         _, xs = jax.lax.scan(inner_loop, (x0, X), jnp.arange(2, self.N + 1))
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
         """
         Args:

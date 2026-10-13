@@ -14,7 +14,7 @@ from sympy import Expr, Number, Symbol
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TriDiagMatrixFun
-from jaxfun.utils.common import Domain, cache_static, jit_vmap, n
+from jaxfun.utils.common import Domain, cache_static, jit_method, jit_vmap, n
 
 from .orthogonal import OrthogonalSpace
 
@@ -62,7 +62,6 @@ class Jacobi(OrthogonalSpace):
         self.alpha: Number | float = alpha
         self.beta: Number | float = beta
 
-    @jit_vmap(in_axes=(0, None))
     def _evaluate(self, X: float | Array, c: Array) -> Array:
         """Evaluate Jacobi series sum_k c_k P_k^{(α,β)}(X)
 
@@ -123,7 +122,7 @@ class Jacobi(OrthogonalSpace):
         x, w = roots_jacobi(N, float(self.alpha), float(self.beta))
         return jnp.array(x), jnp.array(w)
 
-    @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
+    @jit_vmap(in_axes=(0, None), static_argnums=2)
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single (possibly scaled) Jacobi polynomial
 
@@ -201,7 +200,7 @@ class Jacobi(OrthogonalSpace):
         )
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
         """
         Args:

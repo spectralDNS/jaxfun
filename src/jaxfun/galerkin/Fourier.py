@@ -6,7 +6,7 @@ from jax import Array
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, diags
 from jaxfun.typing import MeshKind
-from jaxfun.utils.common import Domain, cache_static, jit_vmap
+from jaxfun.utils.common import Domain, cache_static, jit_method, jit_vmap
 
 from .orthogonal import OrthogonalSpace
 
@@ -82,7 +82,7 @@ class Fourier(OrthogonalSpace):
         points = jnp.arange(N, dtype=float) * 2 * jnp.pi / N
         return points, jnp.full(N, 2 * jnp.pi / N)
 
-    @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
+    @jit_vmap(in_axes=(0, None), static_argnums=2)
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single basis function exp(i k_i X).
 
@@ -109,7 +109,7 @@ class Fourier(OrthogonalSpace):
         X = jnp.asarray(X)
         return jax.lax.exp(1j * self.wavenumbers() * X)
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
         """Return k-th derivative Vandermonde."""
         # `wavenumbers` decides for itself whether there is a Nyquist mode to
@@ -119,7 +119,7 @@ class Fourier(OrthogonalSpace):
         z = (1j * v) ** k * y
         return z
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def backward(self, c: Array, N: int | None = None) -> Array:
         """Inverse FFT (possible padding) to physical space.
 
@@ -143,37 +143,36 @@ class Fourier(OrthogonalSpace):
             )
         return jnp.fft.ifft(c, norm="forward")
 
-    @jax.jit(static_argnums=0)
-    def _scalar_product_ref(self, c: Array) -> Array:
-        """Return inner products <c, E_k> via forward FFT, without the measure.
+    def _scalar_product_ref(self, u: Array) -> Array:
+        """Return inner products <u, E_k> via forward FFT, without the measure.
 
         `OrthogonalSpace.scalar_product` applies `sg` on top of this.
 
         Args:
-            c: Physical samples (length N).
+            u: Physical samples (length N).
 
         Returns:
             Coefficients scaled by 2π / domain_factor.
         """
-        out = jnp.fft.fft(c, norm="forward") * 2 * jnp.pi / float(self.domain_factor)
-        if len(c) > self.N:
+        out = jnp.fft.fft(u, norm="forward") * 2 * jnp.pi / float(self.domain_factor)
+        if len(u) > self.N:
             return out[self.wavenumbers()]
         return out
 
-    @jax.jit(static_argnums=0)
-    def forward(self, c: Array) -> Array:
+    @jit_method
+    def forward(self, u: Array) -> Array:
         """Forward FFT (physical -> spectral coefficients).
 
         Args:
-            c: Physical array.
-            N: Target number of modes for transform length. If N < len(c) then
+            u: Physical array.
+            N: Target number of modes for transform length. If N < len(u) then
                 the output is truncated.
         """
-        assert len(c) >= self.N, (
+        assert len(u) >= self.N, (
             "Forward transform only supports truncation, not padding"
         )
-        out = jnp.fft.fft(c, norm="forward")
-        if len(c) > self.N:
+        out = jnp.fft.fft(u, norm="forward")
+        if len(u) > self.N:
             return out[self.wavenumbers()]
         return out
 
@@ -220,7 +219,7 @@ class Fourier(OrthogonalSpace):
         m = self.wavenumbers(eliminate_highest_freq=k % 2 == 1)
         return (1j * m) ** k * c
 
-    @jax.jit(static_argnums=(0, 1, 2))
+    @cache_static
     def mesh(
         self, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
     ) -> Array:
@@ -415,7 +414,7 @@ class RFourier(Fourier):
         """
         return jnp.pad(out[: self.n_real], (0, self.n_extra))
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def backward(self, c: Array, N: int | None = None) -> Array:
         """Inverse real FFT (possibly padded) to physical space.
 
@@ -435,35 +434,34 @@ class RFourier(Fourier):
         # ones -- so they come off before the transform, not after it.
         return jnp.fft.irfft(c[: self.n_real], n=n, norm="forward")
 
-    @jax.jit(static_argnums=0)
-    def _scalar_product_ref(self, c: Array) -> Array:
-        """Return <c, E_k> for k >= 0 via forward real FFT, without the measure.
+    def _scalar_product_ref(self, u: Array) -> Array:
+        """Return <u, E_k> for k >= 0 via forward real FFT, without the measure.
 
         Args:
-            c: Real physical samples, at least self.num_quad_points of them.
+            u: Real physical samples, at least self.num_quad_points of them.
 
         Returns:
             Coefficients scaled by 2π / domain_factor, truncated to self.N.
         """
-        assert not jnp.iscomplexobj(c), (
+        assert not jnp.iscomplexobj(u), (
             "RFourier represents real fields; pass real samples (a complex array "
             "whose imaginary part is zero still has to be taken .real explicitly)"
         )
-        out = jnp.fft.rfft(c, norm="forward") * 2 * jnp.pi / float(self.domain_factor)
+        out = jnp.fft.rfft(u, norm="forward") * 2 * jnp.pi / float(self.domain_factor)
         return self._to_stored(out)
 
-    @jax.jit(static_argnums=0)
-    def forward(self, c: Array) -> Array:
+    @jit_method
+    def forward(self, u: Array) -> Array:
         """Forward real FFT (physical -> spectral), truncated to self.N modes.
 
         Args:
-            c: Real physical samples, at least self.num_quad_points of them.
+            u: Real physical samples, at least self.num_quad_points of them.
         """
-        assert len(c) >= self.num_quad_points, (
+        assert len(u) >= self.num_quad_points, (
             "Forward transform only supports truncation, not padding"
         )
-        assert not jnp.iscomplexobj(c), (
+        assert not jnp.iscomplexobj(u), (
             "RFourier represents real fields; pass real samples (a complex array "
             "whose imaginary part is zero still has to be taken .real explicitly)"
         )
-        return self._to_stored(jnp.fft.rfft(c, norm="forward"))
+        return self._to_stored(jnp.fft.rfft(u, norm="forward"))

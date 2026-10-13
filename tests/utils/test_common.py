@@ -1,3 +1,6 @@
+import copy
+import gc
+import weakref
 from collections.abc import Callable
 
 import jax
@@ -93,6 +96,85 @@ def test_clear_static_cache() -> None:
     assert "_static_cache" not in space.__dict__
     # and it repopulates on demand
     assert space.vandermonde(None).shape == (8, 8)
+
+
+class _Compiled:
+    """Minimal stand-in for a space with `jit_method`-decorated methods."""
+
+    def __init__(self, a: float, n: int = 2) -> None:
+        self.a = a
+        self.n = n
+        self.traces = 0
+
+    @property
+    def _cache_key(self) -> tuple[int, ...]:
+        return (self.n,)
+
+    @common.jit_method
+    def scale(self, x: Array) -> Array:
+        self.traces += 1
+        return self.a * x * jnp.ones(self.n)
+
+    @common.jit_method(static_argnums=2)
+    def power(self, x: Array, k: int) -> Array:
+        return x**k if k > 0 else jnp.ones_like(x)  # needs a concrete k
+
+    @common.jit_vmap(in_axes=0)
+    def monomials(self, x: Array) -> Array:
+        return jnp.stack([jnp.ones_like(x), x, x**2])  # written for a scalar x
+
+
+def test_jit_method_compiles_per_instance() -> None:
+    s, t = _Compiled(2.0), _Compiled(3.0)
+    assert s.scale(1.0)[0] == 2.0 and t.scale(1.0)[0] == 3.0
+    s.scale(2.0)
+    assert s.traces == 1
+
+
+def test_jit_method_keys_on_instance_state() -> None:
+    s = _Compiled(2.0)
+    assert s.scale(1.0).shape == (2,)
+    s.n = 3
+    assert s.scale(1.0).shape == (3,)
+
+
+def test_jit_method_copy_compiles_afresh() -> None:
+    # A copy must not reuse the original's compiled method, which reads the
+    # original's state.
+    s = _Compiled(2.0)
+    s.scale(1.0)
+    t = copy.deepcopy(s)
+    t.a = 3.0
+    assert t.scale(1.0)[0] == 3.0
+
+
+def test_jit_method_releases_instance() -> None:
+    s = _Compiled(2.0)
+    s.scale(1.0)
+    ref = weakref.ref(s)
+    del s
+    gc.collect()
+    assert ref() is None
+
+
+def test_jit_method_static_argument_by_position_or_keyword() -> None:
+    s = _Compiled(2.0)
+    x = jnp.arange(3.0)
+    assert jnp.array_equal(s.power(x, 0), s.power(x, k=0))
+    assert jnp.array_equal(s.power(x, 2), x**2)
+
+
+def test_jit_method_called_through_class() -> None:
+    s = _Compiled(2.0)
+    assert _Compiled.scale(s, 1.0)[0] == 2.0
+
+
+def test_jit_vmap_maps_every_leading_axis() -> None:
+    s = _Compiled(1.0)
+    x = jnp.arange(12.0).reshape(3, 4)
+    out = s.monomials(x)
+    assert out.shape == (3, 4, 3)
+    assert jnp.array_equal(out[1, 2], s.monomials(x[1, 2]))
 
 
 @pytest.mark.parametrize("k", [1, 2, 3])

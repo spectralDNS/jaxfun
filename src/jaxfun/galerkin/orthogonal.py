@@ -29,7 +29,14 @@ from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import BaseMatrix, DiaMatrix, Matrix, diags
 from jaxfun.typing import Array, MeshKind, RankTag
-from jaxfun.utils.common import Domain, cache_static, jacn, jit_vmap, lambdify
+from jaxfun.utils.common import (
+    Domain,
+    cache_static,
+    jacn,
+    jit_method,
+    jit_vmap,
+    lambdify,
+)
 
 if TYPE_CHECKING:
     from jaxfun.galerkin.cartesianproductspace import CartesianProductSpace
@@ -128,7 +135,6 @@ class OrthogonalSpace(BaseSpace):
         X = self.map_reference_domain(x)
         return self._evaluate(X, c)
 
-    @jit_vmap(in_axes=(0, None))
     def _evaluate(self, X: float | Array, c: Array) -> Array:
         """Evaluate series sum_k c_k psi_k(X).
 
@@ -201,7 +207,7 @@ class OrthogonalSpace(BaseSpace):
         """
         pass
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
         """Return k-th derivative Vandermonde.
 
@@ -213,7 +219,7 @@ class OrthogonalSpace(BaseSpace):
         """
         return jacn(self.eval_basis_functions, k)(X)
 
-    @jax.jit(static_argnums=(0, 2, 3))
+    @jit_method(static_argnums=(2, 3))
     def evaluate_mesh(
         self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
     ) -> Array:
@@ -247,7 +253,7 @@ class OrthogonalSpace(BaseSpace):
         """
         pass
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def backward(self, c: Array, N: int | None = None) -> Array:
         """Return series evaluation at quadrature points (possibly with padding).
 
@@ -284,7 +290,7 @@ class OrthogonalSpace(BaseSpace):
         D = jax.vmap(lambda e: self.derivative_coeffs(e, k))(jnp.eye(self.N))
         return float(self.domain_factor**k) * (self.vandermonde(N) @ D.T)
 
-    @jax.jit(static_argnums=(0, 2, 3))
+    @jit_method(static_argnums=(2, 3))
     def backward_primitive(
         self,
         c: Array,
@@ -321,7 +327,7 @@ class OrthogonalSpace(BaseSpace):
             shape=(self.N, self.N),
         )
 
-    @jax.jit(static_argnums=0)
+    @jit_method
     def forward(self, u: Array) -> Array:
         """Forward transform (physical -> spectral) using orthogonality.
 
@@ -347,7 +353,7 @@ class OrthogonalSpace(BaseSpace):
         x = self.system.base_scalars()[0]
         return lambdify(x, sg)(self.mesh(kind=MeshKind.QUADRATURE, N=N))
 
-    @jax.jit(static_argnums=0)
+    @jit_method
     def scalar_product(self, u: Array) -> Array:
         """Return the scalar product, carrying the curvilinear measure.
 
@@ -356,7 +362,6 @@ class OrthogonalSpace(BaseSpace):
         """
         return self._scalar_product_ref(u * self._metric_weights(u.shape[0]))
 
-    @jax.jit(static_argnums=0)
     def _scalar_product_ref(self, u: Array) -> Array:
         """Return the scalar product without the curvilinear measure.
 
@@ -518,7 +523,7 @@ class OrthogonalSpace(BaseSpace):
                 x = a + (X - c) / self.domain_factor
         return x
 
-    @jax.jit(static_argnums=(0, 1, 2))
+    @cache_static
     def mesh(
         self, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
     ) -> Array:

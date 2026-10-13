@@ -21,6 +21,7 @@ from jaxfun.utils.common import (
     _idct_twiddles,
     _scaled_dct,
     cache_static,
+    jit_method,
     jit_vmap,
 )
 
@@ -215,7 +216,7 @@ class Chebyshev(Jacobi):
             jnp.ones(N) * jnp.pi / N,
         )
 
-    @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
+    @jit_vmap(in_axes=(0, None), static_argnums=2)
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single Chebyshev polynomial T_i at points X.
 
@@ -268,7 +269,7 @@ class Chebyshev(Jacobi):
 
         return jnp.concatenate((jnp.expand_dims(x0, axis=0), xs))
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def backward(self, c: Array, N: int | None = None) -> Array:
         """Return Chebyshev series evaluated at quadrature points.
 
@@ -289,7 +290,7 @@ class Chebyshev(Jacobi):
         out = out + 0.5 * c[:1]
         return out
 
-    @jax.jit(static_argnums=0)
+    @jit_method
     def forward(self, u: Array) -> Array:
         """Return Chebyshev coefficients for function values at quadrature points.
 
@@ -304,7 +305,6 @@ class Chebyshev(Jacobi):
         uh = _scaled_dct(u, _chebyshev_forward_scale(n))
         return uh[: self.N] if n > self.N else uh
 
-    @jax.jit(static_argnums=0)
     def _scalar_product_ref(self, u: Array) -> Array:
         """Return the scalar product without the curvilinear measure.
 
@@ -320,7 +320,7 @@ class Chebyshev(Jacobi):
         uh = _scaled_dct(u, scale)
         return uh[: self.N] if n > self.N else uh
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def derivative_coeffs(self, c: Array, k: int = 0) -> Array:
         """
         Args:

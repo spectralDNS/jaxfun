@@ -16,7 +16,14 @@ from sympy import Number
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import MeshKind, TestSpaceKind
-from jaxfun.utils.common import Domain, cache_static, lambdify, matmat, n
+from jaxfun.utils.common import (
+    Domain,
+    cache_static,
+    jit_method,
+    lambdify,
+    matmat,
+    n,
+)
 
 if TYPE_CHECKING:
     from jaxfun.galerkin.cartesianproductspace import CartesianProductSpace
@@ -372,23 +379,22 @@ class Composite(OrthogonalSpace):
         """Return quadrature nodes/weights (delegated to underlying basis)."""
         return self.orthogonal.quad_points_and_weights(N)
 
-    @jax.jit(static_argnums=0)
-    def _evaluate(self, X: Array, c: Array) -> Array:
+    def _evaluate(self, X: float | Array, c: Array) -> Array:
         """Evaluate constrained expansion at X with composite coeffs c."""
         return self.orthogonal._evaluate(X, self.to_orthogonal(c))
 
-    @jax.jit(static_argnums=(0, 2, 3))
+    @jit_method(static_argnums=(2, 3))
     def evaluate_mesh(
         self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
     ) -> Array:
         return self.orthogonal.evaluate_mesh(self.to_orthogonal(c), kind=kind, N=N)
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def backward(self, c: Array, N: int | None = None) -> Array:
         """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward(self.to_orthogonal(c), N)
 
-    @jax.jit(static_argnums=(0, 2, 3))
+    @jit_method(static_argnums=(2, 3))
     def backward_primitive(
         self,
         c: Array,
@@ -398,7 +404,7 @@ class Composite(OrthogonalSpace):
         """Inverse transform (physical -> coefficients) via underlying basis."""
         return self.orthogonal.backward_primitive(self.to_orthogonal(c), k, N)
 
-    @jax.jit(static_argnums=(0, 2))
+    @jit_method(static_argnums=2)
     def evaluate_basis_derivative(self, X: Array, k: int = 0) -> Array:
         """Return k-th derivative Vandermonde (constrained)."""
         P: Array = self.orthogonal.evaluate_basis_derivative(X, k)
@@ -409,13 +415,13 @@ class Composite(OrthogonalSpace):
         """Return (constrained) Vandermonde matrix at quadrature points X."""
         return self.apply_stencil_right(self.orthogonal.vandermonde(N))
 
-    @jax.jit(static_argnums=(0, 2))
-    def eval_basis_function(self, X: float, i: int) -> float:
+    @jit_method(static_argnums=2)
+    def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single constrained basis function φ_i at X."""
         return matmat(self.get_stencil_row(i), self.orthogonal.eval_basis_functions(X))
 
-    @jax.jit(static_argnums=0)
-    def eval_basis_functions(self, X: float) -> Array:
+    @jit_method
+    def eval_basis_functions(self, X: float | Array) -> Array:
         """Evaluate all constrained basis functions at X."""
         P: Array = self.orthogonal.eval_basis_functions(X)
         return self.apply_stencil_right(P)
@@ -440,15 +446,15 @@ class Composite(OrthogonalSpace):
         """Return reference domain of underlying orthogonal basis."""
         return self.orthogonal.reference_domain
 
-    @jax.jit(static_argnums=0)
-    def to_orthogonal(self, a: Array) -> Array:
+    @jit_method
+    def to_orthogonal(self, c: Array) -> Array:
         """Map composite coefficients -> underlying orthogonal coefficients."""
-        return a @ self.S
+        return c @ self.S
 
-    @jax.jit(static_argnums=0)
-    def from_orthogonal(self, a: Array) -> Array:
+    @jit_method
+    def from_orthogonal(self, c: Array) -> Array:
         """Map underlying orthogonal coefficients -> composite coefficients."""
-        return self.P.solve(self.S @ a)
+        return self.P.solve(self.S @ c)
 
     @overload
     def apply_stencil_galerkin(self, b: Matrix) -> Matrix: ...
@@ -503,7 +509,7 @@ class Composite(OrthogonalSpace):
         """Return constrained mass matrix in sparse DiaMatrix format."""
         return self._mass_matrix
 
-    @jax.jit(static_argnums=0)
+    @jit_method
     def forward(self, u: Array) -> Array:
         """Project physical samples u -> constrained coefficients.
 
@@ -514,13 +520,12 @@ class Composite(OrthogonalSpace):
         L = self._scalar_product_ref(u)
         return self._mass_matrix.solve(L)
 
-    @jax.jit(static_argnums=0)
+    @jit_method
     def scalar_product(self, u: Array) -> Array:
         """Return right-hand side inner product vector <u, φ_i>."""
         P: Array = self.orthogonal.scalar_product(u)
         return self.apply_stencil_right(P)
 
-    @jax.jit(static_argnums=0)
     def _scalar_product_ref(self, u: Array) -> Array:
         """Return <u, φ_i> without the curvilinear measure, for `forward`."""
         P: Array = self.orthogonal._scalar_product_ref(u)
@@ -821,17 +826,17 @@ class DirectSum:
 
     def to_orthogonal(self, c: Array, t: float | Array | None = None) -> Array:
         """Map direct-sum coefficients -> underlying orthogonal coefficients."""
-        return _ds_to_orthogonal(self, c, self.bnd_vals(t))
+        return self._ds_to_orthogonal(c, self.bnd_vals(t))
 
     def from_orthogonal(self, a: Array, t: float | Array | None = None) -> Array:
         """Map underlying orthogonal coefficients -> direct-sum (inhomogeneous) coefficients."""  # noqa: E501
-        return _ds_from_orthogonal(self, a, self.bnd_vals(t))
+        return self._ds_from_orthogonal(a, self.bnd_vals(t))
 
     def evaluate(
         self, x: float | Array, c: Array, t: float | Array | None = None
     ) -> Array:
         """Evaluate direct-sum expansion at points x."""
-        return _ds_evaluate(self, x, c, self.bnd_vals(t))
+        return self._ds_evaluate(x, c, self.bnd_vals(t))
 
     def evaluate_mesh(
         self,
@@ -840,13 +845,13 @@ class DirectSum:
         N: int | None = None,
         t: float | Array | None = None,
     ) -> Array:
-        return _ds_evaluate_mesh(self, c, self.bnd_vals(t), kind, N)
+        return self._ds_evaluate_mesh(c, self.bnd_vals(t), kind, N)
 
     def backward(
         self, c: Array, N: int | None = None, t: float | Array | None = None
     ) -> Array:
         """Return backward transform."""
-        return _ds_backward(self, c, self.bnd_vals(t), N)
+        return self._ds_backward(c, self.bnd_vals(t), N)
 
     def backward_primitive(
         self,
@@ -856,12 +861,11 @@ class DirectSum:
         t: float | Array | None = None,
     ) -> Array:
         """Return backward transform for k-th derivative."""
-        return _ds_backward_primitive(self, c, self.bnd_vals(t), k, N)
+        return self._ds_backward_primitive(c, self.bnd_vals(t), k, N)
 
     def forward(self, uj: Array, t: float | Array | None = None) -> Array:
-        return _ds_forward(self, uj, self.bnd_vals(t))
+        return self._ds_forward(uj, self.bnd_vals(t))
 
-    @jax.jit(static_argnums=0)
     def scalar_product(self, uj: Array) -> Array:
         """Return scalar product <u, φ_i> for direct-sum basis."""
         return self[0].scalar_product(uj)  # No BC part in test functions
@@ -870,64 +874,54 @@ class DirectSum:
         """Return homogeneous Composite part of the direct sum."""
         return self[0]
 
+    # The boundary lifting crosses these as a traced argument rather than being
+    # read off the space inside the trace. A method is compiled once per space,
+    # and the space is mutable: `DirectSumTPS` reassigns `bcs` on the copies it
+    # builds, and boundary data may vary in time. Read from inside, the lifting
+    # would be baked into the first-compiled executable and every later call
+    # would silently get that one back. The space's *structure* is genuinely
+    # static, so only the data moves out.
 
-# The boundary lifting crosses these as a traced argument rather than being read
-# off the space inside the trace. `static_argnums=0` keys the cache on the
-# space's identity, and the space is mutable: `DirectSumTPS` reassigns `bcs` on
-# the copies it builds, and boundary data may vary in time. Read from inside,
-# the lifting would be baked into the first-compiled executable and every later
-# call would silently get that one back. The space's *structure* is genuinely
-# static, so only the data moves out.
+    @jit_method
+    def _ds_to_orthogonal(self, c: Array, bvals: Array) -> Array:
+        c_a = self[0].to_orthogonal(c)
+        c_b = self[1].to_orthogonal(bvals)
+        c_b = jnp.pad(c_b, (0, c_a.shape[0] - c_b.shape[0]))
+        return c_a + c_b
 
+    @jit_method
+    def _ds_from_orthogonal(self, a: Array, bvals: Array) -> Array:
+        c_b = self[1].to_orthogonal(bvals)
+        c_b = jnp.pad(c_b, (0, a.shape[0] - c_b.shape[0]))
+        return self[0].from_orthogonal(a - c_b)
 
-@jax.jit(static_argnums=0)
-def _ds_to_orthogonal(space: DirectSum, c: Array, bvals: Array) -> Array:
-    c_a = space[0].to_orthogonal(c)
-    c_b = space[1].to_orthogonal(bvals)
-    c_b = jnp.pad(c_b, (0, c_a.shape[0] - c_b.shape[0]))
-    return c_a + c_b
+    @jit_method
+    def _ds_evaluate(self, x: float | Array, c: Array, bvals: Array) -> Array:
+        return self.orthogonal.evaluate(x, self._ds_to_orthogonal(c, bvals))
 
+    @jit_method(static_argnums=(3, 4))
+    def _ds_evaluate_mesh(
+        self, c: Array, bvals: Array, kind: MeshKind | str, N: int | None
+    ) -> Array:
+        return self.orthogonal.evaluate_mesh(
+            self._ds_to_orthogonal(c, bvals), kind=kind, N=N
+        )
 
-@jax.jit(static_argnums=0)
-def _ds_from_orthogonal(space: DirectSum, a: Array, bvals: Array) -> Array:
-    c_b = space[1].to_orthogonal(bvals)
-    c_b = jnp.pad(c_b, (0, a.shape[0] - c_b.shape[0]))
-    return space[0].from_orthogonal(a - c_b)
+    @jit_method(static_argnums=3)
+    def _ds_backward(self, c: Array, bvals: Array, N: int | None) -> Array:
+        return self.orthogonal.backward(self._ds_to_orthogonal(c, bvals), N)
 
+    @jit_method(static_argnums=(3, 4))
+    def _ds_backward_primitive(
+        self, c: Array, bvals: Array, k: int, N: int | None
+    ) -> Array:
+        return self.orthogonal.backward_primitive(
+            self._ds_to_orthogonal(c, bvals), k, N
+        )
 
-@jax.jit(static_argnums=0)
-def _ds_evaluate(space: DirectSum, x: float | Array, c: Array, bvals: Array) -> Array:
-    return space.orthogonal.evaluate(x, _ds_to_orthogonal(space, c, bvals))
-
-
-@jax.jit(static_argnums=(0, 3, 4))
-def _ds_evaluate_mesh(
-    space: DirectSum,
-    c: Array,
-    bvals: Array,
-    kind: MeshKind | str,
-    N: int | None,
-) -> Array:
-    return space.orthogonal.evaluate_mesh(
-        _ds_to_orthogonal(space, c, bvals), kind=kind, N=N
-    )
-
-
-@jax.jit(static_argnums=(0, 3))
-def _ds_backward(space: DirectSum, c: Array, bvals: Array, N: int | None) -> Array:
-    return space.orthogonal.backward(_ds_to_orthogonal(space, c, bvals), N)
-
-
-@jax.jit(static_argnums=(0, 3, 4))
-def _ds_backward_primitive(
-    space: DirectSum, c: Array, bvals: Array, k: int, N: int | None
-) -> Array:
-    return space.orthogonal.backward_primitive(_ds_to_orthogonal(space, c, bvals), k, N)
-
-
-@jax.jit(static_argnums=0)
-def _ds_forward(space: DirectSum, uj: Array, bvals: Array) -> Array:
-    return _ds_from_orthogonal(space, space[0].orthogonal.forward(uj), bvals)
+    @jit_method
+    def _ds_forward(self, uj: Array, bvals: Array) -> Array:
+        return self._ds_from_orthogonal(self[0].orthogonal.forward(uj), bvals)
 
 
 class PGComposite(Composite):

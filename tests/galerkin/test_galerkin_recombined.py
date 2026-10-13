@@ -126,6 +126,21 @@ def test_spans_trial_space_with_pg_band(family, bcs, bands, q):
 
 
 @pytest.mark.parametrize("family", [Chebyshev, Legendre])
+@pytest.mark.parametrize("bcs,order", [(DIRICHLET, 2), (BIHARMONIC, 4)])
+def test_low_resolution(family, bcs, order):
+    # For N < 2 * order the conditions that define the PG functions leave no
+    # rows, but there is still one test function per trial function.
+    N = 2 * order - 1
+    B = FunctionSpace(N, family, bcs=bcs)
+    assert B.get_testspace("PG").S.shape == (N - order, N)
+    St = np.asarray(B.S.todense())
+    Sg = np.asarray(B.get_testspace("GR").S.todense())
+    assert Sg.shape == St.shape
+    err = np.abs(Sg - (Sg @ np.linalg.pinv(St)) @ St).max()
+    assert err < _tol() * np.abs(Sg).max()
+
+
+@pytest.mark.parametrize("family", [Chebyshev, Legendre])
 @pytest.mark.parametrize(
     "bcs,order",
     [

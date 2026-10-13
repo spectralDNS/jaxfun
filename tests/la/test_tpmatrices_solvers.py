@@ -118,7 +118,9 @@ def _spd(n: int, rng: np.random.Generator) -> Matrix:
     return Matrix(jnp.asarray(R @ R.T + n * np.eye(n)))
 
 
-@pytest.mark.parametrize("case", ["nonsymmetric", "mixed-pairs"])
+@pytest.mark.parametrize(
+    "case", ["nonsymmetric", "mixed-pairs", "complex-real-spectrum"]
+)
 def test_tpmats_lu_factor_residual(case):
     rng = np.random.default_rng(1)
     n = 8
@@ -129,16 +131,23 @@ def test_tpmats_lu_factor_residual(case):
         C = np.diag(np.arange(3.0, n + 3)) + 0.5 * rng.standard_normal((n, n))
         K, M = Matrix(jnp.asarray(B @ C)), Matrix(jnp.asarray(B))
         A = TPMatrices([TPMatrix([K, M], 1), TPMatrix([M, K], 1)])
-    else:
+    elif case == "mixed-pairs":
         # M pairs with K on axis 0 and with P on axis 1.
         K, M, P = _spd(n, rng), _spd(n, rng), _spd(n, rng)
         A = TPMatrices([TPMatrix([K, M], 1), TPMatrix([M, P], 1)])
+    else:
+        # A complex pencil can have a real spectrum but complex eigenvectors.
+        K = np.diag(np.arange(1.0, n + 1)) + np.triu(
+            1j * rng.standard_normal((n, n)), 1
+        )
+        K, M = Matrix(jnp.asarray(K)), Matrix(jnp.eye(n))
+        A = TPMatrices([TPMatrix([K, M], 1), TPMatrix([M, K], 1)])
     b = jnp.asarray(rng.standard_normal((n, n)))
     lu = tpmats_lu_factor(A.tpmats)
     if case == "nonsymmetric":
         assert jnp.iscomplexobj(lu.eigvecs[0])
     uh = lu.solve(b)
-    assert not jnp.iscomplexobj(uh)
+    assert jnp.iscomplexobj(uh) == (case == "complex-real-spectrum")
     res = jnp.linalg.norm(A(uh) - b) / jnp.linalg.norm(b)
     assert float(res) < float(ulp(100))
 

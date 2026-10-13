@@ -350,8 +350,7 @@ class Composite(OrthogonalSpace):
             )
             stencil = get_stencil_matrix(self.bcs, self.orthogonal)
         stencil = stencil if isinstance(stencil, Stencil) else Stencil(stencil)
-        # One basis function per mode the boundary conditions leave free.
-        shape = (N - self.bcs.num_bcs(), N)
+        shape = (self.dim, N)
         # The stencil is kept unscaled, so that copies of this space, and test
         # spaces made from it, apply a scaling exactly once.
         self.scaling = scaling
@@ -529,8 +528,9 @@ class Composite(OrthogonalSpace):
 
     @property
     def dim(self) -> int:
-        """Return dimension of composite space, one per row of `S`."""
-        return self.S.shape[0]
+        """Return dimension of composite space, one function per mode the
+        boundary conditions leave free."""
+        return self.N - self.bcs.num_bcs()
 
     def get_homogeneous(self) -> Composite:
         """Return the space with homogeneous boundary values, scaled as this one."""
@@ -662,6 +662,11 @@ class BCGeneric(Composite):
         self.stencil = Stencil({}, dict(enumerate(S)))
         self.S = DiaMatrix.from_dense(S)
         self.ST: DiaMatrix = self.S.T
+
+    @property
+    def dim(self) -> int:
+        """Return dimension, one lifting function per boundary condition."""
+        return self.bcs.num_bcs()
 
     @property
     def num_dofs(self) -> int:
@@ -976,6 +981,9 @@ class PGComposite(Composite):
         scaling: sp.Expr | None = None,
         order: int = 1,
     ) -> None:
+        assert order > 0, "Order must be positive for Petrov-Galerkin composite."
+        # Set before the parent builds S, whose rows `dim` counts.
+        self.order = order
         super().__init__(
             N,
             orthogonal,
@@ -989,16 +997,17 @@ class PGComposite(Composite):
             beta=beta,
             scaling=scaling,
         )
-        self.order = order
-        assert self.order > 0, "Order must be positive for Petrov-Galerkin composite."
-        # One test function per trial function. The bcs leave N - 2 * order rows
-        # of width N; the full PG space has N - order rows of width N + order,
-        # and the last `order` of them are cut at width N here.
-        shape = (N - order, N)
+        # The full PG space has N - order rows of width N + order, and the last
+        # `order` of them are cut at width N in S.
         wide = np.asarray(self.stencil.matrix((N - order, N + order)).todense())
         self._truncated = np.flatnonzero(np.any(wide[:, N:] != 0, axis=1))
-        self.S = self.stencil.scaled(self.scaling).matrix(shape)
-        self.ST = self.S.T
+
+    @property
+    def dim(self) -> int:
+        """Return dimension of the test space, one function per trial function."""
+        # Not N - bcs.num_bcs(): the bcs, which define the PG functions, number
+        # 2 * order.
+        return self.N - self.order
 
     def recombine(
         self,

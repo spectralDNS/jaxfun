@@ -1412,7 +1412,8 @@ def _diagonalize_axis(
             break
     else:
         raise SolverNotApplicable("Both factor matrices of an axis are singular.")
-    if np.all(lam.imag == 0):
+    # A complex pencil can have a real spectrum but complex eigenvectors.
+    if np.all(lam.imag == 0) and np.all(V.imag == 0):
         lam, V = lam.real, V.real
     W = np.linalg.inv(pair[b] @ V)
     evals = [lam, lam]

@@ -10,6 +10,7 @@ Subclasses must implement:
     quad_points_and_weights
     eval_basis_function
     eval_basis_functions
+    derivative_coeffs
     norm_squared
     reference_domain
 """
@@ -39,7 +40,7 @@ class OrthogonalSpace(BaseSpace):
     """Abstract 1D orthogonal function space (polynomials / Fourier etc.).
 
     Args:
-        N: Number of (raw) basis functions.
+        N: Number of (orthogonal) basis functions.
         domain: Physical domain (tuple (a, b)); if None reference used.
         system: Coordinate system (metric / symbols). Required for forms.
         name: Space name identifier.
@@ -60,24 +61,7 @@ class OrthogonalSpace(BaseSpace):
     """
 
     is_orthogonal = True
-
-    # Whether `backward` is a fast transform (FFT/DCT) rather than a matrix
-    # product with `vandermonde`. It decides how `backward_primitive` evaluates a
-    # derivative: a space with a fast transform differentiates in coefficient
-    # space and transforms once, while one without folds the differentiation into
-    # a cached derivative Vandermonde and pays a single matrix product either way.
-    # Set it to True in any subclass that overrides `backward` with a fast
-    # transform, or its derivatives will silently take the slower path.
     has_fast_transform = False
-
-    # Whether the coefficient array holds only half of a Hermitian spectrum, the
-    # other half being implied by conjugate symmetry. Such a space represents a
-    # *real* field, and reconstructing it means adding the conjugate half back --
-    # which makes the expansion real-linear rather than complex-linear in the
-    # coefficients, so it cannot be written as a matrix product with
-    # `vandermonde`. `eval_reconstruction` folds the conjugate half into its
-    # weights and the caller takes the real part; `RFourier` is the one such
-    # space. Every other space leaves this False and the two agree.
     is_hermitian_half = False
 
     def __init__(
@@ -90,9 +74,7 @@ class OrthogonalSpace(BaseSpace):
         fun_str: str = "psi",
         **kw,
     ) -> None:
-        # N sets array shapes, so it must be a static Python int, not a
-        # (numpy/jax) integer scalar that would end up as pytree data.
-        N = operator.index(N)
+        N = operator.index(N)  # must be static Python int
         self.N: int = N
         self._num_quad_points: int = N
         if domain is None:
@@ -128,14 +110,7 @@ class OrthogonalSpace(BaseSpace):
 
     @property
     def _cache_key(self) -> tuple[int, ...]:
-        """Return the state that `cache_static` results depend on.
-
-        The memoized quantities (quadrature points and weights, Vandermonde
-        matrices) live in the reference domain, so they depend on the number of
-        basis functions and the default number of quadrature points and on
-        nothing else. Both are mutated after construction for the orthogonal
-        basis underlying a `BCGeneric`, so they have to be read at call time.
-        """
+        """Return the state that `cache_static` results depend on."""
         return (self.N, self.num_quad_points)
 
     @jit_vmap(in_axes=(0, None))
@@ -291,16 +266,8 @@ class OrthogonalSpace(BaseSpace):
     def vandermonde_derivative(self, k: int, N: int | None) -> Array:
         r"""Return the pseudo-Vandermonde matrix of the k'th derivative.
 
-        ``V^{(k)}_{m,j} = d^k psi_j / dx^k`` at the quadrature points, in true
-        (not reference) coordinates, so that ``V^{(k)} @ c`` is the k'th
-        derivative of the series with coefficients ``c``.
-
-        Built by pushing the identity through `derivative_coeffs` -- the
-        recurrence stays the single definition of what differentiation means for
-        the basis -- and folding the resulting coefficient-space operator into
-        `vandermonde`. Memoized, so the recurrence runs once per (k, N) rather
-        than once per transform: it is a length-N sequential scan for the
-        polynomial bases, which costs more than the matrix product it precedes.
+        ``V^{(k)}_{m,j} = d^k psi_j(x_m) / dx^k`` at the quadrature points
+        ``x_m``, in true (not reference) coordinates.
 
         Args:
             k: Derivative order.
@@ -308,6 +275,9 @@ class OrthogonalSpace(BaseSpace):
 
         Returns:
             Array of shape (N, self.N) with the k'th derivatives of the basis.
+
+        Note:
+            The derivative is accounting for the domain scaling factor.
         """
         if k == 0:
             return self.vandermonde(N)
@@ -329,6 +299,9 @@ class OrthogonalSpace(BaseSpace):
             k: Derivative order (default 0 -> function value).
             N: Number of points. Must be >= self.num_quad_points, defaults to
                 self.num_quad_points.
+
+        Note:
+            The derivative is accounting for the domain scaling factor.
         """
         if self.has_fast_transform:
             df = float(self.domain_factor**k)
@@ -350,23 +323,14 @@ class OrthogonalSpace(BaseSpace):
 
     @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
-        """Forward transform (samples -> coefficients) using orthogonality.
+        """Forward transform (physical -> spectral) using orthogonality.
 
         Note:
-            This represents a forward discrete transform, not a projection.
+            This represents a forward discrete transform, not an L2 projection.
             The transform is metric-free, also on a curvilinear system.
-            Use `project` when the L2(sg) projection is wanted.
+            The input may be a padded array of length >= self.N, but the
+                output is always of length self.N.
         """
-        # Weighting this by `sg` would not make it "more correct" for curvilinear
-        # coordinates. We compute the forward transform using a test function that is
-        # the orthogonal basis itself divided by sg. Hence the forward transform becomes
-        # metric-free due to the integral measure (the two sgs cancel out). It is
-        # identical to what would be obtained by project, which on the other hand *is*
-        # using the curvilinear measure. project may use more quadrature points though,
-        # in which case the two will differ. Hence forward is the transform obtained by
-        # interpolation in quadrature points, while project is the L2(sg) projection.
-
-        # u should be a padded array of length >= self.N
         L = self._scalar_product_ref(u)
         A = self.norm_squared() / float(self.domain_factor)
         return L / A
@@ -385,11 +349,10 @@ class OrthogonalSpace(BaseSpace):
 
     @jax.jit(static_argnums=0)
     def scalar_product(self, u: Array) -> Array:
-        """Return the load vector <u, psi_i>, carrying the curvilinear measure.
+        """Return the scalar product, carrying the curvilinear measure.
 
         Note:
-            Contractually identical to ``inner(u * v)``.
-
+            Identical to ``inner(u * v)``.
         """
         return self._scalar_product_ref(u * self._metric_weights(u.shape[0]))
 

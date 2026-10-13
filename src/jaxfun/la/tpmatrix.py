@@ -12,7 +12,7 @@ import numpy as np
 from flax import nnx
 from jax import Array, shard_map
 from jax.sharding import NamedSharding, PartitionSpec as P
-from scipy import sparse as scipy_sparse
+from scipy import linalg as scipy_linalg, sparse as scipy_sparse
 
 from jaxfun.la.diamatrix import (
     DiaMatrix,
@@ -570,31 +570,38 @@ class TPMatricesLUFactors(nnx.Pytree):
 
     by simultaneously diagonalizing the factor matrices on each axis.
 
-    Given a shared eigenbasis :math:`V` satisfying
-    :math:`V^T A V = \\Lambda` (diagonal) and :math:`V^T B V = I`, the system
+    Given per-axis matrices :math:`V` and :math:`W` satisfying
+    :math:`W A V = \\Lambda` (diagonal) and :math:`W B V = I`, the system
     reduces to element-wise division in the transformed space — :math:`O(n^d)`
-    work after the :math:`O(n^3)` per-axis factorisation.
+    work after the :math:`O(n^3)` per-axis factorisation. For a
+    symmetric-definite pair :math:`W = V^T`.
 
     For 2D Poisson (``K⊗M + M⊗K``): the denominator is
-    :math:`D_{ij} = \\lambda_i + \\lambda_j` and the back-transform is
-    :math:`U = V \\tilde{U} V^T`.
+    :math:`D_{ij} = \\lambda_i + \\lambda_j` and the solution is
+    :math:`U = V ((W F W^T) / D) V^T`.
     """
 
     def __init__(
         self,
         eigvecs: list[Array],
+        left_eigvecs: list[Array],
         per_term_eigenvalues: list[list[Array]],
         scales: list[complex | Array],
         shape: tuple[int, ...],
+        real_operator: bool,
     ) -> None:
         # `nnx.data` on the array containers, so the eigenbasis is a pytree
         # leaf; see `TPLUFactors`.
-        self.eigvecs = nnx.data(eigvecs)  # list of (n_i, n_i) eigenvector matrices
+        self.eigvecs = nnx.data(eigvecs)  # list of (n_i, n_i) V matrices
+        self.left_eigvecs = nnx.data(left_eigvecs)  # list of (n_i, n_i) W matrices
         self.per_term_eigenvalues = nnx.data(
             per_term_eigenvalues
         )  # [term][axis] -> (n_axis,)
         self.scales = scales
         self.shape = shape
+        # A real operator can still have complex eigenpairs (Petrov-Galerkin);
+        # they come in conjugate pairs, so a real rhs has a real solution.
+        self.real_operator = real_operator
 
     @jax.jit
     def solve(self, rhs: Array) -> Array:
@@ -610,16 +617,16 @@ class TPMatricesLUFactors(nnx.Pytree):
         ndim = len(shape)
         F = rhs.reshape(shape)
 
-        # Forward transform: apply V_i^T along each axis i.
-        # jnp.tensordot(V.T, X, axes=[[1],[i]]) contracts V^T with axis i of X,
+        # Forward transform: apply W_i along each axis i.
+        # jnp.tensordot(W, X, axes=[[1],[i]]) contracts W with axis i of X,
         # placing the result at position 0; moveaxis restores it to position i.
         Ftilde = F
-        for i, V in enumerate(self.eigvecs):
-            Ftilde = jnp.tensordot(V.T, Ftilde, axes=[[1], [i]])
+        for i, W in enumerate(self.left_eigvecs):
+            Ftilde = jnp.tensordot(W, Ftilde, axes=[[1], [i]])
             Ftilde = jnp.moveaxis(Ftilde, 0, i)
 
         # Denominator: D[i0,i1,...] = sum_k s_k * Λ_k[0][i0] * Λ_k[1][i1] * ...
-        dtype = jnp.result_type(rhs.dtype, jnp.float32)
+        dtype = jnp.result_type(Ftilde.dtype, jnp.float32)
         D = jnp.zeros(shape, dtype=dtype)
         for evals_k, s_k in zip(self.per_term_eigenvalues, self.scales):
             term = jnp.ones(shape, dtype=dtype)
@@ -638,6 +645,8 @@ class TPMatricesLUFactors(nnx.Pytree):
             U = jnp.tensordot(V, U, axes=[[1], [i]])
             U = jnp.moveaxis(U, 0, i)
 
+        if self.real_operator and not jnp.iscomplexobj(rhs):
+            U = U.real
         return U.reshape(rhs.shape)
 
 
@@ -1333,7 +1342,7 @@ class TPMatricesDenseLUFactors(nnx.Pytree):
 
 
 def tpmats_dense_lu_factor(
-    A: TPMatrix | list[TPMatrix],
+    A: TPMatrix | Sequence[TPMatrix],
 ) -> TPMatricesDenseLUFactors:
     """Assemble and LU-factorize the dense Kronecker product of a :class:`TPMatrices`.
 
@@ -1369,7 +1378,50 @@ def tpmats_dense_lu_factor(
     return TPMatricesDenseLUFactors(lu=mat.lu_factor(), shape=shape)
 
 
-def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
+def _is_hermitian(A: np.ndarray) -> bool:
+    tol = 100 * np.finfo(A.dtype).eps * np.abs(A).max()
+    return bool(np.all(np.abs(A - A.conj().T) <= tol))
+
+
+def _diagonalize_axis(
+    mats: list[np.ndarray],
+) -> tuple[np.ndarray, np.ndarray, list[np.ndarray]]:
+    """Simultaneously diagonalize the one or two factor matrices of an axis.
+
+    Returns ``(V, W, evals)`` with ``W @ mats[j] @ V == diag(evals[j])``; one
+    matrix of a pair gets the identity (``evals[j] == 1``).
+    """
+    # A single matrix A is the pair (A, I).
+    pair = list(mats) if len(mats) == 2 else [mats[0], np.eye(len(mats[0]))]
+    if _is_hermitian(pair[0]) and _is_hermitian(pair[1]):
+        # eigh needs its second matrix positive definite, which only one of
+        # the pair may be (e.g. a stiffness matrix entering with a minus sign).
+        for a, b in ((0, 1), (1, 0)):
+            try:
+                lam, V = scipy_linalg.eigh(pair[a], pair[b])
+            except scipy_linalg.LinAlgError:
+                continue
+            evals = [lam, lam]
+            evals[b] = np.ones_like(lam)
+            return V, V.conj().T, evals[: len(mats)]
+    # Weighted inner products (Chebyshev, Jacobi) and Petrov-Galerkin test
+    # spaces give non-symmetric matrices; eigh would silently use one triangle.
+    for a, b in ((0, 1), (1, 0)):
+        lam, V = scipy_linalg.eig(pair[a], pair[b])
+        if np.all(np.isfinite(lam)):
+            break
+    else:
+        raise SolverNotApplicable("Both factor matrices of an axis are singular.")
+    # A complex pencil can have a real spectrum but complex eigenvectors.
+    if np.all(lam.imag == 0) and np.all(V.imag == 0):
+        lam, V = lam.real, V.real
+    W = np.linalg.inv(pair[b] @ V)
+    evals = [lam, lam]
+    evals[b] = np.ones_like(lam)
+    return V, W, evals[: len(mats)]
+
+
+def tpmats_lu_factor(A: TPMatrix | Sequence[TPMatrix]) -> TPMatricesLUFactors:
     """Compute diagonalization-based LU factors for a sum of :class:`TPMatrix`.
 
     Simultaneously diagonalizes the factor matrices on each axis so that the
@@ -1379,21 +1431,23 @@ def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
     **Algorithm** (2D, generalises to any number of dims):
 
     Given a list of TPMatrices representing :math:`\\sum_k s_k A_k \\otimes B_k`,
-    find :math:`V` such that :math:`V^T A V = \\Lambda_A` and
-    :math:`V^T B V = I` (generalized eigenproblem :math:`A v = \\lambda B v`).
-    Then:
+    find :math:`V` and :math:`W` such that :math:`W A V = \\Lambda_A` and
+    :math:`W B V = I` (generalized eigenproblem :math:`A v = \\lambda B v`,
+    with :math:`W = (B V)^{-1}`, or :math:`W = V^T` for a symmetric-definite
+    pair). Then:
 
     .. math::
 
-        \\tilde{F} = V^T F V, \\quad
+        \\tilde{F} = W F W^T, \\quad
         D_{ij} = \\textstyle\\sum_k s_k \\lambda_k^{(0)}{}_i \\lambda_k^{(1)}{}_j,
         \\quad U = V (\\tilde{F} / D) V^T.
 
-    **Requirement**: all factor matrices on each axis must be simultaneously
-    diagonalizable — true whenever each axis has at most 2 distinct matrices
-    that form a symmetric-definite pair (e.g. stiffness K and mass M from the
-    same 1D function space).  Axes that share the same unordered matrix pair
-    automatically reuse the same eigenvectors.
+    **Requirement**: each axis has at most 2 distinct factor matrices (e.g.
+    stiffness K and mass M from the same 1D function space). The matrices need
+    not be symmetric, so weighted bases (Chebyshev, Jacobi) and Petrov-Galerkin
+    test spaces are supported; complex eigenpairs are handled in complex
+    arithmetic. Axes that share the same unordered matrix pair reuse the same
+    eigenvectors.
 
     Args:
         A: Single :class:`TPMatrix` or list of :class:`TPMatrix` objects (as
@@ -1404,7 +1458,8 @@ def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
         method solves the system without re-factorising.
 
     Raises:
-        ValueError: if any axis has more than 2 distinct factor matrices.
+        SolverNotApplicable: if any axis has more than 2 distinct factor
+            matrices, or both matrices of an axis are singular.
     """
     if isinstance(A, TPMatrix):
         A = [A]
@@ -1440,79 +1495,52 @@ def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
     def _repr(mat) -> int:
         return _id_to_repr[id(mat)]
 
-    # --- per-axis pair → (eigvecs, {repr_id: eigenvalues}) ----------------
-    # Axes that share the same unordered pair of matrices reuse eigenvectors.
-    pair_cache: dict[frozenset, tuple[Array, dict[int, Array]]] = {}
-
-    for i in range(ndim):
-        mats_i = list(
-            {_repr(tp.mats[i]): _mat_by_id[_repr(tp.mats[i])] for tp in tpmats}.values()
-        )
-        pair_key = frozenset(_repr(m) for m in mats_i)
-        if pair_key in pair_cache:
-            continue
-        if len(mats_i) == 1:
-            A_dense = cast(BaseMatrix, mats_i[0]).todense()
-            evals, evecs = jnp.linalg.eigh(A_dense)
-            pair_cache[pair_key] = (evecs, {_repr(mats_i[0]): evals})
-        elif len(mats_i) == 2:
-            import numpy as _np
-            import scipy.linalg as _scipy_linalg
-
-            A0_np = _np.array(cast(BaseMatrix, mats_i[0]).todense())
-            A1_np = _np.array(cast(BaseMatrix, mats_i[1]).todense())
-            # Generalized eigenproblem: try A0 v = λ A1 v (A1 must be PD).
-            # If that fails (A1 not PD), swap to A1 v = λ A0 v.
-            try:
-                evals_np, evecs_np = _scipy_linalg.eigh(A0_np, A1_np)
-                evals = jnp.array(evals_np)
-                evecs = jnp.array(evecs_np)
-                pair_cache[pair_key] = (
-                    evecs,
-                    {
-                        _repr(mats_i[0]): evals,
-                        _repr(mats_i[1]): jnp.ones_like(evals),
-                    },
-                )
-            except _scipy_linalg.LinAlgError:
-                evals_np, evecs_np = _scipy_linalg.eigh(A1_np, A0_np)
-                evals = jnp.array(evals_np)
-                evecs = jnp.array(evecs_np)
-                pair_cache[pair_key] = (
-                    evecs,
-                    {
-                        _repr(mats_i[1]): evals,
-                        _repr(mats_i[0]): jnp.ones_like(evals),
-                    },
-                )
-        else:
-            raise SolverNotApplicable(
-                f"Axis {i} has {len(mats_i)} distinct factor matrices; "
-                "simultaneous diagonalization requires ≤ 2 distinct matrices per axis."
-            )
-
-    # Build per-axis eigenvector list and global repr_id→eigenvalues map.
+    # --- per-axis (V, W, {repr_id: eigenvalues}) -----------------------------
+    # Axes that share the same unordered pair of matrices reuse the result. The
+    # eigenvalues are kept per axis: a matrix paired differently on two axes
+    # (M with K on one, with P on another) has different eigenvalues on each.
+    pair_cache: dict[frozenset, tuple[Array, Array, dict[int, Array]]] = {}
     eigvecs: list[Array] = []
-    axis_eigenvalues: dict[int, Array] = {}
+    left_eigvecs: list[Array] = []
+    axis_eigenvalues: list[dict[int, Array]] = []
     for i in range(ndim):
-        mats_i = list(
-            {_repr(tp.mats[i]): _mat_by_id[_repr(tp.mats[i])] for tp in tpmats}.values()
-        )
-        pair_key = frozenset(_repr(m) for m in mats_i)
-        evecs, evals_map = pair_cache[pair_key]
-        eigvecs.append(evecs)
-        axis_eigenvalues.update(evals_map)
+        reprs = list(dict.fromkeys(_repr(tp.mats[i]) for tp in tpmats))
+        pair_key = frozenset(reprs)
+        if pair_key not in pair_cache:
+            if len(reprs) > 2:
+                raise SolverNotApplicable(
+                    f"Axis {i} has {len(reprs)} distinct factor matrices; "
+                    "simultaneous diagonalization requires ≤ 2 distinct matrices "
+                    "per axis."
+                )
+            V, W, evals = _diagonalize_axis(
+                [np.asarray(_dense_by_id[r]) for r in reprs]
+            )
+            pair_cache[pair_key] = (
+                jnp.asarray(V),
+                jnp.asarray(W),
+                {r: jnp.asarray(ev) for r, ev in zip(reprs, evals, strict=True)},
+            )
+        V, W, evals_map = pair_cache[pair_key]
+        eigvecs.append(V)
+        left_eigvecs.append(W)
+        axis_eigenvalues.append(evals_map)
 
     per_term_eigenvalues = [
-        [axis_eigenvalues[_repr(tp.mats[i])] for i in range(ndim)] for tp in tpmats
+        [axis_eigenvalues[i][_repr(tp.mats[i])] for i in range(ndim)] for tp in tpmats
     ]
     scales = [tp.coefficient for tp in tpmats]
+    real_operator = not any(np.iscomplexobj(d) for d in _dense_by_id.values()) and (
+        not any(np.iscomplexobj(s) for s in scales)
+    )
     shape: tuple[int, ...] = tuple(int(tpmats[0].mats[i].shape[0]) for i in range(ndim))
     return TPMatricesLUFactors(
         eigvecs=eigvecs,
+        left_eigvecs=left_eigvecs,
         per_term_eigenvalues=per_term_eigenvalues,
         scales=scales,
         shape=shape,
+        real_operator=real_operator,
     )
 
 

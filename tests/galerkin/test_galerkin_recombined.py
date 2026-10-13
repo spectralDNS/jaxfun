@@ -107,7 +107,9 @@ def test_spans_trial_space_with_pg_band(family, bcs, bands, q):
     # The rows that stay PG must be PG's own (exact, recurrence-built) rows; the
     # replaced ones are checked against exact rational arithmetic.
     pg = B.get_testspace("PG")
-    replaced = np.any(np.asarray(pg.S.todense())[:, N:] != 0, axis=1)
+    # The replaced rows are those whose full PG functions reach beyond mode N.
+    full = np.asarray(pg.stencil.matrix((B.dim, N + pg.order)).todense())
+    replaced = np.any(full[:, N:] != 0, axis=1)
     assert 0 < replaced.sum() < B.dim and replaced[-1]
     for j, offsets in bands.items():
         form = x**q * (u.diff(x, j) if j else u)
@@ -121,6 +123,21 @@ def test_spans_trial_space_with_pg_band(family, bcs, bands, q):
         # x^q widens the band by q on either side.
         band = list(range(offsets[0] - q, offsets[-1] + q + 1, 2))
         assert _offsets(inner(form * v, sparse=True, kind="bilinear")) == band
+
+
+@pytest.mark.parametrize("family", [Chebyshev, Legendre])
+@pytest.mark.parametrize("bcs,order", [(DIRICHLET, 2), (BIHARMONIC, 4)])
+def test_low_resolution(family, bcs, order):
+    # For N < 2 * order the conditions that define the PG functions leave no
+    # rows, but there is still one test function per trial function.
+    N = 2 * order - 1
+    B = FunctionSpace(N, family, bcs=bcs)
+    assert B.get_testspace("PG").S.shape == (N - order, N)
+    St = np.asarray(B.S.todense())
+    Sg = np.asarray(B.get_testspace("GR").S.todense())
+    assert Sg.shape == St.shape
+    err = np.abs(Sg - (Sg @ np.linalg.pinv(St)) @ St).max()
+    assert err < _tol() * np.abs(Sg).max()
 
 
 @pytest.mark.parametrize("family", [Chebyshev, Legendre])

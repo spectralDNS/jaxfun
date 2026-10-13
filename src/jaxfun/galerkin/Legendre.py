@@ -536,6 +536,8 @@ class LegPhi_1(PGComposite):
         \phi_k = \frac{1}{2}(L_k - L_{k+2}) = \frac{(2k+3)(1-x^2)}{2(k+1)(k+2)} L'_{k+1}
 
     where :math:`L'_{k+1}` is the derivative of Legendre polynomial k+1.
+    The last one is truncated to the first N Legendre polynomials, like the
+    trial functions; see `PGComposite`.
 
     When used as a test function space, the resulting inner product is a skewed
     diagonal matrix with entries
@@ -589,7 +591,7 @@ class LegPhi_1(PGComposite):
         fun_str = fun_str if fun_str is not None else "phi_1"
         PGComposite.__init__(
             self,
-            N + 1,
+            N,
             Legendre,
             bcs={"left": {"D": 0}, "right": {"D": 0}},
             domain=domain,
@@ -614,6 +616,8 @@ class LegPhi_2(PGComposite):
                &= \frac{2 (k+1)(k+2)(k+3)(k+4)}{2k+5},
 
     where :math:`L''_{k+2}` is the second derivative of Legendre polynomials k+2.
+    The last two are truncated to the first N Legendre polynomials, like the
+    trial functions; see `PGComposite`.
 
     When used as a test function space, the resulting inner product is a skewed
     diagonal matrix with entries
@@ -669,7 +673,7 @@ class LegPhi_2(PGComposite):
         fun_str = fun_str if fun_str is not None else "phi_2"
         PGComposite.__init__(
             self,
-            N + 2,
+            N,
             Legendre,
             bcs={"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}},
             domain=domain,
@@ -698,6 +702,8 @@ class LegPhi_4(PGComposite):
 
     where :math:`L^{(4)}_{k+4}` is the fourth derivative of Legendre polynomial
     k+4.
+    The last four are truncated to the first N Legendre polynomials, like the
+    trial functions; see `PGComposite`.
 
     When used as a test function space, the resulting inner product is a skewed
     diagonal matrix with entries
@@ -755,7 +761,7 @@ class LegPhi_4(PGComposite):
         fun_str = fun_str if fun_str is not None else "phi_4"
         PGComposite.__init__(
             self,
-            N + 4,
+            N,
             Legendre,
             bcs={
                 "left": {"D": 0, "N": 0, "N2": 0, "N3": 0},

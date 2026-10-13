@@ -217,8 +217,8 @@ def _batch_case(N: int = 8, bcs: bool = False) -> tuple:
     worth transforming anyway; it just may take the local path.
     """
     F = FunctionSpace(N, Fourier.Fourier, name="F")
-    kw = {"bcs": {"left": {"D": 0}, "right": {"D": 0}}} if bcs else {}
-    D = FunctionSpace(N, Legendre.Legendre, name="D", **kw)
+    D_bcs = {"left": {"D": 0}, "right": {"D": 0}} if bcs else None
+    D = FunctionSpace(N, Legendre.Legendre, bcs=D_bcs, name="D")
     T = TensorProduct(F, D, name="T")
     x, y = T.system.base_scalars()
     uh = jax.device_put(project(sp.sin(x) * (1 - y**2), T), spectral_sharding)

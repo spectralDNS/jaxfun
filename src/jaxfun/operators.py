@@ -47,7 +47,7 @@ from .coordinates import (
 )
 
 
-def eijk(i: int, j: int, k: int) -> int:
+def eijk(i: int | sp.Integer, j: int | sp.Integer, k: int | sp.Integer) -> int:
     """Levi-Civita symbol ε_{ijk}."""
     if (i, j, k) in ((0, 1, 2), (1, 2, 0), (2, 0, 1)):
         return 1

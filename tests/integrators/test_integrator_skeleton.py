@@ -4,10 +4,13 @@ import sympy as sp
 
 from jaxfun import Domain
 from jaxfun.galerkin import TestFunction, TrialFunction
+from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
+from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
-from jaxfun.integrators import ETDRK4
+from jaxfun.integrators import ETDRK4, RK4
 from jaxfun.operators import Constant
+from jaxfun.utils.common import ulp
 
 
 # @pytest.mark.skip
@@ -108,3 +111,19 @@ def test_prepare_assembles_weighted_time_derivative_operator() -> None:
     actual_mass_dense = integrator.mass_operator.todense()
     assert jnp.allclose(actual_mass_dense, expected_mass_dense)
     assert not jnp.allclose(actual_mass_dense, jnp.eye(F.num_dofs))
+
+
+def test_nonlinear_rhs_is_in_trial_coefficients() -> None:
+    # GR spans the trial space, so the method is Galerkin and its tendency the
+    # trial space projection, but tested in a different basis.
+    V = FunctionSpace(12, Chebyshev, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    (x,) = V.system.base_scalars()
+    t = V.system.base_time()
+    u = TrialFunction(V, name="u", transient=True)
+    v = TestFunction(V.get_testspace("GR"), name="v")
+    eq = v * (u.diff(t) + u * u.diff(x))
+    integrator = RK4(eq, time=(0.0, 1.0), initial=jnp.zeros(V.num_dofs))
+
+    uh = 1.0 / (1.0 + jnp.arange(V.num_dofs))
+    expected = V.forward(-V.backward(uh) * V.backward_primitive(uh, k=1))
+    assert jnp.allclose(integrator.nonlinear_rhs(uh), expected, atol=100 * ulp(1.0))

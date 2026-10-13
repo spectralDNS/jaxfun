@@ -67,7 +67,7 @@ class SpecialMatrix(BaseMatrix):
         return self.shape[0]
 
     @property
-    def data(self) -> Array:
+    def data(self) -> Array:  # ty: ignore[invalid-property-type-override]
         return self.todense()
 
     def diagonal(self, k: int = 0) -> Array:

@@ -91,7 +91,9 @@ class BaseMatrix(ABC, nnx.Pytree):
 
     if TYPE_CHECKING:
         data: Array
-        shape: tuple[int, int]
+
+        @property
+        def shape(self) -> tuple[int, int]: ...
 
     @property
     def ndim(self) -> int:

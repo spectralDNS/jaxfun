@@ -738,25 +738,25 @@ class BaseIntegrator(TimeStepper[Array]):
         return jnp.zeros(coefficient_shape(self.testspace), dtype=own.dtype)
 
     def nonlinear_rhs(self, uh: IntegratorState, N: ScalarPadding = None) -> Array:
-        """Return the nonlinear contribution in coefficient space.
+        """Return the nonlinear contribution after applying the inverse mass matrix.
 
         For a system of coupled equations `uh` is the tuple of all fields'
         coefficients, in the global field order.
         """
         if self._couplings:
-            # `forward` divides by the *test space* mass, while the coupling
-            # operators produce a scalar product, and this equation's own mass
-            # operator need not be either. Only the explicit scalar-product path
-            # is used for systems, so rather than guess a normalization here:
+            # A coupled field's lifting may move, and there is no `t` here to
+            # read it at. Only the explicit scalar-product path is used for
+            # systems, and it takes `t`:
             raise NotImplementedError(
                 "nonlinear_rhs does not carry assembled field couplings; use "
                 "nonlinear_rhs_scalar_product, which the system integrators do."
             )
         if not self.has_nonlinear:
             return self._no_nonlinear(uh)
-        assert self._nonlinear_evaluator is not None
-        M = physical_shape(self.testspace, N)
-        return self.testspace.forward(self._nonlinear_evaluator(uh, M))
+        # Not `testspace.forward`: that divides by the test space's own mass and
+        # returns test-space coefficients, which are the trial coefficients only
+        # when the test space is the trial space.
+        return self.apply_mass_inverse(self.nonlinear_rhs_scalar_product(uh, N))
 
     def nonlinear_rhs_scalar_product(
         self,

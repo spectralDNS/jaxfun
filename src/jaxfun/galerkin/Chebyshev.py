@@ -617,6 +617,8 @@ class ChebPhi_1(PGComposite):
 
     where :math:`T'_{k+1}` is the derivative of Chebyshev polynomial k+1 of the
     first kind.
+    The last one is truncated to the first N Chebyshev polynomials, like the
+    trial functions; see `PGComposite`.
 
     When used as a test function space, the resulting inner product is a skewed
     diagonal matrix with entries
@@ -670,7 +672,7 @@ class ChebPhi_1(PGComposite):
         fun_str = fun_str if fun_str is not None else "phi_1"
         PGComposite.__init__(
             self,
-            N + 1,
+            N,
             Chebyshev,
             bcs={"left": {"D": 0}, "right": {"D": 0}},
             domain=domain,
@@ -694,6 +696,8 @@ class ChebPhi_2(PGComposite):
 
     where :math:`T''_{k+2}` is the second derivative of Chebyshev polynomial
     k+2 of the first kind.
+    The last two are truncated to the first N Chebyshev polynomials, like the
+    trial functions; see `PGComposite`.
 
     When used as a test function space, the resulting inner product is a skewed
     diagonal matrix with entries
@@ -749,7 +753,7 @@ class ChebPhi_2(PGComposite):
         fun_str = fun_str if fun_str is not None else "phi_2"
         PGComposite.__init__(
             self,
-            N + 2,
+            N,
             Chebyshev,
             bcs={"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}},
             domain=domain,
@@ -777,6 +781,8 @@ class ChebPhi_4(PGComposite):
 
     where :math:`T^{(4)}_{k+4}` is the fourth derivative of Chebyshev polynomial
     k+4 of the first kind.
+    The last four are truncated to the first N Chebyshev polynomials, like the
+    trial functions; see `PGComposite`.
 
     When used as a test function space, the resulting inner product is a skewed
     diagonal matrix with entries
@@ -834,7 +840,7 @@ class ChebPhi_4(PGComposite):
         fun_str = fun_str if fun_str is not None else "phi_4"
         PGComposite.__init__(
             self,
-            N + 4,
+            N,
             Chebyshev,
             bcs={
                 "left": {"D": 0, "N": 0, "N2": 0, "N3": 0},

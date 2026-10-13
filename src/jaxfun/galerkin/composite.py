@@ -350,8 +350,7 @@ class Composite(OrthogonalSpace):
             )
             stencil = get_stencil_matrix(self.bcs, self.orthogonal)
         stencil = stencil if isinstance(stencil, Stencil) else Stencil(stencil)
-        # One basis function per mode the boundary conditions leave free.
-        shape = (N - self.bcs.num_bcs(), N)
+        shape = (self.dim, N)
         # The stencil is kept unscaled, so that copies of this space, and test
         # spaces made from it, apply a scaling exactly once.
         self.scaling = scaling
@@ -529,8 +528,9 @@ class Composite(OrthogonalSpace):
 
     @property
     def dim(self) -> int:
-        """Return dimension of composite space, one per row of `S`."""
-        return self.S.shape[0]
+        """Return dimension of composite space, one function per mode the
+        boundary conditions leave free."""
+        return self.N - self.bcs.num_bcs()
 
     def get_homogeneous(self) -> Composite:
         """Return the space with homogeneous boundary values, scaled as this one."""
@@ -662,6 +662,11 @@ class BCGeneric(Composite):
         self.stencil = Stencil({}, dict(enumerate(S)))
         self.S = DiaMatrix.from_dense(S)
         self.ST: DiaMatrix = self.S.T
+
+    @property
+    def dim(self) -> int:
+        """Return dimension, one lifting function per boundary condition."""
+        return self.bcs.num_bcs()
 
     @property
     def num_dofs(self) -> int:
@@ -928,6 +933,12 @@ def _ds_forward(space: DirectSum, uj: Array, bvals: Array) -> Array:
 class PGComposite(Composite):
     """Composite basis with Petrov-Galerkin [1] test functions (stencil on test side).
 
+    The test functions of [1] reach `order` degrees above the trial functions.
+    Here they are truncated to the N orthogonal modes of the trial space, which
+    changes only the last `order` of them. The operator matrices are unchanged
+    unless a polynomial coefficient lifts the trial functions past degree N - 1,
+    while scalar products only see the N modes the trial space can represent.
+
     Args:
         N: Target (unconstrained) number of modes of underlying orthogonal.
         orthogonal: Underlying orthogonal basis class (e.g. Chebyshev).
@@ -970,6 +981,9 @@ class PGComposite(Composite):
         scaling: sp.Expr | None = None,
         order: int = 1,
     ) -> None:
+        assert order > 0, "Order must be positive for Petrov-Galerkin composite."
+        # Set before the parent builds S, whose rows `dim` counts.
+        self.order = order
         super().__init__(
             N,
             orthogonal,
@@ -983,8 +997,15 @@ class PGComposite(Composite):
             beta=beta,
             scaling=scaling,
         )
-        self.order = order
-        assert self.order > 0, "Order must be positive for Petrov-Galerkin composite."
+        # The full PG space has N - order rows of width N + order, and the last
+        # `order` of them are cut at width N in S.
+        wide = np.asarray(self.stencil.matrix((N - order, N + order)).todense())
+        self._truncated = np.flatnonzero(np.any(wide[:, N:] != 0, axis=1))
+
+    @property
+    def dim(self) -> int:
+        """Return dimension of the test space, one function per trial function."""
+        return self.N - self.order
 
     def recombine(
         self,
@@ -999,6 +1020,35 @@ class PGComposite(Composite):
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
     ) -> DiaMatrix | Matrix | None:
         r"""Return (sparse) operator matrices for Petrov-Galerkin method.
+
+        .. math::
+            \langle \psi_m^{(i)}, x^q \phi_n^{(trial[1])} \rangle
+
+        where \psi_m^{(i)} are i'th derivative of test functions and
+        \phi_n^{(trial[1])} are trial functions with derivative order
+        trial[1].
+
+        Args:
+            i: Derivative order for test function. Should be 0. Kept for
+                consistency with Galerkin.
+            trial: Tuple (u, j) with trial space u and derivative order j.
+            q: polynomial order for scaling.
+
+        """
+        z = self._recurrence_matrices(i, trial, q)
+        _, j = trial
+        if z is None or q <= j:
+            return z
+        # x^q lifts the trial functions to degree N - 1 + q - j >= N, where the
+        # recurrences, which hold for the full test functions, see the modes
+        # the truncated rows have lost.
+        rows = np.asarray(self.S.todense())[self._truncated]
+        return _replace_rows(z, self._truncated, rows, self, trial, q)
+
+    def _recurrence_matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
+    ) -> DiaMatrix | Matrix | None:
+        r"""Return the operator matrices of the full, untruncated test functions.
 
         .. math::
             \langle \psi_m^{(i)}, x^q \phi_n^{(trial[1])} \rangle
@@ -1064,33 +1114,34 @@ class PGComposite(Composite):
 
 
 class GalerkinRecombined(Composite):
-    r"""Petrov-Galerkin [2] test functions cropped to span the trial space.
+    r"""Galerkin test functions recombined for sparsity of operators.
 
-    The test functions of a `PGComposite` reach a higher polynomial degree than
-    the trial functions: its last `order` functions lie outside the trial
-    space. Replacing exactly those by the trial basis functions of the same
-    index, scaled like the functions they replace, gives a test space that
-    spans the trial space -- the method is Galerkin -- while every other test
-    function, and so the banded structure of the operator matrices, is the
-    Petrov-Galerkin one.
+    Create with `V.get_testspace("GR")`, where `V` is a trial space.
+
+    The returned test basis is almost identical to Petrov-Galerkin [2], and
+    only the last `order` (number of derivatives in problem) test functions
+    are different. The last `order` test functions of [2] lie outside the
+    polynomial space of the trial functions, so they are here replaced by the
+    Galerkin trial basis functions. This makes the test space Galerkin, since
+    the other (PG) test functions are recombinations of the trial basis
+    functions.
 
     For example, the Chebyshev Dirichlet basis functions are
     `\phi_k = T_k - T_{k+2}`, k = 0, 1, ..., N-3. Testing with `\phi_k` itself
-    gives a dense (upper triangular) stiffness matrix, but testing with the
-    recombination `\psi_k = \phi_k - (k+1)/(k+3) \phi_{k+2}` makes it banded.
-    Since every `\psi_k` is a combination of trial functions, the method is
-    still Galerkin. The last two, k = N-4 and N-3, would need `\phi_{N-2}` and
-    `\phi_{N-1}`, which are not in the trial space, so they are kept as
-    `\psi_k = \phi_k`.
-
-    The other `\psi_k` are the Petrov-Galerkin test functions up to scaling, so
-    this space reuses the `PGComposite` and its precomputed matrices. Create it with
-    `V.get_testspace("GR")`, where `V` is the trial space.
+    gives a dense (upper triangular) stiffness matrix [1], but testing with the
+    recombination `\psi_k = \phi_k - (k+1)/(k+3) \phi_{k+2}` makes it banded
+    (this recombined `\psi_k` is proportional to (1-x^2)^2 T''_{k+2}, which is
+    the test function used in [2]). Since every `\psi_k` is a recombination of
+    trial functions, the method is still Galerkin if the last two (which would
+    extend beyond T_N) are computed as `\psi_k = \phi_k`. Since the other
+    `\psi_k` are the Petrov-Galerkin [2] test functions up to scaling, this
+    space reuses the `PGComposite` implementation and its precomputed matrices.
 
     Note that the recombination is only used to get strictly banded matrices
-    without any additional effort or the need for tailored solvers, like those
-    of Shen [1]. The results of using the recombined basis should be identical
-    to using the original Galerkin basis, up to round-off error.
+    without any additional effort or the need for tailored linear algebra
+    solvers, like those of Shen [1]. The results of using this recombined basis
+    should be identical to using the original Galerkin basis, up to round-off
+    error. Also, it is not limited to Dirichlet trial functions.
 
     Args:
         pg: The Petrov-Galerkin test space.
@@ -1119,7 +1170,7 @@ class GalerkinRecombined(Composite):
         S_pg = np.asarray(pg.stencil.matrix(pg.S.shape).todense())
         S_trial = np.asarray(trial.S.todense())
         assert S_pg.shape[0] == S_trial.shape[0], "test and trial dimensions differ"
-        replaced = np.any(S_pg[:, trial.N :] != 0, axis=1)
+        replaced = np.isin(np.arange(S_pg.shape[0]), pg._truncated)
         # Scale each replacement like the PG function it replaces, by matching
         # their leading coefficients, so that all rows of a matrix are of one
         # size and the round-off of the last few is not weighted up by k^q.
@@ -1151,38 +1202,53 @@ class GalerkinRecombined(Composite):
         recurrences of the orthogonal basis rather than from quadrature, which
         would lose about N^(2j-1) in accuracy for the j'th derivative.
         """
-        z = self._pg._matrices(i, trial, q)
+        # The replaced rows are PG's truncated ones, so PG's own correction of
+        # them would be overwritten.
+        z = self._pg._recurrence_matrices(i, trial, q)
         if z is None:
             return None
-        u, j = trial
-        uo = u.orthogonal
-        # (x^q T_m^{(j)}, T_p)_w for the replaced rows' modes p and the trial
-        # modes m. Only trial modes from q below the lowest replaced one up can
-        # reach those rows, and a narrow trial space (a boundary lifting) may
-        # have none.
-        lo = max(int(self._replaced_rows.nonzero()[1].min()) - q, 0)
-        G = np.zeros((self.N, uo.N))
-        if lo < uo.N:
-            modes = jnp.arange(lo, uo.N)
-            derivative = jax.vmap(lambda m: uo.derivative_coeffs(jnp.eye(uo.N)[m], j))
-            # One jit compiles once; eager vmap compiles every primitive.
-            D = np.asarray(jax.jit(derivative)(modes))
-            if q > 0:
-                # x Q = A^T Q, so x maps coefficients c to A c. Room for q more
-                # modes keeps the truncation of A out of the product.
-                A = np.asarray(cast(Jacobi, uo).A(uo.N + q).power(q).todense())
-                D = np.pad(D, ((0, 0), (0, q))) @ A.T
-            k = min(D.shape[1], self.N)
-            h = np.asarray(self.orthogonal.norm_squared())[:k]
-            G[:k, lo:] = (D[:, :k] * h[None, :]).T
-        rows = self._replaced_rows @ G
-        if isinstance(u, Composite):
-            rows = rows @ np.asarray(u.ST.todense())
-        Z = np.asarray(z.todense()).copy()
-        Z[self._replaced] = rows
-        # tol=0: the PG rows are about k^-q times the replaced ones, and the
-        # default pruning, relative to the largest entry, would drop them.
-        return DiaMatrix.from_dense(jnp.asarray(Z), tol=0)
+        return _replace_rows(z, self._replaced, self._replaced_rows, self, trial, q)
+
+
+def _replace_rows(
+    z: DiaMatrix | Matrix,
+    replaced: np.ndarray,
+    rows: np.ndarray,
+    test: Composite,
+    trial: tuple[OrthogonalSpace, int],
+    q: int,
+) -> DiaMatrix:
+    """Return `z` with rows `replaced` tested by the functions with coefficients
+    `rows` in `test.orthogonal`, from the orthogonal recurrences."""
+    u, j = trial
+    uo = u.orthogonal
+    # (x^q T_m^{(j)}, T_p)_w for the replaced rows' modes p and the trial
+    # modes m. Only trial modes from q below the lowest replaced one up can
+    # reach those rows, and a narrow trial space (a boundary lifting) may
+    # have none.
+    lo = max(int(rows.nonzero()[1].min()) - q, 0)
+    G = np.zeros((test.N, uo.N))
+    if lo < uo.N:
+        modes = jnp.arange(lo, uo.N)
+        derivative = jax.vmap(lambda m: uo.derivative_coeffs(jnp.eye(uo.N)[m], j))
+        # One jit compiles once; eager vmap compiles every primitive.
+        D = np.asarray(jax.jit(derivative)(modes))
+        if q > 0:
+            # x Q = A^T Q, so x maps coefficients c to A c. Room for q more
+            # modes keeps the truncation of A out of the product.
+            A = np.asarray(cast(Jacobi, uo).A(uo.N + q).power(q).todense())
+            D = np.pad(D, ((0, 0), (0, q))) @ A.T
+        k = min(D.shape[1], test.N)
+        h = np.asarray(test.orthogonal.norm_squared())[:k]
+        G[:k, lo:] = (D[:, :k] * h[None, :]).T
+    tested = rows @ G
+    if isinstance(u, Composite):
+        tested = tested @ np.asarray(u.ST.todense())
+    Z = np.asarray(z.todense()).copy()
+    Z[replaced] = tested
+    # tol=0: the PG rows are about k^-q times the replaced ones, and the
+    # default pruning, relative to the largest entry, would drop them.
+    return DiaMatrix.from_dense(jnp.asarray(Z), tol=0)
 
 
 def _check_in_span(

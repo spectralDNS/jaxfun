@@ -1107,34 +1107,34 @@ class PGComposite(Composite):
 
 
 class GalerkinRecombined(Composite):
-    r"""Petrov-Galerkin [2] test functions cropped to span the trial space.
+    r"""Galerkin test functions recombined for sparsity of operators.
 
-    The last `order` test functions of a `PGComposite` lie outside the trial
-    space: in full they reach a higher polynomial degree than the trial
-    functions, and truncated they miss its boundary conditions. Replacing
-    exactly those by the trial basis functions of the same
-    index, scaled like the functions they replace, gives a test space that
-    spans the trial space -- the method is Galerkin -- while every other test
-    function, and so the banded structure of the operator matrices, is the
-    Petrov-Galerkin one.
+    Create with `V.get_testspace("GR")`, where `V` is a trial space.
+
+    The returned test basis is almost identical to Petrov-Galerkin [2], and
+    only the last `order` (number of derivatives in problem) test functions
+    are different. The last `order` test functions of [2] lie outside the
+    polynomial space of the trial functions, so they are here replaced by the
+    Galerkin trial basis functions. This makes the test space Galerkin, since
+    the other (PG) test functions are recombinations of the trial basis
+    functions.
 
     For example, the Chebyshev Dirichlet basis functions are
     `\phi_k = T_k - T_{k+2}`, k = 0, 1, ..., N-3. Testing with `\phi_k` itself
-    gives a dense (upper triangular) stiffness matrix, but testing with the
-    recombination `\psi_k = \phi_k - (k+1)/(k+3) \phi_{k+2}` makes it banded.
-    Since every `\psi_k` is a combination of trial functions, the method is
-    still Galerkin. The last two, k = N-4 and N-3, would need `\phi_{N-2}` and
-    `\phi_{N-1}`, which are not in the trial space, so they are kept as
-    `\psi_k = \phi_k`.
-
-    The other `\psi_k` are the Petrov-Galerkin test functions up to scaling, so
-    this space reuses the `PGComposite` and its precomputed matrices. Create it with
-    `V.get_testspace("GR")`, where `V` is the trial space.
+    gives a dense (upper triangular) stiffness matrix [1], but testing with the
+    recombination `\psi_k = \phi_k - (k+1)/(k+3) \phi_{k+2}` makes it banded
+    (this recombined `\psi_k` is proportional to (1-x^2)^2 T''_{k+2}, which is
+    the test function used in [2]). Since every `\psi_k` is a recombination of
+    trial functions, the method is still Galerkin if the last two (which would
+    extend beyond T_N) are computed as `\psi_k = \phi_k`. Since the other
+    `\psi_k` are the Petrov-Galerkin [2] test functions up to scaling, this
+    space reuses the `PGComposite` implementation and its precomputed matrices.
 
     Note that the recombination is only used to get strictly banded matrices
-    without any additional effort or the need for tailored solvers, like those
-    of Shen [1]. The results of using the recombined basis should be identical
-    to using the original Galerkin basis, up to round-off error.
+    without any additional effort or the need for tailored linear algebra
+    solvers, like those of Shen [1]. The results of using this recombined basis
+    should be identical to using the original Galerkin basis, up to round-off
+    error. Also, it is not limited to Dirichlet trial functions.
 
     Args:
         pg: The Petrov-Galerkin test space.

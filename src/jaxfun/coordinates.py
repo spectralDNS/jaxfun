@@ -352,7 +352,7 @@ class BaseVector(Vector, AtomicExpr):  # ty:ignore[invalid-method-override]
     _name: str
     _pretty_form: str
     _latex_form: str
-    args: tuple[Any, ...]
+    args: tuple[sp.Integer, CoordSys]
 
     def __new__(
         cls,

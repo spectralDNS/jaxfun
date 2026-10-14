@@ -223,8 +223,7 @@ def main() -> None:
     ax.set_aspect("equal")
     fig.colorbar(c, ax=ax, shrink=0.9)
     plt.show()
-    return solver
 
 
 if __name__ == "__main__":
-    solver = main()
+    main()

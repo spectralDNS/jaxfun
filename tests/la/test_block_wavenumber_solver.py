@@ -147,12 +147,22 @@ def test_block_solve_recovers_solution(kind, method) -> None:
         assert jnp.allclose(sc, xc, atol=float(1000 * ulp(1.0)))
 
 
-def test_dense_factors_are_real_through_phases() -> None:
+def factors(solver) -> tuple[jax.Array, ...]:
+    if isinstance(solver, BlockWavenumberSolver):
+        return (solver.lu,)
+    assert isinstance(solver, BlockBandedWavenumberSolver)
+    return solver.multipliers, solver.U
+
+
+@pytest.mark.parametrize("method", ["dense", "rcm"])
+@pytest.mark.parametrize("kind", ["fourier_poly", "fourier_cheb"])
+def test_factors_are_real_through_phases(kind, method) -> None:
     """Stokes is complex only through ik, which phases on u and its row remove."""
-    mats, test_space, trial_space = stokes_operator("fourier_poly")
-    solver = block_lu_factor(mats, test_space, trial_space, method="dense")
-    assert isinstance(solver, BlockWavenumberSolver)
-    assert not jnp.iscomplexobj(solver.lu)
+    mats, test_space, trial_space = stokes_operator(kind)
+    pins = CHEB_PINS if kind == "fourier_cheb" else []
+    solver = block_lu_factor(mats, test_space, trial_space, pins, method=method)
+    assert isinstance(solver, WAVENUMBER[method])
+    assert not any(jnp.iscomplexobj(f) for f in factors(solver))
 
 
 @pytest.mark.parametrize("method", ["dense", "rcm"])
@@ -160,8 +170,8 @@ def test_mixed_block_stays_complex(method) -> None:
     """A block with both k^2 and ik has no real phases; the solve is still exact."""
     mats, test_space, trial_space = advection_diffusion_operator()
     solver = block_lu_factor(mats, test_space, trial_space, method=method)
-    if isinstance(solver, BlockWavenumberSolver):
-        assert jnp.iscomplexobj(solver.lu)
+    assert isinstance(solver, WAVENUMBER[method])
+    assert all(jnp.iscomplexobj(f) for f in factors(solver))
     keys = jax.random.split(jax.random.PRNGKey(5), 4)
     x = tuple(
         jax.random.normal(keys[2 * c], nd) + 1j * jax.random.normal(keys[2 * c + 1], nd)

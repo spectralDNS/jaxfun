@@ -608,12 +608,15 @@ class BlockBandedWavenumberSolver(nnx.Pytree):
     fields mode by mode into a narrow band. The bands of all :math:`A_k` are then
     assembled straight from the terms, without the dense matrices, factorized
     with partial pivoting within the band as LAPACK's ``gbtrf`` does, and solved
-    by banded substitution that replays the row swaps.
+    by banded substitution that replays the row swaps. As in
+    `BlockWavenumberSolver`, phases make the factors real when they can.
     """
 
     def __init__(self, system: _WavenumberSystem) -> None:
         perm, p, q = system.band
-        n, dtype = system.n, system.dtype
+        phases = system.phases()
+        n = system.n
+        dtype = system.dtype if phases is None else jnp.finfo(system.dtype).dtype
         inv = np.argsort(perm)
         center = p  # L's multipliers below, U widened by p for swap fill above
         assemble = system.assembler(
@@ -640,12 +643,15 @@ class BlockBandedWavenumberSolver(nnx.Pytree):
         self.keep = system.keep()
         self.multipliers, self.pivots, U, singular = system.map(
             factor, (k, k), (k, k, k, k)
-        )(system.weights(None), self.keep)
+        )(system.weights(phases), self.keep)
         _check_nonsingular(singular)
         # Which diagonals survive sets the substitution's shape, so it is decided
         # over all wavenumbers, on every device and process alike.
         _, self.U, _, U_offsets = _prune_zero_diagonals(
             U[:, :0], U, (), tuple(range(0, p + q + 1))
+        )
+        self.row_phase, self.col_phase = (
+            (None, None) if phases is None else _phase_vectors(system, phases)
         )
         self.pinned_rows = tuple((k, r) for k, r, _ in system.pinned)
         backward = _make_wavenumber_solve((), U_offsets, n, dtype)
@@ -663,30 +669,50 @@ class BlockBandedWavenumberSolver(nnx.Pytree):
             pivots: Array,
             U: Array,
             keep: Array | None,
+            row_phase: Array | None,
+            col_phase: Array | None,
             rhs: tuple[Array, ...],
         ) -> tuple[Array, ...]:
             b = _stack(rhs, system.fourier, system.poly_axis, system.row_sizes)
             if keep is not None:
                 b = b * keep
+            if row_phase is not None:
+                b = b * row_phase
             b = b[:, perm]
-            factors = (multipliers, pivots, U)
             if jnp.iscomplexobj(b) and not jnp.iscomplexobj(U):
-                x = substitute(*factors, b.real) + 1j * substitute(*factors, b.imag)
+                # The real and imaginary parts go through as wavenumbers of their
+                # own, one pass for both. A separate axis for the two parts,
+                # trailing or vmapped, compiles to a markedly slower scan.
+                n_k = b.shape[0]
+                both = substitute(
+                    jnp.concatenate([multipliers, multipliers]),
+                    jnp.concatenate([pivots, pivots]),
+                    jnp.concatenate([U, U]),
+                    jnp.concatenate([b.real, b.imag]),
+                )
+                x = both[:n_k] + 1j * both[n_k:]
             else:
-                x = substitute(*factors, b.astype(jnp.result_type(U, b)))
+                x = substitute(multipliers, pivots, U, b.astype(jnp.result_type(U, b)))
+            x = x[:, inv]
+            if col_phase is not None:
+                x = x * col_phase
             return _unstack(
-                x[:, inv],
-                system.fourier,
-                system.poly_axis,
-                system.col_sizes,
-                system.trial_dofs,
+                x, system.fourier, system.poly_axis, system.col_sizes, system.trial_dofs
             )
 
-        self._solve = system.map(solve, (k, k, k, k, k), k)
+        self._solve = system.map(solve, (k, k, k, k, _SAME, _SAME, k), k)
 
     def solve(self, rhs: Sequence[Array]) -> tuple[Array, ...]:
         """Solve the block system; see `BlockWavenumberSolver.solve`."""
-        return self._solve(self.multipliers, self.pivots, self.U, self.keep, tuple(rhs))
+        return self._solve(
+            self.multipliers,
+            self.pivots,
+            self.U,
+            self.keep,
+            self.row_phase,
+            self.col_phase,
+            tuple(rhs),
+        )
 
 
 def _phase_vectors(

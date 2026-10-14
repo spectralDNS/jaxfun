@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 import sympy as sp
 from jax import Array
 from sympy import Expr, Symbol
@@ -105,6 +106,27 @@ class ChebyshevU(Jacobi):
         points = jnp.cos(theta + jnp.pi)
         weights = jnp.full(N, jnp.pi / (N + 1)) * (1 - points**2)
         return points, weights
+
+    @cache_static
+    def integration_points_and_weights(
+        self, N: int | None = None
+    ) -> tuple[Array, Array]:
+        """Return Fejer's second rule: the Gauss-Chebyshev-U nodes, unweighted.
+
+        With theta_k = (k+1)pi/(N+1), the weights are
+
+            q_k = 4 sin(theta_k)/(N+1) sum_{j=1}^{(N+1)/2} sin((2j-1) theta_k)/(2j-1),
+
+        a DST-I. The rule is symmetric, so it does not matter that the points run from
+        -1 to 1 here. See `Chebyshev.integration_points_and_weights` for
+        references.
+        """
+        N = self.num_quad_points if N is None else N
+        n = np.arange(N)
+        c = np.where(n % 2 == 0, 1 / (n + 1), 0.0)
+        theta = (n + 1) * np.pi / (N + 1)
+        q = 2 * np.sin(theta) / (N + 1) * dst(jnp.asarray(c), type=1)
+        return self.quad_points_and_weights(N)[0], q
 
     @jit_vmap(in_axes=(0, None), static_argnums=2)
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
@@ -286,9 +308,12 @@ class ChebyshevU(Jacobi):
         Returns:
             Matrix or DiaMatrix or None if combination unsupported.
         """
+        u, j = trial
+        if not isinstance(u, ChebyshevU):
+            return None
         A = None
         if q != 0:
-            if self.N != trial[0].N:
+            if self.N != u.N:
                 # x**q couples modes across the two ranges, and a recursion
                 # matrix truncated to either range drops that coupling, so
                 # fall back to quadrature for rectangular matrices.
@@ -300,7 +325,6 @@ class ChebyshevU(Jacobi):
             # below N also through modes above it.
             A = self.A(self.N + q).power(q).crop(self.N, self.N)
 
-        u, j = trial
         if i == 0 and j == 0:
             M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
             return M if A is None else A.T @ M

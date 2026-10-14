@@ -587,6 +587,19 @@ class TestLegendreBiharmonic:
         )
 
 
+@pytest.mark.parametrize("q", [0, 1])
+def test_chebyshevu_mass_against_other_family_falls_back(q):
+    """A ChebyshevU test function is not orthogonal to Chebyshev trial modes."""
+    assert ChebyshevU(8).matrices(0, (Chebyshev(8), 0), q=q) is None
+    U = FunctionSpace(8, Chebyshev, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    V = FunctionSpace(8, ChebyshevU)
+    x = U.system.x
+    expr = x**q * TestFunction(V) * TrialFunction(U)
+    got = inner(expr, use_precomputed_matrices=True, kind="bilinear").todense()
+    ref = _quad_matrix_composite(V, U, 0, q=q)
+    assert jnp.allclose(got, ref, atol=ulp(100))
+
+
 def test_rectangular_with_coefficient_falls_back():
     """x**q across unequal mode counts must not use the truncated recursion.
 

@@ -818,10 +818,8 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         unit = P1.scalar_product(jnp.ones(P1.shape[0]))
         self.f0u = nnx.data(fx * unit if fx else None)
         self.f0v = nnx.data(fy * unit if fy else None)
-        # Volume of the domain in scalar-product units, for exact averages.
-        self.vol = nnx.static(
-            float(Wo.scalar_product(jnp.ones(Wo.shape))[0, 0, 0].real)
-        )
+        # Unweighted wall-normal quadrature on the padded mesh, for averages.
+        self.q_z = nnx.data(D1.integration_points_and_weights(self.pad[2])[1])
 
     # -- extension points --------------------------------------------------
 
@@ -1236,8 +1234,8 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
     # -- diagnostics -------------------------------------------------------
 
     def average(self, f: Array) -> Array:
-        """Return the exact volume average of a padded physical field."""
-        return self.Wo.scalar_product(f)[0, 0, 0].real / self.vol
+        """Return the volume average of a padded physical field, unweighted."""
+        return jnp.mean(f, axis=(0, 1)) @ self.q_z / jnp.sum(self.q_z)
 
     def courant(self, state: tuple[Array, ...], dt: float) -> float:
         """Return the advective Courant number on the quadrature mesh.

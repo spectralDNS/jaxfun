@@ -379,6 +379,12 @@ class Composite(OrthogonalSpace):
         """Return quadrature nodes/weights (delegated to underlying basis)."""
         return self.orthogonal.quad_points_and_weights(N)
 
+    def integration_points_and_weights(
+        self, N: int | None = None
+    ) -> tuple[Array, Array]:
+        """Return unweighted quadrature (delegated to underlying basis)."""
+        return self.orthogonal.integration_points_and_weights(N)
+
     def _evaluate(self, X: float | Array, c: Array) -> Array:
         """Evaluate constrained expansion at X with composite coeffs c."""
         return self.orthogonal._evaluate(X, self.to_orthogonal(c))
@@ -712,6 +718,12 @@ class BCGeneric(Composite):
         """Quadrature nodes/weights (override to enforce num_quad_points)."""
         return self.orthogonal.quad_points_and_weights(N)
 
+    def integration_points_and_weights(
+        self, N: int | None = None
+    ) -> tuple[Array, Array]:
+        """Return unweighted quadrature (delegated to underlying basis)."""
+        return self.orthogonal.integration_points_and_weights(N)
+
     def get_homogeneous(self) -> Composite:
         """Return new Composite with homogeneous boundary values."""
         raise NotImplementedError("BCGeneric does not support get_homogeneous()")
@@ -772,6 +784,7 @@ class DirectSum:
         self.map_reference_domain = a.map_reference_domain
         self.map_true_domain = a.map_true_domain
         self.quad_points_and_weights = a.quad_points_and_weights
+        self.integration_points_and_weights = a.integration_points_and_weights
         self.num_quad_points = a.num_quad_points
         self.get_orthogonal = a.get_orthogonal
         self.get_testspace = a.get_testspace

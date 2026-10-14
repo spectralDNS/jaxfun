@@ -251,6 +251,39 @@ def apply_field_couplings(
     return total
 
 
+def apply_blocks(
+    slots: Sequence[tuple[int, int]],
+    operators: Sequence[BaseMatrix],
+    x: Sequence[Array],
+    shapes: Sequence[tuple[int, ...]],
+) -> tuple[Array, ...]:
+    """Apply a block operator, given as `(row, column)` slots and their terms.
+
+    Row `i` of the result sums every term in that row applied to the component
+    its slot names; a row with no terms is zero. `shapes` are the row shapes.
+    """
+    out: list[Array | None] = [None] * len(shapes)
+    for (i, j), operator in zip(slots, operators, strict=True):
+        term = operator @ x[j]
+        out[i] = term if out[i] is None else out[i] + term
+    dtype = jnp.result_type(*x)
+    return tuple(
+        jnp.zeros(shape, dtype=dtype) if o is None else o
+        for o, shape in zip(out, shapes, strict=True)
+    )
+
+
+def component_offset(space: Any) -> int:
+    """Return the flattened index of a mixed-space component's first scalar part.
+
+    Keyed on the `global_index` the mixed space stamps on its scalar parts, not
+    on object identity: a vector component of a test space is rebuilt rather
+    than shared, so it is not one of its parent's `basespaces`.
+    """
+    flatten = getattr(space, "flatten", None)
+    return int((flatten()[0] if flatten is not None else space).global_index)
+
+
 def boundary_values(space) -> list[sp.Expr]:
     """Return the boundary values of every BC-carrying factor of ``space``.
 

@@ -152,8 +152,7 @@ from channel_case import ChannelCase, load_case, parse_cli, pytest_case, to_dict
 from ChannelFlow3D import KMM3D, VelocityKind
 from flax import nnx
 
-from jaxfun import galerkin, integrators
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
+from jaxfun import integrators
 from jaxfun.integrators import IMEXTableau
 from jaxfun.sharding import state_sharding
 from jaxfun.typing import Array, PolynomialKind, TestSpaceKind
@@ -167,39 +166,6 @@ def reichardt(yplus: Array, kappa: float = 0.41) -> Array:
     return jnp.log1p(kappa * yplus) / kappa + 7.8 * (
         1 - jnp.exp(-yplus / 11) - yplus / 11 * jnp.exp(-yplus / 3)
     )
-
-
-def integration_weights(polspace: type[OrthogonalSpace], n: int) -> Array:
-    """Return weights q_k for the unweighted integral over (-1, 1).
-
-    int_{-1}^{1} f(z) dz ~ sum_k q_k f(z_k) on the n Gauss points z_k of the
-    wall-normal basis, exact for polynomials of degree below n. For Legendre
-    these are the Gauss weights themselves. The Chebyshev quadratures carry the
-    weight function of their family, so they get Fejer's rules instead, which
-    keep the same points but integrate without it: the first rule on the
-    Chebyshev-Gauss points, the second on the Chebyshev-U-Gauss points. See
-
-      L. Fejer, Mechanische Quadraturen mit positiven Cotesschen Zahlen.
-      Math. Z. 37:287-309, 1933. doi:10.1007/BF01474575
-
-      J. Waldvogel, Fast construction of the Fejer and Clenshaw-Curtis
-      quadrature rules. BIT 46:195-202, 2006. doi:10.1007/s10543-006-0045-4
-
-    Both rules are symmetric in z, so the ordering of the points is immaterial.
-    """
-    if polspace is galerkin.Legendre.Legendre:
-        return jnp.asarray(np.polynomial.legendre.leggauss(n)[1])
-    if polspace is galerkin.Chebyshev.Chebyshev:
-        theta = (2 * np.arange(n) + 1) * np.pi / (2 * n)
-        j = np.arange(1, n // 2 + 1)[:, None]
-        q = 2 / n * (1 - 2 * (np.cos(2 * j * theta) / (4 * j**2 - 1)).sum(axis=0))
-        return jnp.asarray(q)
-    if polspace is galerkin.ChebyshevU.ChebyshevU:
-        theta = (np.arange(n) + 1) * np.pi / (n + 1)
-        j = np.arange(1, (n + 1) // 2 + 1)[:, None]
-        s = (np.sin((2 * j - 1) * theta) / (2 * j - 1)).sum(axis=0)
-        return jnp.asarray(4 * np.sin(theta) / (n + 1) * s)
-    raise NotImplementedError(f"no unweighted quadrature for {polspace.__name__}")
 
 
 class TurbulentChannel(KMM3D):
@@ -235,7 +201,6 @@ class TurbulentChannel(KMM3D):
         super().__init__(Nx, Ny, Nz, Lx, Ly, 1.0 / Re_tau, body_force=1.0, **kwargs)
         self.Re_tau = nnx.static(float(Re_tau))
         self.grid = nnx.static((Nx, Ny, Nz))
-        self.q_z = nnx.data(integration_weights(self.polspace, self.pad[2]))
         self.Dx = nnx.data(self.D1.evaluate_basis_derivative(jnp.array([-1.0, 1.0]), 1))
 
     # -- initial condition -------------------------------------------------
@@ -344,7 +309,7 @@ class TurbulentChannel(KMM3D):
         """Return the wall-normal average of a profile on the quadrature points.
 
         Unweighted, whatever the basis, and exact for polynomials of degree
-        below the number of points; see `integration_weights`.
+        below the number of points; see `integration_points_and_weights`.
         """
         return 0.5 * jnp.sum(self.q_z * profile)
 

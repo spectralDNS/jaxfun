@@ -560,8 +560,8 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
             if body_force
             else None
         )
-        # Volume of the domain in scalar-product units, for exact averages.
-        self.vol = nnx.static(float(Wo.scalar_product(jnp.ones(Wo.shape))[0, 0].real))
+        # Unweighted wall-normal quadrature on the padded mesh, for averages.
+        self.q_y = nnx.data(D1.integration_points_and_weights(self.pad[1])[1])
 
     # -- extension points --------------------------------------------------
 
@@ -921,8 +921,8 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
     # -- diagnostics -------------------------------------------------------
 
     def average(self, f: Array) -> Array:
-        """Return the exact volume average of a padded physical field."""
-        return self.Wo.scalar_product(f)[0, 0].real / self.vol
+        """Return the volume average of a padded physical field, unweighted."""
+        return jnp.mean(f, axis=0) @ self.q_y / jnp.sum(self.q_y)
 
     def courant(self, state: tuple[Array, ...], dt: float) -> float:
         """Return the advective Courant number on the quadrature mesh.

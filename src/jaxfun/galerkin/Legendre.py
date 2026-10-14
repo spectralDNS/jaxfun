@@ -175,6 +175,12 @@ class Legendre(Jacobi):
         x, w = leggauss(N)
         return x, w
 
+    def integration_points_and_weights(
+        self, N: int | None = None
+    ) -> tuple[Array, Array]:
+        """Return the Gauss-Legendre nodes and weights; the weight function is 1."""
+        return self.quad_points_and_weights(N)
+
     @jit_vmap(in_axes=(0, None), static_argnums=2)
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single Legendre polynomial P_i at X.

@@ -21,6 +21,7 @@ from jaxfun.utils.common import (
     _idct_twiddles,
     _scaled_dct,
     cache_static,
+    dct,
     jit_method,
     jit_vmap,
 )
@@ -215,6 +216,33 @@ class Chebyshev(Jacobi):
             jnp.cos(jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)),
             jnp.ones(N) * jnp.pi / N,
         )
+
+    @cache_static
+    def integration_points_and_weights(
+        self, N: int | None = None
+    ) -> tuple[Array, Array]:
+        """Return Fejer's first rule: the Gauss-Chebyshev nodes, unweighted.
+
+        With theta_k = (2k+1)pi/(2N), the weights are
+
+            q_k = 2/N (1 - 2 sum_{j=1}^{N/2} cos(2j theta_k) / (4j^2 - 1)),
+
+        a DCT-III. The rule is symmetric, so it does not matter that the points run from
+        -1 to 1 here. See
+
+          L. Fejer, Mechanische Quadraturen mit positiven Cotesschen Zahlen.
+          Math. Z. 37:287-309, 1933. doi:10.1007/BF01474575
+
+          J. Waldvogel, Fast construction of the Fejer and Clenshaw-Curtis
+          quadrature rules. BIT 46:195-202, 2006. doi:10.1007/s10543-006-0045-4
+        """
+        N = self.num_quad_points if N is None else N
+        # The j = N/2 term of an even N drops out, cos(N theta_k) being zero.
+        j = np.arange(1, (N - 1) // 2 + 1)
+        c = np.zeros(N)
+        c[0] = 1
+        c[2 * j] = -1 / (4 * j**2 - 1)
+        return self.quad_points_and_weights(N)[0], 2 / N * dct(jnp.asarray(c), type=3)
 
     @jit_vmap(in_axes=(0, None), static_argnums=2)
     def eval_basis_function(self, X: float | Array, i: int) -> Array:

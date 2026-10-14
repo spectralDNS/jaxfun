@@ -91,10 +91,15 @@ class CoupledIMEXRungeKutta(IMEXStages, TimeStepper[tuple[Array, ...]]):
     A system with algebraic fields needs a globally stiffly accurate tableau
     whose first stage is explicit (`ARS443`, `ARS222`, `IMEX_EULER`). The
     accepted solution is then the last stage, solved with the constraints in
-    force, and the initial values of the algebraic fields never enter. An
-    algebraic field such as the pressure is that stage's Lagrange multiplier:
-    where it balances explicit terms it is only first-order accurate in time,
-    whatever the order of the fields it constrains.
+    force, and the initial values of the algebraic fields never enter.
+
+    An algebraic field such as the pressure is not integrated in time. Every
+    stage determines it afresh, as the Lagrange multiplier of its constraint,
+    and the value returned is the last stage's. Where that value balances
+    explicit terms, which the stage takes from earlier stage times, it is only
+    a first-order approximation of the pressure at the time of the returned
+    velocity. The pressure is a function of the velocity alone, though, and
+    `consistent_algebraic` solves for it from a state, to the velocity's order.
     """
 
     def __init__(
@@ -217,6 +222,7 @@ class CoupledIMEXRungeKutta(IMEXStages, TimeStepper[tuple[Array, ...]]):
             tuple(c for c in range(len(self._trial_dofs)) if c not in mass_columns)
         )
         self._mass_solver = nnx.data(None)
+        self._algebraic_solver = nnx.static(_Lazy())
         if self.algebraic:
             _check_tableau_for_constraints(tableau)
         else:
@@ -295,6 +301,69 @@ class CoupledIMEXRungeKutta(IMEXStages, TimeStepper[tuple[Array, ...]]):
             jnp.zeros(shape, dtype=dtype) if o is None else o
             for o, shape in zip(out, self._test_dofs, strict=True)
         )
+
+    def consistent_algebraic(
+        self, state: Sequence[Array], N: ScalarPadding = None
+    ) -> tuple[Array, ...]:
+        """Return ``state`` with its algebraic fields solved for from the others.
+
+        The algebraic fields a step returns, such as the pressure, are its last
+        stage's Lagrange multipliers, and only first-order approximations at the
+        step's time. These are the multipliers that make the time derivative of
+        the transient fields satisfy the differentiated constraints, at the
+        state's own time, and so as accurate as the transient fields are.
+
+        The operator is factorized on the first call and kept; the compiled
+        steps are unaffected. Call it outside `jax.jit`.
+
+        Args:
+            state: One coefficient array per component, as `solve` returns.
+            N: Padding for the nonlinear terms, as passed to `solve`.
+
+        Returns:
+            ``state``, its algebraic components replaced.
+        """
+        state = tuple(state)
+        if not self.algebraic:
+            return state
+        constraints = self._constraint_rows()
+        if self._algebraic_solver.value is None:
+            # The mass terms and every linear term that meets a constraint row
+            # or an algebraic column: what the time derivatives and the
+            # multipliers solve together, with the same pins as a stage.
+            coupling = [
+                m.scale(-1.0)
+                for m, (i, j) in zip(
+                    self._linear_terms, self._linear_slots, strict=True
+                )
+                if i in constraints or j in self.algebraic
+            ]
+            self._algebraic_solver.value = block_lu_factor(
+                list(self._mass_terms) + coupling,
+                self.test_space,
+                self.trial_space,
+                self._pins,
+                **dict(self._solve_options),
+            )
+        transient = tuple(
+            jnp.zeros_like(a) if c in self.algebraic else a for c, a in enumerate(state)
+        )
+        linear = self.apply_linear(transient)
+        explicit = self.nonlinear_rhs_scalar_product(state, N)
+        forcing = self._forcing
+        rhs = tuple(
+            jnp.zeros_like(linear[i])
+            if i in constraints
+            else linear[i] + explicit[i] + (0 if forcing is None else forcing[i])
+            for i in range(len(linear))
+        )
+        x = self._algebraic_solver.value.solve(rhs)
+        return tuple(x[c] if c in self.algebraic else a for c, a in enumerate(state))
+
+    def _constraint_rows(self) -> tuple[int, ...]:
+        """Return the test components without a time derivative: the constraints."""
+        mass_rows = {i for i, _ in self._mass_slots}
+        return tuple(i for i in range(len(self._test_dofs)) if i not in mass_rows)
 
     def _forcing_caches(
         self, t: Array | float, dt: float
@@ -525,6 +594,20 @@ def _check_tableau_for_constraints(tableau: IMEXTableau) -> None:
             "first all have a nonzero diagonal and an empty first column, such "
             "as ARS443, ARS222 or IMEX_EULER."
         )
+
+
+class _Lazy:
+    """A slot filled on first use, outside any trace.
+
+    Held as static metadata and compared by its own identity, not its content's,
+    so filling it leaves the stepper's pytree structure -- and with it every
+    compiled step -- unchanged.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self) -> None:
+        self.value: Any = None
 
 
 def _is_array_initial(value: Any) -> bool:

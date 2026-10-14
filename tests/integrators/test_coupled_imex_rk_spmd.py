@@ -57,6 +57,11 @@ def test_taylor_green_vortex() -> None:
     decay = sp.exp(-2 * nu * 0.2)
     assert jnp.allclose(ux, project(sp.sin(x) * sp.cos(y) * decay, VD), atol=1e-5)
     assert jnp.allclose(uy, project(-sp.cos(x) * sp.sin(y) * decay, VD), atol=1e-5)
+    # The pressure solved for from the velocity, through its own split factors.
+    _, _, p = tg.consistent_algebraic((ux, uy, p))
+    pe = project((sp.cos(2 * x) + sp.cos(2 * y)) / 4 * decay**2, Q)
+    assert jnp.abs(p - pe).max() < 1e-5 * jnp.abs(pe).max()
+    assert p.sharding.is_equivalent_to(state_sharding(p.shape), p.ndim)
 
 
 @pytest.mark.parametrize("method", ["dense", "rcm"])

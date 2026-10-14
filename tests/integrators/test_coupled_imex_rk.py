@@ -34,7 +34,9 @@ from jaxfun.integrators import (
     IMEX_SSP2_222,
     CoupledIMEXRungeKutta,
 )
+from jaxfun.integrators.base import _advance
 from jaxfun.operators import Div, Dot, Grad
+from jaxfun.utils.common import ulp
 
 HOM = {"left": {"D": 0}, "right": {"D": 0}}
 
@@ -80,6 +82,49 @@ def test_taylor_green_vortex() -> None:
     # The pressure is a stage value balancing explicit terms: first order.
     pe = project((sp.cos(2 * x) + sp.cos(2 * y)) / 4 * decay**2, Q)
     assert jnp.abs(p - pe).max() < 1e-2 * jnp.abs(pe).max()
+
+    # Solved for from the velocity, it is as accurate as the velocity, and
+    # asking for it leaves the compiled step alone.
+    compiled = _advance._cache_size()  # ty: ignore[unresolved-attribute]
+    _, _, p_consistent = tg.consistent_algebraic((ux, uy, p))
+    assert jnp.abs(p_consistent - pe).max() < 1e-5 * jnp.abs(pe).max()
+    tg.solve(0.02, 1, state0=(ux, uy, p), progress=False)
+    assert _advance._cache_size() == compiled  # ty: ignore[unresolved-attribute]
+
+
+def test_consistent_pressure_at_rest_is_hydrostatic() -> None:
+    """At rest in the conducting profile the pressure balances buoyancy alone.
+
+    Wall-normal only: velocity v, pressure p and temperature T between walls.
+    The profile is the temperature's boundary lifting, so it enters through the
+    forcing, and the buoyancy through a linear term between transient fields.
+    """
+    N = 8
+    poly = Legendre.Legendre
+    D = FunctionSpace(N, poly, bcs=HOM, name="D")
+    P = FunctionSpace(N, poly, name="P")
+    Tb = FunctionSpace(N, poly, bcs={"left": {"D": 1}, "right": {"D": 0}}, name="Tb")
+    W = CartesianProduct(D, P, Tb, name="W")
+    v, p, T = TrialFunction(W, name="vpT", transient=True)
+    w, q, s = TestFunction(W, name="wqs")
+    t = D.system.base_time()
+    y = D.system.base_scalars()[0]
+    equations = (
+        (v.diff(t) + p.diff(y) - T) * w,
+        v.diff(y) * q,
+        (T.diff(t) - T.diff(y, 2)) * s,
+    )
+    rb = CoupledIMEXRungeKutta(
+        equations,
+        tableau=ARS443,
+        initial=(0, None, 0),
+        pin={p: [(0,), (N - 1,)]},
+        sparse=True,
+    )
+    # dp/dy = T = (1 - y)/2, with the constant pinned away.
+    _, p_rest, _ = rb.consistent_algebraic(rb.initial_coefficients())
+    pe = project(y / 2 - y**2 / 4, P).at[0].set(0)
+    assert jnp.allclose(p_rest, pe, atol=float(1000 * ulp(1.0)))
 
 
 def test_initial_condition_as_coefficients() -> None:

@@ -75,7 +75,7 @@ states_phys = jax.jit(jax.vmap(V.backward))(states).real
 
 fig, ax = plt.subplots()
 (line,) = ax.plot(xj, states_phys[0], "b")
-ax.set_xlim(xj.min(), xj.max())
+ax.set_xlim(float(xj.min()), float(xj.max()))
 ax.set_ylim(states_phys.min() * 1.2, states_phys.max() * 1.2)
 ax.set_xlabel("x")
 ax.set_ylabel("u(x,t)")

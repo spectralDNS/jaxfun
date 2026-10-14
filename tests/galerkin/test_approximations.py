@@ -102,6 +102,7 @@ def test_backward_primitive(jspace: type[Jacobi], domain: Domain):
     x = D.system.x
     f = sp.sin(x)
     uf = JAXFunction(f, D)
+    assert isinstance(uf.array, jax.Array)
     du = JAXFunction(sp.diff(f, x), D)
     df = D.backward_primitive(uf.array, 1)
     error = jnp.linalg.norm(df - du.backward())

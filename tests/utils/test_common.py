@@ -111,7 +111,7 @@ class _Compiled:
         return (self.n,)
 
     @common.jit_method
-    def scale(self, x: Array) -> Array:
+    def scale(self, x: Array | float) -> Array:
         self.traces += 1
         return self.a * x * jnp.ones(self.n)
 

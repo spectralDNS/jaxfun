@@ -946,6 +946,11 @@ class PGComposite(Composite):
     unless a polynomial coefficient lifts the trial functions past degree N - 1,
     while scalar products only see the N modes the trial space can represent.
 
+    Order 0 is for a trial space without boundary conditions, an orthogonal one.
+    It has the order-1 test functions, one per mode, so its last two are the
+    truncated ones -- and those truncate to the orthogonal functions N - 2 and
+    N - 1, which leaves the space spanning the trial space.
+
     Args:
         N: Target (unconstrained) number of modes of underlying orthogonal.
         orthogonal: Underlying orthogonal basis class (e.g. Chebyshev).
@@ -988,7 +993,7 @@ class PGComposite(Composite):
         scaling: sp.Expr | None = None,
         order: int = 1,
     ) -> None:
-        assert order > 0, "Order must be positive for Petrov-Galerkin composite."
+        assert order >= 0, "Order must be nonnegative for Petrov-Galerkin composite."
         # Set before the parent builds S, whose rows `dim` counts.
         self.order = order
         super().__init__(
@@ -1004,9 +1009,10 @@ class PGComposite(Composite):
             beta=beta,
             scaling=scaling,
         )
-        # The full PG space has N - order rows of width N + order, and the last
-        # `order` of them are cut at width N in S.
-        wide = np.asarray(self.stencil.matrix((N - order, N + order)).todense())
+        # The full PG space has N - order rows, as wide as its stencil reaches,
+        # and the rows that reach past N are cut at width N in S.
+        width = N + max(self.stencil.rule)
+        wide = np.asarray(self.stencil.matrix((self.dim, width)).todense())
         self._truncated = np.flatnonzero(np.any(wide[:, N:] != 0, axis=1))
 
     @property
@@ -1016,7 +1022,7 @@ class PGComposite(Composite):
 
     def recombine(
         self,
-        trial: Composite,
+        trial: Composite | Jacobi,
         name: str | None = None,
         fun_str: str | None = None,
     ) -> GalerkinRecombined:
@@ -1090,14 +1096,18 @@ class PGComposite(Composite):
         def Akq(k: int, q: int, V: Jacobi | Composite) -> DiaMatrix:
             return V.orthogonal.A_(k=k, N=V.N + 2 * q).power(q)  # (N+2q, N+2q)
 
+        # Order 0 has the order-1 test functions, so it takes their recurrences.
+        # Its own would be those of the orthogonal functions themselves, which
+        # give back the dense Galerkin matrices.
+        k = max(self.order, 1)
         z: DiaMatrix | Matrix | None = None
-        if j <= self.order and q == 0:
-            B: DiaMatrix = Bkl(self.order, j, u).crop(self.num_dofs, u.N)
+        if j <= k and q == 0:
+            B: DiaMatrix = Bkl(k, j, u).crop(self.num_dofs, u.N)
             z = B @ u.ST if isinstance(u, Composite) else B
 
-        elif j <= self.order and q > 0:
-            A: DiaMatrix = Akq(self.order, q, u).crop(self.num_dofs, u.N)  # (M, N)
-            B: DiaMatrix = Bkl(self.order, j, u)  # (N, N)
+        elif j <= k and q > 0:
+            A: DiaMatrix = Akq(k, q, u).crop(self.num_dofs, u.N)  # (M, N)
+            B: DiaMatrix = Bkl(k, j, u)  # (N, N)
             z = A @ B @ u.ST if isinstance(u, Composite) else A @ B
 
         if z is None:
@@ -1150,9 +1160,14 @@ class GalerkinRecombined(Composite):
     should be identical to using the original Galerkin basis, up to round-off
     error. Also, it is not limited to Dirichlet trial functions.
 
+    The trial space may also be an orthogonal space, tested by the order-0
+    Petrov-Galerkin space, e.g. `\psi_k = T_k - T_{k+2}` for Chebyshev. Its last
+    two functions, truncated to the first N modes, are `T_{N-2}` and `T_{N-1}`,
+    which are trial functions already, so there the two spaces coincide.
+
     Args:
         pg: The Petrov-Galerkin test space.
-        trial: The trial space it tests.
+        trial: The trial space it tests, a composite or an orthogonal space.
         name: Space name.
         fun_str: Symbol stem for basis functions.
 
@@ -1169,7 +1184,7 @@ class GalerkinRecombined(Composite):
     def __init__(
         self,
         pg: PGComposite,
-        trial: Composite,
+        trial: Composite | Jacobi,
         name: str | None = None,
         fun_str: str | None = None,
     ) -> None:
@@ -1188,7 +1203,7 @@ class GalerkinRecombined(Composite):
         super().__init__(
             trial.N,
             type(trial.orthogonal),
-            trial.bcs,
+            trial.bcs or {},
             domain=trial.domain,
             name=name if name is not None else pg.name,
             fun_str=fun_str if fun_str is not None else pg.fun_str,
@@ -1259,7 +1274,7 @@ def _replace_rows(
 
 
 def _check_in_span(
-    rows: np.ndarray, S_trial: np.ndarray, pg: PGComposite, trial: Composite
+    rows: np.ndarray, S_trial: np.ndarray, pg: PGComposite, trial: Composite | Jacobi
 ) -> None:
     """Raise unless the kept PG `rows` lie in the span of the trial stencil.
 
@@ -1275,7 +1290,7 @@ def _check_in_span(
     if np.any(err > np.sqrt(np.finfo(rows.dtype).eps)):
         raise ValueError(
             f"the {type(pg).__name__} test functions do not satisfy the boundary "
-            f"conditions {dict(trial.bcs)} of the trial space, so recombining "
+            f"conditions {dict(trial.bcs or {})} of the trial space, so recombining "
             "them is not Galerkin; use get_testspace('PG') instead"
         )
 

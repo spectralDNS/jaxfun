@@ -181,6 +181,35 @@ class Legendre(Jacobi):
         """Return the Gauss-Legendre nodes and weights; the weight function is 1."""
         return self.quad_points_and_weights(N)
 
+    def get_testspace(
+        self,
+        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
+        name: str | None = None,
+        fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
+    ) -> OrthogonalSpace:
+        """Return the test space of `kind` for this space as trial space.
+
+        Galerkin is this space itself. Petrov-Galerkin is `LegPhi_0`, the
+        order-1 test functions, one per mode, which keep operators of up to
+        first derivatives banded. It spans this space, so Galerkin-recombined
+        is the same space. `name`, `fun_str` and `scaling` are for those two.
+        """
+        kind = TestSpaceKind.coerce(kind)
+        if kind == TestSpaceKind.GALERKIN:
+            return self
+        P = LegPhi_0(
+            self.N,
+            domain=self.domain,
+            system=self.system,
+            name=name,
+            fun_str=fun_str,
+            scaling=scaling,
+        )
+        if kind == TestSpaceKind.PETROV_GALERKIN:
+            return P
+        return P.recombine(self, name=name, fun_str=fun_str)
+
     @jit_vmap(in_axes=(0, None), static_argnums=2)
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single Legendre polynomial P_i at X.
@@ -529,6 +558,50 @@ class LGComposite(Composite):
         return -A - q * B
 
         return None
+
+
+class LegPhi_0(PGComposite):
+    r"""
+    Composite space for Galerkin recombination of the orthogonal space.
+
+    The test functions for an orthogonal Legendre trial space: those of
+    `LegPhi_1`, but one per mode,
+
+    .. math::
+
+        \phi_k = \frac{1}{2}(L_k - L_{k+2}), \, k=0, 1, \ldots, N-1,
+
+    with the last two truncated to the first N Legendre polynomials, which
+    leaves them proportional to L_{N-2} and L_{N-1}; see `PGComposite`. The test
+    functions then span the trial space, so the method is Galerkin, while the
+    matrices of operators with up to first derivatives are banded, as for
+    `LegPhi_1`. Create with `Legendre(N).get_testspace("GR")`.
+    """
+
+    def __init__(
+        self,
+        N: int,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
+        name: str | None = None,
+        fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
+    ) -> None:
+        name = name if name is not None else "LegPhi_0"
+        fun_str = fun_str if fun_str is not None else "phi_0"
+        PGComposite.__init__(
+            self,
+            N,
+            Legendre,
+            bcs={"left": {"D": 0}, "right": {"D": 0}},
+            domain=domain,
+            system=system,
+            stencil={0: sp.S.Half, 2: -sp.S.Half},
+            scaling=scaling,
+            name=name,
+            fun_str=fun_str,
+            order=0,
+        )
 
 
 class LegPhi_1(PGComposite):

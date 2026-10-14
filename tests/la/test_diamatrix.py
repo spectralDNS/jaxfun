@@ -843,15 +843,32 @@ class TestLU:
         a = jnp.array([[0.0, 1.0, 0.0], [1.0, 2.0, 1.0], [0.0, 1.0, 2.0]])
         A = DiaMatrix.from_dense(a, offsets=(-1, 0, 1))
         lu = A.lu_factor(pivot=True)
-        # L @ U == P @ A
-        PA = a if lu.perm is None else a[lu.perm, :]
-        H = lu.L @ lu.U
-        assert jnp.allclose(H.todense(), PA, atol=ulp(100))
+        assert lu.pivots is not None
         # Solve A x = b
         x_true = jnp.array([1.0, 2.0, 3.0])
         b = a @ x_true
         x = lu.solve(b)
         assert jnp.allclose(x, x_true, atol=ulp(100))
+
+    @pytest.mark.parametrize("complex_valued", [False, True])
+    @pytest.mark.parametrize(("p", "q"), [(1, 1), (2, 3), (3, 1)])
+    def test_lu_pivot_rows_swapped_down_repeatedly(self, p, q, complex_valued):
+        """A row swapped down at several steps carries its multipliers ever
+        further from the diagonal, past what a band holds; the solve has to
+        replay the swaps step by step, as LAPACK's gbtrs does."""
+        rng = np.random.default_rng(3)
+        n = 12
+        a = np.zeros((n, n), dtype=complex if complex_valued else float)
+        for o in range(-p, q + 1):
+            d = rng.standard_normal(n - abs(o))
+            a += np.diag(d + 1j * d[::-1] if complex_valued else d, o)
+        a[np.arange(0, n, 3), np.arange(0, n, 3)] = 0  # forces swaps
+        lu = DiaMatrix.from_dense(jnp.asarray(a), tol=0).lu_factor(pivot=True)
+        assert lu.pivots is not None
+        b = rng.standard_normal(n)
+        x = np.asarray(lu.solve(jnp.asarray(b).astype(lu.U.dtype)))
+        residual = np.abs(a @ x - b).max()
+        assert residual < ulp(1000) * np.abs(a).max() * np.abs(x).max()
 
     def test_lu_perm_attribute(self):
         """perm is None when no pivoting occurred; a JAX int array when it did."""

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, NamedTuple, TypedDict, overload
 import jax
 import jax.core
 import jax.numpy as jnp
+import numpy as np
 from flax import nnx
 
 from jaxfun.la.matrixprotocol import (
@@ -415,11 +416,14 @@ class DiaMatrix(BaseMatrix):
                 positive-definite matrices — the common case.  ``lu.perm`` will
                 be ``None``.
 
-                If ``True``, restricted partial pivoting is used: at each step
-                the row with the largest absolute value in the pivot column,
-                among rows ``k … k+p``, is swapped into position.  This handles
-                zero diagonals and improves stability for general banded
-                matrices.  Fill-in may extend U's bandwidth to ``p + q``.
+                If ``True``, restricted partial pivoting is used, as in
+                LAPACK's ``gbtrf``: at each step the row with the largest
+                absolute value in the pivot column, among rows ``k … k+p``, is
+                swapped into position.  This handles zero diagonals and improves
+                stability for general banded matrices.  Fill-in may extend U's
+                bandwidth to ``p + q``, while L keeps ``p`` sub-diagonals: each
+                step's multipliers stay where they were computed, and
+                ``lu.pivots`` records the swaps for the solve to replay.
 
         The elimination is compiled via ``jax.lax.scan`` and ``jax.jit``, so
         the first call traces and compiles the kernel (cached for the same
@@ -427,8 +431,8 @@ class DiaMatrix(BaseMatrix):
         same size are fast.  It is an *O(n·(p + q))* operation.
 
         Returns:
-            :class:`LUFactors` containing ``L``, ``U``, ``perm``, and the
-            original shape.
+            :class:`LUFactors` containing ``L``, ``U``, ``perm``, ``pivots``
+            and the original shape.
 
         Raises:
             ValueError: if the matrix is not square or the system is singular.
@@ -510,20 +514,14 @@ class DiaMatrix(BaseMatrix):
             return result
 
         # ---- pivoting path ----------------------------------------------
-        # Row pivoting within the band can introduce fill: U bandwidth ≤ p + q.
+        # Row swaps within the band can introduce fill: U bandwidth ≤ p + q.
         q_eff = q + p
-
-        # Build a compact band array of shape (bw, n) — O(n·bw) rather than O(n²).
-        #
-        # Convention (LAPACK-style with extra kl rows for fill):
+        # Compact band array of shape (bw, n), LAPACK's layout for gbtrf:
         #   band[center + off, j] = A[j - off, j]  (column-aligned DIA)
-        #   center = 2p
-        #   bw     = 2p + q_eff + 1 = 3p + q + 1
-        #
-        # The extra 'p' rows above the original p sub-diagonals store multipliers
-        # that were displaced when earlier rows got swapped down — allowing L fill
-        # at offsets as deep as -2p without growing the array.
-        center = 2 * p
+        #   center = p,  bw = p + q_eff + 1 = 2p + q + 1
+        # The p rows below the center hold L's multipliers, the rows from the
+        # center up U, whose extra p rows take the fill from swaps.
+        center = p
         bw = center + q_eff + 1
         band = jnp.zeros((bw, n), dtype=self.data.dtype)
         valid = [
@@ -534,9 +532,7 @@ class DiaMatrix(BaseMatrix):
         if valid:
             src_idx, dst_rows = zip(*valid)
             band = band.at[jnp.array(dst_rows), :].set(self.data[jnp.array(src_idx)])
-
-        band_lu, perm_arr = _lu_banded_kernel(band, p, q_eff, center)
-
+        band_lu, pivots = _lu_banded_kernel(band, p, q_eff, center)
         # Singularity check: the main diagonal of U lives at band row `center`.
         diag_u = band_lu[center]
         if (
@@ -548,18 +544,20 @@ class DiaMatrix(BaseMatrix):
                 "Consider pinning (:meth:`DiaMatrix.pin`) additional DOFs "
                 "for this matrix."
             )
-
         # ---------- extract L -------------------------------------------
-        # band_lu[center - t, :] is already the column-aligned DIA row for
-        # offset -t (L[i, i-t] = band_lu[center-t, i-t]).  Skip near-zero rows
-        # using a relative tolerance (floating-point residuals from elimination
-        # can leave structurally-zero diagonals with tiny non-zero entries).
+        # band_lu[center - t, k] is the multiplier step k applied to the row t
+        # below it, stored as the column-aligned DIA row for offset -t.  Skip
+        # near-zero rows using a relative tolerance (floating-point residuals
+        # from elimination can leave structurally-zero diagonals with tiny
+        # non-zero entries).
         l_tol, u_tol = _lu_prune_tols(band_lu, center, n)
 
+        # The deepest is kept even when zero: a swap can reach p rows down, and
+        # the solve replays the swaps in a window as deep as L.
         l_offsets = tuple(
             off
-            for off in range(-2 * p, 1)
-            if off == 0 or float(jnp.max(jnp.abs(band_lu[center + off]))) > l_tol
+            for off in range(-p, 1)
+            if off in (0, -p) or float(jnp.max(jnp.abs(band_lu[center + off]))) > l_tol
         )
         l_data_rows: list[Array] = []
         for off in l_offsets:
@@ -587,9 +585,17 @@ class DiaMatrix(BaseMatrix):
             shape=(n, n),
         )
 
-        # Use None when no rows were actually swapped (identity permutation).
-        perm = None if bool(jnp.all(perm_arr == jnp.arange(n, dtype=int))) else perm_arr
-        result = LUFactors(L=L, U=U, shape=(n, n), perm=perm)
+        # Use None when no rows were actually swapped: then L U = A as it is.
+        swaps = np.asarray(pivots)
+        if np.array_equal(swaps, np.arange(n)):
+            result = LUFactors(L=L, U=U, shape=(n, n))
+        else:
+            perm = np.arange(n)
+            for k, r in enumerate(swaps):
+                perm[[k, r]] = perm[[r, k]]
+            result = LUFactors(
+                L=L, U=U, shape=(n, n), perm=jnp.asarray(perm), pivots=pivots
+            )
         cache[pivot] = result
         return result
 
@@ -1915,6 +1921,14 @@ class LUFactors(nnx.Pytree):
     Holds the unit-lower-triangular factor ``L`` and the upper-triangular
     factor ``U`` as :class:`DiaMatrix` objects so that ``A ≈ L @ U``.
 
+    With pivoting, as in LAPACK's ``gbtrf``, step ``k`` swaps row ``k`` with
+    row ``pivots[k]`` and then eliminates below it; ``L`` holds each step's
+    multipliers where that step computed them. ``perm`` is the permutation all
+    the swaps compose to, ``P A = L' U``, where ``L'`` is ``L`` with the
+    multipliers moved along by later swaps -- which a band cannot hold, since a
+    row swapped down repeatedly carries its multipliers ever further from the
+    diagonal. The solve replays the swaps one step at a time instead.
+
     Example::
 
         A = diags([jnp.ones(4), -2 * jnp.ones(5), jnp.ones(4)], (-1, 0, 1))
@@ -1928,11 +1942,13 @@ class LUFactors(nnx.Pytree):
         U: DiaMatrix,
         shape: tuple[int, int],
         perm: Array | None = None,
+        pivots: Array | None = None,
     ):
         self.L = nnx.data(L)
         self.U = nnx.data(U)
         self.shape = shape
         self.perm = perm
+        self.pivots = pivots
 
     @jax.jit(static_argnums=(2,))
     def solve(self, b: Array, axis: int = 0) -> Array:
@@ -1957,7 +1973,7 @@ class LUFactors(nnx.Pytree):
         Returns:
             Solution array with the same shape as ``b``.
         """
-        if self.perm is None and self.L.is_diagonal and self.U.is_diagonal:
+        if self.pivots is None and self.L.is_diagonal and self.U.is_diagonal:
             # Nothing to substitute: L is the unit diagonal and U carries the
             # matrix itself, so the solve is a division. Worth taking here rather
             # than leaving it to `_backward_substitution`, which reaches the same
@@ -1968,9 +1984,10 @@ class LUFactors(nnx.Pytree):
         n = self.shape[0]
 
         if b.ndim == 1:
-            if self.perm is not None:
-                b = b[self.perm]
-            y = _forward_elimination(self.L, b)
+            if self.pivots is not None:
+                y = _forward_elimination_pivoted(self.L, self.pivots, b)
+            else:
+                y = _forward_elimination(self.L, b)
             return _backward_substitution(self.U, y)
 
         # N-D case: normalise the solved axis to position 0.
@@ -1980,17 +1997,17 @@ class LUFactors(nnx.Pytree):
         batch = b_moved.size // n
         b2d = b_moved.reshape(n, batch)  # (n, batch)
 
-        if self.perm is not None:
-            b2d = b2d[self.perm, :]
-
-        y2d = _forward_elimination(self.L, b2d)
+        if self.pivots is not None:
+            y2d = _forward_elimination_pivoted(self.L, self.pivots, b2d)
+        else:
+            y2d = _forward_elimination(self.L, b2d)
         x2d = _backward_substitution(self.U, y2d)  # (n, batch)
 
         x_moved = x2d.reshape((n,) + rest_shape)
         return jnp.moveaxis(x_moved, 0, axis)
 
     def get_pivots(self) -> Array | None:
-        """Return the pivot permutation array, or None if no pivoting was done."""
+        """Return the composed row permutation, or None if no rows were swapped."""
         return self.perm
 
     def __repr__(self) -> str:
@@ -2042,102 +2059,115 @@ def _lu_banded_no_pivot_kernel(band: Array, p: int, q: int, center: int) -> Arra
 def _lu_banded_kernel(
     band: Array, p: int, q_eff: int, center: int
 ) -> tuple[Array, Array]:
-    """JIT-compiled banded LU with partial pivoting via ``jax.lax.scan``.
+    """Banded LU with partial pivoting, as LAPACK's ``gbtrf``.
 
     Operates on the compact ``(bw, n)`` band array described in
     :meth:`DiaMatrix.lu_factor` rather than a dense ``(n, n)`` matrix,
     reducing both memory and compute from O(n²) to O(n·bw).
 
     Band convention:  ``band[center + off, j] = A[j - off, j]``
-    (column-aligned DIA for diagonal offset ``off``).  ``center = 2p`` gives
-    p extra rows above the original sub-diagonals for fill from row swaps.
+    (column-aligned DIA for diagonal offset ``off``), with ``center = p``: the
+    ``p`` rows below the center take L's multipliers, and the ``q_eff + 1`` from
+    the center up U, widened by ``p`` for the fill from row swaps.
+
+    Step ``k`` swaps row ``k`` with the row of largest magnitude among
+    ``k … k+p`` in column ``k`` -- in columns ``k`` and up only, so that the
+    multipliers of earlier steps stay where they were computed -- then stores
+    the new multipliers in column ``k`` and updates the rows below.
 
     Args:
         band:    ``(bw, n)`` band array with ``bw = center + q_eff + 1``.
-        p:       Lower bandwidth (static — determines loop unrolling).
+        p:       Lower bandwidth (static).
         q_eff:   Effective upper bandwidth ``= q + p`` (static).
-        center:  Band index of the main diagonal ``= 2p`` (static).
+        center:  Band index of the main diagonal ``= p`` (static).
 
     Returns:
-        ``(band_lu, perm)`` — the in-place factored band and the int32
-        row-permutation array.
+        ``(band_lu, pivots)`` -- the factored band, and for each step ``k``
+        the row ``pivots[k]`` it swapped with row ``k``.
     """
     bw, n = band.shape
+    width = q_eff + 1  # step k touches columns k .. k + q_eff
+    padded = jnp.pad(band, ((0, 0), (0, q_eff)))
+    cols = jnp.arange(width)
+    rows_k = center + cols  # where row k sits in each of those columns
+    below = jnp.arange(1, p + 1)
+    t, dj = (a.ravel() for a in jnp.meshgrid(below, cols[1:], indexing="ij"))
+    in_range = jnp.arange(p + 1)
 
-    def elim_step(
-        carry: tuple[Array, Array], k: Array
-    ) -> tuple[tuple[Array, Array], None]:
-        band, perm = carry
-        k = k.astype(int)
+    def step(padded: Array, k: Array) -> tuple[Array, Array]:
+        W = jax.lax.dynamic_slice(padded, (0, k), (bw, width))
+        # A[k + s, k] for s = 0..p lives at W[center - s, 0].
+        candidates = jnp.where(k + in_range < n, jnp.abs(W[center - in_range, 0]), -1)
+        r = jnp.argmax(candidates)
+        rows_r = rows_k - r
+        row_k, row_r = W[rows_k, cols], W[rows_r, cols]
+        W = W.at[rows_k, cols].set(row_r).at[rows_r, cols].set(row_k)
+        multipliers = W[center - below, 0] / W[center, 0]
+        W = W.at[center - below, 0].set(multipliers)
+        # A[k + t, k + dj] -= l_t A[k, k + dj]
+        W = W.at[center + dj - t, dj].add(-multipliers[t - 1] * W[center + dj, dj])
+        return jax.lax.dynamic_update_slice(padded, W, (0, k)), k + r
 
-        # --- partial pivot: find argmax |A[k..k+p, k]| ---
-        # A[k+t, k] lives at band[center - t, k].  Use dynamic_slice to read
-        # p+1 entries from column k without a Python loop.
-        pivot_col = jax.lax.dynamic_slice(band[:, k], (center - p,), (p + 1,))
-        pivot_vals = pivot_col[::-1]  # pivot_vals[t] = band[center-t, k]
-        row_inds = k + jnp.arange(p + 1, dtype=int)
-        masked = jnp.where(row_inds < n, jnp.abs(pivot_vals), 0.0)
-        r_rel = jnp.argmax(masked).astype(int)
-        r = k + r_rel
+    padded, pivots = jax.lax.scan(step, padded, jnp.arange(n))
+    return padded[:, :n], pivots
 
-        # --- swap rows k ↔ r in DIA band storage ---
-        #
-        # In column-aligned DIA format:  band[center + off, j] = A[j - off, j].
-        # Swapping rows k and r: for each band column j (= k+dj), exchange
-        # band[center+dj, j] ↔ band[center+dj-r_rel, j].
-        # fori_loop over the bw columns in the band window — avoids O(bw*p)
-        # static unrolling.  dj ranges over [-center, q_eff] so that
-        # s_k = center+dj ∈ [0, bw-1] is always in bounds.  s_r = s_k-r_rel
-        # may be negative; we clamp it and mask the write so stray updates
-        # never escape.
-        def swap_col(dj: Array, band: Array) -> Array:
-            j = k + dj
-            in_j = (j >= 0) & (j < n)
-            safe_j = jnp.where(in_j, j, 0)
-            s_k = center + dj
-            s_r = s_k - r_rel
-            in_band_r = (s_r >= 0) & (s_r < bw)
-            do_swap = in_j & in_band_r & (r_rel > 0)
-            safe_s_r = jnp.maximum(s_r, 0)
-            v_k = band[s_k, safe_j]
-            v_r = band[safe_s_r, safe_j]
-            band = band.at[s_k, safe_j].set(jnp.where(do_swap, v_r, v_k))
-            band = band.at[safe_s_r, safe_j].set(jnp.where(do_swap, v_k, v_r))
-            return band
 
-        band = jax.lax.fori_loop(-center, q_eff + 1, swap_col, band)
+def _pivoted_forward(multipliers: Array, pivots: Array, b: Array) -> Array:
+    """Apply LAPACK-style row swaps and multipliers to ``b``, as ``gbtrs`` does.
 
-        pk, pr = perm[k], perm[r]
-        perm = perm.at[k].set(pr)
-        perm = perm.at[r].set(pk)
+    Args:
+        multipliers: ``(n, p)``; ``multipliers[k, t - 1]`` is what step ``k``
+            subtracted from the row ``t`` below it.
+        pivots: ``(n,)``; step ``k`` swapped row ``k`` with row ``pivots[k]``.
+        b: ``(n, m)`` right-hand sides.
 
-        pivot = band[center, k]  # A[k, k] after swap
+    Returns:
+        ``y`` with ``L y = P b`` in the step-by-step sense of `LUFactors`.
 
-        # --- eliminate rows k+1 .. k+p via fori_loop (avoids O(p*q) unrolling) ---
-        def s_step(s: Array, band: Array) -> Array:
-            in_i = (k + s) < n
-            f = jnp.where(in_i, band[center - s, k] / pivot, 0.0)
-            band = band.at[center - s, k].set(jnp.where(in_i, f, band[center - s, k]))
+    The carry is the window of rows ``k … k+p`` still to be finished, so the
+    swap partner of every step is in it.
+    """
+    n, p = multipliers.shape
+    window0 = b[: p + 1]
+    incoming = jnp.concatenate([b[p + 1 :], jnp.zeros((p + 1, b.shape[1]), b.dtype)])
 
-            def u_step(u: Array, band: Array) -> Array:
-                j = k + u
-                in_j = j < n
-                safe_j = jnp.where(in_j, j, 0)
-                return band.at[center + u - s, safe_j].add(
-                    jnp.where(in_i & in_j, -f * band[center + u, safe_j], 0.0)
-                )
+    def step(
+        window: Array, xs: tuple[Array, Array, Array, Array]
+    ) -> tuple[Array, Array]:
+        k, r, l_k, nxt = xs
+        s = r - k
+        top, partner = window[0], window[s]
+        window = window.at[s].set(top).at[0].set(partner)
+        y_k = window[0]
+        rest = window[1:] - l_k[:, None] * y_k[None, :]
+        return jnp.concatenate([rest, nxt[None]]), y_k
 
-            return jax.lax.fori_loop(1, q_eff + 1, u_step, band)
-
-        band = jax.lax.fori_loop(1, p + 1, s_step, band)
-
-        return (band, perm), None
-
-    perm0 = jnp.arange(n, dtype=int)
-    (band_lu, perm), _ = jax.lax.scan(
-        elim_step, (band, perm0), jnp.arange(n, dtype=int)
+    _, y = jax.lax.scan(
+        step, window0, (jnp.arange(n), pivots, multipliers, incoming[:n])
     )
-    return band_lu, perm
+    return y
+
+
+def _multiplier_columns(L: DiaMatrix, p: int | None = None) -> Array:
+    """Return ``(n, p)`` with column ``t - 1`` the multipliers at offset ``-t``."""
+    n = L.shape[0]
+    strides = [-o for o in L.offsets if o < 0]
+    p = max(strides, default=0) if p is None else p
+    out = jnp.zeros((n, p), dtype=L.data.dtype)
+    for stride in strides:
+        out = out.at[:, stride - 1].set(L.data[L.offsets.index(-stride)])
+    return out
+
+
+@jax.jit
+def _forward_elimination_pivoted(L: DiaMatrix, pivots: Array, b: Array) -> Array:
+    """Solve the forward half of a pivoted `LUFactors`, for ``b`` of 1 or 2 dims."""
+    multipliers = _multiplier_columns(L)
+    if multipliers.shape[1] == 0:
+        return b  # nothing below the diagonal, so nothing was swapped either
+    b2d = b[:, None] if b.ndim == 1 else b
+    y = _pivoted_forward(multipliers.astype(b2d.dtype), pivots, b2d)
+    return y[:, 0] if b.ndim == 1 else y
 
 
 def _lu_prune_tols(band_lu: Array, center: int, n: int) -> tuple[float, float]:

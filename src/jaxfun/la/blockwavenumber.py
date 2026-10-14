@@ -9,14 +9,16 @@ When every component shares the same Fourier axes and at most one non-periodic
 axis, the system decouples into one small block system per Fourier wavenumber.
 `BlockWavenumberSolver` factorizes those dense, and `BlockBandedWavenumberSolver`
 banded, after a reordering that interleaves the fields; both pivot, which the
-zero diagonal of a saddle-point (pressure) block needs. Every other layout falls
-back to one global sparse LU of the flattened system.
+zero diagonal of a saddle-point (pressure) block needs. On several devices the
+wavenumbers are split across them as the state is, and each device assembles,
+factorizes and solves only its own. Every other layout falls back to one global
+sparse LU of the flattened system.
 """
 
 from __future__ import annotations
 
 import functools
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import jax
@@ -24,7 +26,8 @@ import jax.numpy as jnp
 import jax.scipy.linalg as jsl
 import numpy as np
 from flax import nnx
-from jax import Array
+from jax import Array, shard_map
+from jax.sharding import PartitionSpec
 
 from jaxfun.la.blockmatrix import BlockMatrix
 from jaxfun.la.diamatrix import DiaMatrix, _lu_banded_kernel, _pivoted_forward
@@ -40,6 +43,9 @@ if TYPE_CHECKING:
 type Pin = tuple[int, tuple[int, ...]]
 
 _WAVENUMBER_METHODS = frozenset({"auto", "dense", "rcm", "banded"})
+
+# `shard_map` specs: split over the wavenumbers, or the same on every device.
+_SPLIT, _SAME = PartitionSpec("k"), PartitionSpec()
 
 
 def block_lu_factor(
@@ -199,6 +205,16 @@ class _WavenumberSystem:
         self.col_starts = tuple(int(s) for s in np.cumsum((0,) + col_sizes[:-1]))
         self.trial_dofs = trial_dofs
         self.dtype = _working_dtype(mats)
+        # The wavenumbers are split over the devices as the state is (see
+        # `jaxfun.sharding.state_sharding`): along axis 0, when that is a Fourier
+        # axis the devices divide. Otherwise every device holds them all.
+        n_dev = jax.device_count()
+        self.sharded = (
+            n_dev > 1
+            and ndim >= 2
+            and fourier[:1] == (0,)
+            and fourier_shape[0] % n_dev == 0
+        )
 
         # Each term as (test component, trial component, weight per wavenumber,
         # polynomial factor). The weight is its coefficient times the product of
@@ -310,20 +326,97 @@ class _WavenumberSystem:
         phi[phi < 0] = 0
         return psi, phi
 
-    def dense(self, phases: tuple[np.ndarray, np.ndarray] | None) -> np.ndarray:
-        """Return every :math:`A_k`, ``(n_F, n, n)``, scaled by ``phases``."""
-        A = np.zeros((self.n_F, self.n, self.n), dtype=complex)
-        for bi, bj, w, P in self.terms:
-            if phases is not None:
-                w = w * 1j ** int(phases[0][bi] + phases[1][bj])
-            r0, c0 = self.row_starts[bi], self.col_starts[bj]
-            A[:, r0 : r0 + P.shape[0], c0 : c0 + P.shape[1]] += (
-                w[:, None, None] * P[None]
+    def weights(self, phases: tuple[np.ndarray, np.ndarray] | None) -> Array:
+        """Return every term's weight per wavenumber, ``(n_F, n_terms)``.
+
+        Each is multiplied by its block's phase, if ``phases`` are given.
+        """
+        W = np.stack([w for _, _, w, _ in self.terms], axis=1)
+        if phases is not None:
+            psi, phi = phases
+            W = W * np.array([1j ** int(psi[i] + phi[j]) for i, j, _, _ in self.terms])
+        return self.place(W.astype(jnp.result_type(self.dtype, jnp.complex64)))
+
+    def keep(self) -> Array | None:
+        """Return ``(n_F, n)`` zeros on the pinned rows and ones elsewhere, or None."""
+        if not self.pinned:
+            return None
+        keep = np.ones((self.n_F, self.n), dtype=jnp.finfo(self.dtype).dtype)
+        for k, r, _ in self.pinned:
+            keep[k, r] = 0
+        return self.place(keep)
+
+    def place(self, x: np.ndarray) -> Array:
+        """Return ``x``, wavenumbers first, split over the devices if `sharded`."""
+        if not self.sharded:
+            return jnp.asarray(x)
+        from jaxfun.sharding import spectral_sharding
+
+        return jax.make_array_from_callback(
+            x.shape, spectral_sharding, lambda index: x[index]
+        )
+
+    def map(self, fn: Callable, in_specs: Any, out_specs: Any) -> Callable:
+        """Return ``fn`` jitted, run on each device's own wavenumbers if `sharded`.
+
+        ``in_specs`` and ``out_specs`` mark the arguments and results that carry
+        wavenumbers, `_SPLIT`, and those that are the same everywhere, `_SAME`.
+        Per-device data has to come in as an argument: a closed-over array is
+        the same on every device.
+        """
+        if self.sharded:
+            from jaxfun.sharding import spmd_mesh
+
+            fn = shard_map(
+                fn,
+                mesh=spmd_mesh,
+                in_specs=in_specs,
+                out_specs=out_specs,
+                check_vma=False,
             )
-        if phases is None:
-            return A.astype(self.dtype)
-        assert not np.any(A.imag), "phases left an imaginary part"
-        return A.real.astype(jnp.finfo(self.dtype).dtype)
+        return jax.jit(fn)
+
+    def assembler(
+        self,
+        dtype: Any,
+        shape: tuple[int, int],
+        position: Callable[[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]],
+    ) -> Callable[[Array, Array | None], Array]:
+        """Return a function that builds every :math:`A_k` from the weights.
+
+        It takes `weights` and `keep`, for whichever wavenumbers it is handed,
+        and returns them shaped ``(n_k, *shape)``, with ``position`` mapping a
+        (row, column) of :math:`A_k` to its place in that layout. A pinned row
+        is replaced by its identity row.
+        """
+        found = [
+            (
+                np.full(ii.size, t),
+                self.row_starts[bi] + ii,
+                self.col_starts[bj] + jj,
+                P[ii, jj],
+            )
+            for t, (bi, bj, w, P) in enumerate(self.terms)
+            if np.any(w)
+            for ii, jj in [np.nonzero(P)]
+        ]
+        term, rows, cols, vals = (np.concatenate(a) for a in zip(*found, strict=True))
+        at = position(rows, cols)
+        pairs = sorted({(r, c) for _, r, c in self.pinned})
+        pin_rows = np.array([r for r, _ in pairs], dtype=int)
+        pin_at = position(pin_rows, np.array([c for _, c in pairs], dtype=int))
+        real = not jnp.issubdtype(dtype, jnp.complexfloating)
+
+        def assemble(W: Array, keep: Array | None) -> Array:
+            v = W[:, term] * vals
+            v = (v.real if real else v).astype(dtype)
+            A = jnp.zeros((W.shape[0], *shape), dtype)
+            if keep is None:
+                return A.at[:, at[0], at[1]].add(v)
+            A = A.at[:, at[0], at[1]].add(v * keep[:, rows])
+            return A.at[:, pin_at[0], pin_at[1]].add(1 - keep[:, pin_rows])
+
+        return assemble
 
     @functools.cached_property
     def band(self) -> tuple[np.ndarray, int, int]:
@@ -410,21 +503,35 @@ def _unstack(
     out = []
     start = 0
     for n, shape in zip(sizes, dofs, strict=True):
-        xc = x[:, start : start + n].reshape(tuple(shape[a] for a in order))
+        # The leading axis is inferred: it is the split one on several devices.
+        xc = x[:, start : start + n].reshape((-1, *(shape[a] for a in order[1:])))
         out.append(jnp.transpose(xc, back))
         start += n
     return tuple(out)
 
 
-def _check_nonsingular(diag: Array) -> None:
-    magnitude = np.abs(np.asarray(diag))
-    bad = ~np.isfinite(magnitude) | (magnitude == 0)
-    if bad.any():
-        k = int(np.nonzero(bad.any(axis=1))[0][0])
+def _singular(diagonal: Array) -> Array:
+    """Return one flag per wavenumber: whether a pivot of its factors is zero."""
+    return jnp.any(~jnp.isfinite(diagonal) | (diagonal == 0), axis=1)
+
+
+def _check_nonsingular(singular: Array) -> None:
+    flags = _fetch(singular)
+    if flags.any():
+        k = int(np.nonzero(flags)[0][0])
         raise ValueError(
             f"Block system is singular at wavenumber {k} (flat index). Pin "
             "the undetermined unknown, e.g. a pressure mode, through `pins`."
         )
+
+
+def _fetch(x: Array) -> np.ndarray:
+    """Return ``x`` whole, gathering the parts that other processes hold."""
+    if x.is_fully_addressable:
+        return np.asarray(x)
+    from jax.experimental import multihost_utils
+
+    return np.asarray(multihost_utils.process_allgather(x, tiled=True))
 
 
 class BlockWavenumberSolver(nnx.Pytree):
@@ -437,24 +544,47 @@ class BlockWavenumberSolver(nnx.Pytree):
 
     def __init__(self, system: _WavenumberSystem) -> None:
         phases = system.phases()
-        A = system.dense(phases)
-        for k, r, c in system.pinned:
-            A[k, r, :] = 0
-            A[k, r, c] = 1
-        lu, piv = jax.vmap(jsl.lu_factor)(jnp.asarray(A))
-        _check_nonsingular(jnp.diagonal(lu, axis1=1, axis2=2))
-        self.lu = lu
-        self.perm = jax.lax.linalg.lu_pivots_to_permutation(piv, system.n)
+        dtype = system.dtype if phases is None else jnp.finfo(system.dtype).dtype
+        n = system.n
+        assemble = system.assembler(dtype, (n, n), lambda r, c: (r, c))
+
+        def factor(W: Array, keep: Array | None) -> tuple[Array, Array, Array]:
+            lu, piv = jax.vmap(jsl.lu_factor)(assemble(W, keep))
+            perm = jax.lax.linalg.lu_pivots_to_permutation(piv, n)
+            return lu, perm, _singular(jnp.diagonal(lu, axis1=1, axis2=2))
+
+        k = _SPLIT
+        self.keep = system.keep()
+        self.lu, self.perm, singular = system.map(factor, (k, k), (k, k, k))(
+            system.weights(phases), self.keep
+        )
+        _check_nonsingular(singular)
         self.row_phase, self.col_phase = (
             (None, None) if phases is None else _phase_vectors(system, phases)
         )
-        self.keep = _keep_mask(system)
-        self.fourier = system.fourier
-        self.poly_axis = system.poly_axis
-        self.row_sizes = system.row_sizes
-        self.col_sizes = system.col_sizes
-        self.trial_dofs = system.trial_dofs
         self.pinned_rows = tuple((k, r) for k, r, _ in system.pinned)
+
+        def solve(
+            lu: Array,
+            perm: Array,
+            keep: Array | None,
+            row_phase: Array | None,
+            col_phase: Array | None,
+            rhs: tuple[Array, ...],
+        ) -> tuple[Array, ...]:
+            b = _stack(rhs, system.fourier, system.poly_axis, system.row_sizes)
+            if keep is not None:
+                b = b * keep
+            if row_phase is not None:
+                b = b * row_phase
+            x = _dense_solve(lu, perm, b)
+            if col_phase is not None:
+                x = x * col_phase
+            return _unstack(
+                x, system.fourier, system.poly_axis, system.col_sizes, system.trial_dofs
+            )
+
+        self._solve = system.map(solve, (k, k, k, _SAME, _SAME, k), k)
 
     def solve(self, rhs: Sequence[Array]) -> tuple[Array, ...]:
         """Solve the block system.
@@ -465,16 +595,8 @@ class BlockWavenumberSolver(nnx.Pytree):
         Returns:
             One array per trial component.
         """
-        b = _stack(rhs, self.fourier, self.poly_axis, self.row_sizes)
-        if self.keep is not None:
-            b = b * self.keep
-        if self.row_phase is not None:
-            b = b * self.row_phase
-        x = _dense_solve(self.lu, self.perm, b)
-        if self.col_phase is not None:
-            x = x * self.col_phase
-        return _unstack(
-            x, self.fourier, self.poly_axis, self.col_sizes, self.trial_dofs
+        return self._solve(
+            self.lu, self.perm, self.keep, self.row_phase, self.col_phase, tuple(rhs)
         )
 
 
@@ -491,77 +613,80 @@ class BlockBandedWavenumberSolver(nnx.Pytree):
 
     def __init__(self, system: _WavenumberSystem) -> None:
         perm, p, q = system.band
-        n, n_F = system.n, system.n_F
+        n, dtype = system.n, system.dtype
         inv = np.argsort(perm)
         center = p  # L's multipliers below, U widened by p for swap fill above
-        band = np.zeros((n_F, center + p + q + 1, n), dtype=complex)
-        rows, cols, vals = [], [], []
-        for bi, bj, w, P in system.terms:
-            ii, jj = np.nonzero(P)
-            r = inv[system.row_starts[bi] + ii]
-            c = inv[system.col_starts[bj] + jj]
-            rows.append(center + c - r)
-            cols.append(c)
-            vals.append(np.outer(w, P[ii, jj]))
-        # Scattered through a (band row, column, wavenumber) view of `band`.
-        np.add.at(
-            band.transpose(1, 2, 0),
-            (np.concatenate(rows), np.concatenate(cols)),
-            np.concatenate(vals, axis=1).T,
+        assemble = system.assembler(
+            dtype,
+            (center + p + q + 1, n),
+            lambda r, c: (center + inv[c] - inv[r], inv[c]),
         )
-        for k, r, c in system.pinned:
-            rp, cp = inv[r], inv[c]
-            for off in range(-p, q + 1):
-                if 0 <= rp + off < n:
-                    band[k, center + off, rp + off] = 0
-            band[k, center + cp - rp, cp] = 1
-        dtype = system.dtype
-        band = band if jnp.issubdtype(dtype, jnp.complexfloating) else band.real
-        band_lu, pivots = jax.jit(
-            jax.vmap(lambda b: _lu_banded_kernel(b, p, p + q, center))
-        )(jnp.asarray(band, dtype=dtype))
-        _check_nonsingular(band_lu[:, center])
-        # Multipliers as (n_F, n, p), column t - 1 for the row t below; all p
-        # kept, since a swap can reach that far.
-        self.multipliers = jnp.flip(band_lu[:, :center], axis=1).transpose(0, 2, 1)
-        self.pivots = pivots
-        _, U, _, U_offsets = _prune_zero_diagonals(
-            band_lu[:, :0], band_lu[:, center:], (), tuple(range(0, p + q + 1))
-        )
-        self.U = U
-        self._backward = _make_wavenumber_solve((), U_offsets, n, dtype)
-        self.gather = jnp.asarray(perm)
-        self.scatter = jnp.asarray(inv)
-        self.keep = _keep_mask(system)
-        self.fourier = system.fourier
-        self.poly_axis = system.poly_axis
-        self.row_sizes = system.row_sizes
-        self.col_sizes = system.col_sizes
-        self.trial_dofs = system.trial_dofs
-        self.pinned_rows = tuple((k, r) for k, r, _ in system.pinned)
 
-    def _substitute(self, b: Array) -> Array:
-        forward = jax.vmap(lambda m, piv, x: _pivoted_forward(m, piv, x[:, None])[:, 0])
-        y = forward(self.multipliers.astype(b.dtype), self.pivots, b)
-        return self._backward(self.U[:, :0], self.U, y)
+        def factor(W: Array, keep: Array | None) -> tuple[Array, ...]:
+            band_lu, pivots = jax.vmap(
+                lambda b: _lu_banded_kernel(b, p, p + q, center)
+            )(assemble(W, keep))
+            # Multipliers as (n_k, n, p), column t - 1 for the row t below; all p
+            # kept, since a swap can reach that far.
+            multipliers = jnp.flip(band_lu[:, :center], axis=1).transpose(0, 2, 1)
+            return (
+                multipliers,
+                pivots,
+                band_lu[:, center:],
+                _singular(band_lu[:, center]),
+            )
+
+        k = _SPLIT
+        self.keep = system.keep()
+        self.multipliers, self.pivots, U, singular = system.map(
+            factor, (k, k), (k, k, k, k)
+        )(system.weights(None), self.keep)
+        _check_nonsingular(singular)
+        # Which diagonals survive sets the substitution's shape, so it is decided
+        # over all wavenumbers, on every device and process alike.
+        _, self.U, _, U_offsets = _prune_zero_diagonals(
+            U[:, :0], U, (), tuple(range(0, p + q + 1))
+        )
+        self.pinned_rows = tuple((k, r) for k, r, _ in system.pinned)
+        backward = _make_wavenumber_solve((), U_offsets, n, dtype)
+
+        def substitute(multipliers: Array, pivots: Array, U: Array, b: Array) -> Array:
+            forward = jax.vmap(
+                lambda m, piv, x: _pivoted_forward(m, piv, x[:, None])[:, 0]
+            )
+            return backward(
+                U[:, :0], U, forward(multipliers.astype(b.dtype), pivots, b)
+            )
+
+        def solve(
+            multipliers: Array,
+            pivots: Array,
+            U: Array,
+            keep: Array | None,
+            rhs: tuple[Array, ...],
+        ) -> tuple[Array, ...]:
+            b = _stack(rhs, system.fourier, system.poly_axis, system.row_sizes)
+            if keep is not None:
+                b = b * keep
+            b = b[:, perm]
+            factors = (multipliers, pivots, U)
+            if jnp.iscomplexobj(b) and not jnp.iscomplexobj(U):
+                x = substitute(*factors, b.real) + 1j * substitute(*factors, b.imag)
+            else:
+                x = substitute(*factors, b.astype(jnp.result_type(U, b)))
+            return _unstack(
+                x[:, inv],
+                system.fourier,
+                system.poly_axis,
+                system.col_sizes,
+                system.trial_dofs,
+            )
+
+        self._solve = system.map(solve, (k, k, k, k, k), k)
 
     def solve(self, rhs: Sequence[Array]) -> tuple[Array, ...]:
         """Solve the block system; see `BlockWavenumberSolver.solve`."""
-        b = _stack(rhs, self.fourier, self.poly_axis, self.row_sizes)
-        if self.keep is not None:
-            b = b * self.keep
-        b = b[:, self.gather]
-        if jnp.iscomplexobj(b) and not jnp.iscomplexobj(self.U):
-            x = self._substitute(b.real) + 1j * self._substitute(b.imag)
-        else:
-            x = self._substitute(b.astype(jnp.result_type(self.U, b)))
-        return _unstack(
-            x[:, self.scatter],
-            self.fourier,
-            self.poly_axis,
-            self.col_sizes,
-            self.trial_dofs,
-        )
+        return self._solve(self.multipliers, self.pivots, self.U, self.keep, tuple(rhs))
 
 
 def _phase_vectors(
@@ -576,16 +701,6 @@ def _phase_vectors(
         [np.full(n, 1j ** int(s)) for n, s in zip(system.col_sizes, phi, strict=True)]
     )
     return jnp.asarray(row), jnp.asarray(col)
-
-
-def _keep_mask(system: _WavenumberSystem) -> Array | None:
-    """Return ``(n_F, n)`` zeros on the pinned rows and ones elsewhere, or None."""
-    if not system.pinned:
-        return None
-    keep = np.ones((system.n_F, system.n))
-    k, r, _ = (np.array(i) for i in zip(*system.pinned, strict=True))
-    keep[k, r] = 0
-    return jnp.asarray(keep, dtype=jnp.finfo(system.dtype).dtype)
 
 
 def _dense_solve(lu: Array, perm: Array, b: Array) -> Array:

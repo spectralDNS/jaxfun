@@ -146,7 +146,15 @@ class CoupledIMEXRungeKutta(IMEXStages, TimeStepper[tuple[Array, ...]]):
 
         self.time = time
         self.tableau = nnx.static(tableau)
-        self.initial_condition = tuple(initial)
+        # Coefficient arrays are data, and the rest -- expressions, zeros, None
+        # -- static, so the two are held apart; `initial_coefficients` merges them.
+        given = tuple(_is_array_initial(v) for v in initial)
+        self._initial_static = nnx.static(
+            tuple(None if a else v for v, a in zip(initial, given, strict=True))
+        )
+        self._initial_arrays = nnx.data(
+            tuple(v if a else None for v, a in zip(initial, given, strict=True))
+        )
         options = validate_solver_options(solver_options)
         self._solve_options = nnx.static(
             tuple((k, v) for k, v in options if k in _GLOBAL_SOLVE_OPTIONS)
@@ -328,7 +336,14 @@ class CoupledIMEXRungeKutta(IMEXStages, TimeStepper[tuple[Array, ...]]):
 
         `initial` has one entry per top-level field, as in the constructor.
         """
-        init = self.initial_condition if initial is None else tuple(initial)
+        init = (
+            tuple(
+                s if a is None else a
+                for s, a in zip(self._initial_static, self._initial_arrays, strict=True)
+            )
+            if initial is None
+            else tuple(initial)
+        )
         if len(init) != len(self.fields):
             raise ValueError(
                 f"Got {len(init)} initial conditions for {len(self.fields)} fields."
@@ -510,6 +525,11 @@ def _check_tableau_for_constraints(tableau: IMEXTableau) -> None:
             "first all have a nonzero diagonal and an empty first column, such "
             "as ARS443, ARS222 or IMEX_EULER."
         )
+
+
+def _is_array_initial(value: Any) -> bool:
+    """Whether an initial value is given as coefficients rather than symbolically."""
+    return value is not None and not isinstance(value, sp.Basic | int | float)
 
 
 def _validate_common_mesh(spaces: Sequence[Any], N: ScalarPadding) -> None:

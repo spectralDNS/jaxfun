@@ -82,6 +82,28 @@ def test_taylor_green_vortex() -> None:
     assert jnp.abs(p - pe).max() < 1e-2 * jnp.abs(pe).max()
 
 
+def test_initial_condition_as_coefficients() -> None:
+    """Coefficient arrays work as initial values, held as data on the stepper."""
+    F = FunctionSpace(8, Fourier, name="F")
+    VD = TensorProduct(F, F, name="VD")
+    Q = TensorProduct(F, F, name="Q", system=VD.system)
+    equations, (x, y), (i, j), _ = navier_stokes(VD, Q, 0.1)
+    u0 = sp.sin(x) * sp.cos(y) * i - sp.cos(x) * sp.sin(y) * j
+    symbolic = CoupledIMEXRungeKutta(
+        equations, tableau=ARS443, initial=(u0, None), sparse=True
+    )
+    ux, uy, _ = symbolic.initial_coefficients()
+    arrays = CoupledIMEXRungeKutta(
+        equations, tableau=ARS443, initial=((ux, uy), None), sparse=True
+    )
+    for a, b in zip(
+        arrays.solve(0.01, 2, progress=False),
+        symbolic.solve(0.01, 2, progress=False),
+        strict=True,
+    ):
+        assert jnp.array_equal(a, b)
+
+
 @pytest.mark.integration
 def test_channel_keeps_continuity_and_reaches_poiseuille() -> None:
     nu, force = 1.0, 1.0

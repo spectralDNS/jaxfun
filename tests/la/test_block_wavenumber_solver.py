@@ -37,24 +37,29 @@ from jaxfun.utils.common import ulp
 HOM = {"left": {"D": 0}, "right": {"D": 0}}
 
 
+# The Chebyshev operator's two undetermined k = 0 pressure modes.
+CHEB_PINS = [(2, (0, 0)), (2, (0, 7))]
+
+
 @functools.cache
-def stokes_operator(kind: str, N: int = 8):
+def stokes_operator(kind: str, N: int = 8, M: int = 6):
     """Return the terms and spaces of a Stokes-type block operator.
 
     `kind` picks the axes: "fourier_poly" (Fourier x Legendre), "fourier_cheb"
     (Fourier x Chebyshev, tested with GR spaces), "fourier" (Fourier x Fourier)
-    or "poly" (Legendre x Legendre). `N` is the number of wall-normal modes.
+    or "poly" (Legendre x Legendre). `N` is the number of wall-normal modes and
+    `M` the number of Fourier modes along the first axis.
     """
     if kind == "fourier_cheb":
-        return _chebyshev_stokes(N)
+        return _chebyshev_stokes(N, M)
     if kind == "fourier_poly":
         X, Y = (
-            FunctionSpace(6, Fourier, name="F"),
+            FunctionSpace(M, Fourier, name="F"),
             FunctionSpace(N, Legendre.Legendre, bcs=HOM, name="D"),
         )
         XP, YP = X, FunctionSpace(N - 2, Legendre.Legendre, name="P")
     elif kind == "fourier":
-        X, Y = FunctionSpace(6, Fourier, name="F"), FunctionSpace(4, Fourier, name="G")
+        X, Y = FunctionSpace(M, Fourier, name="F"), FunctionSpace(4, Fourier, name="G")
         XP, YP = X, Y
     else:
         X, Y = (FunctionSpace(8, Legendre.Legendre, bcs=HOM, name=n) for n in "XY")
@@ -70,9 +75,9 @@ def stokes_operator(kind: str, N: int = 8):
     return list(A.mats) + list(B.mats), A.test_space, A.trial_space
 
 
-def _chebyshev_stokes(N: int):
+def _chebyshev_stokes(N: int, M: int):
     """Fourier x Chebyshev Stokes with GR test spaces, the pressure's of order 0."""
-    F = FunctionSpace(6, Fourier, name="F")
+    F = FunctionSpace(M, Fourier, name="F")
     D = FunctionSpace(N, Chebyshev.Chebyshev, bcs=HOM, name="D")
     P = FunctionSpace(N, Chebyshev.Chebyshev, name="P")
     VD = TensorProduct(F, D, name="VD")
@@ -104,8 +109,11 @@ def advection_diffusion_operator():
     return list(A.mats) + list(B.mats), A.test_space, A.trial_space
 
 
-def manufactured(mats, test_space, trial_space, complex_valued: bool):
-    """Return `(x, b)` with `b = A x` for a random `x` whose pressure mean is 0."""
+def manufactured(mats, test_space, trial_space, complex_valued: bool, pins=()):
+    """Return `(x, b)` with `b = A x` for a random `x` whose pressure mean is 0.
+
+    The unknowns that `pins` fix are zero too.
+    """
     keys = jax.random.split(jax.random.PRNGKey(3), 2 * len(trial_space.num_dofs))
     x = []
     for c, nd in enumerate(trial_space.num_dofs):
@@ -114,6 +122,8 @@ def manufactured(mats, test_space, trial_space, complex_valued: bool):
             xc = xc + 1j * jax.random.normal(keys[2 * c + 1], nd)
         x.append(xc)
     x[-1] = x[-1].at[(0,) * x[-1].ndim].set(0)
+    for c, index in pins:
+        x[c] = x[c].at[index].set(0)
     A = BlockMatrix(mats, test_space, trial_space)
     b = (A @ BlockArray(trial_space, tuple_array=tuple(x))).array
     return tuple(x), b
@@ -126,18 +136,12 @@ WAVENUMBER = {"dense": BlockWavenumberSolver, "rcm": BlockBandedWavenumberSolver
 @pytest.mark.parametrize("kind", ["fourier_poly", "fourier_cheb", "fourier", "poly"])
 def test_block_solve_recovers_solution(kind, method) -> None:
     mats, test_space, trial_space = stokes_operator(kind)
-    pins = [(2, (0, 0)), (2, (0, 7))] if kind == "fourier_cheb" else []
+    pins = CHEB_PINS if kind == "fourier_cheb" else []
     solver = block_lu_factor(mats, test_space, trial_space, pins, method=method)
     assert isinstance(
         solver, BlockGlobalSolver if kind == "poly" else WAVENUMBER[method]
     )
-    x, b = manufactured(mats, test_space, trial_space, kind != "poly")
-    if kind == "fourier_cheb":  # its second pinned pressure mode is zero too
-        x = (*x[:2], x[2].at[0, 7].set(0))
-        b = (
-            BlockMatrix(mats, test_space, trial_space)
-            @ BlockArray(trial_space, tuple_array=x)
-        ).array
+    x, b = manufactured(mats, test_space, trial_space, kind != "poly", pins)
     for xc, sc in zip(x, solver.solve(b), strict=True):
         assert sc.shape == xc.shape
         assert jnp.allclose(sc, xc, atol=float(1000 * ulp(1.0)))

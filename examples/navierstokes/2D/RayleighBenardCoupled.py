@@ -32,15 +32,31 @@
 # and temperature rows, and that of the pressure space for continuity; set
 # POLYNOMIAL = "chebyshev". The pressure gradient is not
 # integrated by parts, which the Chebyshev weight would not allow.
+#
+# On several devices, or under mpirun, the wavenumbers are split across them, and
+# each device factorizes and solves only its own.
+#
+# Note that this is a monolithic solver and it is not as fast as the segregated one
+# in RayleighBenard.py, which should be the method of choice for production runs.
+#
 # ruff: noqa: E402
 import os
 import sys
 import time
 
+_here = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_here))  # spmd_bootstrap sits one level up
+
 import jax
 
 if "PYTEST" not in os.environ:
     jax.config.update("jax_enable_x64", True)
+
+# Before any jaxfun import, which builds its device mesh from the devices visible
+# then. A no-op outside an MPI launcher.
+from spmd_bootstrap import echo, initialize_distributed, is_leader, to_host
+
+initialize_distributed()
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -65,14 +81,19 @@ LX = 2 * float(sp.pi)
 RA, PR = 1e6, 0.7
 DT, T_END = 0.025, 60.0
 N_SNAPSHOTS = 120
+TABLEAU = ARS443
+SEED = 0
 AMPLITUDE = 1e-3  # initial temperature perturbation
+MODE = 0  # the kind of perturbation; see `initial_temperature`
 POLYNOMIAL = "chebyshev"
 
 if "PYTEST" in os.environ:
     M, N, T_END, N_SNAPSHOTS = 16, 16, 0.2, 2
 
 
-def rayleigh_benard(M: int, N: int, Lx: float, Ra: float, Pr: float, poly: str):
+def rayleigh_benard(
+    M: int, N: int, Lx: float, Ra: float, Pr: float, poly: str, mode: int = MODE
+):
     """Return the coupled RB integrator and its spaces `(W, VT)`."""
     nu, kappa = (Pr / Ra) ** 0.5, 1 / (Ra * Pr) ** 0.5
     family = {"legendre": Legendre.Legendre, "chebyshev": Chebyshev.Chebyshev}[poly]
@@ -105,17 +126,13 @@ def rayleigh_benard(M: int, N: int, Lx: float, Ra: float, Pr: float, poly: str):
         - T * Dot(j, v)
         + Dot(Grad(p), v),
         Div(u) * q,
-        (T.diff(t) + Div(u * T) - kappa * Div(Grad(T))) * s,
+        (T.diff(t) + Dot(u, Grad(T)) - kappa * Div(Grad(T))) * s,
     )
 
-    # The initial temperature is the whole field, the conducting profile plus a
-    # perturbation that vanishes at the walls; projecting it takes the lifting out.
-    x, y = W.system.base_scalars()
-    T0 = (1 - y) / 2 + AMPLITUDE * sp.cos(2 * sp.pi * x / Lx) * (1 - y**2)
     solver = CoupledIMEXRungeKutta(
         equations,
-        tableau=ARS443,
-        initial=(0, None, T0),
+        tableau=TABLEAU,
+        initial=(0, None, initial_temperature(VT, M, Lx, mode)),
         time=(0.0, T_END),
         # Legendre would find these two itself, from their empty rows and
         # columns; the Chebyshev test functions leave the rows nonempty.
@@ -123,6 +140,32 @@ def rayleigh_benard(M: int, N: int, Lx: float, Ra: float, Pr: float, poly: str):
         sparse=True,
     )
     return solver, W, VT
+
+
+def initial_temperature(VT, M: int, Lx: float, mode: int, seed: int = SEED):
+    """Return the initial temperature coefficients, as RayleighBenard.py makes them.
+
+    Modes 0 and 1 perturb the conducting profile, with broadband noise and with
+    the single Fourier mode cos(2 pi x / Lx); mode 2 starts from T = 0, perturbed
+    by noise. The coefficients are those of the homogeneous part, so zero is the
+    conducting profile, which is exactly the boundary lifting.
+
+    A single mode grows and saturates everywhere at once, into one coherent burst
+    whose overshoot drives <v T>, and with it the instantaneous Nu, negative for
+    a while. Noise releases plumes at different places and times.
+    """
+    Vh = VT.get_homogeneous()
+    xx, yy = Vh.mesh()
+    if mode == 0:
+        noise = jax.random.normal(jax.random.PRNGKey(seed), Vh.shape)
+        T_hat = Vh.forward(AMPLITUDE * noise * (1 - yy**2))
+    elif mode == 1:
+        noise = jnp.cos(2 * jnp.pi * xx / Lx) * jnp.ones_like(yy)
+        T_hat = Vh.forward(AMPLITUDE * noise * (1 - yy**2))
+    else:
+        noise = jax.random.uniform(jax.random.PRNGKey(seed), VT.shape)
+        T_hat = VT.forward(AMPLITUDE * noise * (1 - yy**2))
+    return T_hat.at[M // 2].set(0.0)  # the Nyquist mode, as RayleighBenard.py
 
 
 def nusselt(solver, state, W, VT, Ra: float, Pr: float, pad) -> float:
@@ -136,15 +179,21 @@ def nusselt(solver, state, W, VT, Ra: float, Pr: float, pad) -> float:
 
 
 def main() -> None:
-    print(f"M={M} N={N} Ra={RA:g} Pr={PR} dt={DT} T={T_END} {POLYNOMIAL}")
+    echo(f"M={M} N={N} Ra={RA:g} Pr={PR} dt={DT} T={T_END} {POLYNOMIAL}")
     pad = (3 * M // 2, N)
     _t = time.time()
     solver, W, VT = rayleigh_benard(M, N, LX, RA, PR, POLYNOMIAL)
-    print(f"  assembled in {time.time() - _t:.1f}s, dofs {W.num_dofs}")
+    echo(f"  assembled in {time.time() - _t:.1f}s, dofs {W.num_dofs}")
 
     _t = time.time()
-    snaps = solver.solve(DT, n_batches=N_SNAPSHOTS, N=pad, return_batch_snapshots=True)
-    print(f"  run {time.time() - _t:.1f}s")
+    snaps = solver.solve(
+        DT,
+        n_batches=N_SNAPSHOTS,
+        N=pad,
+        return_batch_snapshots=True,
+        progress=is_leader(),
+    )
+    echo(f"  run {time.time() - _t:.1f}s")
 
     final = tuple(s[-1] for s in snaps)
     continuity = float(jnp.abs(solver.apply_linear(final)[2]).max())
@@ -153,8 +202,8 @@ def main() -> None:
         for i in range(len(snaps[0]))
     ]
     every = max(1, len(nus) // 12)
-    print("  Nu(t) " + " ".join(f"{v:.2f}" for v in nus[::every]))
-    print(f"  weak continuity residual {continuity:.2e}")
+    echo("  Nu(t) " + " ".join(f"{v:.2f}" for v in nus[::every]))
+    echo(f"  weak continuity residual {continuity:.2e}")
     eps = float(jnp.finfo(final[0].dtype).eps)
     assert continuity < 1e4 * eps * max(1.0, float(jnp.abs(final[0]).max()))
 
@@ -162,13 +211,18 @@ def main() -> None:
         assert all(bool(jnp.isfinite(s).all()) for s in final)
         sys.exit(0)
 
-    T_phys = VT.backward(final[3], N=pad)
-    x, y = VT.mesh(N=pad, broadcast=False)
+    # Gathered to the host by every process, before only one goes on to plot.
+    T_phys, x, y = to_host(
+        (VT.backward(final[3], N=pad), *VT.mesh(N=pad, broadcast=False))
+    )
+    if not is_leader():
+        return solver
     fig, ax = plt.subplots(figsize=(9, 3.4), constrained_layout=True)
     c = ax.contourf(x, y, T_phys.T, levels=40, cmap="RdBu_r")
     ax.set_title(f"T(x, y, t={T_END:g}),  Ra={RA:g} Pr={PR}")
     ax.set_aspect("equal")
     fig.colorbar(c, ax=ax, shrink=0.9)
+    plt.show()
     return solver
 
 

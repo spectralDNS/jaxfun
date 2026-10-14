@@ -145,7 +145,7 @@ SEED = 0
 AMPLITUDE = 1e-3  # initial temperature perturbation
 TABLEAU = ARS443
 MODE = 0
-CRITICAL = True  # run the linear-stability verification
+CRITICAL = False  # run the linear-stability verification
 # Wall-normal basis and test space, forwarded to KMM2D and reused for the
 # temperature. Pair CHEBYSHEV with GR and LEGENDRE with GALERKIN -- see "CHOICE
 # OF BASIS" in ChannelFlow2D.py. Chebyshev gains as N grows; where the two cross

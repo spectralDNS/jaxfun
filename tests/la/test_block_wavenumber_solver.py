@@ -258,6 +258,27 @@ def test_variable_coefficient_leaves_the_fourier_path(varies_in, solver_type) ->
         assert jnp.allclose(sc, xc, atol=float(1000 * ulp(1.0)))
 
 
+@pytest.mark.parametrize("method", ["dense", "rcm"])
+def test_real_system_stays_real(method) -> None:
+    """A real operator and right-hand side give a real solution, here in 1D."""
+    U = FunctionSpace(10, Legendre.Legendre, bcs=HOM, name="U")
+    S = FunctionSpace(10, Legendre.Legendre, name="S")
+    C = CartesianProduct(U, S, name="C")
+    u, s = TrialFunction(C, name="us")
+    v, q = TestFunction(C, name="vq")
+    x = U.system.base_scalars()[0]
+    A = inner((u - u.diff(x, 2) + s) * v, sparse=True)
+    B = inner((s + u.diff(x)) * q, sparse=True)
+    assert isinstance(A, BlockMatrix) and isinstance(B, BlockMatrix)
+    mats = list(A.mats) + list(B.mats)
+    solver = block_lu_factor(mats, C, C, method=method)
+    assert isinstance(solver, WAVENUMBER[method])
+    xs, b = manufactured(mats, C, C, False)
+    for xc, sc in zip(xs, solver.solve(b), strict=True):
+        assert not jnp.iscomplexobj(sc)
+        assert jnp.allclose(sc, xc, atol=float(1000 * ulp(1.0)))
+
+
 def test_auto_picks_banded_for_a_narrow_band() -> None:
     small = stokes_operator("fourier_poly")
     large = stokes_operator("fourier_poly", 40)

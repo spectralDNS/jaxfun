@@ -321,6 +321,9 @@ class _WavenumberSystem:
         and its row take a phase and nothing else does. A block that mixes
         real and imaginary weights, like advection-diffusion's
         :math:`\\nu k^2 + i c k`, has no such phases.
+
+        Returns None also when every phase is zero: the :math:`A_k` are real
+        already, and there is nothing to apply.
         """
         parity: dict[tuple[int, int], int] = {}
         for bi, bj, w, P in self.terms:
@@ -353,6 +356,8 @@ class _WavenumberSystem:
                     elif other[j] != want:
                         return None
         phi[phi < 0] = 0
+        if not psi.any() and not phi.any():
+            return None
         return psi, phi
 
     def weights(self, phases: tuple[np.ndarray, np.ndarray] | None) -> Array:

@@ -33,6 +33,7 @@ from jaxfun.integrators import (
     ARS443,
     IMEX_SSP2_222,
     CoupledIMEXRungeKutta,
+    IMEXRungeKutta,
 )
 from jaxfun.integrators.base import _advance
 from jaxfun.operators import Div, Dot, Grad
@@ -125,6 +126,50 @@ def test_consistent_pressure_at_rest_is_hydrostatic() -> None:
     _, p_rest, _ = rb.consistent_algebraic(rb.initial_coefficients())
     pe = project(y / 2 - y**2 / 4, P).at[0].set(0)
     assert jnp.allclose(p_rest, pe, atol=float(1000 * ulp(1.0)))
+
+
+@pytest.mark.parametrize("family", ["legendre", "fourier"])
+def test_one_dimensional_system_matches_the_single_field_integrator(family) -> None:
+    """Burgers for u, and a scalar w that u drives but that does not act back.
+
+    u is then exactly what `IMEXRungeKutta` computes for Burgers alone: the same
+    tableau, with the same implicit and explicit split. On Legendre the state is
+    real, and must stay so.
+    """
+    nu, kappa = 0.05, 0.1
+    if family == "legendre":
+        U = FunctionSpace(16, Legendre.Legendre, bcs=HOM, name="U")
+        S = FunctionSpace(16, Legendre.Legendre, bcs=HOM, name="S")
+        x = U.system.base_scalars()[0]
+        u0 = -sp.sin(sp.pi * x)
+    else:
+        U = FunctionSpace(16, Fourier, name="U")
+        S = FunctionSpace(16, Fourier, name="S")
+        x = U.system.base_scalars()[0]
+        u0 = sp.sin(x)
+    t = U.system.base_time()
+    u, w = TrialFunction(CartesianProduct(U, S, name="C"), name="uw", transient=True)
+    v, s = TestFunction(CartesianProduct(U, S, name="C"), name="vs")
+    coupled = CoupledIMEXRungeKutta(
+        (
+            (u.diff(t) + u * u.diff(x) - nu * u.diff(x, 2)) * v,
+            (w.diff(t) - kappa * w.diff(x, 2) - u) * s,
+        ),
+        tableau=ARS443,
+        initial=(u0, 0),
+        sparse=True,
+    )
+    ub, vb = TrialFunction(U, name="ub", transient=True), TestFunction(U, name="vb")
+    burgers = IMEXRungeKutta(
+        (ub.diff(t) + ub * ub.diff(x) - nu * ub.diff(x, 2)) * vb,
+        tableau=ARS443,
+        initial=u0,
+        sparse=True,
+    )
+    u_coupled, w_coupled = coupled.solve(0.01, 20, progress=False)
+    u_single = burgers.solve(0.01, 20, progress=False)
+    assert jnp.allclose(u_coupled, u_single, atol=float(100 * ulp(1.0)))
+    assert jnp.abs(w_coupled).max() > 0
 
 
 def test_initial_condition_as_coefficients() -> None:

@@ -851,7 +851,9 @@ def _assemble_multivar_bilinear_form(
         scales.append(a0["multivar"])
     if "jaxfunction" in a0:
         scales.append(
-            evaluate_jaxfunction_expr_quad(a0["jaxfunction"], N=context.num_quad_points)
+            evaluate_jaxfunction_expr_quad(
+                a0["jaxfunction"], N=context.num_quad_points, space=context.test_space
+            )
         )
     Am = assemble_multivar(mats_, scales, context.test_space)
     if has_bcs:
@@ -1022,6 +1024,15 @@ def _assemble_linear_form(
     return None
 
 
+def _test_component(
+    test_space: TensorProductSpace | VectorTensorProductSpace, global_index: int
+) -> TensorProductSpace:
+    """Return the scalar space of the test function with `global_index`."""
+    if isinstance(test_space, VectorTensorProductSpace):
+        return test_space[global_index]
+    return test_space
+
+
 def _assemble_linear_tensor2d(
     b0: InnerResultDict,
     bs: list[_LinearFactor],
@@ -1038,7 +1049,11 @@ def _assemble_linear_tensor2d(
                 *test_space.mesh(N=num_quad_points)
             )
         if "jaxfunction" in b0:
-            uj *= evaluate_jaxfunction_expr_quad(b0["jaxfunction"], N=num_quad_points)
+            uj *= evaluate_jaxfunction_expr_quad(
+                b0["jaxfunction"],
+                N=num_quad_points,
+                space=_test_component(test_space, global_index),
+            )
         if "jaxfunction" not in b0 and "multivar" not in b0:
             raise ValueError("Expected multivar or jaxfunction key in b0")
         res = bs[0][0].T @ uj @ bs[1][0]
@@ -1063,7 +1078,11 @@ def _assemble_linear_tensor3d(
                 *test_space.mesh(N=num_quad_points)
             )
         elif "jaxfunction" in b0:
-            uj = evaluate_jaxfunction_expr_quad(b0["jaxfunction"], N=num_quad_points)
+            uj = evaluate_jaxfunction_expr_quad(
+                b0["jaxfunction"],
+                N=num_quad_points,
+                space=_test_component(test_space, global_index),
+            )
         else:
             raise ValueError("Expected multivar or jaxfunction key in b0")
         res = jnp.einsum("il,jm,kn,ijk->lmn", bs[0][0], bs[1][0], bs[2][0], uj)
@@ -1280,7 +1299,7 @@ def inner_bilinear(
 
         jaxfunction = get_jaxfunctions(aii)
         if len(jaxfunction) >= 1:
-            scale *= evaluate_jaxfunction_expr_quad(aii, N=N)
+            scale *= evaluate_jaxfunction_expr_quad(aii, N=N, space=vo)
             continue
 
         if len(aii.free_symbols) > 0:
@@ -1378,11 +1397,7 @@ def inner_linear(
 
             jaxfunction = get_jaxfunctions(bii)
             if len(jaxfunction) >= 1:
-                for jaxf in jaxfunction:
-                    assert jaxf.functionspace.orthogonal.__class__ == vo.__class__, (
-                        "JAXFunction space must match test function space"
-                    )
-                uj *= evaluate_jaxfunction_expr_quad(bii, N=N)
+                uj *= evaluate_jaxfunction_expr_quad(bii, N=N, space=vo)
                 continue
             # bii contains coordinates in the domain of v, e.g., (r, theta) for polar
             # Need to compute bii as bii(x(X)), since we use quadrature points

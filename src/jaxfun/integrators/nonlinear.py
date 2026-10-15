@@ -17,6 +17,7 @@ from jaxfun.galerkin.arguments import (
     is_jaxfunc_leaf,
     is_jaxfunc_primitive,
 )
+from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.typing import (
     Array,
     IntegratorState,
@@ -38,9 +39,11 @@ class NonlinearCompileContext:
 
     An expression may depend on several JAXFunctions -- one per field of a
     coupled system. Each field is evaluated through its own function space,
-    resolved from the leaf node itself, so `functionspace` is only the space
-    used to evaluate static (purely spatial) subexpressions on the quadrature
-    mesh.
+    resolved from the leaf node itself. `functionspace` is the space whose
+    quadrature mesh the expression is evaluated on: static (purely spatial)
+    subexpressions are evaluated there, and so is a field whose own space has
+    other quadrature points along some axis, such as a Chebyshev field tested
+    by a ChebyshevU space.
     """
 
     spatial_symbols: tuple[sp.Symbol, ...]
@@ -121,6 +124,49 @@ class NonlinearCompiler:
         leaf = node if is_jaxfunc_leaf(node) else cast(sp.Derivative, node).expr
         jaxf = self._registry.get(leaf, cast(JAXFunction[ScalarSpaceType], leaf))
         space = jaxf.functionspace
+        derivative_order: int | tuple[int, ...] = 0
+        if not is_jaxfunc_leaf(node):
+            assert is_derivative_of_jaxfunc_leaf(node)
+            derivative = cast(sp.Derivative, node)
+            known = set(self.context.spatial_symbols)
+            unknown = tuple(var for var in derivative.variables if var not in known)
+            if len(unknown) > 0:
+                names = ", ".join(sorted(str(sym) for sym in set(unknown)))
+                raise ValueError(
+                    f"Only spatial derivatives are supported, got: {names}"
+                )
+
+            derivative_counts = tuple(
+                derivative.variables.count(sym) for sym in self.context.spatial_symbols
+            )
+            if sum(derivative_counts) == 0:
+                raise ValueError("Derivative order is zero in all spatial coordinates")
+            if space.dims == 1:
+                derivative_order = int(derivative_counts[0])
+            else:
+                derivative_order = derivative_counts
+
+        target = self.context.functionspace
+        if space.dims == target.dims and not _shares_quadrature(space, target):
+
+            def evaluate_foreign(
+                _cache: NodeValueCache,
+                N: ScalarPadding = None,
+                space: ScalarSpaceType = space,
+                jaxf: JAXFunction[ScalarSpaceType] = jaxf,
+                derivative_order: int | tuple[int, ...] = derivative_order,
+            ) -> Array:
+                # The transform of `space` gives its own quadrature points.
+                return _evaluate_on_mesh(
+                    space,
+                    target,
+                    cast(Array, jaxf.array),
+                    derivative_order,
+                    N,
+                )
+
+            return self.memoize(node, evaluate_foreign)
+
         if is_jaxfunc_leaf(node):
 
             def evaluate_leaf(
@@ -132,25 +178,6 @@ class NonlinearCompiler:
                 return space.backward(jaxf.array, N=N)  # ty: ignore[invalid-argument-type]
 
             return self.memoize(node, evaluate_leaf)
-
-        assert is_derivative_of_jaxfunc_leaf(node)
-        derivative = cast(sp.Derivative, node)
-        known = set(self.context.spatial_symbols)
-        unknown = tuple(var for var in derivative.variables if var not in known)
-        if len(unknown) > 0:
-            names = ", ".join(sorted(str(sym) for sym in set(unknown)))
-            raise ValueError(f"Only spatial derivatives are supported, got: {names}")
-
-        derivative_counts = tuple(
-            derivative.variables.count(sym) for sym in self.context.spatial_symbols
-        )
-        if sum(derivative_counts) == 0:
-            raise ValueError("Derivative order is zero in all spatial coordinates")
-        derivative_order: int | tuple[int, ...]
-        if space.dims == 1:
-            derivative_order = int(derivative_counts[0])
-        else:
-            derivative_order = derivative_counts
 
         def evaluate_derivative(
             _cache: NodeValueCache,
@@ -292,6 +319,71 @@ class NonlinearCompiler:
             return value
 
         return evaluate
+
+
+def _axes(space: ScalarSpaceType) -> tuple[OrthogonalSpace, ...]:
+    """Return the 1D orthogonal space of each axis of `space`."""
+    axes = (space,) if space.dims == 1 else tuple(space)  # ty: ignore[invalid-argument-type]
+    return tuple(axis.orthogonal for axis in axes)  # ty: ignore[unresolved-attribute]
+
+
+def _shares_quadrature(a: ScalarSpaceType, b: ScalarSpaceType) -> bool:
+    """Return whether spaces `a` and `b` sample at the same physical points.
+
+    The reference quadrature points of an axis are set by its family and the
+    Jacobi parameters within it, and its domain maps them to physical points.
+    A field transformed on `a` is sampled at the physical points of `a`, so it
+    can only be used with the quadrature of `b` if both agree. A composite or
+    direct sum has the points of its orthogonal space.
+    """
+    return all(
+        type(ao) is type(bo)
+        and ao.domain == bo.domain
+        and getattr(ao, "alpha", None) == getattr(bo, "alpha", None)
+        and getattr(ao, "beta", None) == getattr(bo, "beta", None)
+        for ao, bo in zip(_axes(a), _axes(b), strict=True)
+    )
+
+
+def _evaluate_on_mesh(
+    space: ScalarSpaceType,
+    target: ScalarSpaceType,
+    c: Array,
+    k: int | tuple[int, ...],
+    N: ScalarPadding,
+) -> Array:
+    """Return the field `c` of `space` on the quadrature mesh of `target`.
+
+    Args:
+        space: Space of the coefficients `c`.
+        target: Space whose quadrature mesh to evaluate on, of the same
+            dimension as `space`.
+        c: Coefficients in `space`.
+        k: Derivative order, one per axis, or one for all axes.
+        N: Number of quadrature points of `target`, one per axis for more than
+            one dimension, or None for its default.
+
+    Returns:
+        The k'th derivative of the field at the quadrature points of `target`.
+    """
+    axes, points = _axes(space), _axes(target)
+    k = (k,) * len(axes) if isinstance(k, int) else k
+    counts = cast(
+        tuple[int | None, ...],
+        (N,) if space.dims == 1 else ((None,) * space.dims if N is None else N),
+    )
+    c = space.to_orthogonal(c)
+    for ax, (s, t) in enumerate(zip(axes, points, strict=True)):
+        X = s.map_reference_domain(t.mesh(N=counts[ax]))
+        M = s.eval_reconstruction(X)
+        if k[ax] > 0:
+            # Row m of D holds the coefficients of the k'th derivative of mode m.
+            D = jax.vmap(lambda e, s=s, ax=ax: s.derivative_coeffs(e, k[ax]))(
+                jnp.eye(s.N)
+            )
+            M = float(s.domain_factor ** k[ax]) * (M @ D.T)
+        c = jnp.moveaxis(jnp.tensordot(M, c, axes=(1, ax)), 0, ax)
+    return c.real if any(s.is_hermitian_half for s in axes) else c
 
 
 def remove_test_function(expr: sp.Expr, test: TestFunction) -> sp.Expr:

@@ -930,12 +930,16 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
 def evaluate_jaxfunction_expr_quad(
     a: Basic,
     N: int | tuple[int | None, ...] | None = None,
+    space: ScalarSpaceType | None = None,
 ) -> Array:
     """Evaluate a symbolic JAXFunction expression on the quadrature mesh.
 
     Args:
         a: SymPy expression potentially containing JAXFunction objects.
         N: Optional padding for the number of quadrature points in each dimension.
+        space: Space whose quadrature mesh to evaluate on, which may belong to
+            another family than the JAXFunctions along any axis. Defaults to
+            the space of each JAXFunction.
     """
     from jaxfun.integrators.nonlinear import compile_nonlinear_evaluator
 
@@ -950,7 +954,7 @@ def evaluate_jaxfunction_expr_quad(
         if isinstance(a, sp.Add):
             result = jnp.asarray(0.0)
             for arg in a.args:
-                result = result + evaluate_jaxfunction_expr_quad(arg, N=N)
+                result = result + evaluate_jaxfunction_expr_quad(arg, N, space)
             return result
 
         if not isinstance(a, sp.Mul):
@@ -982,11 +986,11 @@ def evaluate_jaxfunction_expr_quad(
                 # Pure numeric/symbolic constant — evaluate to a scalar.
                 result = result * float(sub_expr)
             else:
-                result = result * evaluate_jaxfunction_expr_quad(sub_expr, N=N)
+                result = result * evaluate_jaxfunction_expr_quad(sub_expr, N, space)
         return result
 
     assert len(jaxfs) == 1, "Single JAXFunction not found in expression."
     jaxf = jaxfs.pop()
-    V = jaxf.functionspace
+    V = jaxf.functionspace if space is None else space
     fun = compile_nonlinear_evaluator(cast(sp.Expr, a), V, cast(AppliedUndef, jaxf))
     return fun(cast(Array, jaxf.array), N)

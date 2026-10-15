@@ -537,9 +537,9 @@ class Chebyshev(Jacobi):
             Matrix | DiaMatrix | None if combination unsupported.
         """
         u, j = trial
-        assert isinstance(u, Chebyshev), (
-            "Trial space must be Chebyshev for Chebyshev matrices"
-        )
+        if not isinstance(u, Chebyshev):
+            return None
+
         if i != 0 and j != 0:
             return None
 

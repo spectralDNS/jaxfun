@@ -20,7 +20,7 @@ from jaxfun.galerkin import (
     TrialFunction,
     Ultraspherical,
 )
-from jaxfun.galerkin.inner import inner
+from jaxfun.galerkin.inner import inner, project
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.la import TPMatrix
 from jaxfun.operators import Div, Dot, Grad
@@ -139,6 +139,35 @@ def test_jaxfunction_nonlin_diff(space: type[OrthogonalSpace], domain: Domain | 
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(1000))
 
 
+def test_project_jaxfunction_onto_other_family(domain: Domain | None):
+    N = 8
+    T = Chebyshev.Chebyshev(N, domain=domain)
+    U = ChebyshevU.ChebyshevU(N, domain=domain)
+    x = T.system.x
+    uf = JAXFunction(jnp.arange(1.0, N + 1), T)
+    expr = uf.diff(x, 2) + uf
+    UT = inner(TestFunction(U) * TrialFunction(T), kind="bilinear")
+    UU = inner(TestFunction(U) * TrialFunction(U), kind="bilinear")
+    expected = UU.solve(UT @ project(expr, T))
+    error = jnp.linalg.norm(project(expr, U) - expected) / jnp.linalg.norm(expected)
+    assert error < ulp(100)
+
+
+def test_jaxfunction_coefficient_from_other_family(domain: Domain | None):
+    N = 8
+    T = Chebyshev.Chebyshev(N, domain=domain)
+    U = ChebyshevU.ChebyshevU(N, domain=domain)
+    u = TrialFunction(U)
+    v = TestFunction(U)
+    c = jnp.arange(1.0, N + 1)
+    UT = inner(v * TrialFunction(T), kind="bilinear")
+    UU = inner(v * u, kind="bilinear")
+    A0 = inner(u * v * JAXFunction(UU.solve(UT @ c), U), kind="bilinear")
+    A1 = inner(u * v * JAXFunction(c, T), kind="bilinear")
+    A0, A1 = A0.todense(), A1.todense()
+    assert jnp.linalg.norm(A1 - A0) / jnp.linalg.norm(A0) < ulp(100)
+
+
 def test_jaxfunction_2d(space: type[OrthogonalSpace], domain: Domain | None):
     N = 8
     D = space(N, domain=domain)
@@ -183,6 +212,57 @@ def test_jaxfunction_diff_2d(space: type[OrthogonalSpace], domain: Domain | None
     b0 = A @ w
     b1 = inner(v * Div(Grad(w)), kind="linear")
     assert jnp.linalg.norm(b0 - b1) < jnp.sqrt(ulp(10))
+
+
+def _chebyshev_to_u(N: int, domain: Domain | None) -> Array:
+    """Return the matrix mapping Chebyshev coefficients to ChebyshevU ones."""
+    T = Chebyshev.Chebyshev(N, domain=domain)
+    U = ChebyshevU.ChebyshevU(N, domain=domain)
+    M = inner(TestFunction(U) * TrialFunction(T), kind="bilinear").todense()
+    B = inner(TestFunction(U) * TrialFunction(U), kind="bilinear").todense()
+    return jnp.linalg.solve(B, M)
+
+
+def test_project_jaxfunction_onto_other_family_2d(domain: Domain | None):
+    N = 6
+    T = Chebyshev.Chebyshev(N, domain=domain)
+    U = ChebyshevU.ChebyshevU(N, domain=domain)
+    TT = TensorProduct(T, T)
+    x, y = TT.system.base_scalars()
+    uf = JAXFunction(jnp.arange(1.0, N * N + 1).reshape(N, N), TT)
+    expr = uf.diff(x, 2) + uf.diff(y)
+    expected = _chebyshev_to_u(N, domain) @ project(expr, TT)
+    result = project(expr, TensorProduct(U, T))
+    assert jnp.linalg.norm(result - expected) / jnp.linalg.norm(expected) < ulp(100)
+
+
+def test_project_jaxfunction_onto_other_family_3d():
+    N = 4
+    T = Chebyshev.Chebyshev(N)
+    U = ChebyshevU.ChebyshevU(N)
+    TTT = TensorProduct(T, T, T)
+    x, y, z = TTT.system.base_scalars()
+    uf = JAXFunction(jnp.arange(1.0, N**3 + 1).reshape(N, N, N), TTT)
+    expr = uf.diff(x) + uf.diff(z)
+    C = _chebyshev_to_u(N, None)
+    expected = jnp.einsum("ij,jkl->ikl", C, project(expr, TTT))
+    result = project(expr, TensorProduct(U, T, T))
+    assert jnp.linalg.norm(result - expected) / jnp.linalg.norm(expected) < ulp(100)
+
+
+def test_jaxfunction_coefficient_from_other_family_2d(domain: Domain | None):
+    N = 6
+    T = Chebyshev.Chebyshev(N, domain=domain)
+    U = ChebyshevU.ChebyshevU(N, domain=domain)
+    UT = TensorProduct(U, T)
+    u = TrialFunction(UT)
+    v = TestFunction(UT)
+    c = jnp.arange(1.0, N * N + 1).reshape(N, N)
+    cU = _chebyshev_to_u(N, domain) @ c
+    A0 = inner(u * v * JAXFunction(cU, UT), kind="bilinear")
+    A1 = inner(u * v * JAXFunction(c, TensorProduct(T, T)), kind="bilinear")
+    A0, A1 = A0.todense(), A1.todense()
+    assert jnp.linalg.norm(A1 - A0) / jnp.linalg.norm(A0) < ulp(100)
 
 
 def test_jaxfunction_nonlin_2d(space: type[OrthogonalSpace], domain: Domain | None):

@@ -31,7 +31,7 @@ from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.galerkin.tensorproductspace import TensorProduct
-from jaxfun.operators import Div, Grad
+from jaxfun.operators import Grad
 from jaxfun.utils.common import lambdify, n, ulp
 
 R2 = R(2)
@@ -47,9 +47,7 @@ T = TensorProduct(F, D, name="T", real=True)
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 
-# A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=True)
-A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
-
+A, b = inner(Grad(u) - Grad(ue), Grad(v), sparse=True, kind="system")
 uh = A.solve(b)
 
 N = 100

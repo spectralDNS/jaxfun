@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import sympy as sp
 
 from jaxfun.galerkin import (
     CartesianProduct,
@@ -27,6 +28,7 @@ from jaxfun.galerkin.inner import inner
 from jaxfun.la import BlockArray, BlockMatrix
 from jaxfun.la.blockwavenumber import (
     BlockBandedWavenumberSolver,
+    BlockFourierSolver,
     BlockGlobalSolver,
     BlockWavenumberSolver,
     block_lu_factor,
@@ -94,16 +96,24 @@ def _chebyshev_stokes(N: int, M: int):
     return list(A.mats) + list(B.mats), A.test_space, A.trial_space
 
 
-def advection_diffusion_operator():
-    """Two fields whose (u, u) block mixes real (k^2) and imaginary (ik) weights."""
+def advection_diffusion_operator(kind: str = "fourier_poly"):
+    """Two fields whose (u, u) block mixes real (k^2) and imaginary (ik) weights.
+
+    `kind` is "fourier_poly" (Fourier x Legendre) or "fourier" (Fourier x Fourier).
+    """
     F = FunctionSpace(6, Fourier, name="F")
-    D = FunctionSpace(8, Legendre.Legendre, bcs=HOM, name="D")
+    D = (
+        FunctionSpace(8, Legendre.Legendre, bcs=HOM, name="D")
+        if kind == "fourier_poly"
+        else FunctionSpace(4, Fourier, name="G")
+    )
     VD = TensorProduct(F, D, name="VD")
     W = CartesianProduct(VD, VD, name="W2")
     u, w = TrialFunction(W, name="uw")
     v, s = TestFunction(W, name="vs")
     x = VD.system.base_scalars()[0]
-    A = inner((u + u.diff(x) - 0.1 * Div(Grad(u)) + w) * v, sparse=True)
+    # Coupled with weight 1/2, so that k = 0 is not singular without walls.
+    A = inner((u + u.diff(x) - 0.1 * Div(Grad(u)) + 0.5 * w) * v, sparse=True)
     B = inner((w - 0.1 * Div(Grad(w)) + u) * s, sparse=True)
     assert isinstance(A, BlockMatrix) and isinstance(B, BlockMatrix)
     return list(A.mats) + list(B.mats), A.test_space, A.trial_space
@@ -132,45 +142,81 @@ def manufactured(mats, test_space, trial_space, complex_valued: bool, pins=()):
 WAVENUMBER = {"dense": BlockWavenumberSolver, "rcm": BlockBandedWavenumberSolver}
 
 
+def expected(kind: str, method: str) -> type:
+    """Return the solver `block_lu_factor` picks for an operator of this kind."""
+    if kind == "poly":
+        return BlockGlobalSolver
+    return BlockFourierSolver if kind == "fourier" else WAVENUMBER[method]
+
+
 @pytest.mark.parametrize("method", ["dense", "rcm"])
 @pytest.mark.parametrize("kind", ["fourier_poly", "fourier_cheb", "fourier", "poly"])
 def test_block_solve_recovers_solution(kind, method) -> None:
     mats, test_space, trial_space = stokes_operator(kind)
     pins = CHEB_PINS if kind == "fourier_cheb" else []
     solver = block_lu_factor(mats, test_space, trial_space, pins, method=method)
-    assert isinstance(
-        solver, BlockGlobalSolver if kind == "poly" else WAVENUMBER[method]
-    )
+    assert isinstance(solver, expected(kind, method))
     x, b = manufactured(mats, test_space, trial_space, kind != "poly", pins)
     for xc, sc in zip(x, solver.solve(b), strict=True):
         assert sc.shape == xc.shape
         assert jnp.allclose(sc, xc, atol=float(1000 * ulp(1.0)))
 
 
+@pytest.mark.parametrize("kind", ["fourier_cheb", "poly"])
+def test_block_matrix_solve(kind) -> None:
+    """`BlockMatrix.solve` factorizes the matrix itself, pins included."""
+    mats, test_space, trial_space = stokes_operator(kind)
+    pins = CHEB_PINS if kind == "fourier_cheb" else []
+    A = BlockMatrix(mats, test_space, trial_space)
+    x, b = manufactured(mats, test_space, trial_space, kind != "poly", pins)
+    sol = A.solve(BlockArray(test_space, tuple_array=b), pins=pins, method="dense")
+    assert sol.cartspace is trial_space
+    for xc, sc in zip(x, sol, strict=True):
+        assert jnp.allclose(sc, xc, atol=float(1000 * ulp(1.0)))
+    assert A.solver(pins=pins, method="dense") is A.solver(pins=pins, method="dense")
+    assert isinstance(
+        A.solver(pins=pins, method="dense"),
+        BlockGlobalSolver if kind == "poly" else BlockWavenumberSolver,
+    )
+
+
 def factors(solver) -> tuple[jax.Array, ...]:
+    if isinstance(solver, BlockFourierSolver):
+        return (solver.inverse,)
     if isinstance(solver, BlockWavenumberSolver):
         return (solver.lu,)
     assert isinstance(solver, BlockBandedWavenumberSolver)
     return solver.multipliers, solver.U
 
 
-@pytest.mark.parametrize("method", ["dense", "rcm"])
-@pytest.mark.parametrize("kind", ["fourier_poly", "fourier_cheb"])
+@pytest.mark.parametrize(
+    ("kind", "method"),
+    [
+        ("fourier_poly", "dense"),
+        ("fourier_poly", "rcm"),
+        ("fourier_cheb", "dense"),
+        ("fourier_cheb", "rcm"),
+        ("fourier", "auto"),
+    ],
+)
 def test_factors_are_real_through_phases(kind, method) -> None:
     """Stokes is complex only through ik, which phases on u and its row remove."""
     mats, test_space, trial_space = stokes_operator(kind)
     pins = CHEB_PINS if kind == "fourier_cheb" else []
     solver = block_lu_factor(mats, test_space, trial_space, pins, method=method)
-    assert isinstance(solver, WAVENUMBER[method])
+    assert isinstance(solver, expected(kind, method))
     assert not any(jnp.iscomplexobj(f) for f in factors(solver))
 
 
-@pytest.mark.parametrize("method", ["dense", "rcm"])
-def test_mixed_block_stays_complex(method) -> None:
+@pytest.mark.parametrize(
+    ("kind", "method"),
+    [("fourier_poly", "dense"), ("fourier_poly", "rcm"), ("fourier", "auto")],
+)
+def test_mixed_block_stays_complex(kind, method) -> None:
     """A block with both k^2 and ik has no real phases; the solve is still exact."""
-    mats, test_space, trial_space = advection_diffusion_operator()
+    mats, test_space, trial_space = advection_diffusion_operator(kind)
     solver = block_lu_factor(mats, test_space, trial_space, method=method)
-    assert isinstance(solver, WAVENUMBER[method])
+    assert isinstance(solver, expected(kind, method))
     assert all(jnp.iscomplexobj(f) for f in factors(solver))
     keys = jax.random.split(jax.random.PRNGKey(5), 4)
     x = tuple(
@@ -180,6 +226,35 @@ def test_mixed_block_stays_complex(method) -> None:
     A = BlockMatrix(mats, test_space, trial_space)
     b = (A @ BlockArray(trial_space, tuple_array=x)).array
     for xc, sc in zip(x, solver.solve(b), strict=True):
+        assert jnp.allclose(sc, xc, atol=float(1000 * ulp(1.0)))
+
+
+@pytest.mark.parametrize(
+    ("varies_in", "solver_type"),
+    [("x", BlockWavenumberSolver), ("xy", BlockGlobalSolver)],
+)
+def test_variable_coefficient_leaves_the_fourier_path(varies_in, solver_type) -> None:
+    """A variable coefficient makes the Fourier matrices along its axis banded.
+
+    That axis is then solved like a polynomial one, per wavenumber of the other;
+    varying along both, the system is solved globally.
+    """
+    F = FunctionSpace(8, Fourier, name="F")
+    G = FunctionSpace(6, Fourier, name="G")
+    V = TensorProduct(F, G, name="VC")
+    W = CartesianProduct(V, V, name="WC")
+    u, w = TrialFunction(W, name="uw")
+    v, s = TestFunction(W, name="vs")
+    x, y = V.system.base_scalars()
+    c = (2 + sp.sin(x)) * (2 + sp.cos(y) if varies_in == "xy" else 1)
+    A = inner((c * u + u.diff(x) + 0.5 * w) * v, sparse=True)
+    B = inner((w - 0.1 * w.diff(y, 2) + u) * s, sparse=True)
+    assert isinstance(A, BlockMatrix) and isinstance(B, BlockMatrix)
+    mats = list(A.mats) + list(B.mats)
+    solver = block_lu_factor(mats, W, W, method="dense")
+    assert isinstance(solver, solver_type)
+    xs, b = manufactured(mats, W, W, True)
+    for xc, sc in zip(xs, solver.solve(b), strict=True):
         assert jnp.allclose(sc, xc, atol=float(1000 * ulp(1.0)))
 
 

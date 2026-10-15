@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Self, cast
 
 import jax.numpy as jnp
@@ -22,8 +23,23 @@ if TYPE_CHECKING:
         CartesianTensorProductSpace,
         JAXFunction,
     )
+    from jaxfun.la.blockwavenumber import (
+        BlockBandedWavenumberSolver,
+        BlockFourierSolver,
+        BlockGlobalSolver,
+        BlockWavenumberSolver,
+        Pin,
+    )
+
+    type _BlockSolver = (
+        BlockFourierSolver
+        | BlockWavenumberSolver
+        | BlockBandedWavenumberSolver
+        | BlockGlobalSolver
+    )
 
 type _SparseMatrixCache = _CacheBox[DiaMatrix]
+type _SolverCache = _CacheBox[dict[tuple, _BlockSolver]]
 
 
 class BlockMatrix[
@@ -185,8 +201,8 @@ class BlockMatrix[
         """Apply block matrix to coefficient array u.
 
         Uses direct sparse matvec when the sparse cache has been populated
-        (e.g. after :meth:`solve` or an explicit :meth:`tosparse` call);
-        otherwise falls back to the per-block path.
+        (after a :meth:`tosparse` call); otherwise falls back to the per-block
+        path.
         """
         if not isinstance(u, BlockArray):
             w = BlockArray(self.test_space, tuple_array=u.get_array())
@@ -209,35 +225,74 @@ class BlockMatrix[
         """Return number of rows (test space dimension)."""
         return self.shape[0]
 
+    def solver(
+        self,
+        *,
+        pins: Sequence[Pin] = (),
+        method: DiaMatrixSolveMethod | str = DiaMatrixSolveMethod.AUTO,
+        auto_threshold: int = 100,
+    ) -> _BlockSolver:
+        """Return a solver for this matrix, factorized on the first call.
+
+        The matrix is factorized by
+        :func:`~jaxfun.la.blockwavenumber.block_lu_factor`, with pivoting. Later
+        calls with the same ``pins`` and options, including those made by
+        :meth:`solve`, return the same solver.
+
+        Args:
+            pins: ``(component, index)`` pairs whose unknowns are fixed to zero,
+                e.g. ``[(2, (0, 0))]`` for the constant mode of a pressure in
+                component 2. Unknowns whose row and column are both zero are
+                pinned automatically.
+            method: One of ``"auto"``, ``"banded"``, ``"rcm"``, or
+                ``"dense"``.  Default ``"auto"``.
+            auto_threshold: Threshold for the ``"auto"`` method of a global
+                sparse solve.  Default 100.
+
+        Returns:
+            A solver whose ``solve`` maps one right-hand side per test
+            component to one solution per trial component. A
+            :class:`~jaxfun.la.blockwavenumber.BlockGlobalSolver` also holds the
+            pinned global matrix as ``matrix``.
+        """
+        from jaxfun.la.blockwavenumber import block_lu_factor
+
+        pins = tuple((int(c), tuple(int(i) for i in index)) for c, index in pins)
+        key = (pins, str(method), auto_threshold)
+        box: _SolverCache | None = getattr(self, "_solver_cache", None)
+        if box is None:
+            box = _CacheBox({})
+            object.__setattr__(self, "_solver_cache", box)
+        if key not in box.value:
+            box.value[key] = block_lu_factor(
+                self, pins=pins, method=method, auto_threshold=auto_threshold
+            )
+        return box.value[key]
+
     def solve(
         self,
         b: BlockArray,
         *,
-        pivot: bool = False,
+        pins: Sequence[Pin] = (),
         method: DiaMatrixSolveMethod | str = DiaMatrixSolveMethod.AUTO,
         auto_threshold: int = 100,
     ) -> BlockArray:  # ty:ignore[invalid-method-override]
-        """Solve ``M x = b``.
-
-        When all factor matrices are :class:`~jaxfun.la.DiaMatrix` instances,
-        assembles the global sparse matrix via :meth:`tosparse`.
+        """Solve ``M x = b`` with the solver from :meth:`solver`.
 
         Args:
-            b: Right-hand side BlockArray.
-            pivot: Passed to :meth:`lu_factor` (banded and RCM paths only).
+            b: Right-hand side, one block per test component.
+            pins: ``(component, index)`` pairs whose unknowns are fixed to zero;
+                see :meth:`solver`.
             method: One of ``"auto"``, ``"banded"``, ``"rcm"``, or
                 ``"dense"``.  Default ``"auto"``.
-            auto_threshold: Threshold for the ``"auto"`` method.  Default 100.
+            auto_threshold: Threshold for the ``"auto"`` method of a global
+                sparse solve.  Default 100.
+
+        Returns:
+            The solution, one block per trial component.
         """
-        all_dia = all(isinstance(m, DiaMatrix) for m in self._combined_blocks.values())
-        x = b.flatten()
-        if all_dia:
-            uh = self.tosparse().lu_solve(
-                x, pivot=pivot, method=method, auto_threshold=auto_threshold
-            )
-            return BlockArray(b.cartspace, flat_array=uh)
-        M = self.to_matrix()
-        return BlockArray(b.cartspace, flat_array=M.solve(x))
+        solver = self.solver(pins=pins, method=method, auto_threshold=auto_threshold)
+        return BlockArray(self.trial_space, tuple_array=solver.solve(b.array))
 
     def scale(self, alpha: complex | Array) -> Self:
         scaled = cast(

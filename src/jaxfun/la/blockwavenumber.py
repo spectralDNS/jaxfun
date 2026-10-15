@@ -9,7 +9,9 @@ When every component shares the same Fourier axes and at most one non-periodic
 axis, the system decouples into one small block system per Fourier wavenumber.
 `BlockWavenumberSolver` factorizes those dense, and `BlockBandedWavenumberSolver`
 banded, after a reordering that interleaves the fields; both pivot, which the
-zero diagonal of a saddle-point (pressure) block needs. On several devices the
+zero diagonal of a saddle-point (pressure) block needs. Fourier along every axis,
+each block only couples the components, and `BlockFourierSolver` inverts it. On
+several devices the
 wavenumbers are split across them as the state is, and each device assembles,
 factorizes and solves only its own. Every other layout falls back to one global
 sparse LU of the flattened system.
@@ -41,6 +43,7 @@ if TYPE_CHECKING:
     type BlockSpace = CartesianTensorProductSpace | CartesianProductSpace
 
 type Pin = tuple[int, tuple[int, ...]]
+type BlockTerm = TPMatrix | GlobalMatrix
 
 _WAVENUMBER_METHODS = frozenset({"auto", "dense", "rcm", "banded"})
 
@@ -49,19 +52,27 @@ _SPLIT, _SAME = PartitionSpec("k"), PartitionSpec()
 
 
 def block_lu_factor(
-    mats: Sequence[TPMatrix | GlobalMatrix],
-    test_space: BlockSpace,
-    trial_space: BlockSpace,
+    mats: BlockMatrix | Sequence[BlockTerm],
+    test_space: BlockSpace | None = None,
+    trial_space: BlockSpace | None = None,
     pins: Sequence[Pin] = (),
     **solve_options: Any,
-) -> BlockWavenumberSolver | BlockBandedWavenumberSolver | BlockGlobalSolver:
+) -> (
+    BlockFourierSolver
+    | BlockWavenumberSolver
+    | BlockBandedWavenumberSolver
+    | BlockGlobalSolver
+):
     """Factorize a block operator for repeated solves.
 
     Args:
-        mats: The operator's terms, each tagged with ``global_indices = (test
-            component, trial component)``, as in ``BlockMatrix.mats``.
-        test_space: Mixed space of the rows (the test functions).
-        trial_space: Mixed space of the columns (the unknowns).
+        mats: The operator, either a `BlockMatrix` or its terms, each tagged
+            with ``global_indices = (test component, trial component)``, as in
+            ``BlockMatrix.mats``.
+        test_space: Mixed space of the rows (the test functions). Needed only
+            for terms; a `BlockMatrix` brings its own.
+        trial_space: Mixed space of the columns (the unknowns). Needed only for
+            terms; a `BlockMatrix` brings its own.
         pins: ``(component, index)`` pairs. The row of that test component and
             coefficient index is replaced by an identity row on the same trial
             component and index, which fixes that unknown to zero. Use it for a
@@ -71,24 +82,27 @@ def block_lu_factor(
         **solve_options: ``method`` picks how each wavenumber is factorized:
             ``"dense"``, ``"rcm"`` (banded, after a reverse Cuthill-McKee
             reordering; ``"banded"`` is the same) or ``"auto"``, the default,
-            which takes the banded factorization when its band is narrow. Without
-            Fourier structure the global sparse solve takes ``method`` and
-            ``auto_threshold`` as `DiaMatrix.lu_solve` does.
+            which takes the banded factorization when its band is narrow. A
+            system that is Fourier along every axis is inverted per wavenumber
+            whatever the method. Without Fourier structure the global sparse
+            solve takes ``method`` and ``auto_threshold`` as
+            `DiaMatrix.lu_solve` does.
 
     Returns:
         A solver whose ``solve`` maps a tuple of right-hand sides, one per test
         component, to a tuple of solutions, one per trial component.
     """
+    terms, test_space, trial_space = _unpack(mats, test_space, trial_space)
     # A 1D mixed space assembles `GlobalMatrix` blocks; as one-axis tensor
     # products they take the same per-wavenumber path.
-    mats = [
+    tpmats = [
         TPMatrix([m.data], 1, global_indices=m.global_indices)
         if isinstance(m, GlobalMatrix)
         else m
-        for m in mats
+        for m in terms
     ]
     try:
-        system = _WavenumberSystem(mats, test_space, trial_space, pins)
+        system = _WavenumberSystem(tpmats, test_space, trial_space, pins)
     except SolverNotApplicable:
         return BlockGlobalSolver(mats, test_space, trial_space, pins, **solve_options)
     method = solve_options.get("method", "auto")
@@ -97,9 +111,24 @@ def block_lu_factor(
             f"Unsupported method {method!r} for a per-wavenumber block solve; "
             f"use one of {sorted(_WAVENUMBER_METHODS)}."
         )
+    if system.poly_axis is None:
+        return BlockFourierSolver(system)
     if method == "dense" or (method == "auto" and not system.band_is_narrow):
         return BlockWavenumberSolver(system)
     return BlockBandedWavenumberSolver(system)
+
+
+def _unpack(
+    mats: BlockMatrix | Sequence[BlockTerm],
+    test_space: BlockSpace | None,
+    trial_space: BlockSpace | None,
+) -> tuple[Sequence[BlockTerm], BlockSpace, BlockSpace]:
+    """Return the terms and the (test, trial) spaces of a block operator."""
+    if isinstance(mats, BlockMatrix):
+        return list(mats.mats), mats.test_space, mats.trial_space
+    if test_space is None or trial_space is None:
+        raise TypeError("Block terms need their test and trial spaces.")
+    return mats, test_space, trial_space
 
 
 def _num_dofs(space: BlockSpace) -> tuple[tuple[int, ...], ...]:
@@ -715,6 +744,89 @@ class BlockBandedWavenumberSolver(nnx.Pytree):
         )
 
 
+class BlockFourierSolver(nnx.Pytree):
+    """Per-wavenumber inverse of a block system that is Fourier along every axis.
+
+    Every term is diagonal, so the system at each wavenumber couples only the
+    components: one unknown each. Its inverse is computed once, and a solve is
+    an elementwise sum of products over the components, each in its own layout
+    -- the block counterpart of a diagonal solve. As in `BlockWavenumberSolver`,
+    phases make the inverse real when they can.
+    """
+
+    def __init__(self, system: _WavenumberSystem) -> None:
+        phases = system.phases()
+        dtype = system.dtype if phases is None else jnp.finfo(system.dtype).dtype
+        n = system.n
+        assemble = system.assembler(dtype, (n, n), lambda r, c: (r, c))
+        trailing = system.fourier_shape[1:]
+
+        def factor(W: Array, keep: Array | None) -> tuple[Array, Array]:
+            lu, piv = jax.vmap(jsl.lu_factor)(assemble(W, keep))
+            eye = jnp.eye(n, dtype=dtype)
+            inverse = jax.vmap(lambda f, p: jsl.lu_solve((f, p), eye))(lu, piv)
+            if keep is not None:
+                # A pinned row's right-hand side is ignored, so its unknown is 0.
+                inverse = inverse * keep[:, None, :]
+            # Back on the Fourier axes, with (unknown, row) last.
+            return (
+                inverse.reshape((-1, *trailing, n, n)),
+                _singular(jnp.diagonal(lu, axis1=1, axis2=2)),
+            )
+
+        k = _SPLIT
+        self.inverse, singular = system.map(factor, (k, k), (k, k))(
+            system.weights(phases), system.keep()
+        )
+        _check_nonsingular(singular)
+        self.pinned_rows = tuple((k, r) for k, r, _ in system.pinned)
+        pairs = tuple(
+            (int(i), int(j)) for i, j in zip(*np.nonzero(_nonzero_pairs(self.inverse)))
+        )
+        row_phase, col_phase = (
+            ((1,) * n, (1,) * n)
+            if phases is None
+            else tuple(tuple(1j ** int(s) for s in ph) for ph in phases)
+        )
+
+        def solve(inverse: Array, rhs: tuple[Array, ...]) -> tuple[Array, ...]:
+            b = [jnp.asarray(r) * s for r, s in zip(rhs, row_phase, strict=True)]
+            x: list[Array | None] = [None] * n
+            for i, j in pairs:
+                term, partial = inverse[..., i, j] * b[j], x[i]
+                x[i] = term if partial is None else partial + term
+            # Every component has the same (Fourier) shape.
+            zero = jnp.zeros_like(b[0], dtype=jnp.result_type(inverse, *b))
+            return tuple(
+                zero if xi is None else xi * s
+                for xi, s in zip(x, col_phase, strict=True)
+            )
+
+        self._solve = system.map(solve, (k, k), k)
+
+    def solve(self, rhs: Sequence[Array]) -> tuple[Array, ...]:
+        """Solve the block system; see `BlockWavenumberSolver.solve`."""
+        return self._solve(self.inverse, tuple(rhs))
+
+
+def _nonzero_pairs(inverse: Array) -> np.ndarray:
+    """Which entries of the per-wavenumber blocks are nonzero at any wavenumber.
+
+    Reduced over each addressable block and OR-ed across processes, so that every
+    process skips the same entries and compiles the same solve.
+    """
+    axes = tuple(range(inverse.ndim - 2))
+    nonzero = np.zeros(inverse.shape[-2:], dtype=bool)
+    for shard in inverse.addressable_shards:
+        nonzero |= np.asarray(jnp.any(shard.data != 0, axis=axes))
+    if jax.process_count() > 1:
+        from jax.experimental import multihost_utils
+
+        gathered = multihost_utils.process_allgather(jnp.asarray(nonzero))
+        nonzero = np.any(np.asarray(gathered), axis=0)
+    return nonzero
+
+
 def _phase_vectors(
     system: _WavenumberSystem, phases: tuple[np.ndarray, np.ndarray]
 ) -> tuple[Array, Array]:
@@ -752,20 +864,26 @@ class BlockGlobalSolver(nnx.Pytree):
 
     The fallback for block layouts with no exploitable Fourier structure. The
     whole operator is assembled into one `DiaMatrix` and factorized with
-    pivoting, as for the steady Stokes problem.
+    pivoting, as for the steady Stokes problem. The arguments are those of
+    `block_lu_factor`.
     """
 
     def __init__(
         self,
-        mats: Sequence[TPMatrix | GlobalMatrix],
-        test_space: BlockSpace,
-        trial_space: BlockSpace,
+        mats: BlockMatrix | Sequence[BlockTerm],
+        test_space: BlockSpace | None = None,
+        trial_space: BlockSpace | None = None,
         pins: Sequence[Pin] = (),
         **solve_options: Any,
     ) -> None:
+        terms, test_space, trial_space = _unpack(mats, test_space, trial_space)
         test_dofs, trial_dofs = _num_dofs(test_space), _num_dofs(trial_space)
         _check_pins(pins, test_dofs, trial_dofs)
-        bm = BlockMatrix(list(mats), test_space, trial_space)
+        bm = (
+            mats
+            if isinstance(mats, BlockMatrix)
+            else BlockMatrix(list(terms), test_space, trial_space)
+        )
         dia = bm.tosparse()
 
         row_starts = np.cumsum((0,) + tuple(test_space.block_sizes[:-1]))

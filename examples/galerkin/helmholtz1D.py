@@ -27,7 +27,7 @@ bcs = {
     "right": {"D": float(ue.subs(x, domain[1]))},
 }
 D = FunctionSpace(N, Chebyshev, bcs=bcs, name="D", fun_str="psi", domain=domain)
-P = D.get_testspace(kind=TestSpaceKind.PG, scaling=n + 1)
+P = D.get_testspace(kind=TestSpaceKind.GR, scaling=n + 1)
 v = TestFunction(P, name="v")
 u = TrialFunction(D, name="u")
 

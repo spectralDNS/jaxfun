@@ -16,8 +16,11 @@ if "PYTEST" not in os.environ:
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import numpy as np
 import sympy as sp
 from matplotlib.animation import FuncAnimation
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from PIL import Image
 
 from jaxfun import Domain
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
@@ -46,11 +49,6 @@ if "PYTEST" in os.environ:
     T = 0.4
     steps = 192
     n_states = 8
-elif "NLS_FAST" in os.environ:
-    N = 64
-    T = 0.6
-    steps = 240
-    n_states = 24
 
 dt = T / steps
 
@@ -87,7 +85,7 @@ states = integrator.solve(
     steps=steps,
     n_batches=n_states,
     return_batch_snapshots=True,
-    progress=False,
+    progress="PYTEST" not in os.environ,
 )
 times = jnp.linspace(0.0, T, states.shape[0])
 
@@ -152,17 +150,15 @@ time_color = "#f4a261"
 density_max = float(density_states.max())
 wave_max = float(jnp.max(jnp.abs(psi_states)))
 
-fill = [
-    ax_density.fill_between(
-        xj,
-        density_states[0],
-        color=fill_color,
-        alpha=0.55,
-        linewidth=0,
-    )
-]
+fill = ax_density.fill_between(
+    xj,
+    density_states[0],
+    color=fill_color,
+    alpha=0.55,
+    linewidth=0,
+)
 (density_line,) = ax_density.plot(xj, density_states[0], color=density_color, lw=2.5)
-ax_density.plot(
+(initial_line,) = ax_density.plot(
     xj,
     density_states[0],
     color="#6d6875",
@@ -189,7 +185,7 @@ ax_wave.set_ylim(-wave_max * 1.15, wave_max * 1.15)
 ax_wave.set_xlabel("x")
 ax_wave.set_ylabel("wave field")
 ax_wave.grid(alpha=0.35)
-ax_wave.legend(loc="upper right")
+wave_legend = ax_wave.legend(loc="upper right")
 
 heat = ax_heat.imshow(
     density_states.T,
@@ -223,14 +219,16 @@ stats = ax_density.text(
 )
 
 
+fig.suptitle("1D Focusing NLS with Two Counter-Propagating Solitons", fontsize=15)
+
+
 def update(frame: int):
-    fill[0].remove()
-    fill[0] = ax_density.fill_between(
-        xj,
-        density_states[frame],
-        color=fill_color,
-        alpha=0.55,
-        linewidth=0,
+    fill.set_verts(
+        [
+            np.column_stack(
+                (np.r_[xj, xj[::-1]], np.r_[density_states[frame], np.zeros_like(xj)])
+            )
+        ]
     )
     density_line.set_ydata(density_states[frame])
     real_line.set_ydata(real_states[frame])
@@ -241,11 +239,46 @@ def update(frame: int):
         f"peak |psi|^2 = {float(density_states[frame].max()):.2f}\n"
         f"mass drift = {float(jnp.abs(mass_history[frame] - mass_history[0])):.2e}"
     )
-    return fill[0], density_line, real_line, imag_line, time_line, stats
 
 
-anim = FuncAnimation(fig, update, frames=len(times), interval=50, blit=False)
-anim.save(gif_path, writer="pillow", fps=24)
+# Only these artists change between frames, and a full redraw re-lays out and
+# re-ticks every axis, which costs several times more than the artists do. So
+# the GIF is blitted: the static parts are drawn once, under a fixed layout, and
+# the changing artists are drawn over a copy of them. Listed in drawing order,
+# with the legend last since the waves pass beneath it.
+animated = [
+    fill,
+    density_line,
+    initial_line,
+    stats,
+    real_line,
+    imag_line,
+    wave_legend,
+    time_line,
+]
+# The frames are rendered on an Agg canvas whatever the backend, and the
+# figure's own canvas is put back afterwards for plt.show().
+screen_canvas = fig.canvas
+canvas = FigureCanvasAgg(fig)
+canvas.draw()
+fig.set_layout_engine("none")
+for artist in animated:
+    artist.set_animated(True)
+canvas.draw()
+background = canvas.copy_from_bbox(fig.bbox)
+frames = []
+for frame in range(len(times)):
+    update(frame)
+    canvas.restore_region(background)
+    for artist in animated:
+        fig.draw_artist(artist)
+    frames.append(Image.fromarray(np.asarray(canvas.buffer_rgba())).convert("RGB"))
+frames[0].save(
+    gif_path, save_all=True, append_images=frames[1:], duration=1000 / 24, loop=0
+)
 
-fig.suptitle("1D Focusing NLS with Two Counter-Propagating Solitons", fontsize=15)
+fig.set_canvas(screen_canvas)
+for artist in animated:
+    artist.set_animated(False)
+anim = FuncAnimation(fig, update, frames=len(times), interval=50)
 plt.show()

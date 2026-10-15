@@ -4,31 +4,35 @@ import sys
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import sympy as sp
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from jaxfun.galerkin.arguments import TestFunction, TrialFunction
-from jaxfun.galerkin.Chebyshev import Chebyshev as space
-
-# from jaxfun.galerkin.Legendre import Legendre as space
+from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
-from jaxfun.utils.common import lambdify, n, ulp
+from jaxfun.utils.common import lambdify
 
-M = 20
+M = 32
+
+if "PYTEST" in os.environ:
+    M = 16
+
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
-D = FunctionSpace(M, space, bcs, scaling=n + 1, name="D", fun_str="psi")
+D = FunctionSpace(M, Chebyshev, bcs=bcs, name="D", fun_str="psi")
+P = D.get_testspace(kind="GR")  # sparse Galerkin test space
 T = TensorProduct(D, D, name="T")
-v = TestFunction(T, name="v")
+Q = TensorProduct(P, P, name="Q")
+v = TestFunction(Q, name="v")
 u = TrialFunction(T, name="u")
 
 # Method of manufactured solution
 x, y = T.system.base_scalars()
-ue = (1 - x**2) * (1 - y**2)  # * sp.exp(sp.cos(sp.pi * x)) * sp.exp(sp.sin(sp.pi * y))
+ue = (1 - x**2) * (1 - y**2) * sp.exp(sp.cos(sp.pi * (x + y)))
 
-# A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=False)
-A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
+A, b = inner(v, Div(Grad(u)) - Div(Grad(ue)), sparse=True, kind="system")
 
 uh = A.solve(b, method="lu")
 
@@ -39,7 +43,7 @@ uej = lambdify((x, y), ue)(*xj)
 
 error = jnp.linalg.norm(uj - uej) / N
 if "PYTEST" in os.environ:
-    assert error < ulp(1000), error
+    assert error < 1e-3, error
     sys.exit(0)
 
 print("Error =", error)

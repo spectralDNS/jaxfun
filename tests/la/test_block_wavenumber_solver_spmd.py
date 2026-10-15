@@ -15,7 +15,11 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from jaxfun.la.blockwavenumber import BlockWavenumberSolver, block_lu_factor
+from jaxfun.la.blockwavenumber import (
+    BlockFourierSolver,
+    BlockWavenumberSolver,
+    block_lu_factor,
+)
 from jaxfun.sharding import state_sharding
 from jaxfun.utils.common import ulp
 from tests.la.test_block_wavenumber_solver import (
@@ -35,6 +39,8 @@ COLLECTIVE = re.compile(
 
 
 def factors(solver) -> tuple[jax.Array, ...]:
+    if isinstance(solver, BlockFourierSolver):
+        return (solver.inverse,)
     if isinstance(solver, BlockWavenumberSolver):
         return solver.lu, solver.perm
     return solver.multipliers, solver.pivots, solver.U

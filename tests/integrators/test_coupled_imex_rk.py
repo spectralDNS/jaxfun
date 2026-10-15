@@ -197,6 +197,32 @@ def test_wave_system_every_combination_path(tableau, tol) -> None:
     assert jnp.abs(sw - exact).max() < tol
 
 
+def test_vector_space_alone() -> None:
+    """A vector space on its own is one field: `u = i + exp(-nu t) sin(x - t) j`.
+
+    The unit x-velocity advects the y-velocity through `Dot(Grad(u), u)`, while
+    the viscous term damps it.
+    """
+    nu = 0.1
+    F = FunctionSpace(8, Fourier, name="F")
+    VD = TensorProduct(F, F, name="VD")
+    W = CartesianProduct(VD, VD, name="W", rank=1)
+    u = TrialFunction(W, name="u", transient=True)
+    v = TestFunction(W, name="v")
+    t = W.system.base_time()
+    x, _ = W.system.base_scalars()
+    i, j = W.system.base_vectors()
+    equation = Dot(u.diff(t), v) + Dot(Dot(Grad(u), u), v) - nu * Dot(Div(Grad(u)), v)
+    solver = CoupledIMEXRungeKutta(
+        equation, tableau=ARS443, initial=(i + sp.sin(x) * j,), sparse=True
+    )
+    assert solver.algebraic == ()
+    ux, uy = solver.solve(0.01, 20, progress=False)
+    assert jnp.allclose(ux, project(sp.S.One, VD), atol=1e-5)
+    exact = project(sp.sin(x - 0.2) * sp.exp(-nu * 0.2), VD)
+    assert jnp.abs(uy - exact).max() < 1e-5
+
+
 def periodic_spaces():
     F = FunctionSpace(4, Fourier, name="F")
     VD = TensorProduct(F, F, name="VD")

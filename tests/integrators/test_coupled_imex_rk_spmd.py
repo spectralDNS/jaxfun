@@ -19,6 +19,7 @@ from jaxfun.galerkin.inner import project
 from jaxfun.integrators import ARS443, CoupledIMEXRungeKutta
 from jaxfun.la.blockwavenumber import (
     BlockBandedWavenumberSolver,
+    BlockFourierSolver,
     BlockWavenumberSolver,
 )
 from jaxfun.sharding import state_sharding
@@ -36,8 +37,13 @@ def assert_split(stepper: CoupledIMEXRungeKutta, state: tuple[jax.Array, ...]) -
         assert a.sharding.is_equivalent_to(state_sharding(a.shape), a.ndim)
         assert not a.is_fully_replicated
     for solver in stepper._stage_solvers:
-        assert isinstance(solver, BlockWavenumberSolver | BlockBandedWavenumberSolver)
-        f = solver.lu if isinstance(solver, BlockWavenumberSolver) else solver.U
+        if isinstance(solver, BlockFourierSolver):
+            f = solver.inverse
+        elif isinstance(solver, BlockWavenumberSolver):
+            f = solver.lu
+        else:
+            assert isinstance(solver, BlockBandedWavenumberSolver)
+            f = solver.U
         n_local = f.shape[0] // jax.device_count()
         assert {s.data.shape[0] for s in f.addressable_shards} == {n_local}
 

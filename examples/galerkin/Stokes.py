@@ -20,7 +20,6 @@ from jaxfun.galerkin import (
     TrialFunction,
     inner,
 )
-from jaxfun.la.blockmatrix import BlockArray
 from jaxfun.operators import Constant, Div, Grad
 
 R2 = R(2)
@@ -51,14 +50,10 @@ Dp = inner(p, Div(v), sparse=True, kind="bilinear", num_quad_points=(N, N))
 C = A + B + Dp
 c = a + b  # ty:ignore[unsupported-operator]
 
-# pin pressure dof 0
-C_pin = C.tosparse().pin({2 * (N - 2) ** 2: 0})
-d = C_pin.lu_solve(c.flatten(), method="rcm", pivot=True)
+# Note that the pin is optional for Legendre, it is automatically detected.
+sol = C.solve(c, pins=[(2, (0, 0))], method="rcm")
 
-sol = BlockArray(W, flat_array=d)
-up_ = W.backward(
-    sol.array, N=(N, N)
-)  # Need to provide N since spaces have different shape
+up_ = W.backward(sol, N=(N, N))  # Need to provide N since spaces have different shape
 
 if "PYTEST" in os.environ:
     for i in range(3):
@@ -69,7 +64,7 @@ xj = W.mesh()
 shape = up_[0].shape
 x0, y0 = jnp.broadcast_to(xj[0], shape), jnp.broadcast_to(xj[1], shape)
 plt.figure()
-plt.spy(C_pin.todense())
+plt.spy(C.solver(pins=[(2, (0, 0))], method="rcm").matrix.todense())
 plt.figure()
 plt.contourf(x0, y0, jnp.sqrt(up_[0] ** 2 + up_[1] ** 2))
 plt.quiver(x0, y0, up_[0], up_[1])

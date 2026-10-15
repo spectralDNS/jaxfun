@@ -487,9 +487,11 @@ def _fields(form: sp.Expr) -> tuple[TrialFunction, ...]:
     leaf = cast(MixedSpace, next(iter(leaves.values())))
 
     fields = tuple(sorted(atoms, key=lambda u: component_offset(u.functionspace)))
-    if len(fields) != len(leaf.basespaces):
+    # A vector space on its own is one field, not one per component.
+    expected = 1 if leaf.rank == RankTag.VECTOR else len(leaf.basespaces)
+    if len(fields) != expected:
         raise ValueError(
-            f"The weak form holds {len(fields)} of the {len(leaf.basespaces)} "
+            f"The weak form holds {len(fields)} of the {expected} "
             "fields of its mixed space; every field needs an equation."
         )
     return fields

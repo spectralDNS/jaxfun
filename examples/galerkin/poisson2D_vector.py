@@ -42,7 +42,7 @@ b = inner(Div(Grad(ue)), v)
 
 assert isinstance(A, BlockMatrix)
 assert isinstance(b, BlockArray)
-uh = A.solve(b, method="lu")
+uh = A.solve(b, method="dense")
 
 N = 100
 uj = V.evaluate_mesh(uh.array, kind="uniform", N=(N, N))

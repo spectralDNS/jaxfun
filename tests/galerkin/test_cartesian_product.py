@@ -618,7 +618,7 @@ def test_1d_coupled_system_solve():
     H = A + B
     h = cast(BlockArray, a)
 
-    uh = H.solve(h, method="banded", pivot=True, auto_threshold=200)
+    uh = H.solve(h, method="banded")
     assert isinstance(uh, BlockArray)
 
     # Residual check

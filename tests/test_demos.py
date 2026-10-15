@@ -85,6 +85,10 @@ SPMD_DEMOS = [
     # the same way but takes minutes, so it is left out, as the 2D
     # Navier-Stokes demos are.
     "SquireMode3D",
+    # `RayleighBenardCoupled` is the exception among those: its coupled block
+    # solves are split per wavenumber like `poisson2D_periodic`'s, and its test
+    # size is small. The half spectrum is padded to divide the devices.
+    "RayleighBenardCoupled",
 ]
 
 # Demos whose own verification needs float64, so they enable it for themselves at

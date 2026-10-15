@@ -316,8 +316,29 @@ def test_dct_axis_and_padding() -> None:
     )
 
 
+@pytest.mark.parametrize("complex_input", [False, True])
+def test_dct_type3_vs_scipy(complex_input: bool) -> None:
+    """The DCT-III must match scipy's, also off-axis and padded."""
+    rng = np.random.default_rng(2)
+    for shape, kwargs in (
+        ((15,), {}),
+        ((16,), {}),
+        ((8, 16), {"axis": 0}),
+        ((16,), {"n": 24}),
+    ):
+        x = rng.standard_normal(shape)
+        if complex_input:
+            x = x + 1j * rng.standard_normal(shape)
+        ours = common.dct(jnp.asarray(x), type=3, **kwargs)
+        expected = scipy_dct(x, type=3, norm=None, **kwargs)
+        assert jnp.iscomplexobj(ours) == np.iscomplexobj(expected)
+        assert jnp.allclose(
+            ours, jnp.asarray(expected), rtol=ulp(1000), atol=ulp(1000)
+        ), f"{shape} {kwargs}"
+
+
 def test_dct_rejects_other_types() -> None:
-    """Only type 2 is implemented, as for `dst`."""
+    """Type 1 is implemented for neither direction."""
     x = jnp.zeros(8)
     for f in (common.dct, common.idct):
         with pytest.raises(ValueError, match="type"):

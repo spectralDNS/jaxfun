@@ -110,6 +110,26 @@ class OrthogonalSpace(BaseSpace):
         """Return (points, weights) for orthogonality measure (abstract)."""
         pass
 
+    def integration_points_and_weights(
+        self, N: int | None = None
+    ) -> tuple[Array, Array]:
+        """Return (points, weights) for the unweighted integral.
+
+        The points are those of `quad_points_and_weights`, but its weights carry
+        the weight function of the family and these do not: with X_k the N
+        points in the reference domain, int f(X) dX ~ sum_k q_k f(X_k), the
+        integral of the function that interpolates f on the points.
+
+        Args:
+            N: Number of quadrature points (None -> self.num_quad_points).
+
+        Returns:
+            Tuple (x, q) of nodes and weights.
+        """
+        raise NotImplementedError(
+            f"No unweighted quadrature implemented for {type(self).__name__}"
+        )
+
     @property
     def num_quad_points(self) -> int:
         """Return default number of quadrature points."""

@@ -23,7 +23,7 @@ from jaxfun.galerkin import (
     inner,
 )
 from jaxfun.galerkin.Chebyshev import Chebyshev
-from jaxfun.galerkin.composite import Composite, GalerkinRecombined
+from jaxfun.galerkin.composite import Composite, GalerkinRecombined, PGComposite
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.la.tpmatrix import TPMatrices, TPMatricesWavenumberSolver
@@ -78,7 +78,8 @@ def _exact(test_rows, trial_rows, j: int, family, q: int = 0) -> np.ndarray:
 def _offsets(A) -> list[int]:
     X = np.asarray(A.todense())
     # Row by row: the PG rows are scaled ~k^-q against the replaced trial rows.
-    X = X / np.maximum(np.abs(X).max(axis=1, keepdims=True), 1e-300)
+    m = np.abs(X).max(axis=1, keepdims=True)
+    X = X / np.where(m > 0, m, 1)
     nz = np.argwhere(np.abs(X) > 1e-6)
     return sorted(set((nz[:, 1] - nz[:, 0]).tolist()))
 
@@ -241,3 +242,49 @@ def test_inhomogeneous_dirichlet_matches_galerkin(family):
         sols.append(np.linalg.solve(np.asarray(A.todense()), np.asarray(b)))
     cond = np.linalg.cond(np.asarray(A.todense()).astype(float))
     assert np.abs(sols[0] - sols[1]).max() < _tol() * cond * np.abs(sols[0]).max()
+
+
+@pytest.mark.parametrize("q", [0, 1])
+@pytest.mark.parametrize("family", [Chebyshev, Legendre])
+def test_orthogonal_trial_space(family, q):
+    """GR for an orthogonal trial space: order-1 PG functions, one per mode.
+
+    Truncated to N modes, the last two are trial functions already, so PG and
+    GR coincide and span the trial space.
+    """
+    N = 12
+    X = family(N)
+    G = X.get_testspace("GR")
+    assert isinstance(G, GalerkinRecombined) and G.dim == N
+    Sg = np.asarray(G.S.todense())
+    assert np.array_equal(Sg, np.asarray(X.get_testspace("PG").S.todense()))
+    assert not np.tril(Sg, -1).any() and np.all(np.diag(Sg) != 0)
+    assert np.count_nonzero(Sg[-2:]) == 2
+    x = X.system.x
+    v = TestFunction(G)
+    dirichlet = cast(Composite, FunctionSpace(N, family, bcs=DIRICHLET))
+    for trial, bands in (
+        (X, {0: [0, 2], 1: [1]}),
+        (dirichlet, {0: [-2, 0, 2], 1: [-1, 1]}),
+    ):
+        u = TrialFunction(trial)
+        for j, offsets in bands.items():
+            form = x**q * (u.diff(x, j) if j else u)
+            A = inner(form * v, sparse=True, kind="bilinear")
+            ref = _exact(Sg, np.asarray(trial.S.todense()), j, family, q)
+            scale = np.abs(ref).max(axis=1)
+            scale[scale == 0] = np.abs(ref).max()
+            err = np.abs(np.asarray(A.todense()) - ref).max(axis=1)
+            assert np.all(err <= _tol() * scale), (type(trial).__name__, j)
+            band = list(range(offsets[0] - q, offsets[-1] + q + 1, 2))
+            assert _offsets(A) == band
+
+
+@pytest.mark.parametrize("family", [Chebyshev, Legendre])
+@pytest.mark.parametrize("bcs", [{"left": {"D": 0}}, DIRICHLET, BIHARMONIC])
+def test_pg_truncates_its_last_order_rows(family, bcs):
+    """Order >= 1 truncates the last `order` test functions, as documented."""
+    trial = cast(Composite, FunctionSpace(12, family, bcs=bcs))
+    pg = cast(PGComposite, trial.get_testspace("PG"))
+    order = pg.order
+    assert list(pg._truncated) == list(range(pg.dim - order, pg.dim))

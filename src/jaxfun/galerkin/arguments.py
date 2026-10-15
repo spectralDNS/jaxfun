@@ -318,7 +318,9 @@ class ExpansionFunction(BaseFunction):
             raise ValueError(
                 f"Length of self.name ({name}) != {len(self.functionspace) = }"
             )
-        result = self.__class__(self.functionspace[i], name=name)
+        # A component of a transient trial function is itself transient.
+        transient = {"transient": True} if getattr(self, "transient", False) else {}
+        result = self.__class__(self.functionspace[i], name=name, **transient)
         parent = self.functionspace
         if isinstance(result.functionspace, CartesianTensorProductSpace):
             result.functionspace.leaf = cast(CartesianTensorProductSpace, parent)

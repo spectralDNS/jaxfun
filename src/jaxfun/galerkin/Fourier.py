@@ -82,6 +82,12 @@ class Fourier(OrthogonalSpace):
         points = jnp.arange(N, dtype=float) * 2 * jnp.pi / N
         return points, jnp.full(N, 2 * jnp.pi / N)
 
+    def integration_points_and_weights(
+        self, N: int | None = None
+    ) -> tuple[Array, Array]:
+        """Return the equispaced points and weights 2π/N; the weight function is 1."""
+        return self.quad_points_and_weights(N)
+
     @jit_vmap(in_axes=(0, None), static_argnums=2)
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single basis function exp(i k_i X).

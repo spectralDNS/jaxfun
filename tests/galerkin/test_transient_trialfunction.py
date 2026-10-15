@@ -1,7 +1,7 @@
 import sympy as sp
 
 from jaxfun import Domain
-from jaxfun.galerkin import TensorProduct, TestFunction, TrialFunction
+from jaxfun.galerkin import CartesianProduct, TensorProduct, TestFunction, TrialFunction
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.operators import Constant
@@ -94,3 +94,18 @@ def test_trialfunction_splitting_zk() -> None:
 
 if __name__ == "__main__":
     test_trialfunction_splitting_kdv()
+
+
+def test_components_of_transient_trialfunction_are_transient() -> None:
+    F = Fourier(4)
+    t = F.system.base_time()
+    VD = TensorProduct(F, F, name="VD")
+    Q = TensorProduct(F, F, name="Q", system=VD.system)
+    W = CartesianProduct(CartesianProduct(VD, VD, name="V", rank=1), Q, name="W")
+
+    u, p = TrialFunction(W, name="up", transient=True)
+    assert u.transient and p.transient
+    assert isinstance(p.diff(t), sp.Derivative)
+
+    u, p = TrialFunction(W, name="up")
+    assert not u.transient and p.diff(t) == 0

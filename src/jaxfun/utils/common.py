@@ -570,13 +570,18 @@ def dct(x: Array, axis: int = -1, type: int = 2, n: int | None = None) -> Array:
     Args:
         x: Input array, real or complex.
         axis: Axis to transform along.
-        type: DCT type. Only type 2 is implemented.
+        type: DCT type, 2 or 3.
         n: Length of the transform. `x` is zero-padded up to it. Defaults to the
             length of `x` along `axis`.
 
     Returns:
         The transform, of the same shape as `x` but with `axis` of length `n`.
     """
+    if type == 3:
+        # The DCT-III inverts the DCT-II up to scaling: scipy's idct of type 2,
+        # which `idct` matches, is the DCT-III divided by 2N.
+        N = x.shape[axis] if n is None else n
+        return 2 * N * idct(x, axis=axis, n=n)
     if type != 2:
         raise ValueError(f"Unsupported dct type: {type}")
     x, N = _to_last(x, axis, n)

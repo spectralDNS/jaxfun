@@ -12,7 +12,7 @@ from jaxfun.galerkin.inner import (
     inner_boundary,
     inner_source,
 )
-from jaxfun.la import BaseMatrix, Matrix
+from jaxfun.la import BaseMatrix, BlockArray, Matrix
 from jaxfun.typing import Array, GalerkinAssembledForm
 
 type AssembledTerm = tuple[BaseMatrix | None, Array | None]
@@ -35,7 +35,7 @@ def _normalize_assembled_operator(
 
 def split_operator_and_forcing(
     form: GalerkinAssembledForm,
-) -> AssembledTerm:
+) -> tuple[BaseMatrix | None, Array | BlockArray | None]:
     """Split an assembled Galerkin form into operator and forcing pieces.
 
     The result is normalized so that the assembled expression is always
@@ -57,9 +57,18 @@ def split_operator_and_forcing(
     if form is None:
         return None, None
     if isinstance(form, tuple):
-        operator, forcing = cast(tuple[BaseMatrix | Array, Array | None], form)
-        rhs = -jnp.asarray(forcing) if forcing is not None else None
+        operator, forcing = cast(
+            tuple[BaseMatrix | Array, Array | BlockArray | None], form
+        )
+        rhs: Array | BlockArray | None = None
+        if isinstance(forcing, BlockArray):
+            rhs = -forcing
+        elif forcing is not None:
+            rhs = -jnp.asarray(forcing)
         return _normalize_assembled_operator(operator), rhs
+
+    if isinstance(form, BlockArray):
+        return None, form
 
     if isinstance(form, Array):
         if form.ndim <= 1:
@@ -77,7 +86,25 @@ def assemble_linear_term(
         return None, None
 
     linear_form = inner(expr, sparse=sparse, sparse_tol=sparse_tol)
-    return split_operator_and_forcing(linear_form)
+    operator, forcing = split_operator_and_forcing(linear_form)
+    return operator, cast(Array | None, forcing)
+
+
+def assemble_block_term(
+    expr: sp.Expr, *, sparse: bool, sparse_tol: int
+) -> tuple[BaseMatrix | None, BlockArray | None]:
+    """Assemble a weak form over mixed spaces into block operator and forcing.
+
+    The counterpart of `assemble_linear_term` for test and trial functions of a
+    `CartesianProduct` space: the operator is a `BlockMatrix` and the forcing a
+    `BlockArray`. `inner` takes one test function per call, so `expr` holds one.
+    """
+    if sp.sympify(expr) == 0:
+        return None, None
+    operator, forcing = split_operator_and_forcing(
+        inner(expr, sparse=sparse, sparse_tol=sparse_tol)
+    )
+    return operator, cast(BlockArray | None, forcing)
 
 
 def assemble_boundary_term(expr: sp.Expr) -> BoundaryForcing | None:

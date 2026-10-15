@@ -2,11 +2,13 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
+import jax
 import jax.numpy as jnp
 import sympy as sp
 from sympy.core.function import AppliedUndef
+from sympy.vector import VectorAdd
 
 from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.arguments import (
@@ -15,10 +17,16 @@ from jaxfun.galerkin.arguments import (
     is_jaxfunc_leaf,
     is_jaxfunc_primitive,
 )
-from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
+from jaxfun.typing import (
+    Array,
+    IntegratorState,
+    RankTag,
+    ScalarPadding,
+    ScalarSpaceType,
+)
 from jaxfun.utils import JAX_FUNCTION_BY_NAME, lambdify, normalize_explicit
 
-from ._utils import mesh_axes
+from ._utils import component_offset, mesh_axes
 
 type NodeValueCache = dict[sp.Basic, Array]
 type NodeEvaluator = Callable[[NodeValueCache, ScalarPadding], Array]
@@ -249,20 +257,26 @@ class NonlinearCompiler:
         free_symbols = evaluated.free_symbols
         spatial_symbols = self.context.spatial_symbols
         V = self.context.functionspace
-        if len(free_symbols) == 0:
-            value = float(evaluated) if evaluated.is_real else complex(evaluated)
-            out = jnp.asarray(value)
-        elif free_symbols.issubset(set(spatial_symbols)):
-            # `N` has a lot of different shapes, trust the correct one is passed.
-            # `mesh_axes` because a 1D space returns the mesh as a bare array
-            # rather than a one-tuple, and splatting that spreads the
-            # quadrature points across the arguments one point each.
-            out = lambdify(spatial_symbols, evaluated, modules="jax")(*mesh_axes(V, N))
-        else:
-            names = ", ".join(sorted(str(sym) for sym in free_symbols))
-            raise ValueError(
-                f"Unsupported nonlinear term with unresolved symbols: {names}"
-            )
+        # Evaluated eagerly even when reached from inside a trace: the value is
+        # cached across calls, and a cached tracer is hoisted as a constant by
+        # the next trace, which then fails in PJRT with an argument-count error.
+        with jax.ensure_compile_time_eval():
+            if len(free_symbols) == 0:
+                value = float(evaluated) if evaluated.is_real else complex(evaluated)
+                out = jnp.asarray(value)
+            elif free_symbols.issubset(set(spatial_symbols)):
+                # `N` has a lot of different shapes, trust the correct one is
+                # passed. `mesh_axes` because a 1D space returns the mesh as a
+                # bare array rather than a one-tuple, and splatting that spreads
+                # the quadrature points across the arguments one point each.
+                out = lambdify(spatial_symbols, evaluated, modules="jax")(
+                    *mesh_axes(V, N)
+                )
+            else:
+                names = ", ".join(sorted(str(sym) for sym in free_symbols))
+                raise ValueError(
+                    f"Unsupported nonlinear term with unresolved symbols: {names}"
+                )
 
         self._static[(node, N)] = out
         return out
@@ -442,3 +456,108 @@ def compile_coupled_nonlinear_evaluator(
         return tuple(evaluator(cache, N) for evaluator in compiled)
 
     return evaluate
+
+
+def compile_block_nonlinear_evaluator(
+    expr: sp.Expr,
+    fields: Sequence[TrialFunction],
+    test_leaf: Any,
+    functionspace: ScalarSpaceType,
+) -> tuple[
+    tuple[int, ...],
+    tuple[int, ...],
+    Callable[[tuple[Array, ...], ScalarPadding], tuple[Array, ...]],
+]:
+    """Compile the nonlinear terms of a coupled weak form over a mixed space.
+
+    Every field is replaced by a JAXFunction node -- a vector field by one
+    scalar node per component, times the base vectors -- and every test function
+    by symbolic weights, which splits the form into one pointwise expression
+    per flattened test component.
+
+    Args:
+        expr: Nonlinear part of the weak form, test functions still attached.
+        fields: The top-level (time-independent) trial functions of the mixed
+            trial space, in its order.
+        test_leaf: The mixed test space.
+        functionspace: Space used to evaluate static (purely spatial) factors.
+
+    Returns:
+        `(components, used, evaluator)`: the flattened test components with a
+        nonlinear term, the flattened trial components the terms read, and an
+        evaluator taking one coefficient array per flattened trial component and
+        returning one physical-space array per entry of `components`.
+    """
+    from jaxfun.operators import Curl, Div, Grad
+
+    system = functionspace.system
+    base_vectors = system.base_vectors()
+
+    names = [f.name for f in fields]
+    if len(set(names)) != len(names):
+        raise ValueError(
+            f"Coupled fields must have unique names, got {names}. Rename the "
+            "TrialFunctions so each field of the system is distinguishable."
+        )
+
+    replacements: dict[sp.Basic, sp.Basic] = {}
+    nodes: list[AppliedUndef] = []
+    for field in fields:
+        V = field.functionspace
+        if V.rank == RankTag.VECTOR:
+            dofs = cast(tuple[tuple[int, ...], ...], V.num_dofs)
+            zeros = tuple(jnp.zeros(nd) for nd in dofs)
+            vector = JAXFunction(zeros, V, name=f"{field.name}_jax").doit()
+            components = cast(VectorAdd, vector).components
+            nodes.extend(cast(AppliedUndef, components[b]) for b in base_vectors)
+            replacements[field] = vector
+        else:
+            nd = V.num_dofs
+            node = JAXFunction(
+                jnp.zeros(nd if isinstance(nd, tuple) else (nd,)),
+                V,
+                name=f"{field.name}_jax",
+            ).doit()
+            nodes.append(cast(AppliedUndef, node))
+            replacements[field] = node
+
+    n_tests = len(test_leaf.flatten())
+    weights = tuple(sp.Dummy(f"w{c}") for c in range(n_tests))
+    for test in expr.atoms(TestFunction):
+        for node in sp.preorder_traversal(expr):
+            if isinstance(node, sp.Derivative | Grad | Div | Curl) and node.has(test):
+                raise NotImplementedError(
+                    f"Nonlinear term differentiates the test function {test}: "
+                    f"{node}. Write explicit terms against the undifferentiated "
+                    "test function."
+                )
+        k = component_offset(test.functionspace)
+        if test.functionspace.rank == RankTag.VECTOR:
+            replacements[test] = VectorAdd.fromiter(
+                weights[k + i] * b for i, b in enumerate(base_vectors)
+            )
+        else:
+            replacements[test] = weights[k]
+
+    expanded = sp.expand(sp.sympify(expr).xreplace(replacements).doit())
+    if expanded.atoms(TrialFunction):
+        raise ValueError(
+            "Nonlinear term still contains TrialFunctions after substitution: "
+            f"{expanded}. Every field must belong to the same mixed trial space."
+        )
+    time = system.base_time()
+    if expanded.has(time):
+        raise NotImplementedError(
+            f"Nonlinear term depends on {time}: {expanded}. Time-dependent data "
+            "is not supported in terms evaluated pointwise in physical space."
+        )
+    components: list[int] = []
+    exprs: list[sp.Expr] = []
+    for c, w in enumerate(weights):
+        term = expanded.xreplace({wk: (1 if wk is w else 0) for wk in weights})
+        if sp.sympify(term) != 0:
+            components.append(c)
+            exprs.append(term)
+    evaluator = compile_coupled_nonlinear_evaluator(exprs, functionspace, tuple(nodes))
+    used = tuple(k for k, node in enumerate(nodes) if any(e.has(node) for e in exprs))
+    return tuple(components), used, evaluator

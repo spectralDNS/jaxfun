@@ -1,14 +1,15 @@
 """Diagonally-implicit IMEX Runge-Kutta time integration."""
 
 from collections.abc import Sequence
-from typing import cast
+from typing import TYPE_CHECKING, Any, cast
 
+import jax
 import jax.numpy as jnp
 import sympy as sp
 from flax import nnx
 
 from jaxfun.la import BaseMatrix
-from jaxfun.typing import Array, ScalarPadding
+from jaxfun.typing import Array, IntegratorState, ScalarPadding
 
 from ._utils import solve_with_options, warm_operator_solve_cache
 from .base import BaseIntegrator
@@ -16,7 +17,207 @@ from .system import SystemIntegrator
 from .tableau import IMEXTableau
 
 
-class IMEXRungeKutta(BaseIntegrator):
+def _axpy[StateT: IntegratorState](y: StateT, a: Any, x: StateT) -> StateT:
+    """Return ``y + a * x`` leaf by leaf, for one array or a tuple of them."""
+    return jax.tree.map(lambda yi, xi: yi + a * xi, y, x)
+
+
+class IMEXStages:
+    """The stage and combination arithmetic of a diagonally-implicit IMEX step.
+
+    Written against hooks rather than concrete operators, so the same Butcher
+    bookkeeping drives a scalar equation (one coefficient array) and a coupled
+    block system (a tuple with one array per component): `apply_mass`,
+    `apply_mass_inverse`, `apply_linear`, `stage_solve`,
+    `nonlinear_rhs_scalar_product` and `_forcing_caches`.
+    """
+
+    tableau: IMEXTableau
+
+    if TYPE_CHECKING:
+        # Declared for the type checker only: defined here at runtime they would
+        # sit ahead of `BaseIntegrator` in the MRO and shadow its versions.
+
+        def apply_mass(self, uh: Any) -> Any: ...
+
+        def apply_mass_inverse(self, rhs: Any) -> Any: ...
+
+        def apply_linear(self, uh: Any) -> Any: ...
+
+        def stage_solve(self, a_ii: float, rhs: Any) -> Any: ...
+
+        def nonlinear_rhs_scalar_product(
+            self, uh: Any, N: ScalarPadding = None, t: Array | float | None = None
+        ) -> Any: ...
+
+        def _forcing_caches(self, t: Array | float, dt: float) -> tuple[Any, Any]: ...
+
+    def _explicit_first_stage(
+        self,
+        u_hat: Any,
+        m_u: Any,
+        dt: float,
+        forcing: Any,
+        forcing_stage: Sequence[Any] | None,
+    ) -> Any:
+        """Return the first stage of a tableau whose first stage is explicit.
+
+        That stage is the state the step starts from. A scalar step recovers it
+        as `M^-1 (M u)`, as it always has; a system whose mass matrix is singular
+        has no `M^-1` and returns `u_hat` itself.
+        """
+        return self.stage(0, m_u, dt, [], [], forcing, forcing_stage)
+
+    def stage(
+        self,
+        i: int,
+        m_u: Any,
+        dt: float,
+        nonlinear_stage: Sequence[Any],
+        linear_stage: Sequence[Any],
+        forcing: Any,
+        forcing_stage: Sequence[Any] | None = None,
+    ) -> Any:
+        """Compute stage `i` from the caches already populated for `j < i`.
+
+        `nonlinear_stage`/`linear_stage` are read-only here (entries for
+        `j < i` must already be populated by the caller); this method does
+        not append to them -- that bookkeeping is `step`-specific (it depends
+        on `step`'s choice of final-combination path) and stays there.
+
+        Pass `forcing_stage` -- the forcing evaluated at every stage time -- when
+        it varies in time, and `forcing` when it does not.
+        """
+        # The forcing rides with the *implicit* tableau, because `A u + f(t)` is
+        # the affine part of the implicit operator: that is where it came from,
+        # and a stiffly-accurate implicit treatment is what avoids order
+        # reduction in the boundary layer a moving wall drives.
+        #
+        # For a constant forcing the row-sum condition `sum_j a_i[i][j] ==
+        # c_i[i]` collapses the accumulation to a single scaling. Both branches
+        # are then correct but not bit-for-bit equal -- they sum a different
+        # number of terms -- so the shortcut is kept rather than unified, and a
+        # steady problem gets exactly the arithmetic it got before.
+        tableau: IMEXTableau = self.tableau
+        a_e, a_i = tableau.explicit.A, tableau.implicit.A
+        c_i = tableau.implicit.c
+
+        a_ii = a_i[i][i]
+        rhs = m_u
+        for j in range(i):
+            if a_e[i][j] != 0.0:
+                rhs = _axpy(rhs, dt * a_e[i][j], nonlinear_stage[j])
+            if a_i[i][j] != 0.0:
+                rhs = _axpy(rhs, dt * a_i[i][j], linear_stage[j])
+        if forcing_stage is not None:
+            # `a_i` is lower triangular including the diagonal, and the forcing
+            # does not depend on the state, so stage `i`'s own term is known.
+            for j in range(i + 1):
+                if a_i[i][j] != 0.0:
+                    rhs = _axpy(rhs, dt * a_i[i][j], forcing_stage[j])
+        elif forcing is not None and c_i[i] != 0.0:
+            rhs = _axpy(rhs, dt * c_i[i], forcing)
+
+        if a_ii == 0.0:
+            return self.apply_mass_inverse(rhs)
+        return self.stage_solve(a_ii, rhs)
+
+    def _step_impl(
+        self,
+        u_hat: Any,
+        dt: float,
+        N: ScalarPadding = None,
+        t: Array | float = 0.0,
+        /,
+    ) -> Any:
+        """Advance one IMEX Runge-Kutta step in coefficient space.
+
+        Three final-combination paths, selected by `tableau`'s (static)
+        stiff-accuracy properties:
+
+        - Globally stiffly accurate (`is_stiffly_accurate`): the last stage
+          already equals the accepted solution; return it directly.
+        - Implicit-only stiffly accurate (`implicit_is_stiffly_accurate`
+          without the former): the ``b_i``-weighted combination folds
+          algebraically into the last stage, leaving only a
+          ``(b_e - explicit.A[-1])``-weighted correction over the cached
+          nonlinear stage values (no linear-operator terms needed at all).
+        - Otherwise: the general weighted combination over both ``b_e`` and
+          ``b_i``.
+
+        The last stage's nonlinear/linear evaluations are skipped entirely
+        when the chosen path doesn't need them (never needed for the fully
+        stiffly-accurate path; the linear evaluation is additionally never
+        needed for the implicit-only path).
+        """
+        tableau: IMEXTableau = self.tableau
+        a_e = tableau.explicit.A
+        b_e, b_i = tableau.explicit.b, tableau.implicit.b
+
+        full_gsa = tableau.is_stiffly_accurate
+        implicit_only_sa = (not full_gsa) and tableau.implicit_is_stiffly_accurate
+        last = tableau.stages - 1
+
+        m_u = self.apply_mass(u_hat)
+        forcing, forcing_stage = self._forcing_caches(t, dt)
+
+        stages: list[Any] = []
+        nonlinear_stage: list[Any] = []
+        linear_stage: list[Any] = []
+
+        for i in range(tableau.stages):
+            if i == 0 and tableau.implicit.A[0][0] == 0.0:
+                stage = self._explicit_first_stage(
+                    u_hat, m_u, dt, forcing, forcing_stage
+                )
+            else:
+                stage = self.stage(
+                    i, m_u, dt, nonlinear_stage, linear_stage, forcing, forcing_stage
+                )
+            stages.append(stage)
+            is_last = i == last
+            skip_nonlinear = is_last and full_gsa
+            skip_linear = is_last and (full_gsa or implicit_only_sa)
+            nonlinear_stage.append(
+                None
+                if skip_nonlinear
+                else self.nonlinear_rhs_scalar_product(
+                    stage, N, t + tableau.implicit.c[i] * dt
+                )
+            )
+            linear_stage.append(None if skip_linear else self.apply_linear(stage))
+
+        # Both stiffly-accurate paths need no forcing term of their own: `b_i`
+        # equals `a_i[-1]` there, so the `b_i`-weighted forcing is already
+        # inside the last stage. That is why the general path below is the only
+        # one that carries it, for a moving forcing exactly as for a fixed one.
+        if full_gsa:
+            return stages[-1]
+
+        if implicit_only_sa:
+            rhs = self.apply_mass(stages[-1])
+            for j in range(tableau.stages):
+                weight = b_e[j] - a_e[-1][j]
+                if weight != 0.0:
+                    rhs = _axpy(rhs, dt * weight, nonlinear_stage[j])
+            return self.apply_mass_inverse(rhs)
+
+        rhs = m_u
+        for j in range(tableau.stages):
+            if b_e[j] != 0.0:
+                rhs = _axpy(rhs, dt * b_e[j], nonlinear_stage[j])
+            if b_i[j] != 0.0:
+                rhs = _axpy(rhs, dt * b_i[j], linear_stage[j])
+        if forcing_stage is not None:
+            for j in range(tableau.stages):
+                if b_i[j] != 0.0:
+                    rhs = _axpy(rhs, dt * b_i[j], forcing_stage[j])
+        elif forcing is not None:
+            rhs = _axpy(rhs, dt, forcing)
+        return self.apply_mass_inverse(rhs)
+
+
+class IMEXRungeKutta(IMEXStages, BaseIntegrator):
     """Diagonally-implicit IMEX Runge-Kutta integrator for semilinear systems.
 
     The stiff linear part of the weak form is solved implicitly (one linear
@@ -72,148 +273,13 @@ class IMEXRungeKutta(BaseIntegrator):
         idx = self.tableau.distinct_diagonal_coeffs.index(a_ii)
         return self._stage_operators[idx]
 
-    def stage(
-        self,
-        i: int,
-        m_u: Array,
-        dt: float,
-        nonlinear_stage: list[Array | None],
-        linear_stage: list[Array | None],
-        forcing: Array | None,
-        forcing_stage: list[Array] | None = None,
-    ) -> Array:
-        """Compute stage `i` from the caches already populated for `j < i`.
+    def apply_linear(self, uh: Array) -> Array:
+        """Apply the assembled linear operator to a coefficient state."""
+        return self.linear_operator @ uh
 
-        `nonlinear_stage`/`linear_stage` are read-only here (entries for
-        `j < i` must already be populated by the caller); this method does
-        not append to them -- that bookkeeping is `step`-specific (it depends
-        on `step`'s choice of final-combination path) and stays there.
-
-        Pass `forcing_stage` -- the forcing evaluated at every stage time -- when
-        it varies in time, and `forcing` when it does not.
-        """
-        # The forcing rides with the *implicit* tableau, because `A u + f(t)` is
-        # the affine part of the implicit operator: that is where it came from,
-        # and a stiffly-accurate implicit treatment is what avoids order
-        # reduction in the boundary layer a moving wall drives.
-        #
-        # For a constant forcing the row-sum condition `sum_j a_i[i][j] ==
-        # c_i[i]` collapses the accumulation to a single scaling. Both branches
-        # are then correct but not bit-for-bit equal -- they sum a different
-        # number of terms -- so the shortcut is kept rather than unified, and a
-        # steady problem gets exactly the arithmetic it got before.
-        tableau: IMEXTableau = self.tableau
-        a_e, a_i = tableau.explicit.A, tableau.implicit.A
-        c_i = tableau.implicit.c
-
-        a_ii = a_i[i][i]
-        rhs = m_u
-        for j in range(i):
-            if a_e[i][j] != 0.0:
-                rhs = rhs + dt * a_e[i][j] * cast(Array, nonlinear_stage[j])
-            if a_i[i][j] != 0.0:
-                rhs = rhs + dt * a_i[i][j] * cast(Array, linear_stage[j])
-        if forcing_stage is not None:
-            # `a_i` is lower triangular including the diagonal, and the forcing
-            # does not depend on the state, so stage `i`'s own term is known.
-            for j in range(i + 1):
-                if a_i[i][j] != 0.0:
-                    rhs = rhs + dt * a_i[i][j] * forcing_stage[j]
-        elif forcing is not None and c_i[i] != 0.0:
-            rhs = rhs + dt * c_i[i] * forcing
-
-        if a_ii == 0.0:
-            return self.apply_mass_inverse(rhs)
+    def stage_solve(self, a_ii: float, rhs: Array) -> Array:
+        """Solve the cached stage operator for diagonal coefficient `a_ii`."""
         return solve_with_options(self._stage_operator(a_ii), rhs, self._solver_options)
-
-    def _step_impl(
-        self,
-        u_hat: Array,
-        dt: float,
-        N: ScalarPadding = None,
-        t: Array | float = 0.0,
-        /,
-    ) -> Array:
-        """Advance one IMEX Runge-Kutta step in coefficient space.
-
-        Three final-combination paths, selected by `tableau`'s (static)
-        stiff-accuracy properties:
-
-        - Globally stiffly accurate (`is_stiffly_accurate`): the last stage
-          already equals the accepted solution; return it directly.
-        - Implicit-only stiffly accurate (`implicit_is_stiffly_accurate`
-          without the former): the ``b_i``-weighted combination folds
-          algebraically into the last stage, leaving only a
-          ``(b_e - explicit.A[-1])``-weighted correction over the cached
-          nonlinear stage values (no linear-operator terms needed at all).
-        - Otherwise: the general weighted combination over both ``b_e`` and
-          ``b_i``.
-
-        The last stage's nonlinear/linear evaluations are skipped entirely
-        when the chosen path doesn't need them (never needed for the fully
-        stiffly-accurate path; the linear evaluation is additionally never
-        needed for the implicit-only path).
-        """
-        tableau: IMEXTableau = self.tableau
-        a_e = tableau.explicit.A
-        b_e, b_i = tableau.explicit.b, tableau.implicit.b
-
-        full_gsa = tableau.is_stiffly_accurate
-        implicit_only_sa = (not full_gsa) and tableau.implicit_is_stiffly_accurate
-        last = tableau.stages - 1
-
-        m_u = self.apply_mass(u_hat)
-        forcing, forcing_stage = self._forcing_caches(t, dt)
-
-        stages: list[Array] = []
-        nonlinear_stage: list[Array | None] = []
-        linear_stage: list[Array | None] = []
-
-        for i in range(tableau.stages):
-            stage = self.stage(
-                i, m_u, dt, nonlinear_stage, linear_stage, forcing, forcing_stage
-            )
-            stages.append(stage)
-            is_last = i == last
-            skip_nonlinear = is_last and full_gsa
-            skip_linear = is_last and (full_gsa or implicit_only_sa)
-            nonlinear_stage.append(
-                None
-                if skip_nonlinear
-                else self.nonlinear_rhs_scalar_product(
-                    stage, N, t + tableau.implicit.c[i] * dt
-                )
-            )
-            linear_stage.append(None if skip_linear else (self.linear_operator @ stage))
-
-        # Both stiffly-accurate paths need no forcing term of their own: `b_i`
-        # equals `a_i[-1]` there, so the `b_i`-weighted forcing is already
-        # inside the last stage. That is why the general path below is the only
-        # one that carries it, for a moving forcing exactly as for a fixed one.
-        if full_gsa:
-            return stages[-1]
-
-        if implicit_only_sa:
-            rhs = self.apply_mass(stages[-1])
-            for j in range(tableau.stages):
-                weight = b_e[j] - a_e[-1][j]
-                if weight != 0.0:
-                    rhs = rhs + dt * weight * cast(Array, nonlinear_stage[j])
-            return self.apply_mass_inverse(rhs)
-
-        rhs = m_u
-        for j in range(tableau.stages):
-            if b_e[j] != 0.0:
-                rhs = rhs + dt * b_e[j] * cast(Array, nonlinear_stage[j])
-            if b_i[j] != 0.0:
-                rhs = rhs + dt * b_i[j] * cast(Array, linear_stage[j])
-        if forcing_stage is not None:
-            for j in range(tableau.stages):
-                if b_i[j] != 0.0:
-                    rhs = rhs + dt * b_i[j] * forcing_stage[j]
-        elif forcing is not None:
-            rhs = rhs + dt * forcing
-        return self.apply_mass_inverse(rhs)
 
 
 class SystemIMEXRungeKutta(SystemIntegrator[IMEXRungeKutta]):

@@ -21,6 +21,7 @@ from jaxfun.utils.common import (
     _idct_twiddles,
     _scaled_dct,
     cache_static,
+    dct,
     jit_method,
     jit_vmap,
 )
@@ -215,6 +216,62 @@ class Chebyshev(Jacobi):
             jnp.cos(jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)),
             jnp.ones(N) * jnp.pi / N,
         )
+
+    @cache_static
+    def integration_points_and_weights(
+        self, N: int | None = None
+    ) -> tuple[Array, Array]:
+        """Return Fejer's first rule: the Gauss-Chebyshev nodes, unweighted.
+
+        With theta_k = (2k+1)pi/(2N), the weights are
+
+            q_k = 2/N (1 - 2 sum_{j=1}^{N/2} cos(2j theta_k) / (4j^2 - 1)),
+
+        a DCT-III. The rule is symmetric, so it does not matter that the points run from
+        -1 to 1 here. See
+
+          L. Fejer, Mechanische Quadraturen mit positiven Cotesschen Zahlen.
+          Math. Z. 37:287-309, 1933. doi:10.1007/BF01474575
+
+          J. Waldvogel, Fast construction of the Fejer and Clenshaw-Curtis
+          quadrature rules. BIT 46:195-202, 2006. doi:10.1007/s10543-006-0045-4
+        """
+        N = self.num_quad_points if N is None else N
+        # The j = N/2 term of an even N drops out, cos(N theta_k) being zero.
+        j = np.arange(1, (N - 1) // 2 + 1)
+        c = np.zeros(N)
+        c[0] = 1
+        c[2 * j] = -1 / (4 * j**2 - 1)
+        return self.quad_points_and_weights(N)[0], 2 / N * dct(jnp.asarray(c), type=3)
+
+    def get_testspace(
+        self,
+        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
+        name: str | None = None,
+        fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
+    ) -> OrthogonalSpace:
+        """Return the test space of `kind` for this space as trial space.
+
+        Galerkin is this space itself. Petrov-Galerkin is `ChebPhi_0`, the
+        order-1 test functions, one per mode, which keep operators of up to
+        first derivatives banded. It spans this space, so Galerkin-recombined
+        is the same space. `name`, `fun_str` and `scaling` are for those two.
+        """
+        kind = TestSpaceKind.coerce(kind)
+        if kind == TestSpaceKind.GALERKIN:
+            return self
+        P = ChebPhi_0(
+            self.N,
+            domain=self.domain,
+            system=self.system,
+            name=name,
+            fun_str=fun_str,
+            scaling=scaling,
+        )
+        if kind == TestSpaceKind.PETROV_GALERKIN:
+            return P
+        return P.recombine(self, name=name, fun_str=fun_str)
 
     @jit_vmap(in_axes=(0, None), static_argnums=2)
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
@@ -602,6 +659,50 @@ class CGComposite(Composite):
             name=name,
             fun_str=fun_str,
             scaling=scaling,
+        )
+
+
+class ChebPhi_0(PGComposite):
+    r"""
+    Composite space for Galerkin recombination of the orthogonal space.
+
+    The test functions for an orthogonal Chebyshev trial space: those of
+    `ChebPhi_1`, but one per mode,
+
+    .. math::
+
+        \phi_k = \frac{T_k - T_{k+2}}{\pi (k+1)}, \, k=0, 1, \ldots, N-1,
+
+    with the last two truncated to the first N Chebyshev polynomials, which
+    leaves them proportional to T_{N-2} and T_{N-1}; see `PGComposite`. The test
+    functions then span the trial space, so the method is Galerkin, while the
+    matrices of operators with up to first derivatives are banded, as for
+    `ChebPhi_1`. Create with `Chebyshev(N).get_testspace("GR")`.
+    """
+
+    def __init__(
+        self,
+        N: int,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
+        name: str | None = None,
+        fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
+    ) -> None:
+        name = name if name is not None else "ChebPhi_0"
+        fun_str = fun_str if fun_str is not None else "phi_0"
+        PGComposite.__init__(
+            self,
+            N,
+            Chebyshev,
+            bcs={"left": {"D": 0}, "right": {"D": 0}},
+            domain=domain,
+            system=system,
+            stencil={0: 1 / sp.pi / (n + 1), 2: -1 / sp.pi / (n + 1)},
+            scaling=scaling,
+            name=name,
+            fun_str=fun_str,
+            order=0,
         )
 
 

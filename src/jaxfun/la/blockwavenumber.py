@@ -15,6 +15,11 @@ several devices the
 wavenumbers are split across them as the state is, and each device assembles,
 factorizes and solves only its own. Every other layout falls back to one global
 sparse LU of the flattened system.
+
+Fields that enter the others' equations one way only -- a temperature that drives
+the momentum equation through buoyancy but is itself advected explicitly, say --
+make the operator block triangular. `BlockTriangularSolver` then solves the
+groups of fields one after the other, each with one of the solvers above.
 """
 
 from __future__ import annotations
@@ -35,7 +40,13 @@ from jaxfun.la.blockmatrix import BlockMatrix
 from jaxfun.la.diamatrix import DiaMatrix, _lu_banded_kernel, _pivoted_forward
 from jaxfun.la.matrixprotocol import BaseMatrix, SolverNotApplicable
 from jaxfun.la.operators import GlobalMatrix
-from jaxfun.la.tpmatrix import TPMatrix, _make_wavenumber_solve, _prune_zero_diagonals
+from jaxfun.la.tpmatrix import (
+    TPMatricesWavenumberSolver,
+    TPMatrix,
+    _make_wavenumber_solve,
+    _prune_zero_diagonals,
+    tpmats_wavenumber_factor,
+)
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import CartesianProductSpace, CartesianTensorProductSpace
@@ -61,9 +72,14 @@ def block_lu_factor(
     BlockFourierSolver
     | BlockWavenumberSolver
     | BlockBandedWavenumberSolver
+    | BlockTriangularSolver
     | BlockGlobalSolver
 ):
     """Factorize a block operator for repeated solves.
+
+    When some fields enter the others' equations but not the other way round,
+    the operator is block triangular, and it is factorized and solved group by
+    group; see `BlockTriangularSolver`.
 
     Args:
         mats: The operator, either a `BlockMatrix` or its terms, each tagged
@@ -84,7 +100,8 @@ def block_lu_factor(
             reordering; ``"banded"`` is the same) or ``"auto"``, the default,
             which takes the banded factorization when its band is narrow. A
             system that is Fourier along every axis is inverted per wavenumber
-            whatever the method. Without Fourier structure the global sparse
+            whatever the method, and a field solved on its own takes the scalar
+            wavenumber solver. Without Fourier structure the global sparse
             solve takes ``method`` and ``auto_threshold`` as
             `DiaMatrix.lu_solve` does.
 
@@ -101,11 +118,24 @@ def block_lu_factor(
         else m
         for m in terms
     ]
+    test_dofs, trial_dofs = _num_dofs(test_space), _num_dofs(trial_space)
+    method = solve_options.get("method", "auto")
+    groups = _triangular_groups(tpmats, test_dofs, trial_dofs)
     try:
-        system = _WavenumberSystem(tpmats, test_space, trial_space, pins)
+        if len(groups) > 1:
+            return BlockTriangularSolver(
+                tpmats, test_dofs, trial_dofs, pins, groups, method
+            )
+        system = _WavenumberSystem(tpmats, test_dofs, trial_dofs, pins)
+        return _wavenumber_solver(system, method)
     except SolverNotApplicable:
         return BlockGlobalSolver(mats, test_space, trial_space, pins, **solve_options)
-    method = solve_options.get("method", "auto")
+
+
+def _wavenumber_solver(
+    system: _WavenumberSystem, method: str
+) -> BlockFourierSolver | BlockWavenumberSolver | BlockBandedWavenumberSolver:
+    """Return the per-wavenumber solver `method` picks for ``system``."""
     if method not in _WAVENUMBER_METHODS:
         raise ValueError(
             f"Unsupported method {method!r} for a per-wavenumber block solve; "
@@ -155,6 +185,48 @@ def _check_pins(
             )
 
 
+def _triangular_groups(
+    mats: Sequence[TPMatrix],
+    test_dofs: tuple[tuple[int, ...], ...],
+    trial_dofs: tuple[tuple[int, ...], ...],
+) -> tuple[tuple[int, ...], ...]:
+    """Return the components in groups that can be solved one after another.
+
+    Equation c (test component) is taken to determine unknown c (trial
+    component). The groups are the strongly connected components of "equation
+    i holds unknown j", in an order where each group's equations hold only its
+    own unknowns and those of earlier groups. It is one group, the whole system,
+    when the components cannot be paired like that, when they are all coupled
+    both ways, or when a group of one component has no term in its own unknown.
+    """
+    n = len(test_dofs)
+    whole = (tuple(range(n)),)
+    if test_dofs != trial_dofs:
+        return whole
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    holds = np.zeros((n, n), dtype=bool)
+    for tp in mats:
+        i, j = (int(c) for c in tp.global_indices)
+        holds[i, j] = True
+    count, label = connected_components(
+        csr_matrix(holds), directed=True, connection="strong"
+    )
+    groups = [tuple(int(c) for c in np.nonzero(label == g)[0]) for g in range(count)]
+    if count == 1 or any(len(g) == 1 and not holds[g[0], g[0]] for g in groups):
+        return whole
+    needs = [
+        {int(label[j]) for c in group for j in np.nonzero(holds[c])[0]} - {g}
+        for g, group in enumerate(groups)
+    ]
+    order: list[int] = []
+    while len(order) < count:
+        ready = [g for g in range(count) if g not in order and needs[g] <= set(order)]
+        order.append(min(ready, key=lambda g: groups[g][0]))
+    return tuple(groups[g] for g in order)
+
+
 class _WavenumberSystem:
     """A block operator that splits into one block system per Fourier wavenumber.
 
@@ -179,11 +251,10 @@ class _WavenumberSystem:
     def __init__(
         self,
         mats: Sequence[TPMatrix],
-        test_space: BlockSpace,
-        trial_space: BlockSpace,
+        test_dofs: tuple[tuple[int, ...], ...],
+        trial_dofs: tuple[tuple[int, ...], ...],
         pins: Sequence[Pin],
     ) -> None:
-        test_dofs, trial_dofs = _num_dofs(test_space), _num_dofs(trial_space)
         if not all(isinstance(m, TPMatrix) for m in mats):
             raise SolverNotApplicable("Wavenumber solver needs TPMatrix terms")
         ndim = len(test_dofs[0])
@@ -862,6 +933,103 @@ def _dense_solve(lu: Array, perm: Array, b: Array) -> Array:
     )
     x = jax.lax.linalg.triangular_solve(lu, y, left_side=True, lower=False)
     return x[..., 0] + 1j * x[..., 1] if split else x[..., 0]
+
+
+class BlockTriangularSolver(nnx.Pytree):
+    """Block forward substitution over fields that enter each other one way.
+
+    The groups of `_triangular_groups` make the operator block lower
+    triangular: the equations of each group hold only its own unknowns and
+    those of the groups before it. In Rayleigh-Benard convection, say, the
+    temperature enters the momentum equation through buoyancy, but no other
+    field enters the temperature equation implicitly. Each group is factorized
+    on its own, and a solve takes them in order, moving the terms that hold
+    unknowns already solved for to the right-hand side. The answer is that of
+    the whole system, from smaller ones: there, a pivoted saddle-point system
+    without the temperature, and the temperature alone, which as a single field
+    takes the scalar wavenumber solver.
+    """
+
+    def __init__(
+        self,
+        mats: Sequence[TPMatrix],
+        test_dofs: tuple[tuple[int, ...], ...],
+        trial_dofs: tuple[tuple[int, ...], ...],
+        pins: Sequence[Pin],
+        groups: tuple[tuple[int, ...], ...],
+        method: str,
+    ) -> None:
+        group_of = {c: g for g, group in enumerate(groups) for c in group}
+        local = {c: group.index(c) for group in groups for c in group}
+        terms: list[list[TPMatrix]] = [[] for _ in groups]
+        slots, couplings = [], []
+        for tp in mats:
+            i, j = (int(c) for c in tp.global_indices)
+            if group_of[i] == group_of[j]:
+                indices = (local[i], local[j])
+                terms[group_of[i]].append(TPMatrix(tp.mats, tp.coefficient, indices))
+            else:
+                slots.append((i, j))
+                couplings.append(tp)
+        self.groups = groups
+        self.slots = tuple(slots)
+        self.couplings = nnx.data(tuple(couplings))
+        self.solvers = nnx.data(
+            tuple(
+                _group_solver(
+                    terms[g],
+                    tuple(test_dofs[c] for c in group),
+                    tuple(trial_dofs[c] for c in group),
+                    [(local[c], index) for c, index in pins if group_of[c] == g],
+                    method,
+                )
+                for g, group in enumerate(groups)
+            )
+        )
+
+    def solve(self, rhs: Sequence[Array]) -> tuple[Array, ...]:
+        """Solve the block system; see `BlockWavenumberSolver.solve`."""
+        x: dict[int, Array] = {}
+        for group, solver in zip(self.groups, self.solvers, strict=True):
+            b = [jnp.asarray(rhs[c]) for c in group]
+            for (i, j), op in zip(self.slots, self.couplings, strict=True):
+                if i in group:
+                    b[group.index(i)] = b[group.index(i)] - op @ x[j]
+            if isinstance(solver, TPMatricesWavenumberSolver):
+                xs = (solver.solve(b[0]),)
+            else:
+                xs = solver.solve(tuple(b))
+            x.update(zip(group, xs, strict=True))
+        return tuple(x[c] for c in range(len(x)))
+
+
+def _group_solver(
+    terms: Sequence[TPMatrix],
+    test_dofs: tuple[tuple[int, ...], ...],
+    trial_dofs: tuple[tuple[int, ...], ...],
+    pins: Sequence[Pin],
+    method: str,
+) -> (
+    TPMatricesWavenumberSolver
+    | BlockFourierSolver
+    | BlockWavenumberSolver
+    | BlockBandedWavenumberSolver
+):
+    """Return the solver of one group of `BlockTriangularSolver`.
+
+    A single field with nothing to pin is solved as a scalar equation would be,
+    without pivoting and with its even and odd modes apart where they decouple.
+    """
+    system = _WavenumberSystem(terms, test_dofs, trial_dofs, pins)
+    if (
+        len(test_dofs) == 1
+        and system.fourier
+        and system.poly_axis is not None
+        and not system.pinned
+        and all(isinstance(m, DiaMatrix) for tp in terms for m in tp.mats)
+    ):
+        return tpmats_wavenumber_factor(list(terms))
+    return _wavenumber_solver(system, method)
 
 
 class BlockGlobalSolver(nnx.Pytree):

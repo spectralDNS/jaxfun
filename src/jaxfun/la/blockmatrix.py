@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         BlockBandedWavenumberSolver,
         BlockFourierSolver,
         BlockGlobalSolver,
+        BlockTriangularSolver,
         BlockWavenumberSolver,
         Pin,
     )
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
         BlockFourierSolver
         | BlockWavenumberSolver
         | BlockBandedWavenumberSolver
+        | BlockTriangularSolver
         | BlockGlobalSolver
     )
 

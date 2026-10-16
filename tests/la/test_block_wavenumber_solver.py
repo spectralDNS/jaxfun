@@ -30,9 +30,11 @@ from jaxfun.la.blockwavenumber import (
     BlockBandedWavenumberSolver,
     BlockFourierSolver,
     BlockGlobalSolver,
+    BlockTriangularSolver,
     BlockWavenumberSolver,
     block_lu_factor,
 )
+from jaxfun.la.tpmatrix import TPMatricesWavenumberSolver
 from jaxfun.operators import Div, Dot, Grad
 from jaxfun.utils.common import ulp
 
@@ -94,6 +96,34 @@ def _chebyshev_stokes(N: int, M: int):
     B = inner(Div(u) * q, sparse=True)
     assert isinstance(A, BlockMatrix) and isinstance(B, BlockMatrix)
     return list(A.mats) + list(B.mats), A.test_space, A.trial_space
+
+
+@functools.cache
+def boussinesq_operator(M: int = 6):
+    """Stokes plus a temperature that drives the v equation and sees nothing else.
+
+    No other field enters the temperature's equation, so the operator is block
+    triangular: T can be solved for first, and then (u, v, p).
+    """
+    F = FunctionSpace(M, Fourier, name="F")
+    D = FunctionSpace(8, Legendre.Legendre, bcs=HOM, name="D")
+    VD = TensorProduct(F, D, name="VD")
+    Q = TensorProduct(F, FunctionSpace(6, Legendre.Legendre, name="P"), name="Q")
+    VT = TensorProduct(F, D, name="VT", system=VD.system)
+    V = CartesianProduct(VD, VD, name="V", rank=1)
+    W = CartesianProduct(V, Q, VT, name="W")
+    u, p, T = TrialFunction(W, name="upT")
+    v, q, s = TestFunction(W, name="vqs")
+    j = VD.system.base_vectors()[1]
+    A = inner(
+        Dot(u, v) - 0.1 * Dot(Div(Grad(u)), v) - p * Div(v) - T * Dot(j, v),
+        sparse=True,
+    )
+    B = inner(Div(u) * q, sparse=True)
+    C = inner((T - 0.1 * Div(Grad(T))) * s, sparse=True)
+    assert isinstance(A, BlockMatrix) and isinstance(B, BlockMatrix)
+    assert isinstance(C, BlockMatrix)
+    return list(A.mats) + list(B.mats) + list(C.mats), A.test_space, A.trial_space
 
 
 def advection_diffusion_operator(kind: str = "fourier_poly"):
@@ -309,6 +339,21 @@ def test_explicit_pin_matches_automatic(method) -> None:
     _, b = manufactured(mats, test_space, trial_space, True)
     for a, e in zip(auto.solve(b), explicit.solve(b), strict=True):
         assert np.array_equal(np.asarray(a), np.asarray(e))
+
+
+@pytest.mark.parametrize("method", ["dense", "rcm"])
+def test_one_way_coupling_is_solved_group_by_group(method) -> None:
+    """The temperature first, as a scalar equation, and then the Stokes block."""
+    mats, test_space, trial_space = boussinesq_operator()
+    pins = [(2, (0, 0))]
+    solver = block_lu_factor(mats, test_space, trial_space, pins, method=method)
+    assert isinstance(solver, BlockTriangularSolver)
+    assert solver.groups == ((3,), (0, 1, 2))
+    assert isinstance(solver.solvers[0], TPMatricesWavenumberSolver)
+    assert isinstance(solver.solvers[1], WAVENUMBER[method])
+    x, b = manufactured(mats, test_space, trial_space, True, pins)
+    for xc, sc in zip(x, solver.solve(b), strict=True):
+        assert jnp.allclose(sc, xc, atol=float(1000 * ulp(1.0)))
 
 
 def test_pin_out_of_range_raises() -> None:

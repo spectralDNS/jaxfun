@@ -24,6 +24,7 @@ from jaxfun.sharding import state_sharding
 from jaxfun.utils.common import ulp
 from tests.la.test_block_wavenumber_solver import (
     CHEB_PINS,
+    boussinesq_operator,
     manufactured,
     stokes_operator,
 )
@@ -56,6 +57,20 @@ def test_each_device_solves_its_own_wavenumbers(kind, method) -> None:
         n_local = f.shape[0] // jax.device_count()
         assert {s.data.shape[0] for s in f.addressable_shards} == {n_local}
 
+    x, b = manufactured(mats, test_space, trial_space, True, pins)
+    b = tuple(jax.device_put(r, state_sharding(r.shape)) for r in b)
+    hlo = jax.jit(lambda s, r: s.solve(r)).lower(solver, b).compile().as_text()
+    assert hlo is not None and not COLLECTIVE.search(hlo)
+    for xc, sc in zip(x, solver.solve(b), strict=True):
+        assert sc.sharding.is_equivalent_to(state_sharding(xc.shape), xc.ndim)
+        assert jnp.allclose(sc, xc, atol=float(1000 * ulp(1.0)))
+
+
+def test_one_way_coupling_solves_without_communication() -> None:
+    """Group by group, each group on the wavenumbers of its own device."""
+    mats, test_space, trial_space = boussinesq_operator(M=8)
+    pins = [(2, (0, 0))]
+    solver = block_lu_factor(mats, test_space, trial_space, pins)
     x, b = manufactured(mats, test_space, trial_space, True, pins)
     b = tuple(jax.device_put(r, state_sharding(r.shape)) for r in b)
     hlo = jax.jit(lambda s, r: s.solve(r)).lower(solver, b).compile().as_text()

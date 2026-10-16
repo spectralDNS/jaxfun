@@ -1114,7 +1114,7 @@ def covariant_diff(
 
 # Regular doit() is problematic for vectors and dyadics when these are
 # used unevaluated. For example
-# from sympy.vector import CoordSys3D, Gardient
+# from sympy.vector import CoordSys3D, Gradient
 # N = CoordSys3D("N")
 # f = N.x*N.y
 # h = 4*Gradient(f)
@@ -1142,21 +1142,18 @@ def doit(self, **hints: Any) -> Basic:
         z = self.func(*terms)
     else:
         z = self
-    if isinstance(z, sp.Add):
-        # Check if should be VectorAdd
-        for p in sp.core.traversal.preorder_traversal(z):
-            if isinstance(p, BaseVector):
-                return VectorAdd.fromiter(z.args)
-            elif isinstance(p, BaseDyadic):
-                return DyadicAdd.fromiter(z.args)
-
-    elif isinstance(z, sp.Mul):
-        # Check if should be VectorMul
-        for p in sp.core.traversal.preorder_traversal(z):
-            if isinstance(p, BaseVector):
-                return VectorMul.fromiter(z.args)
-            elif isinstance(p, BaseDyadic):
-                return DyadicMul.fromiter(z.args)
+    if not isinstance(z, sp.Add | sp.Mul):
+        return z
+    # Look for basis vectors among the terms and factors of z only. One inside
+    # anything else, like the scalar Dot(u, N.i), does not make z a vector.
+    nodes = sp.core.traversal.preorder_traversal(z)
+    for p in nodes:
+        if isinstance(p, BaseVector):
+            return (VectorAdd if isinstance(z, sp.Add) else VectorMul).fromiter(z.args)
+        elif isinstance(p, BaseDyadic):
+            return (DyadicAdd if isinstance(z, sp.Add) else DyadicMul).fromiter(z.args)
+        elif not isinstance(p, sp.Add | sp.Mul):
+            nodes.skip()
     return z
 
 

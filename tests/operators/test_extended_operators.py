@@ -154,6 +154,13 @@ def test_global_doit_vector_and_dyadic_add():
     assert dadd.is_Dyadic
 
 
+def test_global_doit_scalar_holding_basis_vector():
+    # The unevaluated Dot(., N.j) holds a basis vector but is a scalar
+    s = Dot(N.x * N.i + N.y * N.j, N.j)
+    assert (s + 1).doit(deep=False) == s + 1
+    assert sp.expand(Dot(s * (s + 1) * N.i, N.i)).doit() == N.y**2 + N.y
+
+
 def test_cross_zero_and_self():
     z = sp_vector.VectorZero()
     assert cross(z, C.b_r) == z

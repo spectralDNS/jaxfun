@@ -33,6 +33,7 @@ from jaxfun.galerkin.cartesianproductspace import (
     CartesianTensorProductSpace,
     VectorTensorProductSpace,
 )
+from jaxfun.operators import Dot
 from jaxfun.typing import (
     ComputationalSpaceType,
     FunctionSpaceType,
@@ -41,7 +42,6 @@ from jaxfun.typing import (
     RankTag,
     ScalarSpaceType,
     TestSpaceType,
-    TrialSpaceType,
 )
 
 from .composite import DirectSum
@@ -265,7 +265,7 @@ class BaseFunction(Function):
         pass
 
 
-class ExpansionFunction(BaseFunction):
+class ExpansionFunction[SpaceT: FunctionSpaceType](BaseFunction):
     r"""Base class for functions that represent expansions in a given function
     space.
 
@@ -283,7 +283,7 @@ class ExpansionFunction(BaseFunction):
 
     """
 
-    functionspace: FunctionSpaceType
+    functionspace: SpaceT
     own_name: str
 
     @property
@@ -305,14 +305,28 @@ class ExpansionFunction(BaseFunction):
                 name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return f"{name}({self.c_names}; {self.functionspace.name})"
 
-    def __getitem__(self, i: int) -> Self:
+    @overload
+    def __getitem__(
+        self: ExpansionFunction[VectorTensorProductSpace], i: int
+    ) -> Dot: ...
+    @overload
+    def __getitem__(self, i: int) -> Self: ...
+    def __getitem__(self, i: int) -> Self | Dot:
+        """Return field i of a mixed space, or component i of a vector field.
+
+        A component of a vector field ``u`` is not a field of its own but the
+        projection ``u·b^i`` onto the contravariant basis vector ``b^i``.
+        """
         assert isinstance(
             self.functionspace, CartesianTensorProductSpace | CartesianProductSpace
         )
+        V = self.functionspace
+        if isinstance(V, VectorTensorProductSpace):
+            # IndexError, not a flat index into the metric, ends unpacking
+            k = range(len(V))[i]
+            return Dot(self, V.system.get_contravariant_basis_vector(k))
         name = self.name
-        if isinstance(self.functionspace, VectorTensorProductSpace) and len(name) == 1:
-            name = f"{name}_{i}"
-        elif len(name) == len(self.functionspace):
+        if len(name) == len(self.functionspace):
             name = name[i]
         else:
             raise ValueError(
@@ -341,7 +355,7 @@ class ExpansionFunction(BaseFunction):
 # Need a unique Symbol in order to create a new TestFunction/TrialFunction for a new
 # space. Without it all TestFunctions/TrialFunctions created with the same Cartesian
 # coordinates will be the same object.
-class TestFunction(ExpansionFunction):
+class TestFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
     """Symbolic test function T(x; V) for weak form assembly.
 
     Holds a reference to its functionspace and lazily expands (via doit)
@@ -354,7 +368,7 @@ class TestFunction(ExpansionFunction):
 
     def __new__(
         cls,
-        V: FunctionSpaceType,
+        V: SpaceT,
         name: str | None = None,
     ) -> Self:
         coors = V.system
@@ -400,7 +414,7 @@ class TestFunction(ExpansionFunction):
         )
 
 
-class TrialFunction(ExpansionFunction):
+class TrialFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
     """Symbolic trial function U(x; V) for weak form assembly.
 
     Direct sums expand to sum of component spaces. Tensor product spaces
@@ -408,12 +422,11 @@ class TrialFunction(ExpansionFunction):
     """
 
     argument: Literal[ArgumentTag.TRIAL]
-    functionspace: TrialSpaceType
     transient: bool
 
     def __new__(
         cls,
-        V: FunctionSpaceType,
+        V: SpaceT,
         name: str | None = None,
         transient: bool = False,
     ) -> Self:
@@ -708,7 +721,7 @@ def get_JAXFunction(
     return b
 
 
-class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
+class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
     r"""A Galerkin function with explicit expansion coefficients.
 
     A JAXFunction represents a complete function in a given function space,

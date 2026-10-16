@@ -13,19 +13,19 @@
 # field is implicit -- diffusion, the pressure gradient, continuity and buoyancy
 # -- and the two advection terms are explicit. The pressure has no time
 # derivative; it is the Lagrange multiplier of continuity, so the tableau has to
-# be globally stiffly accurate (ARS443).
+# be globally stiffly accurate (ARS443 or ARS222).
 #
-# Each implicit stage is one block solve, decoupled per Fourier wavenumber into
-# a dense system for (u, v, p, T) along y.
+# Each implicit stage is one block solve, decoupled per Fourier wavenumber. No
+# other field enters the temperature equation implicitly, so it takes T first, as
+# a scalar equation, and then the saddle-point system for (u, v, p) along y, with
+# the buoyancy on its right-hand side.
 #
 # The wall-normal basis is Legendre with Galerkin test functions, and the
 # pressure has as many modes as the velocity components. Continuity is then
 # tested against every polynomial of the divergence's degree, so Div(u) = 0
 # holds pointwise and not only weakly: the discrete velocity is the same
-# divergence-free one as in RayleighBenard.py. With N - 2 pressure modes instead,
-# a mean wall-normal velocity of the size of the truncation error would appear.
-# At k = 0 the constant and the highest pressure mode are undetermined, and are
-# pinned.
+# divergence-free one as in RayleighBenard.py. At k = 0 the constant and the
+# highest pressure mode are undetermined, and are pinned.
 #
 # Chebyshev works too, with Galerkin-recombined test spaces, which keep every
 # block banded: those of the velocity and temperature spaces for the momentum

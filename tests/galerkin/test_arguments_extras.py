@@ -1,7 +1,18 @@
 import jax
 import jax.numpy as jnp
+import sympy as sp
+from sympy.vector import VectorAdd
 
-from jaxfun.galerkin import Chebyshev, TensorProduct, TestFunction, TrialFunction
+from jaxfun import Domain
+from jaxfun.coordinates import get_CoordSys
+from jaxfun.galerkin import (
+    CartesianProduct,
+    Chebyshev,
+    Legendre,
+    TensorProduct,
+    TestFunction,
+    TrialFunction,
+)
 from jaxfun.galerkin.arguments import JAXFunction, ScalarFunction, VectorFunction
 
 
@@ -39,3 +50,20 @@ def test_jaxfunction_no_bold_for_rank0():
     coeffs = jax.random.normal(jax.random.PRNGKey(11), shape=(C.N,))
     jf = JAXFunction(coeffs, C)
     assert "mathbf" not in jf._latex()
+
+
+def test_vector_component_is_projection_of_the_field():
+    r, theta = sp.symbols("r theta", real=True, positive=True)
+    C = get_CoordSys("C", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta))))
+    L0 = Legendre.Legendre(3, domain=Domain(1, 2))
+    L1 = Legendre.Legendre(3, domain=Domain(0, 1))
+    T = TensorProduct(L0, L1, system=C)
+    u = TrialFunction(CartesianProduct(T, T, rank=1), name="u")
+    # A component is the contravariant u^k = u·b^k, not a new trial function
+    assert u[1].atoms(TrialFunction) == {u}
+    full = u.doit()
+    assert isinstance(full, VectorAdd)
+    for k, bk in enumerate(C.base_vectors()):
+        assert sp.simplify(u[k].doit() - full.components[bk]) == 0
+    ux, uy = u
+    assert ux == u[0] and uy == u[1]

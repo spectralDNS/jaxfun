@@ -4,7 +4,7 @@ import copy
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
-from typing import TYPE_CHECKING, Any, Self, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, Self, cast, overload
 
 if TYPE_CHECKING:
     from jaxfun.pinns.nnspaces import CartesianNNSpace, NNSpace
@@ -44,7 +44,7 @@ def CartesianProduct(
 def CartesianProduct(
     *basespaces: MultiDimensionalSpace,
     name: str = "CP",
-    rank: int | RankTag = RankTag.VECTOR,
+    rank: Literal[1, RankTag.VECTOR],
 ) -> VectorTensorProductSpace: ...
 @overload
 def CartesianProduct(

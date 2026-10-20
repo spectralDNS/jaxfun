@@ -198,6 +198,7 @@ class TestSpaceKind(CoercibleStrEnum):
     PG = "Petrov-Galerkin"
     GALERKIN_RECOMBINED = "Galerkin-recombined"
     GR = "Galerkin-recombined"
+    TAU = "tau"
 
 
 @unique

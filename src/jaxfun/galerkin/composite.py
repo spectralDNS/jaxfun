@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import functools
 import itertools
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import jax
@@ -598,6 +598,18 @@ class Composite(OrthogonalSpace):
             alpha=self.orthogonal.alpha,
             beta=self.orthogonal.beta,
         )
+
+    def _tau_testspace(
+        self,
+        tau_basis: Sequence[tuple[OrthogonalSpace, int]] | None,
+        name: str | None,
+        fun_str: str | None,
+        scaling: sp.Expr | None,
+    ) -> TauRecombined:
+        """Return the test space that makes testing the tau method `tau_basis`."""
+        pg = self.get_testspace(TestSpaceKind.PETROV_GALERKIN, scaling=scaling)
+        pg = cast(PGComposite, pg)
+        return TauRecombined(pg, self, tau_basis, name=name, fun_str=fun_str)
 
     def __add__(self, b: BCGeneric) -> DirectSum:
         """Direct sum self ⊕ b."""
@@ -1230,6 +1242,165 @@ class GalerkinRecombined(Composite):
         if z is None:
             return None
         return _replace_rows(z, self._replaced, self._replaced_rows, self, trial, q)
+
+
+class TauRecombined(Composite):
+    r"""Petrov-Galerkin test functions recombined to give a tau method.
+
+    Create with `V.get_testspace("tau", tau_basis=...)`, where `V` is a
+    Chebyshev or Legendre trial space with boundary conditions. `tau_basis`
+    lists the tau polynomials, one per boundary condition, as pairs `(S, k)`:
+    mode `k` of the orthogonal space `S`, counted from the end if negative.
+    Without it, the tau polynomials are the last modes of the orthogonal space
+    of `V`, which is Lanczos' method: `V.get_testspace("tau")`.
+
+    A tau method solves
+
+    .. math::
+
+        L u_N = f_N + \sum_t \tau_t X_t
+
+    with the boundary conditions, for the N coefficients of :math:`u_N` and
+    one unknown :math:`\tau_t` per tau polynomial :math:`X_t`, each of degree
+    less than N. That is the same as testing with the polynomials of degree
+    less than N that are orthogonal to every :math:`X_t` in the inner product
+    of the trial space. This space is a basis of those made of the
+    Petrov-Galerkin test functions :math:`\psi_k`. The few of the last ones
+    that have to change are recombined with the next Petrov-Galerkin
+    functions and truncated to N modes, which keeps their banded matrices.
+
+    For two boundary conditions in Chebyshev polynomials, with `T`, `U` and
+    `C2` the spaces of the Chebyshev polynomials of the first and second kind
+    and of the Gegenbauer polynomials :math:`C^{(2)}_k`:
+
+    ==========================  ==============================================
+    tau_basis                   test functions
+    ==========================  ==============================================
+    `[(T, -1), (T, -2)]`        all truncated to N - 2 modes (Lanczos' method)
+    `[(C2, -1), (C2, -2)]`      the Petrov-Galerkin functions
+    `[(U, -1), (C2, -2)]`       :math:`\psi_{N-3} \to \phi_{N-3}`
+    `[(U, -1), (U, -2)]`        :math:`\psi_{N-4}, \psi_{N-3} \to
+                                \phi_{N-4}, \phi_{N-3}`
+    `[(C2, -1), (U, -2)]`       :math:`\psi_{N-4} \to \phi_{N-4}`
+    ==========================  ==============================================
+
+    with :math:`\phi_k \propto T_k - T_{k+2}`. The fourth is the Galerkin method
+    for a Dirichlet trial space. See docs/tau_test_basis.tex.
+
+    Args:
+        pg: The Petrov-Galerkin test space.
+        trial: The trial space it tests.
+        tau_basis: The tau polynomials, as pairs `(S, k)` of an orthogonal
+            space and one of its modes. Defaults to the last modes of the
+            orthogonal space of `trial`, one per boundary condition.
+        name: Space name.
+        fun_str: Symbol stem for basis functions.
+    """
+
+    def __init__(
+        self,
+        pg: PGComposite,
+        trial: Composite,
+        tau_basis: Sequence[tuple[OrthogonalSpace, int]] | None = None,
+        name: str | None = None,
+        fun_str: str | None = None,
+    ) -> None:
+        orth = trial.orthogonal
+        if tau_basis is None:
+            tau_basis = [(orth, -k) for k in range(1, pg.order + 1)]
+        if len(tau_basis) != pg.order:
+            raise ValueError(
+                f"Got {len(tau_basis)} tau polynomials for {pg.order} boundary "
+                "conditions; there must be one per condition."
+            )
+        X = np.array([_coefficients_in(orth, S, k) for S, k in tau_basis])
+        rows = _tau_rows(pg, orth, X)
+        super().__init__(
+            trial.N,
+            type(orth),
+            trial.bcs,
+            domain=trial.domain,
+            name=name if name is not None else pg.name,
+            fun_str=fun_str if fun_str is not None else pg.fun_str,
+            system=trial.system,
+            stencil=pg.stencil.with_overrides(rows),
+            scaling=pg.scaling,
+        )
+        self._pg = pg
+        self._replaced = np.array(sorted(rows), dtype=int)
+        self._rows = np.asarray(self.S.todense())
+
+    def _matrices(
+        self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
+    ) -> DiaMatrix | Matrix | None:
+        """Return the PG matrix with the replaced rows recomputed.
+
+        The replaced rows come from the recurrences of the orthogonal basis, as
+        for `GalerkinRecombined`.
+        """
+        z = self._pg._recurrence_matrices(i, trial, q)
+        if z is None:
+            return None
+        rows = self._replaced
+        if q > trial[1]:
+            # As in `PGComposite`: x^q lifts the trial functions past mode N - 1,
+            # which the kept PG rows truncated at N do not see.
+            rows = np.union1d(rows, self._pg._truncated)
+        if len(rows) == 0:
+            return z
+        return _replace_rows(z, rows, self._rows[rows], self, trial, q)
+
+
+def _coefficients_in(orth: OrthogonalSpace, S: OrthogonalSpace, k: int) -> np.ndarray:
+    """Return mode `k` of `S` as coefficients of `orth`, in reference coordinates."""
+    k = range(S.N)[k]
+    if k >= orth.N:
+        raise ValueError(
+            f"Mode {k} of {S.name} has degree {k}, but a tau polynomial must have "
+            f"degree less than {orth.N}."
+        )
+    X = orth.quad_points_and_weights()[0]
+    return np.asarray(orth.forward(S.eval_basis_functions(X)[:, k]), dtype=float)
+
+
+def _tau_rows(
+    pg: PGComposite, orth: OrthogonalSpace, X: np.ndarray
+) -> dict[int, np.ndarray]:
+    """Return the rows of `pg` that the tau polynomials `X` change, and to what.
+
+    The Petrov-Galerkin functions extended to N rows, psi_0, ..., psi_{N-1},
+    determine every polynomial of degree less than N through its inner
+    products with them. Testing the tau equation with all N and eliminating
+    the taus from the last m rows, one per tau polynomial, leaves N - m test
+    functions psi_k + sum_j g_kj psi_j, j = N - m, ..., N - 1. Only their first
+    N modes matter, since the residual has degree less than N.
+
+    Args:
+        pg: The Petrov-Galerkin test space, of N - m functions.
+        orth: The orthogonal space of the trial space.
+        X: The tau polynomials as coefficients of `orth`, shape (m, N).
+
+    Returns:
+        The changed rows, unscaled, by index, as coefficients of `orth`.
+    """
+    N, m = orth.N, len(X)
+    psi = pg.stencil.matrix((N, N + pg.order)).todense()
+    tol = np.sqrt(np.finfo(psi.dtype).eps)
+    psi = np.array(psi, dtype=float)[:, :N]
+    P = (psi * np.asarray(orth.norm_squared(), dtype=float)) @ X.T
+    top = np.arange(N - m, N)
+    if np.linalg.matrix_rank(P[top], tol=tol * np.abs(P[top]).max()) < m:
+        raise ValueError(
+            "The tau polynomials leave the tau method undetermined: their "
+            f"components along the last {m} modes are dependent."
+        )
+    G = np.eye(N) - P @ np.linalg.solve(P[top], np.eye(N)[top])
+    rows, kept = (G @ psi)[: N - m], psi[: N - m]
+    # Rows changed by round-off only keep their PG function exactly.
+    scale = np.abs(kept).max(axis=1, keepdims=True)
+    changed = np.flatnonzero(np.abs(rows - kept).max(axis=1) > tol * scale[:, 0])
+    rows[np.abs(rows) < tol * scale] = 0
+    return {int(k): rows[k] for k in changed}
 
 
 def _replace_rows(

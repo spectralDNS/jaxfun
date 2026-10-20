@@ -276,6 +276,29 @@ class TestPoly5FirstDerivativeMatrixWithCoefficient:
 
 
 @pytest.mark.parametrize("space_fn", (Legendre, Chebyshev))
+class TestPGOrder3Matrices:
+    """Three boundary conditions take the order-3 Petrov-Galerkin test space."""
+
+    @pytest.mark.parametrize("j,q", [(0, 0), (1, 0), (3, 0), (0, 1), (0, 2), (3, 2)])
+    def test_values_match_quadrature(self, space_fn, j, q):
+        bcs = {"left": {"D": 0, "N": 0}, "right": {"D": 0}}
+        U = FunctionSpace(12, space_fn, bcs=bcs)
+        V = U.get_testspace(kind="PG")
+        assert cast(Composite, V).dim == 9
+        u = TrialFunction(U)
+        v = TestFunction(V)
+        x = U.system.x
+        form = x**q * v * u.diff(x, j) if j else x**q * v * u
+        M = inner(form, sparse=True, use_precomputed_matrices=True, kind="bilinear")
+        assert M is not None
+        ref = _quad_matrix_composite(V, U, j, q)
+        err = float(jnp.linalg.norm(M.todense() - ref))
+        scale = float(jnp.linalg.norm(M.todense()))
+        # Quadrature loses accuracy with the derivative order, as for j = 3, 4 below.
+        assert err / max(scale, 1.0) < ulp(1000), f"relative err {err / scale:.2e}"
+
+
+@pytest.mark.parametrize("space_fn", (Legendre, Chebyshev))
 class TestPoly5FirstDerivativeMatrixPGWithCoefficient:
     @pytest.mark.parametrize("N,q", [(6, 1), (8, 2), (10, 3)])
     def test_values_match_quadrature(self, space_fn, N, q):

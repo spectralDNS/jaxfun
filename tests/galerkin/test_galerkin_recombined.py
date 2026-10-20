@@ -30,6 +30,7 @@ from jaxfun.la.tpmatrix import TPMatrices, TPMatricesWavenumberSolver
 
 DIRICHLET = {"left": {"D": 0}, "right": {"D": 0}}
 BIHARMONIC = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
+THREE = {"left": {"D": 0, "N": 0}, "right": {"D": 0}}
 CASES = [
     (DIRICHLET, {0: [-2, 0, 2, 4], 1: [-1, 1, 3], 2: [0, 2]}),
     (BIHARMONIC, {0: [-4, -2, 0, 2, 4, 6, 8], 2: [-2, 0, 2, 4, 6], 4: [0, 2, 4]}),
@@ -127,7 +128,7 @@ def test_spans_trial_space_with_pg_band(family, bcs, bands, q):
 
 
 @pytest.mark.parametrize("family", [Chebyshev, Legendre])
-@pytest.mark.parametrize("bcs,order", [(DIRICHLET, 2), (BIHARMONIC, 4)])
+@pytest.mark.parametrize("bcs,order", [(DIRICHLET, 2), (THREE, 3), (BIHARMONIC, 4)])
 def test_low_resolution(family, bcs, order):
     # For N < 2 * order the conditions that define the PG functions leave no
     # rows, but there is still one test function per trial function.
@@ -153,6 +154,8 @@ def test_low_resolution(family, bcs, order):
         ({"left": {"D": 0}, "right": {"N": 0}}, 2),
         ({"left": {"R": (1, 0)}, "right": {"R": (1, 0)}}, 2),
         ({"left": {"D": 0, "N2": 0}, "right": {"D": 0, "N2": 0}}, 4),
+        (THREE, 3),
+        ({"left": {"D": 0}, "right": {"D": 0, "N2": 0}}, 3),
     ],
 )
 def test_solution_is_the_galerkin_solution(family, bcs, order):
@@ -164,18 +167,19 @@ def test_solution_is_the_galerkin_solution(family, bcs, order):
     x = B.system.x
     u = TrialFunction(B)
     ue = (1 - x**2) ** 2 * (x**3 + x + 1)
-    if order == 4:
-        f = ue.diff(x, 4) - 3 * ue.diff(x, 2) + 5 * ue
-    else:
-        f = ue.diff(x, 2) - 5 * ue
+
+    def L(w):
+        return {
+            2: w.diff(x, 2) - 5 * w,
+            3: w.diff(x, 3) + 5 * w,
+            4: w.diff(x, 4) - 3 * w.diff(x, 2) + 5 * w,
+        }[order]
+
+    f = L(ue)
     sols, conds = [], []
     for V in (B, G):
         v = TestFunction(V)
-        if order == 4:
-            form = u.diff(x, 4) * v - 3 * u.diff(x, 2) * v + 5 * u * v
-        else:
-            form = u.diff(x, 2) * v - 5 * u * v
-        A = np.asarray(inner(form, kind="bilinear").todense())
+        A = np.asarray(inner(L(u) * v, kind="bilinear").todense())
         sols.append(np.linalg.solve(A, np.asarray(inner(f * v))))
         conds.append(np.linalg.cond(A.astype(float)))
     # Both are the Galerkin solution; they differ only by each solve's round-off.
@@ -281,7 +285,7 @@ def test_orthogonal_trial_space(family, q):
 
 
 @pytest.mark.parametrize("family", [Chebyshev, Legendre])
-@pytest.mark.parametrize("bcs", [{"left": {"D": 0}}, DIRICHLET, BIHARMONIC])
+@pytest.mark.parametrize("bcs", [{"left": {"D": 0}}, DIRICHLET, THREE, BIHARMONIC])
 def test_pg_truncates_its_last_order_rows(family, bcs):
     """Order >= 1 truncates the last `order` test functions, as documented."""
     trial = cast(Composite, FunctionSpace(12, family, bcs=bcs))

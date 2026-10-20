@@ -131,9 +131,9 @@ def warm_operator_solve_cache(
     Args:
         op: Operator whose solve caches should be populated.
         shape: Coefficient shape of the right-hand sides `op` will be solving.
-            When given, an operator with no applicable factored solver is warmed
-            by running one throwaway solve, which fills the caches of whichever
-            fallback path `solve` settles on.
+            When given, an operator with no applicable factored solver, or one
+            solved with options, is warmed by running one throwaway solve, which
+            fills the caches of whichever path `solve` settles on.
         options: Solver options, passed on so that the warming solve takes the
             same path the stepping solves will.
     """
@@ -141,7 +141,10 @@ def warm_operator_solve_cache(
     if lu_factor is not None:
         try:
             lu_factor()
-            return
+            # Options can route `solve` past the factored path (`method="kron"`),
+            # so with options the throwaway solve below still has to run.
+            if not options:
+                return
         except (SolverNotApplicable, NotImplementedError):
             pass
     if shape is None:

@@ -465,8 +465,7 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         D1 = VD.basespaces[1]
 
         if GR:
-            BP = B.get_testspace("GR", name="BP")
-            PB = TensorProduct(F, BP, name="PB")
+            PB = VB.get_testspace("GR", name="PB")
             P1 = cast(Composite, D1).get_testspace("GR", name="P1")
 
         else:

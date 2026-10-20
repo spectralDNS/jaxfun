@@ -254,14 +254,15 @@ class Chebyshev(Jacobi):
     ) -> OrthogonalSpace:
         """Return the test space of `kind` for this space as trial space.
 
-        Galerkin is this space itself. Petrov-Galerkin is `ChebPhi_0`, the
+        Galerkin is this space itself, or a copy carrying `name` or `fun_str`
+        when given; it takes no `scaling`. Petrov-Galerkin is `ChebPhi_0`, the
         order-1 test functions, one per mode, which keep operators of up to
         first derivatives banded. It spans this space, so Galerkin-recombined
-        is the same space. `name`, `fun_str` and `scaling` are for those two.
+        is the same space.
         """
         kind = TestSpaceKind.coerce(kind)
         if kind == TestSpaceKind.GALERKIN:
-            return self
+            return super().get_testspace(kind, name, fun_str, scaling)
         if kind == TestSpaceKind.TAU:
             raise NotImplementedError(
                 "The 'tau' test space needs a trial space with boundary conditions."

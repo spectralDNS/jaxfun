@@ -284,7 +284,7 @@ class TestPGOrder3Matrices:
         bcs = {"left": {"D": 0, "N": 0}, "right": {"D": 0}}
         U = FunctionSpace(12, space_fn, bcs=bcs)
         V = U.get_testspace(kind="PG")
-        assert cast(Composite, V).dim == 9
+        assert V.dim == 9
         u = TrialFunction(U)
         v = TestFunction(V)
         x = U.system.x

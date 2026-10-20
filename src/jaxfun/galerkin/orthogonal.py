@@ -17,6 +17,7 @@ Subclasses must implement:
 
 from __future__ import annotations
 
+import copy
 import operator
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Self, cast, overload
@@ -28,7 +29,7 @@ import sympy as sp
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import BaseMatrix, DiaMatrix, Matrix, diags
-from jaxfun.typing import Array, MeshKind, RankTag
+from jaxfun.typing import Array, MeshKind, RankTag, TestSpaceKind
 from jaxfun.utils.common import (
     Domain,
     cache_static,
@@ -580,6 +581,38 @@ class OrthogonalSpace(BaseSpace):
     def get_orthogonal(self) -> OrthogonalSpace:
         """Return self (orthogonal space is self; overridden in Composite)."""
         return self
+
+    def get_testspace(
+        self,
+        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
+        name: str | None = None,
+        fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
+    ) -> OrthogonalSpace:
+        """Return the test space of `kind` for this space as trial space.
+
+        The same basis whatever the kind, so every kind is the Galerkin method
+        here. Spaces with dedicated test spaces, Chebyshev and Legendre,
+        override this; for the rest, Fourier among them, there is no other test
+        space to give. It is this space itself unless `name` or `fun_str` is
+        given, and then a copy carrying them.
+
+        Raises:
+            NotImplementedError: if `scaling` is given; an orthogonal space has
+                no scaled counterpart.
+        """
+        TestSpaceKind.coerce(kind)
+        if scaling is not None:
+            raise NotImplementedError(
+                f"{type(self).__name__} has no scaled test space; scaling={scaling}"
+            )
+        if name is None and fun_str is None:
+            return self
+        space = copy.copy(self)
+        space.orthogonal = space
+        space.name = self.name if name is None else name
+        space.fun_str = self.fun_str if fun_str is None else fun_str
+        return space
 
     def to_orthogonal(self, c: Array) -> Array:
         """Return coefficients unchanged (already in the orthogonal basis)."""

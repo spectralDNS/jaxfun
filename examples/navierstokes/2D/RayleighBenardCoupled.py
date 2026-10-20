@@ -109,10 +109,7 @@ def rayleigh_benard(
     u, p, T = TrialFunction(W, name="upT", transient=True)
 
     if poly == "chebyshev":
-        DG = TensorProduct(F, D.get_testspace("GR", name="DG"), name="DG")
-        TG = TensorProduct(F, Tb.get_testspace("GR", name="TG"), name="TG")
-        QG = TensorProduct(F, P.get_testspace("GR", name="QG"), name="QG")
-        WT = CartesianProduct(CartesianProduct(DG, DG, rank=1), QG, TG, name="WT")
+        WT = W.get_testspace("GR", name="WT")
         v, q, s = TestFunction(WT, name="vqs")
     else:
         v, q, s = TestFunction(W, name="vqs")

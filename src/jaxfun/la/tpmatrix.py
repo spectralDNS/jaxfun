@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import itertools
+import math
 import os
 from collections.abc import Callable, Sequence
 from enum import StrEnum
@@ -33,6 +35,12 @@ if TYPE_CHECKING:
 
 type _SparseMatrixCache = _CacheBox[DiaMatrix]
 type _DenseMatrixCache = _CacheBox[Matrix]
+type _TPMatricesFactors = (
+    TPMatricesDenseLUFactors
+    | TPMatricesLUFactors
+    | TPMatricesWavenumberSolver
+    | TPMatricesSchurSolver
+)
 
 
 def _sharding():
@@ -299,9 +307,9 @@ class TPSolveMethod(StrEnum):
         AUTO: Try the factored path (:meth:`TPMatrices.lu_factor`) first;
             fall back to explicit Kronecker assembly if it raises
             :exc:`ValueError`.
-        LU: Force the factored path (diagonalization or wavenumber solver).
-            Propagates :exc:`ValueError` if the factor-matrix structure is
-            not suitable.
+        LU: Force the factored path (wavenumber, diagonalization or Schur
+            solver). Propagates :exc:`ValueError` if the factor-matrix
+            structure is not suitable.
         KRON: Force explicit Kronecker product assembly.  The assembled
             :class:`~jaxfun.la.DiaMatrix` or :class:`~jaxfun.la.Matrix` is
             cached; the DIA-matrix solver is selected via *kron_method* in
@@ -420,9 +428,7 @@ class TPMatrices(BaseMatrix):
             return TPMatrices([*list(self.tpmats), *list(other.tpmats)])
         return NotImplemented
 
-    def lu_factor(
-        self,
-    ) -> TPMatricesDenseLUFactors | TPMatricesLUFactors | TPMatricesWavenumberSolver:
+    def lu_factor(self) -> _TPMatricesFactors:
         """Pre-compute factors for repeated fast solves.
 
         Dispatch order:
@@ -432,22 +438,20 @@ class TPMatrices(BaseMatrix):
            LU — works for any linear system).
         2. Otherwise try :func:`tpmats_wavenumber_factor` (efficient for
            Fourier x polynomial problems).
-        3. Fall back to :func:`tpmats_lu_factor` (diagonalization — requires
-           simultaneously diagonalizable factor matrices per axis).
+        3. Then :func:`tpmats_lu_factor` (diagonalization — requires at most two
+           distinct factor matrices per axis and well-conditioned eigenvectors).
+        4. Fall back to :func:`tpmats_schur_factor` (generalized Schur — 2D
+           systems of two terms, after merging shared factors).
 
         The result is cached as a tracked attribute, so the factor arrays are
         pytree leaves of the operator rather than static payload.
 
         Returns:
             :class:`TPMatricesDenseLUFactors`, :class:`TPMatricesWavenumberSolver`,
-            or :class:`TPMatricesLUFactors` for repeated fast solves.
+            :class:`TPMatricesLUFactors` or :class:`TPMatricesSchurSolver` for
+            repeated fast solves.
         """
-        cached: (
-            TPMatricesDenseLUFactors
-            | TPMatricesLUFactors
-            | TPMatricesWavenumberSolver
-            | None
-        ) = getattr(self, "_lu_cache", None)
+        cached: _TPMatricesFactors | None = getattr(self, "_lu_cache", None)
         if cached is not None:
             return cached
         # A previous attempt that found no applicable factored solver is cached
@@ -458,9 +462,7 @@ class TPMatrices(BaseMatrix):
         why: str | None = getattr(self, "_lu_not_applicable", None)
         if why is not None:
             raise SolverNotApplicable(why)
-        result: (
-            TPMatricesDenseLUFactors | TPMatricesLUFactors | TPMatricesWavenumberSolver
-        )
+        result: _TPMatricesFactors
         tpmats_list = list(self.tpmats)
         try:
             if all(isinstance(mat, Matrix) for tp in tpmats_list for mat in tp.mats):
@@ -469,7 +471,7 @@ class TPMatrices(BaseMatrix):
                 try:
                     result = tpmats_wavenumber_factor(tpmats_list)
                 except SolverNotApplicable:
-                    result = tpmats_lu_factor(tpmats_list)
+                    result = _diagonalize_or_schur(tpmats_list)
         except SolverNotApplicable as e:
             object.__setattr__(self, "_lu_not_applicable", str(e))
             raise
@@ -494,9 +496,9 @@ class TPMatrices(BaseMatrix):
                   (:meth:`lu_factor`) first; falls back to explicit Kronecker
                   product assembly if the factor-matrix structure is not
                   suitable (e.g. not simultaneously diagonalizable).
-                * ``"lu"`` — force the factored path (diagonalization or
-                  wavenumber solver). Raises :exc:`ValueError` if the structure
-                  is not suitable.
+                * ``"lu"`` — force the factored path (wavenumber,
+                  diagonalization or Schur solver). Raises :exc:`ValueError` if
+                  the structure is not suitable.
                 * ``"kron"`` — force explicit Kronecker product assembly.
                   The assembled matrix is cached for repeated solves.
 
@@ -1378,6 +1380,91 @@ def tpmats_dense_lu_factor(
     return TPMatricesDenseLUFactors(lu=mat.lu_factor(), shape=shape)
 
 
+# Largest condition number of a non-Hermitian pencil's (unit-column) eigenvector
+# matrix that `tpmats_lu_factor` accepts. Close-to-normal pencils, such as Poisson
+# in Chebyshev with PG/GR test spaces, stay in the tens up to N = 256.
+# Far-from-normal ones grow exponentially with N: advection-dominated operators,
+# or a first derivative with a single boundary condition, are past 1e3 by N = 12.
+# A Hermitian-definite pencil is exempt: its eigenvectors are orthonormal in the
+# inner product of the definite matrix, however their Euclidean norms spread.
+_EIGVEC_COND_MAX = 1e3
+
+
+def _proportionality(a: np.ndarray, b: np.ndarray) -> complex | None:
+    """Return ``c`` with ``a == c * b`` up to rounding, else ``None``."""
+    if a.shape != b.shape:
+        return None
+    k = np.unravel_index(np.argmax(np.abs(b)), b.shape)
+    if b[k] == 0:
+        return None
+    c = a[k] / b[k]
+    eps = np.finfo(np.result_type(a.dtype, b.dtype, np.float32)).eps
+    if np.abs(a - c * b).max() > 1000 * eps * np.abs(a).max():
+        return None
+    return complex(c) if np.iscomplexobj(c) and c.imag != 0 else float(np.real(c))
+
+
+def _merge_shared_factors(tpmats: list[TPMatrix]) -> list[TPMatrix]:
+    """Combine terms whose factors agree, up to a scalar, on all axes but one.
+
+    ``A ⊗ B + C ⊗ cB`` becomes ``(A + cC) ⊗ B``, repeated until no two terms
+    share all but one factor. Coefficients are folded into the summed factor,
+    so merged terms carry coefficient 1.
+    """
+    terms: list[tuple[list[BaseMatrix], complex | Array]] = [
+        (list(tp.mats), tp.coefficient) for tp in tpmats
+    ]
+    dense = [[np.asarray(m.todense()) for m in mats] for mats, _ in terms]
+
+    def _mergeable(a: int, b: int) -> tuple[int, complex] | None:
+        """The axis where terms a and b differ, and b's scalar on the others."""
+        ratios = [_proportionality(xb, xa) for xa, xb in zip(dense[a], dense[b])]
+        differ = [i for i, r in enumerate(ratios) if r is None]
+        if len(differ) > 1:
+            return None
+        j = differ[0] if differ else 0
+        others = [r for i, r in enumerate(ratios) if i != j and r is not None]
+        return j, math.prod(others, start=1.0)
+
+    while True:
+        found = next(
+            (
+                (a, b, m)
+                for a, b in itertools.combinations(range(len(terms)), 2)
+                if (m := _mergeable(a, b)) is not None
+            ),
+            None,
+        )
+        if found is None:
+            break
+        a, b, (j, r) = found
+        (mats_a, s_a), (mats_b, s_b) = terms[a], terms[b]
+        mats = list(mats_a)
+        mats[j] = mats_a[j].scale(s_a) + mats_b[j].scale(s_b * r)
+        terms[a] = (mats, 1)
+        dense[a][j] = np.asarray(mats[j].todense())
+        del terms[b], dense[b]
+    return [
+        TPMatrix(mats, scale=s, global_indices=tpmats[0].global_indices)
+        for mats, s in terms
+    ]
+
+
+def _diagonalize_or_schur(
+    tpmats: list[TPMatrix],
+) -> TPMatricesLUFactors | TPMatricesSchurSolver:
+    """`tpmats_lu_factor`, or `tpmats_schur_factor` where it does not apply."""
+    try:
+        return tpmats_lu_factor(tpmats)
+    except SolverNotApplicable as diag_err:
+        try:
+            return tpmats_schur_factor(tpmats)
+        except SolverNotApplicable as schur_err:
+            raise SolverNotApplicable(
+                f"Diagonalization: {diag_err} Schur: {schur_err}"
+            ) from None
+
+
 def _is_hermitian(A: np.ndarray) -> bool:
     tol = 100 * np.finfo(A.dtype).eps * np.abs(A).max()
     return bool(np.all(np.abs(A - A.conj().T) <= tol))
@@ -1412,6 +1499,13 @@ def _diagonalize_axis(
             break
     else:
         raise SolverNotApplicable("Both factor matrices of an axis are singular.")
+    cond = float(np.linalg.cond(V))
+    if not cond <= _EIGVEC_COND_MAX:
+        raise SolverNotApplicable(
+            f"An eigenvector matrix has condition number {cond:.1e} (limit "
+            f"{_EIGVEC_COND_MAX:.0e}), so diagonalization would lose that factor in "
+            "accuracy; the factor matrices are far from normal."
+        )
     # A complex pencil can have a real spectrum but complex eigenvectors.
     if np.all(lam.imag == 0) and np.all(V.imag == 0):
         lam, V = lam.real, V.real
@@ -1443,11 +1537,17 @@ def tpmats_lu_factor(A: TPMatrix | Sequence[TPMatrix]) -> TPMatricesLUFactors:
         \\quad U = V (\\tilde{F} / D) V^T.
 
     **Requirement**: each axis has at most 2 distinct factor matrices (e.g.
-    stiffness K and mass M from the same 1D function space). The matrices need
-    not be symmetric, so weighted bases (Chebyshev, Jacobi) and Petrov-Galerkin
-    test spaces are supported; complex eigenpairs are handled in complex
-    arithmetic. Axes that share the same unordered matrix pair reuse the same
-    eigenvectors.
+    stiffness K and mass M from the same 1D function space). Terms that share
+    their factors, up to a scalar, on all axes but one are merged first, so
+    ``K⊗M + M⊗K + c M⊗M`` qualifies. The matrices need not be symmetric, so
+    weighted bases (Chebyshev, Jacobi) and Petrov-Galerkin test spaces are
+    supported; complex eigenpairs are handled in complex arithmetic. Axes that
+    share the same unordered matrix pair reuse the same eigenvectors.
+
+    The eigenvectors of a non-Hermitian pair must also be well conditioned.
+    They are not for pencils far from normal, such as advection-dominated
+    operators or a first derivative with a single boundary condition;
+    :func:`tpmats_schur_factor` solves those in 2D.
 
     Args:
         A: Single :class:`TPMatrix` or list of :class:`TPMatrix` objects (as
@@ -1459,7 +1559,8 @@ def tpmats_lu_factor(A: TPMatrix | Sequence[TPMatrix]) -> TPMatricesLUFactors:
 
     Raises:
         SolverNotApplicable: if any axis has more than 2 distinct factor
-            matrices, or both matrices of an axis are singular.
+            matrices after merging, both matrices of an axis are singular, or
+            a non-Hermitian axis has ill-conditioned eigenvectors.
     """
     if isinstance(A, TPMatrix):
         A = [A]
@@ -1470,27 +1571,39 @@ def tpmats_lu_factor(A: TPMatrix | Sequence[TPMatrix]) -> TPMatricesLUFactors:
     # Matrices that are numerically equal but have different Python ids (e.g.
     # M from K⊗M and M from the M⊗M term in a Helmholtz problem) are treated
     # as the same matrix.  All ids are mapped to a single representative id.
-    _mat_by_id: dict[int, object] = {}
-    _dense_by_id: dict[int, Array] = {}
-    for tp in tpmats:
-        for mat in tp.mats:
-            mid = id(mat)
-            if mid not in _mat_by_id:
-                _mat_by_id[mid] = mat
-                _dense_by_id[mid] = mat.todense()
+    def _dedup(
+        tpmats: list[TPMatrix],
+    ) -> tuple[dict[int, Array], dict[int, int]]:
+        _mat_by_id: dict[int, object] = {}
+        _dense_by_id: dict[int, Array] = {}
+        for tp in tpmats:
+            for mat in tp.mats:
+                mid = id(mat)
+                if mid not in _mat_by_id:
+                    _mat_by_id[mid] = mat
+                    _dense_by_id[mid] = mat.todense()
 
-    _seen_repr: list[int] = []  # canonical ids in first-seen order
-    _id_to_repr: dict[int, int] = {}
-    for mid in _mat_by_id:
-        for rid in _seen_repr:
-            if _dense_by_id[mid].shape == _dense_by_id[rid].shape and jnp.allclose(
-                _dense_by_id[mid], _dense_by_id[rid], rtol=1e-5, atol=1e-8
-            ):
-                _id_to_repr[mid] = rid
-                break
-        else:
-            _id_to_repr[mid] = mid
-            _seen_repr.append(mid)
+        _seen_repr: list[int] = []  # canonical ids in first-seen order
+        _id_to_repr: dict[int, int] = {}
+        for mid in _mat_by_id:
+            for rid in _seen_repr:
+                a, b = _dense_by_id[mid], _dense_by_id[rid]
+                if a.shape == b.shape and jnp.allclose(a, b, rtol=1e-5, atol=1e-8):
+                    _id_to_repr[mid] = rid
+                    break
+            else:
+                _id_to_repr[mid] = mid
+                _seen_repr.append(mid)
+        return _dense_by_id, _id_to_repr
+
+    def _n_distinct(axis: int) -> int:
+        return len({_id_to_repr[id(tp.mats[axis])] for tp in tpmats})
+
+    _dense_by_id, _id_to_repr = _dedup(tpmats)
+    # Merging only when needed leaves systems that already qualify untouched.
+    if any(_n_distinct(i) > 2 for i in range(ndim)):
+        tpmats = _merge_shared_factors(tpmats)
+        _dense_by_id, _id_to_repr = _dedup(tpmats)
 
     def _repr(mat) -> int:
         return _id_to_repr[id(mat)]
@@ -1541,6 +1654,182 @@ def tpmats_lu_factor(A: TPMatrix | Sequence[TPMatrix]) -> TPMatricesLUFactors:
         scales=scales,
         shape=shape,
         real_operator=real_operator,
+    )
+
+
+class TPMatricesSchurSolver(nnx.Pytree):
+    """Generalized Schur (QZ) solver for a 2D sum of two tensor-product operators.
+
+    Solves
+
+    .. math::
+
+        (X_0 \\otimes Y_0 + X_1 \\otimes Y_1)\\, x = f
+
+    by the Bartels-Stewart method. A QZ decomposition :math:`Y_0 = Q S Z^H`,
+    :math:`Y_1 = Q T Z^H` of the pair on one axis, the *Schur axis*, makes
+    :math:`S` and :math:`T` upper triangular. The solution then follows one
+    Schur index :math:`j` at a time, last to first, each a banded solve along
+    the other axis with the matrix :math:`S_{jj} X_0 + T_{jj} X_1`.
+
+    Only unitary transforms enter, so unlike :class:`TPMatricesLUFactors` the
+    solver stays accurate when the factor matrices are far from normal, such as
+    advection-dominated operators or a first derivative with a single boundary
+    condition. The price is a sequential loop over the Schur axis.
+
+    Args:
+        schur_axis: Axis carrying the QZ decomposition.
+        shape: Solution shape ``(n_0, n_1)``.
+        X: The two banded factors along the other axis, coefficients folded in.
+        Q: Left unitary QZ factor, ``(n, n)`` for ``n = shape[schur_axis]``.
+        Z: Right unitary QZ factor.
+        S: Upper triangular QZ factor of :math:`Y_0`.
+        T: Upper triangular QZ factor of :math:`Y_1`.
+        real_operator: Whether the operator is real, so that a real right-hand
+            side has a real solution.
+    """
+
+    def __init__(
+        self,
+        schur_axis: int,
+        shape: tuple[int, int],
+        X: Sequence[DiaMatrix],
+        Q: Array,
+        Z: Array,
+        S: Array,
+        T: Array,
+        real_operator: bool,
+    ) -> None:
+        n_p = shape[1 - schur_axis]
+        offsets = tuple(sorted(set(X[0].offsets) | set(X[1].offsets)))
+        X0, X1 = (_align_dia_data(x, offsets, n_p).astype(Q.dtype) for x in X)
+        # S[j, j] X_0 + T[j, j] X_1 for every j, factorised in one batch. Without
+        # pivoting, as in the wavenumber solver; a zero pivot is reported below.
+        B = jnp.diagonal(S)[:, None, None] * X0 + jnp.diagonal(T)[:, None, None] * X1
+        L, U, L_offsets, U_offsets = _batched_banded_lu(B, offsets)
+        if not (
+            bool(jnp.all(jnp.isfinite(L)))
+            and bool(jnp.all(jnp.isfinite(U)))
+            and bool(jnp.all(U[:, U_offsets.index(0)] != 0))
+        ):
+            raise SolverNotApplicable(
+                "A banded matrix S[j, j] X_0 + T[j, j] X_1 has a zero pivot: the "
+                "system is singular or needs pivoting."
+            )
+        self.schur_axis = schur_axis
+        self.shape = shape
+        self.X = nnx.List(X)
+        self.Q = Q
+        self.Z = Z
+        self.S_upper = jnp.triu(S, 1)
+        self.T_upper = jnp.triu(T, 1)
+        self.L = L
+        self.U = U
+        self.real_operator = real_operator
+        self._solve_one = _make_wavenumber_solve(L_offsets, U_offsets, n_p, L.dtype)
+
+    @jax.jit
+    def solve(self, rhs: Array) -> Array:
+        """Solve the two-term tensor-product system for RHS ``rhs``.
+
+        Args:
+            rhs: Right-hand side, flat ``(n,)`` or shaped ``(n0, n1)``.
+
+        Returns:
+            Solution with the same shape as ``rhs``.
+        """
+        q = self.schur_axis
+        n = self.shape[q]
+        X0, X1 = self.X
+        # Rows of R are Schur indices. Once row j is solved, its contribution
+        # to every row above it is subtracted, so R[j] is complete when reached.
+        R = self.Q.conj().T @ jnp.moveaxis(rhs.reshape(self.shape), q, 0)
+
+        def step(R: Array, xs: tuple) -> tuple[Array, Array]:
+            j, L_j, U_j, s_j, t_j = xs
+            v = self._solve_one(L_j[None], U_j[None], R[j][None])[0]
+            R = R - jnp.outer(s_j, X0.matvec(v)) - jnp.outer(t_j, X1.matvec(v))
+            return R, v
+
+        xs = (jnp.arange(n), self.L, self.U, self.S_upper.T, self.T_upper.T)
+        _, V = jax.lax.scan(step, R, xs, reverse=True)
+        u = jnp.moveaxis(self.Z @ V, 0, q)
+        if self.real_operator and not jnp.iscomplexobj(rhs):
+            u = u.real
+        return u.reshape(rhs.shape)
+
+
+def tpmats_schur_factor(
+    A: TPMatrix | Sequence[TPMatrix] | TPMatrices,
+) -> TPMatricesSchurSolver:
+    """Pre-factorize a 2D :class:`TPMatrices` system by QZ decomposition.
+
+    The system must reduce to two terms, :math:`X_0 \\otimes Y_0 + X_1 \\otimes
+    Y_1`, once terms that share their factors, up to a scalar, on all axes but
+    one are merged. Any constant-coefficient operator that is a sum of pure
+    x-derivatives and pure y-derivatives does, for example ``B⊗D + K⊗B + C⊗B``
+    for :math:`u_y - \\nu u_{xx} - u_x`.
+
+    The QZ decomposition goes on an axis with dense factor matrices if there is
+    one, and otherwise on the shorter axis, whose length is that of the
+    sequential loop in :meth:`TPMatricesSchurSolver.solve`. The other axis needs
+    banded :class:`~jaxfun.la.DiaMatrix` factors.
+
+    Args:
+        A: :class:`TPMatrix`, list of :class:`TPMatrix` or :class:`TPMatrices`.
+
+    Returns:
+        :class:`TPMatricesSchurSolver` for repeated fast solves.
+
+    Raises:
+        SolverNotApplicable: if the system is not 2D, does not reduce to two
+            terms, has no axis with banded factors, or one of the banded
+            matrices has a zero pivot.
+    """
+    if isinstance(A, TPMatrices):
+        tpmats = list(A.tpmats)
+    elif isinstance(A, TPMatrix):
+        tpmats = [A]
+    else:
+        tpmats = list(A)
+    if tpmats[0].dims != 2:
+        raise SolverNotApplicable(
+            f"The Schur solver handles 2D systems; this one is {tpmats[0].dims}D."
+        )
+    if len(tpmats) > 2:
+        tpmats = _merge_shared_factors(tpmats)
+    if len(tpmats) != 2:
+        raise SolverNotApplicable(
+            f"The system reduces to {len(tpmats)} tensor-product terms; the Schur "
+            "solver needs exactly 2."
+        )
+    shape = (int(tpmats[0].mats[0].shape[0]), int(tpmats[0].mats[1].shape[0]))
+    banded = [all(isinstance(tp.mats[i], DiaMatrix) for tp in tpmats) for i in (0, 1)]
+    if all(banded):
+        schur_axis = 0 if shape[0] < shape[1] else 1
+    elif any(banded):
+        schur_axis = banded.index(False)
+    else:
+        raise SolverNotApplicable(
+            "The Schur solver needs banded DiaMatrix factors on one axis."
+        )
+    X = [
+        cast(DiaMatrix, tp.mats[1 - schur_axis]).scale(tp.coefficient) for tp in tpmats
+    ]
+    Y = [np.asarray(tp.mats[schur_axis].todense()) for tp in tpmats]
+    S, T, Q, Z = scipy_linalg.qz(Y[0], Y[1], output="complex")
+    real_operator = not any(np.iscomplexobj(np.asarray(x.data)) for x in X) and not any(
+        np.iscomplexobj(y) for y in Y
+    )
+    return TPMatricesSchurSolver(
+        schur_axis,
+        shape,
+        X,
+        jnp.asarray(Q),
+        jnp.asarray(Z),
+        jnp.asarray(S),
+        jnp.asarray(T),
+        real_operator,
     )
 
 

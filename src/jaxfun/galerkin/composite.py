@@ -571,11 +571,13 @@ class Composite(OrthogonalSpace):
         name: str | None = None,
         fun_str: str | None = None,
         scaling: sp.Expr | None = None,
+        tau_basis: Sequence[tuple[OrthogonalSpace, int]] | None = None,
     ) -> Composite:
         """Return the Galerkin test space, scaled by `scaling` only.
 
         The test space does not inherit this space's scaling, so it is this
-        space itself only when neither is scaled.
+        space itself only when neither is scaled. `tau_basis` is for the 'tau'
+        test spaces of the subclasses that have one.
         """
         kind = TestSpaceKind.coerce(kind)
         if kind != TestSpaceKind.GALERKIN:
@@ -1217,7 +1219,7 @@ class GalerkinRecombined(Composite):
             type(trial.orthogonal),
             trial.bcs or {},
             domain=trial.domain,
-            name=name if name is not None else pg.name,
+            name=name if name is not None else pg.name + "_GR",
             fun_str=fun_str if fun_str is not None else pg.fun_str,
             system=trial.system,
             stencil=pg.stencil.with_overrides({int(i): S_trial[i] for i in rows}),
@@ -1320,7 +1322,7 @@ class TauRecombined(Composite):
             type(orth),
             trial.bcs,
             domain=trial.domain,
-            name=name if name is not None else pg.name,
+            name=name if name is not None else pg.name + "_tau",
             fun_str=fun_str if fun_str is not None else pg.fun_str,
             system=trial.system,
             stencil=pg.stencil.with_overrides(rows),

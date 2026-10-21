@@ -1287,7 +1287,7 @@ class TauRecombined(Composite):
     ==========================  ==============================================
 
     with :math:`\phi_k \propto T_k - T_{k+2}`. The fourth is the Galerkin method
-    for a Dirichlet trial space. See docs/tau_test_basis.tex.
+    for a Dirichlet trial space.
 
     Args:
         pg: The Petrov-Galerkin test space.
@@ -1297,6 +1297,30 @@ class TauRecombined(Composite):
             orthogonal space of `trial`, one per boundary condition.
         name: Space name.
         fun_str: Symbol stem for basis functions.
+
+    Note:
+        For m boundary conditions, Lanczos' method tests with the first N - m
+        orthogonal polynomials, :math:`T_0, \ldots, T_{N-m-1}` for Chebyshev.
+        The default test functions are a recombination of these, which only
+        serves to make the matrices sparse. Recombination changes the basis of
+        the test space, not the space, so the default is exactly Lanczos'
+        method.
+
+        The tau method with `[(U, -1), (U, -2)]` is the Galerkin method only
+        for Dirichlet conditions, where its test space spans the trial space.
+        For Neumann conditions, the tau polynomials of the Galerkin method are
+        combinations of several modes, which `tau_basis` does not take.
+
+        For a Chebyshev trial space with m boundary conditions of any kind,
+        the Petrov-Galerkin method, `V.get_testspace("PG")`, is the tau method
+        with :math:`C^{(m)}_{N-1}, \ldots, C^{(m)}_{N-m}`. When m is also the
+        order of the equation, this is the ultraspherical method of Olver and
+        Townsend [1] for linear equations with polynomial coefficients, given
+        the same approximation of the right-hand side.
+
+    References:
+        [1] S. Olver and A. Townsend, A Fast and Well-Conditioned Spectral
+            Method, SIAM Rev. 55 (2013) 462-489. doi:10.1137/120865458
     """
 
     def __init__(

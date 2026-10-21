@@ -1,8 +1,7 @@
 """`get_testspace("tau", tau_basis=...)`: the test space of a tau method.
 
 The tau method with tau polynomials X_1, ..., X_m is testing with the
-polynomials of degree less than N that are orthogonal to all of them; see
-docs/tau_test_basis.tex.
+polynomials of degree less than N that are orthogonal to all of them.
 """
 
 import functools

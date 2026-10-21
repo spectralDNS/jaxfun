@@ -1330,7 +1330,6 @@ class TauRecombined(Composite):
         )
         self._pg = pg
         self._replaced = np.array(sorted(rows), dtype=int)
-        self._rows = np.asarray(self.S.todense())
 
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
@@ -1350,7 +1349,7 @@ class TauRecombined(Composite):
             rows = np.union1d(rows, self._pg._truncated)
         if len(rows) == 0:
             return z
-        return _replace_rows(z, rows, self._rows[rows], self, trial, q)
+        return _replace_rows(z, rows, np.asarray(self.S.get_rows(rows)), self, trial, q)
 
 
 def _coefficients_in(orth: OrthogonalSpace, S: OrthogonalSpace, k: int) -> np.ndarray:

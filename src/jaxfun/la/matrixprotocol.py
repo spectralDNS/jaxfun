@@ -12,12 +12,33 @@ from typing import (
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from flax import nnx
+from jax.typing import ArrayLike
 
 Array = jax.Array
 
 if TYPE_CHECKING:
     from jaxfun.la import DiaMatrix, Matrix
+
+
+def _proportionality(
+    a: np.ndarray, b: np.ndarray, rtol: float | None
+) -> complex | None:
+    """Return ``c`` with ``a == c * b`` for equal-shaped arrays, else ``None``.
+
+    See `BaseMatrix.proportionality`; this is it on the stored values.
+    """
+    k = np.unravel_index(np.argmax(np.abs(b)), b.shape)
+    if b[k] == 0:
+        return None
+    c = a[k] / b[k]
+    if rtol is None:
+        eps = np.finfo(np.result_type(a.dtype, b.dtype, np.float32)).eps
+        rtol = 1000 * float(eps)
+    if np.abs(a - c * b).max() > rtol * np.abs(a).max():
+        return None
+    return complex(c) if np.iscomplexobj(c) and c.imag != 0 else float(np.real(c))
 
 
 class DiaMatrixSolveMethod(StrEnum):
@@ -173,6 +194,28 @@ class BaseMatrix(ABC, nnx.Pytree):
     def todense(self) -> Array:
         """Return or compute the equivalent dense ``(n, m)`` array."""
 
+    def proportionality(
+        self, other: BaseMatrix, /, *, rtol: float | None = None
+    ) -> complex | None:
+        """Return ``c`` with ``self == c * other`` up to rounding, else ``None``.
+
+        The largest entry of ``self - c * other`` may be `rtol` times the
+        largest entry of ``self``; `rtol` defaults to 1000 machine epsilons.
+        ``None`` also when the shapes differ or `other` is zero. The values are
+        read, so neither matrix may be traced.
+
+        Args:
+            other: Matrix to compare with.
+            rtol: Relative tolerance.
+
+        Returns:
+            ``c`` as a float, or a complex when it has an imaginary part.
+        """
+        if self.shape != other.shape:
+            return None
+        a, b = np.asarray(self.todense()), np.asarray(other.todense())
+        return _proportionality(a, b, rtol)
+
     def tosparse(self, *, tol: int = 100) -> DiaMatrix:
         """Return a sparse representation of the matrix."""
         raise NotImplementedError
@@ -188,6 +231,22 @@ class BaseMatrix(ABC, nnx.Pytree):
     def get_column(self, j: int | Array) -> Array:
         """Return column ``j`` as a dense 1-D array of length ``n``."""
         raise NotImplementedError
+
+    def get_rows(self, i: ArrayLike) -> Array:
+        """Return rows ``i`` as a dense array of shape ``(len(i), m)``.
+
+        Args:
+            i: 1-D array of row indices. May be traced.
+        """
+        return jax.vmap(self.get_row)(jnp.asarray(i))
+
+    def get_columns(self, j: ArrayLike) -> Array:
+        """Return columns ``j`` as a dense array of shape ``(n, len(j))``.
+
+        Args:
+            j: 1-D array of column indices. May be traced.
+        """
+        return jax.vmap(self.get_column, out_axes=1)(jnp.asarray(j))
 
     @abstractmethod
     def scale(self, *_args: Any, **_kwargs: Any) -> BaseMatrix:

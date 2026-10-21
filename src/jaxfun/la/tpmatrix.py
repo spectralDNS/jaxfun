@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import itertools
-import math
 import os
 from collections.abc import Callable, Sequence
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, cast, overload
+from typing import TYPE_CHECKING, Any, NamedTuple, cast, overload
 
 import jax
 import jax.core
@@ -41,33 +40,6 @@ type _TPMatricesFactors = (
     | TPMatricesWavenumberSolver
     | TPMatricesSchurSolver
 )
-
-
-def _sharding():
-    """Return `jaxfun.sharding`, imported on use rather than at module scope.
-
-    `jaxfun.sharding` imports `jaxfun.typing`, which imports `jaxfun.la`, which
-    is this package -- so importing it from here at module scope closes a cycle.
-    Every caller below is on a multi-device path, long after imports settle.
-    """
-    from jaxfun import sharding
-
-    return sharding
-
-
-def _solve_diagonal(diagonal: Array, rhs: Array) -> Array:
-    """Solve a diagonal system while preserving the RHS shape."""
-    if diagonal.shape == rhs.shape:
-        return rhs / diagonal
-    return (rhs.reshape((-1,)) / diagonal.reshape((-1,))).reshape(rhs.shape)
-
-
-def _scale_tpmatrix(tp: TPMatrix, alpha: complex | Array) -> TPMatrix:
-    return TPMatrix(
-        list(tp.mats),
-        scale=tp.coefficient * alpha,
-        global_indices=tp.global_indices,
-    )
 
 
 class TPMatrix(BaseMatrix):  # noqa: B903
@@ -321,6 +293,35 @@ class TPSolveMethod(StrEnum):
     KRON = "kron"
 
 
+class DistinctFactors(NamedTuple):
+    """A sum of tensor products written over its distinct factor matrices.
+
+    The operator is
+    ``sum_k scales[k] * kron(*(matrices[i] for i in indices[k]))``, where no
+    two of `matrices` are equal up to a scalar. See
+    :meth:`TPMatrices.distinct_factors`.
+    """
+
+    matrices: list[BaseMatrix]
+    indices: list[tuple[int, ...]]
+    scales: list[complex | Array]
+
+
+def _index_up_to_scalar(
+    mat: BaseMatrix, matrices: list[BaseMatrix]
+) -> tuple[int, complex]:
+    """Index of the matrix in `matrices` that `mat` is a multiple of, and how much.
+
+    `mat` is appended, as its own multiple 1, when it is a multiple of none.
+    """
+    for r, rep in enumerate(matrices):
+        c = mat.proportionality(rep)
+        if c is not None:
+            return r, c
+    matrices.append(mat)
+    return len(matrices) - 1, 1.0
+
+
 class TPMatrices(BaseMatrix):
     """Container for list of TPMatrix bilinear operator tensors."""
 
@@ -420,6 +421,47 @@ class TPMatrices(BaseMatrix):
     def scale(self, alpha: complex | Array) -> TPMatrices:
         """Return ``alpha * self`` preserving the summed tensor-product form."""
         return TPMatrices([_scale_tpmatrix(mat, alpha) for mat in self.tpmats])
+
+    def merge(self) -> TPMatrices:
+        """Return the same operator with terms that share factors merged.
+
+        Terms whose factors agree, up to a scalar, on all axes but one are
+        summed on that axis: ``A ⊗ B + C ⊗ cB`` becomes ``(A + cC) ⊗ B``,
+        repeated until no two terms qualify. Merged terms are written over the
+        :meth:`distinct_factors`; the others are kept as they are. This
+        operator itself when nothing merges, which includes when its values are
+        traced and cannot be compared.
+        """
+        merged = _merge_shared_factors(self.tpmats)
+        return self if len(merged) == len(self.tpmats) else TPMatrices(merged)
+
+    def distinct_factors(self) -> DistinctFactors:
+        """Return the terms written over factor matrices distinct up to a scalar.
+
+        `inner` builds every term's factors separately and folds constants into
+        them, so equal matrices arrive as different objects, and the mass matrix
+        of an anisotropic Laplacian as ``M``, ``2M`` and ``3M``. Here every
+        factor is one of the distinct matrices times a scalar, and the scalars
+        join their term's coefficient. Matrices on different axes are shared
+        when equal up to a scalar. The values are compared, so the matrices may
+        not be traced.
+        """
+        matrices: list[BaseMatrix] = []
+        placed: dict[int, tuple[int, complex]] = {}  # id(factor) -> (index, scalar)
+        indices: list[tuple[int, ...]] = []
+        scales: list[complex | Array] = []
+        for tp in self.tpmats:
+            idx: list[int] = []
+            scale = tp.coefficient
+            for mat in tp.mats:
+                if id(mat) not in placed:
+                    placed[id(mat)] = _index_up_to_scalar(mat, matrices)
+                r, c = placed[id(mat)]
+                idx.append(r)
+                scale = scale * c
+            indices.append(tuple(idx))
+            scales.append(scale)
+        return DistinctFactors(matrices, indices, scales)
 
     def __add__(self, other):
         if isinstance(other, TPMatrix):
@@ -1380,6 +1422,33 @@ def tpmats_dense_lu_factor(
     return TPMatricesDenseLUFactors(lu=mat.lu_factor(), shape=shape)
 
 
+def _sharding():
+    """Return `jaxfun.sharding`, imported on use rather than at module scope.
+
+    `jaxfun.sharding` imports `jaxfun.typing`, which imports `jaxfun.la`, which
+    is this package -- so importing it from here at module scope closes a cycle.
+    Every caller below is on a multi-device path, long after imports settle.
+    """
+    from jaxfun import sharding
+
+    return sharding
+
+
+def _solve_diagonal(diagonal: Array, rhs: Array) -> Array:
+    """Solve a diagonal system while preserving the RHS shape."""
+    if diagonal.shape == rhs.shape:
+        return rhs / diagonal
+    return (rhs.reshape((-1,)) / diagonal.reshape((-1,))).reshape(rhs.shape)
+
+
+def _scale_tpmatrix(tp: TPMatrix, alpha: complex | Array) -> TPMatrix:
+    return TPMatrix(
+        list(tp.mats),
+        scale=tp.coefficient * alpha,
+        global_indices=tp.global_indices,
+    )
+
+
 # Largest condition number of a non-Hermitian pencil's (unit-column) eigenvector
 # matrix that `tpmats_lu_factor` accepts. Close-to-normal pencils, such as Poisson
 # in Chebyshev with PG/GR test spaces, stay in the tens up to N = 256.
@@ -1390,63 +1459,64 @@ def tpmats_dense_lu_factor(
 _EIGVEC_COND_MAX = 1e3
 
 
-def _proportionality(a: np.ndarray, b: np.ndarray) -> complex | None:
-    """Return ``c`` with ``a == c * b`` up to rounding, else ``None``."""
-    if a.shape != b.shape:
-        return None
-    k = np.unravel_index(np.argmax(np.abs(b)), b.shape)
-    if b[k] == 0:
-        return None
-    c = a[k] / b[k]
-    eps = np.finfo(np.result_type(a.dtype, b.dtype, np.float32)).eps
-    if np.abs(a - c * b).max() > 1000 * eps * np.abs(a).max():
-        return None
-    return complex(c) if np.iscomplexobj(c) and c.imag != 0 else float(np.real(c))
-
-
-def _merge_shared_factors(tpmats: list[TPMatrix]) -> list[TPMatrix]:
+def _merge_shared_factors(tpmats: Sequence[TPMatrix]) -> list[TPMatrix]:
     """Combine terms whose factors agree, up to a scalar, on all axes but one.
 
     ``A ⊗ B + C ⊗ cB`` becomes ``(A + cC) ⊗ B``, repeated until no two terms
-    share all but one factor. Coefficients are folded into the summed factor,
-    so merged terms carry coefficient 1.
+    share all but one factor. Only terms of the same block, with equal
+    `global_indices`, combine; the result keeps the blocks in order of first
+    appearance. Merged terms are written over the distinct factors (see
+    `TPMatrices.distinct_factors`); the others are returned as they are.
     """
-    terms: list[tuple[list[BaseMatrix], complex | Array]] = [
-        (list(tp.mats), tp.coefficient) for tp in tpmats
+    terms = list(tpmats)
+    # Which terms merge is decided by their values, and traced values cannot be
+    # read. Left unmerged, the terms are still the same operator.
+    if any(
+        isinstance(x, jax.core.Tracer)
+        for tp in terms
+        for x in (tp.coefficient, *(getattr(m, "data", None) for m in tp.mats))
+    ):
+        return terms
+    blocks: dict[tuple[int, int], list[TPMatrix]] = {}
+    for tp in terms:
+        blocks.setdefault(tp.global_indices, []).append(tp)
+    return [tp for block in blocks.values() for tp in _merge_block(block)]
+
+
+def _merge_block(tpmats: list[TPMatrix]) -> list[TPMatrix]:
+    """`_merge_shared_factors` for the terms of one block."""
+    form = TPMatrices(tpmats).distinct_factors()
+    matrices = form.matrices
+    # (factor indices, scale, original term or None once merged)
+    terms: list[tuple[list[int], complex | Array, TPMatrix | None]] = [
+        (list(idx), s, tp)
+        for idx, s, tp in zip(form.indices, form.scales, tpmats, strict=True)
     ]
-    dense = [[np.asarray(m.todense()) for m in mats] for mats, _ in terms]
-
-    def _mergeable(a: int, b: int) -> tuple[int, complex] | None:
-        """The axis where terms a and b differ, and b's scalar on the others."""
-        ratios = [_proportionality(xb, xa) for xa, xb in zip(dense[a], dense[b])]
-        differ = [i for i, r in enumerate(ratios) if r is None]
-        if len(differ) > 1:
-            return None
-        j = differ[0] if differ else 0
-        others = [r for i, r in enumerate(ratios) if i != j and r is not None]
-        return j, math.prod(others, start=1.0)
-
     while True:
-        found = next(
+        pair = next(
             (
-                (a, b, m)
+                (a, b)
                 for a, b in itertools.combinations(range(len(terms)), 2)
-                if (m := _mergeable(a, b)) is not None
+                if sum(x != y for x, y in zip(terms[a][0], terms[b][0])) <= 1
             ),
             None,
         )
-        if found is None:
+        if pair is None:
             break
-        a, b, (j, r) = found
-        (mats_a, s_a), (mats_b, s_b) = terms[a], terms[b]
-        mats = list(mats_a)
-        mats[j] = mats_a[j].scale(s_a) + mats_b[j].scale(s_b * r)
-        terms[a] = (mats, 1)
-        dense[a][j] = np.asarray(mats[j].todense())
-        del terms[b], dense[b]
+        a, b = pair
+        (ia, sa, _), (ib, sb, _) = terms[a], terms[b]
+        j = next((i for i, (x, y) in enumerate(zip(ia, ib)) if x != y), 0)
+        r, c = _index_up_to_scalar(
+            matrices[ia[j]].scale(sa) + matrices[ib[j]].scale(sb), matrices
+        )
+        terms[a] = ([*ia[:j], r, *ia[j + 1 :]], c, None)
+        del terms[b]
+    indices = tpmats[0].global_indices
     return [
-        TPMatrix(mats, scale=s, global_indices=tpmats[0].global_indices)
-        for mats, s in terms
+        tp
+        if tp is not None
+        else TPMatrix([matrices[i] for i in idx], scale=s, global_indices=indices)
+        for idx, s, tp in terms
     ]
 
 
@@ -1537,8 +1607,9 @@ def tpmats_lu_factor(A: TPMatrix | Sequence[TPMatrix]) -> TPMatricesLUFactors:
         \\quad U = V (\\tilde{F} / D) V^T.
 
     **Requirement**: each axis has at most 2 distinct factor matrices (e.g.
-    stiffness K and mass M from the same 1D function space). Terms that share
-    their factors, up to a scalar, on all axes but one are merged first, so
+    stiffness K and mass M from the same 1D function space), counted up to a
+    scalar, so that M, 2M and 3M count once. Terms that share their factors,
+    up to a scalar, on all axes but one are merged first, so
     ``K⊗M + M⊗K + c M⊗M`` qualifies. The matrices need not be symmetric, so
     weighted bases (Chebyshev, Jacobi) and Petrov-Galerkin test spaces are
     supported; complex eigenpairs are handled in complex arithmetic. Axes that
@@ -1567,72 +1638,39 @@ def tpmats_lu_factor(A: TPMatrix | Sequence[TPMatrix]) -> TPMatricesLUFactors:
     tpmats = list(A)
     ndim = tpmats[0].dims
 
-    # --- value-based deduplication of factor matrices ----------------------
-    # Matrices that are numerically equal but have different Python ids (e.g.
-    # M from K⊗M and M from the M⊗M term in a Helmholtz problem) are treated
-    # as the same matrix.  All ids are mapped to a single representative id.
-    def _dedup(
-        tpmats: list[TPMatrix],
-    ) -> tuple[dict[int, Array], dict[int, int]]:
-        _mat_by_id: dict[int, object] = {}
-        _dense_by_id: dict[int, Array] = {}
-        for tp in tpmats:
-            for mat in tp.mats:
-                mid = id(mat)
-                if mid not in _mat_by_id:
-                    _mat_by_id[mid] = mat
-                    _dense_by_id[mid] = mat.todense()
-
-        _seen_repr: list[int] = []  # canonical ids in first-seen order
-        _id_to_repr: dict[int, int] = {}
-        for mid in _mat_by_id:
-            for rid in _seen_repr:
-                a, b = _dense_by_id[mid], _dense_by_id[rid]
-                if a.shape == b.shape and jnp.allclose(a, b, rtol=1e-5, atol=1e-8):
-                    _id_to_repr[mid] = rid
-                    break
-            else:
-                _id_to_repr[mid] = mid
-                _seen_repr.append(mid)
-        return _dense_by_id, _id_to_repr
-
-    def _n_distinct(axis: int) -> int:
-        return len({_id_to_repr[id(tp.mats[axis])] for tp in tpmats})
-
-    _dense_by_id, _id_to_repr = _dedup(tpmats)
+    # Factors equal up to a scalar count once, so M, 2M and 3M on an axis are
+    # one matrix; only the distinct ones are diagonalized.
+    form = TPMatrices(tpmats).distinct_factors()
     # Merging only when needed leaves systems that already qualify untouched.
-    if any(_n_distinct(i) > 2 for i in range(ndim)):
+    if any(len({idx[i] for idx in form.indices}) > 2 for i in range(ndim)):
         tpmats = _merge_shared_factors(tpmats)
-        _dense_by_id, _id_to_repr = _dedup(tpmats)
+        form = TPMatrices(tpmats).distinct_factors()
 
-    def _repr(mat) -> int:
-        return _id_to_repr[id(mat)]
-
-    # --- per-axis (V, W, {repr_id: eigenvalues}) -----------------------------
+    # --- per-axis (V, W, {matrix: eigenvalues}) ------------------------------
     # Axes that share the same unordered pair of matrices reuse the result. The
     # eigenvalues are kept per axis: a matrix paired differently on two axes
     # (M with K on one, with P on another) has different eigenvalues on each.
-    pair_cache: dict[frozenset, tuple[Array, Array, dict[int, Array]]] = {}
+    pair_cache: dict[frozenset[int], tuple[Array, Array, dict[int, Array]]] = {}
     eigvecs: list[Array] = []
     left_eigvecs: list[Array] = []
     axis_eigenvalues: list[dict[int, Array]] = []
     for i in range(ndim):
-        reprs = list(dict.fromkeys(_repr(tp.mats[i]) for tp in tpmats))
-        pair_key = frozenset(reprs)
+        axis_mats = list(dict.fromkeys(idx[i] for idx in form.indices))
+        pair_key = frozenset(axis_mats)
         if pair_key not in pair_cache:
-            if len(reprs) > 2:
+            if len(axis_mats) > 2:
                 raise SolverNotApplicable(
-                    f"Axis {i} has {len(reprs)} distinct factor matrices; "
+                    f"Axis {i} has {len(axis_mats)} distinct factor matrices; "
                     "simultaneous diagonalization requires ≤ 2 distinct matrices "
                     "per axis."
                 )
             V, W, evals = _diagonalize_axis(
-                [np.asarray(_dense_by_id[r]) for r in reprs]
+                [np.asarray(form.matrices[r].todense()) for r in axis_mats]
             )
             pair_cache[pair_key] = (
                 jnp.asarray(V),
                 jnp.asarray(W),
-                {r: jnp.asarray(ev) for r, ev in zip(reprs, evals, strict=True)},
+                {r: jnp.asarray(ev) for r, ev in zip(axis_mats, evals, strict=True)},
             )
         V, W, evals_map = pair_cache[pair_key]
         eigvecs.append(V)
@@ -1640,12 +1678,12 @@ def tpmats_lu_factor(A: TPMatrix | Sequence[TPMatrix]) -> TPMatricesLUFactors:
         axis_eigenvalues.append(evals_map)
 
     per_term_eigenvalues = [
-        [axis_eigenvalues[i][_repr(tp.mats[i])] for i in range(ndim)] for tp in tpmats
+        [axis_eigenvalues[i][idx[i]] for i in range(ndim)] for idx in form.indices
     ]
-    scales = [tp.coefficient for tp in tpmats]
-    real_operator = not any(np.iscomplexobj(d) for d in _dense_by_id.values()) and (
-        not any(np.iscomplexobj(s) for s in scales)
-    )
+    scales = form.scales
+    real_operator = not any(
+        jnp.issubdtype(m.dtype, jnp.complexfloating) for m in form.matrices
+    ) and not any(np.iscomplexobj(s) for s in scales)
     shape: tuple[int, ...] = tuple(int(tpmats[0].mats[i].shape[0]) for i in range(ndim))
     return TPMatricesLUFactors(
         eigvecs=eigvecs,

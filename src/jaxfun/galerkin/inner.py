@@ -1187,7 +1187,9 @@ def _finalize_inner_result(
                     a0.mats = nnx.List(mat.to_matrix() for mat in a0.mats)
 
             if rank == RankTag.SCALAR:
-                aresult = tpresults[0] if len(tpresults) == 1 else TPMatrices(tpresults)
+                # Terms that share factors are summed, as 1D sums all of them.
+                merged = TPMatrices(tpresults).merge()
+                aresult = merged.tpmats[0] if len(merged) == 1 else merged
             else:
                 aresult = BlockMatrix(
                     tpresults,

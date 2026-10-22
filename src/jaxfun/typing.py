@@ -201,6 +201,17 @@ class TestSpaceKind(CoercibleStrEnum):
     TAU = "tau"
 
 
+class UltrasphericalNormalization(CoercibleStrEnum):
+    r"""Scaling of the ultraspherical polynomials.
+
+    `GEGENBAUER` is the standard :math:`C^{(\lambda)}_n(1) = (2\lambda)_n / n!`,
+    `UNITY` scales every polynomial to :math:`C^{(\lambda)}_n(1) = 1`.
+    """
+
+    GEGENBAUER = "Gegenbauer"
+    UNITY = "Unity"
+
+
 @unique
 class RankTag(Enum):
     SCALAR = 0

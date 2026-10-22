@@ -314,9 +314,9 @@ class Composite(OrthogonalSpace):
         fun_str: Symbol stem for basis functions.
         system: Optional coordinate system.
         stencil: Optional custom stencil, a `Stencil` or a dict {shift: sympy_expr}.
-        alpha: Jacobi alpha (for Jacobi-based bases).
-        beta: Jacobi beta.
         scaling: SymPy expression scaling the stencil diagonals.
+        **kw: Keyword arguments of the orthogonal basis, e.g. alpha and beta
+            for Jacobi, lambda_ and normalization for Ultraspherical.
 
     Attributes:
         orthogonal: Instance of underlying orthogonal basis.
@@ -339,16 +339,13 @@ class Composite(OrthogonalSpace):
         fun_str: str = "phi",
         system: CoordSys | None = None,
         stencil: Stencil | dict | None = None,
-        alpha: Number | float = 0,  # Used if orthogonal is Jacobi; ignored otherwise.
-        beta: Number | float = 0,  # Used if orthogonal is Jacobi; ignored otherwise.
         scaling: sp.Expr | None = None,
+        **kw: Any,
     ) -> None:
         scaling = scaling if scaling is not None else sp.S.One
         domain = Domain(-1, 1) if domain is None else domain
         super().__init__(N, domain=domain, system=system, name=name, fun_str=fun_str)
-        self.orthogonal: Jacobi = orthogonal(
-            N, domain=domain, alpha=alpha, beta=beta, system=system
-        )
+        self.orthogonal: Jacobi = orthogonal(N, domain=domain, system=system, **kw)
         self.bcs: BoundaryConditions = BoundaryConditions(bcs)
         if stencil is None:
             assert isinstance(self.orthogonal, Jacobi), (
@@ -556,9 +553,8 @@ class Composite(OrthogonalSpace):
             fun_str=self.fun_str,
             system=self.system,
             stencil=self.stencil,
-            alpha=self.orthogonal.alpha,
-            beta=self.orthogonal.beta,
             scaling=self.scaling,
+            **self.orthogonal.parameters,
         )
 
     def get_orthogonal(self) -> OrthogonalSpace:
@@ -597,8 +593,7 @@ class Composite(OrthogonalSpace):
             system=self.system,
             stencil=self.stencil,
             scaling=scaling,
-            alpha=self.orthogonal.alpha,
-            beta=self.orthogonal.beta,
+            **self.orthogonal.parameters,
         )
 
     def _tau_testspace(
@@ -649,6 +644,7 @@ class BCGeneric(Composite):
 
     All degrees of freedom correspond to boundary modes; num_dofs == 0.
     Used to construct direct sums (solution space ⊕ boundary lift space).
+    Keyword arguments `**kw` go to the orthogonal basis, as for `Composite`.
     """
 
     def __init__(  # noqa: D401
@@ -661,9 +657,8 @@ class BCGeneric(Composite):
         fun_str: str = "B",
         system: CoordSys | None = None,
         stencil: dict | None = None,
-        alpha: Number | float = 0,
-        beta: Number | float = 0,
         num_quad_points: int = 0,
+        **kw: Any,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
         bcs: BoundaryConditions = BoundaryConditions(bcs, domain=domain)
@@ -673,11 +668,7 @@ class BCGeneric(Composite):
         self.bcs = bcs
         self._num_quad_points = num_quad_points
         self.orthogonal = orthogonal(
-            bcs.num_bcs() + bcs.num_derivatives(),
-            domain=domain,
-            alpha=alpha,
-            beta=beta,
-            system=system,
+            bcs.num_bcs() + bcs.num_derivatives(), domain=domain, system=system, **kw
         )
         S = get_bc_basis(bcs, self.orthogonal)
         self.orthogonal.N = S.shape[1]
@@ -974,10 +965,9 @@ class PGComposite(Composite):
         fun_str: Symbol stem for basis functions.
         system: Optional coordinate system.
         stencil: Optional custom stencil dict {shift: sympy_expr}.
-        alpha: Jacobi alpha (for Jacobi-based bases).
-        beta: Jacobi beta.
         scaling: SymPy expression scaling the stencil diagonals.
         order: Highest derivative order for trial function.
+        **kw: Keyword arguments of the orthogonal basis, as for `Composite`.
 
     Attributes:
         orthogonal: Instance of underlying orthogonal basis.
@@ -1002,10 +992,9 @@ class PGComposite(Composite):
         fun_str: str = "phi",
         system: CoordSys | None = None,
         stencil: dict | None = None,
-        alpha: Number | float = 0,
-        beta: Number | float = 0,
         scaling: sp.Expr | None = None,
         order: int = 1,
+        **kw: Any,
     ) -> None:
         assert order >= 0, "Order must be nonnegative for Petrov-Galerkin composite."
         # Set before the parent builds S, whose rows `dim` counts.
@@ -1019,9 +1008,8 @@ class PGComposite(Composite):
             fun_str=fun_str,
             system=system,
             stencil=stencil,
-            alpha=alpha,
-            beta=beta,
             scaling=scaling,
+            **kw,
         )
         # The full PG space has N - order rows, as wide as its stencil reaches,
         # and the rows that reach past N are cut at width N in S.
@@ -1224,6 +1212,7 @@ class GalerkinRecombined(Composite):
             system=trial.system,
             stencil=pg.stencil.with_overrides({int(i): S_trial[i] for i in rows}),
             scaling=pg.scaling,
+            **trial.orthogonal.parameters,
         )
         self._pg = pg
         self._replaced = rows
@@ -1351,6 +1340,7 @@ class TauRecombined(Composite):
             system=trial.system,
             stencil=pg.stencil.with_overrides(rows),
             scaling=pg.scaling,
+            **orth.parameters,
         )
         self._pg = pg
         self._replaced = np.array(sorted(rows), dtype=int)

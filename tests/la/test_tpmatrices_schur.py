@@ -1,5 +1,7 @@
-"""Shared-factor merging, the eigenvector-conditioning guard of the
-diagonalization solver, and the generalized Schur (QZ) solver."""
+"""Shared-factor merging, the eigenvector-conditioning guard and parity split of
+the diagonalization solver, and the generalized Schur (QZ) solver."""
+
+import functools
 
 import jax
 import jax.numpy as jnp
@@ -199,6 +201,40 @@ def test_lu_factor_with_a_complex_scale_and_real_eigenvectors():
     assert not jnp.iscomplexobj(lu.eigvecs[0])
     b = jnp.ones((n, n))
     assert _residual(A, lu.solve(b), b) < float(ulp(100))
+
+
+def _parity_pair(n: int) -> tuple[np.ndarray, np.ndarray]:
+    """Stiffness- and mass-like matrices that couple only indices of equal
+    parity, as Chebyshev and Legendre ones with Dirichlet conditions do."""
+    K = 2 * np.eye(n) - np.eye(n, k=2) - np.eye(n, k=-2)
+    M = 4 * np.eye(n) + np.eye(n, k=2) + 0.5 * np.eye(n, k=-2)
+    return K, M
+
+
+@pytest.mark.parametrize(
+    "shape,parity", [((6, 7), (True, False)), ((5, 6, 7), (True, True, True))]
+)
+def test_lu_factor_splits_axes_by_parity(shape, parity):
+    pairs = [
+        _parity_pair(n) if p else (_stiffness(n), _mass(n))
+        for n, p in zip(shape, parity, strict=True)
+    ]
+    # The parity of a dense Matrix is read from its values.
+    wrap = [_dia] * (len(shape) - 1) + [lambda a: Matrix(jnp.asarray(a))]
+    terms = [
+        [K if i == a else M for i, (K, M) in enumerate(pairs)]
+        for a in range(len(shape))
+    ]
+    A = TPMatrices(
+        [TPMatrix([w(m) for w, m in zip(wrap, t, strict=True)], 1) for t in terms]
+    )
+    lu = tpmats_lu_factor(list(A.tpmats))
+    assert tuple(V.ndim == 3 for V in lu.eigvecs) == parity
+    b = np.random.default_rng(3).standard_normal(shape)
+    dense = sum(functools.reduce(np.kron, t) for t in terms)
+    ref = np.linalg.solve(dense, b.ravel())
+    uh = np.asarray(lu.solve(jnp.asarray(b))).ravel()
+    assert np.linalg.norm(uh - ref) / np.linalg.norm(ref) < float(ulp(100))
 
 
 def test_lu_factor_accepts_a_scaled_symmetric_definite_pencil():

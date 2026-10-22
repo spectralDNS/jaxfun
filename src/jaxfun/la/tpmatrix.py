@@ -625,6 +625,11 @@ class TPMatricesLUFactors(nnx.Pytree):
     For 2D Poisson (``K⊗M + M⊗K``): the denominator is
     :math:`D_{ij} = \\lambda_i + \\lambda_j` and the solution is
     :math:`U = V ((W F W^T) / D) V^T`.
+
+    On an axis whose matrices couple only indices of equal parity, :math:`V`
+    and :math:`W` are block diagonal, one block for the even and one for the odd
+    indices. They are stored as these two blocks, shape ``(2, m, m)`` with
+    ``m = ceil(n / 2)``, which halves the work of the transforms along that axis.
     """
 
     def __init__(
@@ -638,8 +643,9 @@ class TPMatricesLUFactors(nnx.Pytree):
     ) -> None:
         # `nnx.data` on the array containers, so the eigenbasis is a pytree
         # leaf; see `TPLUFactors`.
-        self.eigvecs = nnx.data(eigvecs)  # list of (n_i, n_i) V matrices
-        self.left_eigvecs = nnx.data(left_eigvecs)  # list of (n_i, n_i) W matrices
+        # Per axis, (n_i, n_i) V and W matrices, or (2, m_i, m_i) parity blocks.
+        self.eigvecs = nnx.data(eigvecs)
+        self.left_eigvecs = nnx.data(left_eigvecs)
         self.per_term_eigenvalues = nnx.data(
             per_term_eigenvalues
         )  # [term][axis] -> (n_axis,)
@@ -664,25 +670,32 @@ class TPMatricesLUFactors(nnx.Pytree):
         F = rhs.reshape(shape)
 
         # Forward transform: apply W_i along each axis i.
-        # jnp.tensordot(W, X, axes=[[1],[i]]) contracts W with axis i of X,
-        # placing the result at position 0; moveaxis restores it to position i.
         Ftilde = F
         for i, W in enumerate(self.left_eigvecs):
-            Ftilde = jnp.tensordot(W, Ftilde, axes=[[1], [i]])
-            Ftilde = jnp.moveaxis(Ftilde, 0, i)
+            Ftilde = _to_eigenbasis(W, Ftilde, i)
+        # A parity axis of odd length n carries one padded unknown, so it is
+        # 2 ceil(n / 2) long here.
+        tshape = Ftilde.shape
 
         # Denominator: D[i0,i1,...] = sum_k s_k * Λ_k[0][i0] * Λ_k[1][i1] * ...
         # A scale can be complex with real eigenvectors and RHS, e.g. the 1j of
         # K⊗M + (1j M)⊗K, so it takes part in the dtype.
         dtype = jnp.result_type(Ftilde.dtype, jnp.float32, *self.scales)
-        D = jnp.zeros(shape, dtype=dtype)
+        D = jnp.zeros(tshape, dtype=dtype)
         for evals_k, s_k in zip(self.per_term_eigenvalues, self.scales):
-            term = jnp.ones(shape, dtype=dtype)
+            term = jnp.ones(tshape, dtype=dtype)
             for i, ev in enumerate(evals_k):
                 idx: list = [None] * ndim
                 idx[i] = slice(None)
                 term = term * ev[tuple(idx)]
             D = D + jnp.asarray(s_k, dtype=dtype) * term
+        # The padded unknowns are zero and must stay so; any nonzero D does.
+        padded = np.zeros(tshape, dtype=bool)
+        for i, n in enumerate(shape):
+            if tshape[i] != n:
+                padded[(slice(None),) * i + (-1,)] = True
+        if padded.any():
+            D = jnp.where(padded, 1, D)
 
         # Solve in the transformed space (element-wise division).
         Utilde = Ftilde / D
@@ -690,12 +703,50 @@ class TPMatricesLUFactors(nnx.Pytree):
         # Back-transform: apply V_i along each axis i.
         U = Utilde
         for i, V in enumerate(self.eigvecs):
-            U = jnp.tensordot(V, U, axes=[[1], [i]])
-            U = jnp.moveaxis(U, 0, i)
+            U = _from_eigenbasis(V, U, i, shape[i])
 
         if self.real_operator and not jnp.iscomplexobj(rhs):
             U = U.real
         return U.reshape(rhs.shape)
+
+
+def _matmul_along(M: Array, X: Array, axis: int) -> Array:
+    """Apply ``M`` along `axis` of ``X``."""
+    # tensordot contracts M with axis `axis` of X, placing the result at
+    # position 0; moveaxis restores it to position `axis`.
+    return jnp.moveaxis(jnp.tensordot(M, X, axes=[[1], [axis]]), 0, axis)
+
+
+def _to_eigenbasis(W: Array, X: Array, axis: int) -> Array:
+    """Apply ``W`` along `axis` of ``X``.
+
+    With parity blocks ``W`` of shape ``(2, m, m)``, the result along `axis` is
+    the even block followed by the odd one, ``2 m`` long.
+    """
+    if W.ndim == 2:
+        return _matmul_along(W, X, axis)
+    m = W.shape[1]
+    pad = [(0, 0)] * X.ndim
+    pad[axis] = (0, 2 * m - X.shape[axis])
+    X = jnp.pad(X, pad)
+    # Index 2k + c is row k of parity c; one batched matmul over c.
+    Xr = X.reshape(X.shape[:axis] + (m, 2) + X.shape[axis + 1 :])
+    Y = jnp.einsum("cak,kc...->ca...", W, jnp.moveaxis(Xr, (axis, axis + 1), (0, 1)))
+    return jnp.moveaxis(Y.reshape((2 * m, *Y.shape[2:])), 0, axis)
+
+
+def _from_eigenbasis(V: Array, X: Array, axis: int, n: int) -> Array:
+    """Apply ``V`` along `axis` of ``X``, the inverse layout of `_to_eigenbasis`.
+
+    The result is `n` long along `axis`.
+    """
+    if V.ndim == 2:
+        return _matmul_along(V, X, axis)
+    m = V.shape[1]
+    Y = jnp.moveaxis(X, axis, 0)
+    Y = Y.reshape((2, m, *Y.shape[1:]))
+    Xr = jnp.einsum("cka,ca...->kc...", V, Y)
+    return jnp.moveaxis(Xr.reshape((2 * m, *Xr.shape[2:]))[:n], 0, axis)
 
 
 def _make_wavenumber_vmap_solve(
@@ -1595,6 +1646,57 @@ def _diagonalize_axis(
     return V, W, evals[: len(mats)]
 
 
+def _decouples_by_parity(mats: Sequence[BaseMatrix]) -> bool:
+    """Whether every matrix couples only indices of equal parity, ``i - j`` even.
+
+    Then the even- and odd-indexed unknowns of the axis form two independent
+    systems, as for Chebyshev and Legendre bases with the same kind of boundary
+    condition at both ends. Read from the stored offsets of a `DiaMatrix`, and
+    from the values of any other matrix.
+    """
+    if mats[0].shape[0] < 2:
+        return False
+    for mat in mats:
+        if isinstance(mat, DiaMatrix):
+            if any(o % 2 for o in mat.offsets):
+                return False
+            continue
+        a = np.asarray(mat.todense())
+        i, j = np.indices(a.shape)
+        if np.any(a[(i - j) % 2 == 1]):
+            return False
+    return True
+
+
+def _diagonalize_axis_by_parity(
+    mats: list[np.ndarray],
+) -> tuple[np.ndarray, np.ndarray, list[np.ndarray]]:
+    """`_diagonalize_axis` for matrices that decouple by index parity.
+
+    The even- and odd-indexed blocks are diagonalized apart. Returns ``V`` and
+    ``W`` as their two blocks, shape ``(2, m, m)`` with ``m = ceil(n / 2)``,
+    and the eigenvalues, even block first. For odd ``n`` the odd block is padded
+    with one unknown that the identity maps to itself.
+    """
+    n = len(mats[0])
+    m = (n + 1) // 2
+    V_even, W_even, even = _diagonalize_axis([a[0::2, 0::2] for a in mats])
+    V_odd, W_odd, odd = _diagonalize_axis([a[1::2, 1::2] for a in mats])
+
+    def padded(B: np.ndarray) -> np.ndarray:
+        out = np.eye(m, dtype=B.dtype)
+        out[: len(B), : len(B)] = B
+        return out
+
+    V = np.stack([V_even, padded(V_odd)])
+    W = np.stack([W_even, padded(W_odd)])
+    evals = [
+        np.concatenate([e, o, np.ones(m - len(o), dtype=o.dtype)])
+        for e, o in zip(even, odd, strict=True)
+    ]
+    return V, W, evals
+
+
 def tpmats_lu_factor(A: TPMatrix | Sequence[TPMatrix]) -> TPMatricesLUFactors:
     """Compute diagonalization-based LU factors for a sum of :class:`TPMatrix`.
 
@@ -1624,6 +1726,9 @@ def tpmats_lu_factor(A: TPMatrix | Sequence[TPMatrix]) -> TPMatricesLUFactors:
     weighted bases (Chebyshev, Jacobi) and Petrov-Galerkin test spaces are
     supported; complex eigenpairs are handled in complex arithmetic. Axes that
     share the same unordered matrix pair reuse the same eigenvectors.
+    An axis whose matrices couple only indices of equal parity, as Chebyshev
+    and Legendre matrices with the same kind of condition at both ends do, is
+    diagonalized in its even and odd halves, which halves the transform work.
 
     The eigenvectors of a non-Hermitian pair must also be well conditioned.
     They are not for pencils far from normal, such as advection-dominated
@@ -1674,9 +1779,14 @@ def tpmats_lu_factor(A: TPMatrix | Sequence[TPMatrix]) -> TPMatricesLUFactors:
                     "simultaneous diagonalization requires ≤ 2 distinct matrices "
                     "per axis."
                 )
-            V, W, evals = _diagonalize_axis(
-                [np.asarray(form.matrices[r].todense()) for r in axis_mats]
-            )
+            mats = [form.matrices[r] for r in axis_mats]
+            dense = [np.asarray(m.todense()) for m in mats]
+            # Even and odd indices apart when they decouple: half the work in
+            # each transform along the axis.
+            if _decouples_by_parity(mats):
+                V, W, evals = _diagonalize_axis_by_parity(dense)
+            else:
+                V, W, evals = _diagonalize_axis(dense)
             pair_cache[pair_key] = (
                 jnp.asarray(V),
                 jnp.asarray(W),

@@ -335,15 +335,11 @@ class Legendre(Jacobi):
         return None
 
 
-### Predefined Composite spaces #####
-
-
 class LGComposite(Composite):
     """Legendre Composite basis with Galerkin test functions.
 
     The 'tau' test functions are the Galerkin ones recombined, since those keep
-    the operator matrices sparser than the Petrov-Galerkin ones do for
-    Legendre; see `TauRecombined`.
+    the operator matrices as sparse as possible; see `TauRecombined`.
 
     Args:
         N: Target (unconstrained) number of modes of underlying orthogonal.

@@ -1047,7 +1047,6 @@ class PGComposite(Composite):
         **kw: Any,
     ) -> None:
         assert order >= 0, "Order must be nonnegative for Petrov-Galerkin composite."
-        # Set before the parent builds S, whose rows `dim` counts.
         self.order = order
         # The test functions vanish at both ends with their first k - 1
         # derivatives; order 0 has those of order 1.

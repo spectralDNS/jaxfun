@@ -210,7 +210,12 @@ def test_three_conditions_petrov_galerkin(family, lam):
     C = Ultraspherical(N, lambda_=lam)
     V = B.get_testspace("tau", tau_basis=[(C, -1), (C, -2), (C, -3)])
     pg = B.get_testspace("PG")
-    assert np.array_equal(np.asarray(V.S.todense()), np.asarray(pg.S.todense()))
+    S, P = np.asarray(V.S.todense()), np.asarray(pg.S.todense())
+    rows = np.vstack([S, P])
+    rows = rows / np.abs(rows).max(axis=1, keepdims=True)
+    assert np.linalg.matrix_rank(rows, tol=_tol()) == len(S) == len(P)
+    if family is Chebyshev:  # recombined from the PG functions, row for row
+        assert np.array_equal(S, P)
 
 
 def test_three_conditions_lanczos():
@@ -240,6 +245,25 @@ def test_legendre():
     rows = S / np.abs(S).max(axis=1, keepdims=True)
     assert np.linalg.matrix_rank(rows) == N - 2
     assert np.abs(rows[:, N - 2 :]).max() < _tol()
+
+
+@pytest.mark.parametrize("bcs", [DIRICHLET, BIHARMONIC], ids=["2", "4"])
+def test_legendre_has_galerkin_sparsity(bcs):
+    """Recombined from the Galerkin functions, Lanczos' method for Legendre has
+    the matrices of the Galerkin method in band, and correct to quadrature."""
+    N = 12
+    B = FunctionSpace(N, Legendre, bcs=bcs)
+    V = B.get_testspace("tau")
+    x = B.system.x
+    u = TrialFunction(B)
+    for form in (u.diff(x, B.bcs.num_bcs()), u):
+        A = inner(form * TestFunction(V), kind="bilinear")
+        ref = inner(
+            form * TestFunction(V), kind="bilinear", use_precomputed_matrices=False
+        )
+        assert _offsets(A) == _offsets(inner(form * TestFunction(B), kind="bilinear"))
+        err = np.abs(np.asarray(A.todense()) - np.asarray(ref.todense())).max()
+        assert err < _tol() * np.abs(np.asarray(ref.todense())).max()
 
 
 @pytest.mark.parametrize("family", [Chebyshev, Legendre])

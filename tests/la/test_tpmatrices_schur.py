@@ -231,7 +231,7 @@ def test_lu_factor_splits_axes_by_parity(shape, parity):
     lu = tpmats_lu_factor(list(A.tpmats))
     assert tuple(V.ndim == 3 for V in lu.eigvecs) == parity
     b = np.random.default_rng(3).standard_normal(shape)
-    dense = sum(functools.reduce(np.kron, t) for t in terms)
+    dense = sum(functools.reduce(lambda a, b: np.kron(a, b), t) for t in terms)
     ref = np.linalg.solve(dense, b.ravel())
     uh = np.asarray(lu.solve(jnp.asarray(b))).ravel()
     assert np.linalg.norm(uh - ref) / np.linalg.norm(ref) < float(ulp(100))

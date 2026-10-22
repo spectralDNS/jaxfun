@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from functools import partial
-from typing import Any, cast
+from functools import cache, partial
+from typing import TYPE_CHECKING, Any, cast
 
 import jax
 import jax.numpy as jnp
@@ -13,10 +13,13 @@ from sympy import Expr, Number, Symbol
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
-from jaxfun.typing import TriDiagMatrixFun
+from jaxfun.typing import TestSpaceKind, TriDiagMatrixFun
 from jaxfun.utils.common import Domain, cache_static, jit_method, jit_vmap, n
 
 from .orthogonal import OrthogonalSpace
+
+if TYPE_CHECKING:
+    from .composite import GalerkinRecombined, PGComposite
 
 alf, bet = sp.symbols("a,b", real=True)
 delta = sp.KroneckerDelta
@@ -67,6 +70,71 @@ class Jacobi(OrthogonalSpace):
         """Return the keyword arguments, besides N, domain and system, that
         rebuild this basis, e.g. at another N."""
         return {"alpha": self.alpha, "beta": self.beta}
+
+    def pg_stencil(self, k: int) -> dict[int, Expr]:
+        r"""Return the stencil of the Petrov-Galerkin test functions of order k.
+
+        The test functions are
+
+        .. math::
+            \psi_j = \frac{(1-x^2)^k}{h^{(k)}_{j+k}} \partial^k Q_{j+k},
+            \quad j = 0, 1, \ldots
+
+        so that :math:`(\psi_j, \partial^k Q_l)_{\omega} = \delta_{j, l-k}`, and
+        :math:`\psi_j` combines :math:`Q_j, Q_{j+2}, \ldots, Q_{j+2k}`.
+
+        Args:
+            k: Order, the number of derivatives.
+
+        Returns:
+            Dictionary shift -> coefficient, an expression in `n`.
+
+        Raises:
+            NotImplementedError: if alpha != beta.
+        """
+        if self.alpha != self.beta:
+            raise NotImplementedError("Petrov-Galerkin needs alpha = beta")
+        return _pg_stencil(type(self), tuple(self.parameters.items()), k)
+
+    def get_testspace(
+        self,
+        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
+        name: str | None = None,
+        fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
+    ) -> OrthogonalSpace | PGComposite | GalerkinRecombined:
+        """Return the test space of `kind` for this space as trial space.
+
+        Galerkin is this space itself, or a copy carrying `name` or `fun_str`
+        when given; it takes no `scaling`. Petrov-Galerkin is the `PGComposite`
+        of order 0: the order-1 test functions, one per mode, which keep
+        operators of up to first derivatives banded. It spans this space, so
+        Galerkin-recombined is the same space. Jacobi spaces with alpha != beta
+        have only the Galerkin test space.
+        """
+        from .composite import PGComposite
+
+        kind = TestSpaceKind.coerce(kind)
+        if kind == TestSpaceKind.GALERKIN or self.alpha != self.beta:
+            return super().get_testspace(kind, name, fun_str, scaling)
+        if kind == TestSpaceKind.TAU:
+            raise NotImplementedError(
+                "The 'tau' test space needs a trial space with boundary conditions."
+            )
+        P = PGComposite(
+            self.N,
+            type(self),
+            order=0,
+            domain=self.domain,
+            system=self.system,
+            name=name,
+            fun_str=fun_str,
+            scaling=scaling,
+            **self.parameters,
+        )
+        if kind == TestSpaceKind.PETROV_GALERKIN:
+            return P
+        return P.recombine(self, name=name, fun_str=fun_str)
 
     def _evaluate(self, X: float | Array, c: Array) -> Array:
         """Evaluate Jacobi series sum_k c_k P_k^{(α,β)}(X)
@@ -587,3 +655,33 @@ class Jacobi(OrthogonalSpace):
             M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
             return M if A is None else A.T @ M
         return None
+
+
+@cache
+def _pg_stencil(
+    family: type[Jacobi], parameters: tuple[tuple[str, Any], ...], k: int
+) -> dict[int, Expr]:
+    """Return `family(**parameters).pg_stencil(k)`, computed once per process."""
+    Q = family(0, **dict(parameters))
+    j = Symbol("j", integer=True, nonnegative=True)  # settles Piecewise for j < 0
+    # Write d^k Q_{j+k} = g_{j+k} psi^{(k)}_{j+k} P^{(a+k,a+k)}_j and expand
+    # (1-x^2)^k P^{(a+k,a+k)}_j in P^{(a,a)}_{j+2m}, one factor at a time, with
+    #   (1-x^2) P^{(c+1,c+1)}_p = 2(p+c+1) / (2p+2c+3) P^{(c,c)}_p
+    #                             - 4(p+1)(p+2) / ((2p+2c+3)(2p+2c+4)) P^{(c,c)}_{p+2}
+    # for c = a+k-1, ..., a. It has no singularity, unlike the Gegenbauer form,
+    # which degenerates for Chebyshev (a = -1/2). Then P^{(a,a)}_p = Q_p / g_p.
+    e: dict[int, Expr] = {0: sp.S.One}
+    for c in (Q.alpha + i for i in reversed(range(k))):
+        f: dict[int, Expr] = {}
+        for m, v in e.items():
+            p = j + 2 * m
+            f[m] = f.get(m, 0) + v * 2 * (p + c + 1) / (2 * p + 2 * c + 3)
+            f[m + 1] = f.get(m + 1, 0) - v * 4 * (p + 1) * (p + 2) / (
+                (2 * p + 2 * c + 3) * (2 * p + 2 * c + 4)
+            )
+        e = f
+    s = Q.gn(j + k) * Q.psi(j + k, k) / Q.h(j + k, k)
+    return {
+        2 * m: sp.factor(sp.gammasimp(s * v / Q.gn(j + 2 * m))).subs(j, n)
+        for m, v in e.items()
+    }

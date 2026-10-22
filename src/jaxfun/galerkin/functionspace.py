@@ -119,7 +119,6 @@ def FunctionSpace(
         No boundary conditions:
             V = FunctionSpace(32, Chebyshev)
     """
-    from jaxfun.galerkin.Chebyshev import CGComposite, Chebyshev
     from jaxfun.galerkin.Legendre import Legendre, LGComposite
 
     N = operator.index(N)
@@ -137,13 +136,7 @@ def FunctionSpace(
         bcs = BoundaryConditions(bcs, domain=domain)
         assert issubclass(space, Jacobi)
 
-        compspace = (
-            LGComposite
-            if issubclass(space, Legendre)
-            else CGComposite
-            if issubclass(space, Chebyshev)
-            else Composite
-        )
+        compspace = LGComposite if issubclass(space, Legendre) else Composite
         C = compspace(
             N,
             space,

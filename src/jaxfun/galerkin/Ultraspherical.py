@@ -1,3 +1,5 @@
+from typing import Any
+
 import jax.numpy as jnp
 import numpy as np
 import sympy as sp
@@ -6,6 +8,7 @@ from sympy import Expr, Number, Symbol
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, diags
+from jaxfun.typing import UltrasphericalNormalization
 from jaxfun.utils.common import Domain, cache_static, jit_method
 
 from .Jacobi import Jacobi
@@ -28,8 +31,15 @@ class Ultraspherical(Jacobi):
     .. math::
         C^{(\lambda)}_n(X) = g_n^{(\lambda-1/2)} P_n^{(\lambda-1/2, \lambda-1/2)}(X)
 
-    where g_n^{(\lambda-1/2)} is a scaling factor that ensures C^{(\lambda)}_n(\pm 1)
-    = (\pm 1)^n. Hence, g_n^{(\lambda-1/2)} = 1 / P_n^{(\lambda-1/2, \lambda-1/2)}(1).
+    where g_n^{(\lambda-1/2)} is a scaling factor set by `normalization`:
+
+      * "Gegenbauer" (default): the standard Gegenbauer polynomials, with
+        C^{(\lambda)}_n(1) = (2\lambda)_n / n!.
+      * "Unity": C^{(\lambda)}_n(\pm 1) = (\pm 1)^n, that is,
+        g_n^{(\lambda-1/2)} = 1 / P_n^{(\lambda-1/2, \lambda-1/2)}(1).
+
+    The Gegenbauer polynomials vanish for lambda = 0 and n > 0, so lambda = 0
+    always gives the Chebyshev polynomials T_n, scaled as "Unity".
 
     Args:
         N: Number of basis functions (polynomial order = N-1).
@@ -37,7 +47,9 @@ class Ultraspherical(Jacobi):
         system: Coordinate system (optional).
         name: Basis family name.
         fun_str: Symbol stem for basis functions (default "C").
-        **kw: Extra keyword args passed to parent Jacobi constructor.
+        lambda_: The parameter lambda > -1/2 of the polynomials.
+        normalization: Scaling of the polynomials, "Gegenbauer" or "Unity".
+        **kw: Ignored.
     """
 
     def __init__(
@@ -48,6 +60,8 @@ class Ultraspherical(Jacobi):
         name: str = "Ultraspherical",
         fun_str: str = "C",
         lambda_: Number | float = 1,
+        normalization: UltrasphericalNormalization
+        | str = UltrasphericalNormalization.GEGENBAUER,
         **kw,
     ) -> None:
         Jacobi.__init__(
@@ -60,10 +74,19 @@ class Ultraspherical(Jacobi):
             alpha=lambda_ - sp.S.Half,
             beta=lambda_ - sp.S.Half,
         )
+        self.normalization: UltrasphericalNormalization = (
+            UltrasphericalNormalization.UNITY
+            if lambda_ == 0
+            else UltrasphericalNormalization.coerce(normalization)
+        )
 
     @property
     def lambda_(self):
         return self.alpha + sp.S.Half
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {"lambda_": self.lambda_, "normalization": self.normalization}
 
     def h(self, n: Symbol | int, k: int) -> Expr:
         if self.lambda_ == 0:  # Chebyshev
@@ -81,9 +104,12 @@ class Ultraspherical(Jacobi):
             n: Polynomial index symbol.
 
         Returns:
-            SymPy expression 1 / P_n^{(alpha,beta)}(1).
+            SymPy expression (2 lambda)_n / (lambda + 1/2)_n for "Gegenbauer",
+            1 / P_n^{(alpha,beta)}(1) for "Unity".
         """
-        return sp.S.One / sp.jacobi(n, self.alpha, self.beta, 1)
+        if self.normalization == UltrasphericalNormalization.UNITY:
+            return sp.S.One / sp.jacobi(n, self.alpha, self.beta, 1)
+        return sp.rf(2 * self.lambda_, n) / sp.rf(self.lambda_ + sp.S.Half, n)
 
     def a(self, i: Symbol | int, j: Symbol | int) -> Expr | float:
         if self.lambda_ == 0:  # Chebyshev requires tweaking
@@ -115,6 +141,8 @@ class Ultraspherical(Jacobi):
         """
         lam = float(self.lambda_)
         j = np.arange(N, dtype=np.float64)
+        if self.normalization == UltrasphericalNormalization.GEGENBAUER:
+            return jnp.full(N, 2.0), jnp.asarray(j + lam)
         if lam == 0:  # Chebyshev, where g is the limit (1/2, 1, 1, ...)
             bm = 1.0 / (2 * (j + 1))
             bm[0] = 1.0  # the same removable 0/0 that `b` patches with Piecewise
@@ -150,7 +178,7 @@ class Ultraspherical(Jacobi):
             return jnp.array([x0])
 
         # The generic Jacobi recurrence `x[n] = (c[n+1] - b_+[n] x[n+2]) / b_-[n]`
-        # has, for alpha = beta = lambda - 1/2,
+        # has, for alpha = beta = lambda - 1/2 and the "Unity" normalization,
         #
         #     b_-[n] = (n + 2L) / (2 (n + 1)(n + L))
         #     b_+[n] = -(n + 2) / (2 (n + 2L + 1)(n + L + 2))
@@ -167,6 +195,10 @@ class Ultraspherical(Jacobi):
         # `g` has to be built from the exact product of its own ratios: taking it
         # from `exp(gammaln(n + 2L) - gammaln(n + 1))` instead costs two to three
         # digits, since the two gammaln values are large and nearly equal.
+        #
+        # The "Gegenbauer" normalization rescales mode n by C_n(1) = Gamma(n + 2L)
+        # / (Gamma(2L) n!), which leaves `b_-[n] = 1 / (2(n + L))` and `g[n] = n + L`,
+        # so that `x[n] = 2(n + L) * sum c[p]` over p > n with p - n odd.
         #
         # L = 0 is Chebyshev, where `b_-` has a removable 0/0 that `b` patches up
         # with a Piecewise. `_derivative_weights` hardcodes the limit instead, so
@@ -193,7 +225,7 @@ class Ultraspherical(Jacobi):
             DiaMatrix diagonal mass matrix or None if derivative combo unsupported.
         """
         u, j = trial
-        if not isinstance(u, Ultraspherical):
+        if not isinstance(u, Ultraspherical) or u.parameters != self.parameters:
             return None
         A = None
         if q != 0:

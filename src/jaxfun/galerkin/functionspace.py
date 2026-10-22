@@ -99,7 +99,8 @@ def FunctionSpace(
         name: Name of the resulting space (used for symbolic function ids).
         fun_str: Basis function symbol stem.
         **kw: Extra keyword arguments forwarded to the base `space`
-            constructor (e.g. alpha/beta for Jacobi, scaling, stencil).
+            constructor (e.g. alpha/beta for Jacobi, lambda_/normalization for
+            Ultraspherical) or, with bcs, to the composite (scaling, stencil).
 
     Returns:
         BaseSpace | Composite | DirectSum:
@@ -168,6 +169,7 @@ def FunctionSpace(
             system=system,
             num_quad_points=N,
             **kwb,
+            **C.orthogonal.parameters,
         )
         C.name += "0"
         return DirectSum(C, B)

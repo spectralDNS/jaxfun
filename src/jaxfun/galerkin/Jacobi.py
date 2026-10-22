@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
-from typing import cast
+from typing import Any, cast
 
 import jax
 import jax.numpy as jnp
@@ -61,6 +61,12 @@ class Jacobi(OrthogonalSpace):
         )
         self.alpha: Number | float = alpha
         self.beta: Number | float = beta
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """Return the keyword arguments, besides N, domain and system, that
+        rebuild this basis, e.g. at another N."""
+        return {"alpha": self.alpha, "beta": self.beta}
 
     def _evaluate(self, X: float | Array, c: Array) -> Array:
         """Evaluate Jacobi series sum_k c_k P_k^{(α,β)}(X)
@@ -247,7 +253,8 @@ class Jacobi(OrthogonalSpace):
 
     def norm_squared(self) -> Array:
         """Return L2 norms squared h_n^{(0)} for n=0..N-1."""
-        return sp.lambdify(n, self.h(n, 0), modules="jax")(jnp.arange(self.N))
+        h = sp.lambdify(n, self.h(n, 0), modules="jax")(jnp.arange(self.N))
+        return jnp.broadcast_to(h, (self.N,))  # h may not depend on n
 
     @property
     def reference_domain(self) -> Domain:

@@ -15,7 +15,12 @@ from jaxfun.la.matrixprotocol import (
     _CacheBox,
 )
 from jaxfun.la.operators import GlobalArray, GlobalMatrix
-from jaxfun.la.tpmatrix import TPMatrices, TPMatrix, tpmats_to_kron
+from jaxfun.la.tpmatrix import (
+    TPMatrices,
+    TPMatrix,
+    _merge_shared_factors,
+    tpmats_to_kron,
+)
 
 if TYPE_CHECKING:
     from jaxfun.galerkin import (
@@ -76,6 +81,12 @@ class BlockMatrix[
         self.trial_block_sizes: tuple[int, ...] = self.trial_space.block_sizes
 
         if isinstance(mats[0], TPMatrix):
+            # Terms of a block that share factors are summed, which leaves
+            # fewer Kronecker products to build here and to apply in solvers.
+            mats = cast(
+                list[MatrixT], _merge_shared_factors(cast(list[TPMatrix], mats))
+            )
+            self.mats = nnx.List(mats)
             _grouped: dict[str, TPMatrices] = {}
             for mat in mats:
                 idx = f"{mat.global_indices[0]},{mat.global_indices[1]}"

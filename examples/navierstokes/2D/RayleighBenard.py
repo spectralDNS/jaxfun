@@ -232,12 +232,7 @@ class RayleighBenard(KMM2D):
         # homogeneous summand, which is the only part a test function sees --
         # the lifting is trial-side data.
         if self.testkind is TestSpaceKind.GALERKIN_RECOMBINED:
-            PT = TensorProduct(
-                self.F,
-                Tb.get_testspace("GR", name="TbP"),
-                system=self.system,
-                name="PT",
-            )
+            PT = VT.get_testspace("GR", name="PT")
         else:
             PT = VT
 

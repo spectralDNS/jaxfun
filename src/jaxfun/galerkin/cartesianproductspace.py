@@ -22,7 +22,7 @@ from jaxfun.galerkin.tensorproductspace import (
     multiplication_sign,
 )
 from jaxfun.sharding import physical_sharding, spectral_sharding
-from jaxfun.typing import MeshKind, RankTag
+from jaxfun.typing import MeshKind, RankTag, TestSpaceKind
 
 type MultiDimensionalSpace = TensorProductSpace | CartesianTensorProductSpace
 type OneDimensionalSpace = OrthogonalSpace | DirectSum | CartesianProductSpace
@@ -123,6 +123,7 @@ class CartesianBaseSpace(ABC):
 
     is_transient = False
     basespaces: Sequence[OneDimensionalSpace | MultiDimensionalSpace]
+    name: str
     _rank: RankTag
 
     @abstractmethod
@@ -144,6 +145,35 @@ class CartesianBaseSpace(ABC):
     @abstractmethod
     def get_orthogonal(self) -> Self:
         """Return orthogonal version of self"""
+
+    def get_testspace(
+        self,
+        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
+        name: str | None = None,
+    ) -> Self:
+        """Return the Cartesian product of every component's test space of `kind`.
+
+        Each component contributes its own ``get_testspace(kind)``, nested
+        Cartesian products included, and the product keeps its rank. It is this
+        space itself when every component is its own test space and no `name`
+        is given.
+
+        Args:
+            kind: Test space kind, e.g. ``"G"``, ``"PG"`` or ``"GR"``.
+            name: Name of the test space; defaults to this space's name.
+        """
+        # Components mix 1D, tensor-product and Cartesian product spaces.
+        spaces: list[Any] = [space.get_testspace(kind) for space in self.basespaces]
+        if name is None and all(
+            s is t for s, t in zip(spaces, self.basespaces, strict=True)
+        ):
+            return self
+        return cast(
+            Self,
+            CartesianProduct(
+                *spaces, name=self.name if name is None else name, rank=self.rank
+            ),
+        )
 
     @abstractmethod
     def evaluate_mesh(

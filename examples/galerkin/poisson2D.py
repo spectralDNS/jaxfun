@@ -22,9 +22,8 @@ if "PYTEST" in os.environ:
 
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
 D = FunctionSpace(M, Chebyshev, bcs=bcs, name="D", fun_str="psi")
-P = D.get_testspace(kind="GR")  # sparse Galerkin test space
 T = TensorProduct(D, D, name="T")
-Q = TensorProduct(P, P, name="Q")
+Q = T.get_testspace("GR", name="Q")
 v = TestFunction(Q, name="v")
 u = TrialFunction(T, name="u")
 

@@ -14,7 +14,7 @@ from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre as space
 from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
-from jaxfun.utils.common import lambdify, n, ulp
+from jaxfun.utils.common import lambdify, ulp
 
 R2 = R(2)
 x, y = R2.base_scalars()
@@ -23,12 +23,8 @@ ue = sp.exp(-(x**2 + y**2))
 bcsx = {"left": {"D": ue.subs(x, 0)}, "right": {"D": ue.subs(x, 1)}}
 bcsy = {"left": {"D": ue.subs(y, 0)}, "right": {"D": ue.subs(y, 1)}}
 M = 50
-Dx = FunctionSpace(
-    M, space, bcs=bcsx, name="Dx", fun_str="psi", scaling=n + 1, domain=(0, 1)
-)
-Dy = FunctionSpace(
-    M, space, bcs=bcsy, name="Dy", fun_str="phi", scaling=n + 1, domain=(0, 1)
-)
+Dx = FunctionSpace(M, space, bcs=bcsx, name="Dx", fun_str="psi", domain=(0, 1))
+Dy = FunctionSpace(M, space, bcs=bcsy, name="Dy", fun_str="phi", domain=(0, 1))
 T = TensorProduct(Dx, Dy, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
@@ -37,7 +33,7 @@ A, L = inner(
     v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True, kind="system"
 )
 
-un = A.solve(L, method="kron", kron_method="banded", auto_threshold=10000)
+un = A.solve(L, method="lu")
 
 N = 100
 uj = T.evaluate_mesh(un, kind="uniform", N=(N, N))

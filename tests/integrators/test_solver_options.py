@@ -127,36 +127,40 @@ def test_options_reach_the_stage_solve() -> None:
 def test_auto_threshold_switches_the_solver_path() -> None:
     """`auto_threshold` must change which solver runs, not just be accepted.
 
-    The 2D operator has bandwidth p*(q+1)=182. Under the default threshold of
-    100 that exceeds the banded budget and `lu_solve` falls back to a dense
-    solve, announcing it with a warning; widening the threshold past 182 keeps
-    it on the banded path and the warning must disappear. The warning is the
-    only externally visible evidence of which branch was taken, so it is worth
-    asserting rather than filtering away.
+    Assembled as a Kronecker product, the 2D operator has bandwidth
+    p*(q+1)=182. Under the default threshold of 100 that exceeds the banded
+    budget and `lu_solve` falls back to a dense solve, announcing it with a
+    warning; widening the threshold past 182 keeps it on the banded path and
+    the warning must disappear. The warning is the only externally visible
+    evidence of which branch was taken, so it is worth asserting rather than
+    filtering away.
     """
-    _, default = _diffusion_2d()
+    _, default = _diffusion_2d(solver_options={"method": "kron"})
     with pytest.warns(UserWarning, match="Falling back to dense solver"):
         default.solve(dt=1e-2, steps=1, progress=False)
 
-    _, tuned = _diffusion_2d(solver_options={"auto_threshold": 10_000})
+    _, tuned = _diffusion_2d(
+        solver_options={"method": "kron", "auto_threshold": 10_000}
+    )
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         tuned.solve(dt=1e-2, steps=1, progress=False)
     assert not [w for w in caught if "Falling back to dense" in str(w.message)]
 
 
-# The reference below is deliberately built without options, so it takes the
-# dense fallback that `test_auto_threshold_switches_the_solver_path` asserts on
-# -- that is the point of the comparison. Its warnings are expected here.
+# The reference below is built without options and takes the factored
+# (diagonalization) path; the Kronecker paths are compared against it, including
+# the dense fallback that `test_auto_threshold_switches_the_solver_path` asserts
+# on. Its warnings are expected here.
 @pytest.mark.filterwarnings("ignore:Falling back to dense solver:UserWarning")
 @pytest.mark.filterwarnings(r"ignore:DiaMatrix\.lu_solve:UserWarning")
 @pytest.mark.parametrize(
     "options",
     [
         {},
-        {"auto_threshold": 10_000},
-        {"kron_method": "banded", "auto_threshold": 10_000},
+        {"method": "kron"},
         {"method": "kron", "auto_threshold": 10_000},
+        {"method": "kron", "kron_method": "banded", "auto_threshold": 10_000},
     ],
 )
 def test_solver_options_do_not_change_the_answer_2d(options: dict) -> None:

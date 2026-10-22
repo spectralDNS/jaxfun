@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import scipy.sparse
 
-from jaxfun.la import BaseMatrix
+from jaxfun.la import BaseMatrix, ZeroMatrix
 from jaxfun.la.diamatrix import (
     DenseIndexingWarning,
     DiagonalMatrix,
@@ -1623,3 +1623,79 @@ class TestRCM:
         x2 = A.lu_solve(b, method="rcm")
         assert jnp.allclose(x1, x2, atol=ulp(10))
         assert jnp.allclose(x1, x_true, atol=ulp(100))
+
+
+# ---------------------------------------------------------------------------
+# proportionality
+# ---------------------------------------------------------------------------
+
+
+def _pentadiagonal(n: int, seed: int) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    a = np.zeros((n, n))
+    for k in range(-2, 3):
+        a += np.diag(rng.standard_normal(n - abs(k)), k)
+    return a
+
+
+def test_proportionality_of_a_scaled_diamatrix():
+    A = DiaMatrix.from_dense(jnp.asarray(_pentadiagonal(8, 0)))
+    assert A.scale(2.5).proportionality(A) == pytest.approx(2.5)
+    assert A.proportionality(A.scale(2.5)) == pytest.approx(0.4)
+    c = A.scale(1 + 2j).proportionality(A)
+    assert isinstance(c, complex) and c == pytest.approx(1 + 2j)
+
+
+def test_proportionality_is_none_unless_proportional():
+    A = DiaMatrix.from_dense(jnp.asarray(_pentadiagonal(8, 0)))
+    B = DiaMatrix.from_dense(jnp.asarray(_pentadiagonal(8, 1)))
+    assert A.proportionality(B) is None
+    assert A.proportionality(DiaMatrix.from_dense(jnp.ones((8, 9)))) is None
+    assert A.proportionality(A.scale(0.0)) is None
+    assert A.scale(0.0).proportionality(A) == 0.0
+    # Zero matrices from `from_dense` store no diagonals at all.
+    Z = DiaMatrix.from_dense(jnp.zeros((8, 8)))
+    assert Z.proportionality(DiaMatrix.from_dense(jnp.zeros((8, 8)))) is None
+
+
+def test_proportionality_compares_the_stored_band(monkeypatch):
+    a = jnp.asarray(_pentadiagonal(8, 0))
+    A = DiaMatrix.from_dense(a)
+    # Other diagonals stored, among them zero ones, and garbage in the slots
+    # that fall outside the matrix.
+    wide = DiaMatrix.from_dense(3 * a, offsets=(-3, -2, -1, 0, 1, 2, 3))
+    k = wide.offsets.index(2)
+    padded = DiaMatrix(
+        data=wide.data.at[k, :2].set(99.0), offsets=wide.offsets, shape=wide.shape
+    )
+
+    def _no_dense(self):
+        raise AssertionError("formed densely")
+
+    monkeypatch.setattr(DiaMatrix, "todense", _no_dense)
+    assert padded.proportionality(A) == pytest.approx(3.0)
+
+
+def test_proportionality_across_matrix_types():
+    a = jnp.asarray(_pentadiagonal(8, 0))
+    A, M = DiaMatrix.from_dense(a), Matrix(a)
+    assert A.proportionality(M.scale(2.0)) == pytest.approx(0.5)
+    assert M.proportionality(A) == pytest.approx(1.0)
+    assert M.proportionality(Matrix(jnp.asarray(_pentadiagonal(8, 1)))) is None
+
+
+# ---------------------------------------------------------------------------
+# get_rows / get_columns
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "make", [Matrix, DiaMatrix.from_dense, lambda a: ZeroMatrix(a.shape[0])]
+)
+def test_get_rows_and_columns_match_dense(make):
+    A = make(jnp.asarray(_pentadiagonal(6, 0)))
+    dense = A.todense()
+    idx = jnp.array([4, 0, 2])
+    assert jnp.allclose(A.get_rows(idx), dense[idx])
+    assert jnp.allclose(A.get_columns(idx), dense[:, idx])
+    assert jnp.allclose(jax.jit(A.get_columns)(idx), dense[:, idx])

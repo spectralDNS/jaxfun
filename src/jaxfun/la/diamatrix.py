@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import os
 import warnings
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, NamedTuple, TypedDict, overload
 
 import jax
@@ -15,6 +16,7 @@ from jaxfun.la.matrixprotocol import (
     BaseMatrix,
     DiaMatrixSolveMethod,
     _CacheBox,
+    _proportionality,
     pin_value_to_scalar,
 )
 
@@ -380,6 +382,37 @@ class DiaMatrix(BaseMatrix):
             (self.data, jnp.array(self.offsets, dtype=int)),
         )
         return A
+
+    def proportionality(
+        self, other: BaseMatrix, /, *, rtol: float | None = None
+    ) -> complex | None:
+        """Return ``c`` with ``self == c * other`` up to rounding, else ``None``.
+
+        As `BaseMatrix.proportionality`. Against another `DiaMatrix` it
+        compares the stored diagonals, without forming either matrix densely.
+        """
+        if not isinstance(other, DiaMatrix):
+            return super().proportionality(other, rtol=rtol)
+        if self.shape != other.shape:
+            return None
+        offsets = sorted(set(self.offsets) | set(other.offsets))
+        return _proportionality(self._band(offsets), other._band(offsets), rtol)
+
+    def _band(self, offsets: Sequence[int]) -> np.ndarray:
+        """The diagonals at `offsets`, zero where not stored or outside the matrix.
+
+        Slots outside the matrix are documented as zero, but the matrix kernels
+        mask them rather than trust it, and so does this.
+        """
+        n, m = self.shape
+        data = np.asarray(self.data)
+        band = np.zeros((len(offsets), m), dtype=data.dtype)
+        j = np.arange(m)
+        for i, k in enumerate(offsets):
+            if k in self.offsets:
+                valid = (j - k >= 0) & (j - k < n)
+                band[i, valid] = data[self.offsets.index(k), valid]
+        return band
 
     def tosparse(self, *, tol: int = 100) -> DiaMatrix:  # noqa: ARG002
         """Return self. The *tol* parameter is accepted for API uniformity with
@@ -1042,15 +1075,14 @@ class DiaMatrix(BaseMatrix):
     def _gather_rows(self, rows: Array) -> Array:
         original_shape = rows.shape
         rows = rows.reshape((-1,))
-        selected = jax.vmap(self.get_row)(rows)
+        selected = self.get_rows(rows)
         return selected.reshape(original_shape + selected.shape[1:])
 
     def _gather_columns(self, cols: Array) -> Array:
         original_shape = cols.shape
         cols = cols.reshape((-1,))
-        selected = jax.vmap(self.get_column)(cols)
-        selected = selected.reshape(original_shape + selected.shape[1:])
-        return jnp.moveaxis(selected, -1, 0)
+        selected = self.get_columns(cols)
+        return selected.reshape(selected.shape[:1] + original_shape)
 
     def _get_tuple_axes(self, row_key, col_key) -> tuple[Array, tuple[int, int]]:
         n, m = self.shape
@@ -1113,7 +1145,7 @@ class DiaMatrix(BaseMatrix):
 
         if isinstance(key, slice):
             rows = jnp.arange(n, dtype=jnp.int32)[key]
-            return jax.vmap(self.get_row)(rows)
+            return self.get_rows(rows)
 
         if isinstance(key, int) and not isinstance(key, bool):
             return self.get_row(_normalize_index(key, n))
@@ -1138,7 +1170,7 @@ class DiaMatrix(BaseMatrix):
 
             rows = jnp.arange(n, dtype=jnp.int32)
             if idx.ndim == 1:
-                return jax.vmap(self.get_row)(rows[idx])
+                return self.get_rows(rows[idx])
 
             row_idx, col_idx = jnp.nonzero(idx)
             return jax.vmap(self._get_scalar)(row_idx, col_idx)
@@ -1149,7 +1181,7 @@ class DiaMatrix(BaseMatrix):
 
         original_shape = rows.shape
         rows = rows.reshape((-1,))
-        selected = jax.vmap(self.get_row)(rows)
+        selected = self.get_rows(rows)
         return selected.reshape(original_shape + selected.shape[1:])
 
     def _get_scalar(self, i: int | Array, j: int | Array) -> Array:

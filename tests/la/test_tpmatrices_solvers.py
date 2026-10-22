@@ -31,6 +31,7 @@ from jaxfun.la.tpmatrix import (
     TPLUFactors,
     TPMatricesDenseLUFactors,
     TPMatricesLUFactors,
+    TPMatricesSchurSolver,
     TPMatricesWavenumberSolver,
     _parity_halves_offsets,
     tpmats_dense_lu_factor,
@@ -300,6 +301,52 @@ def test_tpmatrices_solve_dispatches_lu_for_poly(poly):
     assert isinstance(lu, TPMatricesLUFactors)
     uh = A.solve(b)
     assert uh.shape == b.shape
+
+
+def test_tpmatrices_solve_dispatches_schur_for_advection_diffusion():
+    """u_y - 0.1 u_xx - u_x: three terms, two sharing their y-factor, and an
+    initial value problem along y whose eigenvectors are too ill-conditioned to
+    diagonalize. The factored path merges the terms and solves by QZ."""
+    Dx = FunctionSpace(
+        20,
+        Chebyshev.Chebyshev,
+        domain=(-3, 3),
+        bcs={"left": {"N": 0}, "right": {"D": 0}},
+    )
+    Dy = FunctionSpace(20, Chebyshev.Chebyshev, domain=(0, 6), bcs={"left": {"D": 0}})
+    T = TensorProduct(Dx, Dy)
+    P = TensorProduct(Dx.get_testspace("GR"), Dy.get_testspace("GR"))
+    u, v = TrialFunction(T), TestFunction(P)
+    x, y = T.system.base_scalars()
+    A = cast(
+        TPMatrices, inner((u.diff(y) - 0.1 * u.diff(x, 2) - u.diff(x)) * v, sparse=True)
+    )
+    assert isinstance(A.lu_factor(), TPMatricesSchurSolver)
+    b = jnp.ones(T.num_dofs)
+    uh = A.solve(b, method="lu")
+    ref = A.solve(b, method="kron", kron_method="dense")
+    # cond(A) ~ 1e5, so the two solves agree to a relative, not absolute,
+    # tolerance; a failed diagonalization is off by O(1) or more.
+    err = jnp.linalg.norm(uh - ref) / jnp.linalg.norm(ref)
+    assert float(err) < float(jnp.sqrt(ulp(1.0)))
+
+
+def test_tpmatrices_wavenumber_upper_triangular():
+    """An upper-triangular polynomial axis: the LU factors have no L diagonals."""
+    J = np.eye(5) + np.eye(5, k=1)
+    F = DiaMatrix.from_dense(jnp.asarray(np.diag(np.arange(1.0, 5.0))))
+    A = TPMatrices(
+        [
+            TPMatrix([F, DiaMatrix.from_dense(jnp.asarray(J))], 1),
+            TPMatrix(
+                [DiaMatrix.from_dense(jnp.eye(4)), DiaMatrix.from_dense(jnp.eye(5))], 1
+            ),
+        ]
+    )
+    assert isinstance(A.lu_factor(), TPMatricesWavenumberSolver)
+    b = jnp.ones((4, 5))
+    uh = A.solve(b, method="lu")
+    assert jnp.linalg.norm(A(uh) - b) < ulp(100) * jnp.linalg.norm(b)
 
 
 def test_tpmatrices_lu_factor_caching():

@@ -26,7 +26,7 @@ from jaxfun.sharding import (
     place,
     spectral_sharding,
 )
-from jaxfun.typing import ArrayFun, MeshKind, RankTag
+from jaxfun.typing import ArrayFun, MeshKind, RankTag, TestSpaceKind
 from jaxfun.utils.common import jit_method, lambdify
 
 from .composite import (
@@ -523,6 +523,32 @@ class TensorProductSpace:
             system=self.system,
             name=self.name + "o",
             _token=_tensorproduct_token,
+        )
+
+    def get_testspace(
+        self,
+        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
+        name: str | None = None,
+    ) -> TensorProductSpace:
+        """Return the tensor product of every axis's test space of `kind`.
+
+        Each axis contributes its own ``get_testspace(kind)``, so an axis with
+        no test space of that kind, such as Fourier, contributes itself. Test
+        spaces carry no boundary lifting, so the test space of a `DirectSumTPS`
+        is homogeneous. It is this space itself when every axis is its own test
+        space and no `name` is given.
+
+        Args:
+            kind: Test space kind, e.g. ``"G"``, ``"PG"`` or ``"GR"``.
+            name: Name of the test space; defaults to this space's name.
+        """
+        spaces = [space.get_testspace(kind) for space in self.basespaces]
+        if name is None and all(
+            s is t for s, t in zip(spaces, self.basespaces, strict=True)
+        ):
+            return self
+        return TensorProduct(
+            *spaces, system=self.system, name=self.name if name is None else name
         )
 
     def _use_spmd(

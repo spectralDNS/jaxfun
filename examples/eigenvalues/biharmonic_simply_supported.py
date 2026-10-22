@@ -44,9 +44,8 @@ else:
     k = 150
 
 B = FunctionSpace(N, family, bcs=bcs, domain=(0, 1))
-G = B.get_testspace(kind)
 T = TensorProduct(B, B, name="T")
-P = TensorProduct(G, G, name="P")
+P = T.get_testspace(kind, name="P")
 x, y = T.system.base_scalars()
 u = TrialFunction(T, name="u")
 v = TestFunction(P, name="v")
@@ -63,6 +62,7 @@ Asep_solve = cast(TPMatrices, Asep).lu_factor().solve
 
 shape = T.num_dofs
 ndofs = int(np.prod(shape))
+G = P.basespaces[0]
 # d = (G.S @ jnp.linalg.pinv(B.S.todense())).diagonal()
 d = G.S.diagonal()
 D = jnp.outer(1 / d, 1 / d)

@@ -25,7 +25,7 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import inner, project
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.la import BaseMatrix, BlockArray, DiaMatrix, TPMatrices
+from jaxfun.la import BaseMatrix, BlockArray, DiaMatrix, TPMatrices, TPMatrix
 from jaxfun.operators import Div, Dot, Grad
 from jaxfun.typing import GalerkinAssembledForm, ProjectionKind
 from jaxfun.utils import ulp
@@ -805,3 +805,18 @@ def test_project_takes_a_moving_lifting_at_t(dims: int, route: str) -> None:
     got = project(ue, V, t=1.0, kind=kind)
     expected = project(lifted + bubble, V, t=1.0)
     assert jnp.allclose(got, expected, atol=ulp(1000)), jnp.abs(got - expected).max()
+
+
+def test_inner_merges_terms_that_share_factors():
+    D = FunctionSpace(8, Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    T = TensorProduct(D, D)
+    u, v = TrialFunction(T), TestFunction(T)
+    x, y = T.system.base_scalars()
+    # B⊗D + 2 B⊗B is the single term B⊗(D + 2B).
+    A = inner((u.diff(y) + 2 * u) * v, sparse=True)
+    assert isinstance(A, TPMatrix)
+    parts = [cast(TPMatrix, inner(f * v, sparse=True)) for f in (u.diff(y), 2 * u)]
+    assert jnp.allclose(A.todense(), (parts[0] + parts[1]).todense())
+    # Helmholtz: K⊗M + M⊗K + c M⊗M has only two separate terms.
+    H = inner((-Div(Grad(u)) + 3 * u) * v, sparse=True)
+    assert isinstance(H, TPMatrices) and len(H) == 2

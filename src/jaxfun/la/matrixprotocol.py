@@ -29,6 +29,8 @@ def _proportionality(
 
     See `BaseMatrix.proportionality`; this is it on the stored values.
     """
+    if b.size == 0:
+        return None
     k = np.unravel_index(np.argmax(np.abs(b)), b.shape)
     if b[k] == 0:
         return None

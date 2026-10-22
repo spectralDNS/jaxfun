@@ -1653,6 +1653,9 @@ def test_proportionality_is_none_unless_proportional():
     assert A.proportionality(DiaMatrix.from_dense(jnp.ones((8, 9)))) is None
     assert A.proportionality(A.scale(0.0)) is None
     assert A.scale(0.0).proportionality(A) == 0.0
+    # Zero matrices from `from_dense` store no diagonals at all.
+    Z = DiaMatrix.from_dense(jnp.zeros((8, 8)))
+    assert Z.proportionality(DiaMatrix.from_dense(jnp.zeros((8, 8)))) is None
 
 
 def test_proportionality_compares_the_stored_band(monkeypatch):

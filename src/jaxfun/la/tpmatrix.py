@@ -18,6 +18,8 @@ from scipy import linalg as scipy_linalg, sparse as scipy_sparse
 from jaxfun.la.diamatrix import (
     DiaMatrix,
     _affine_prefix,
+    _lu_banded_kernel,
+    _pivoted_forward,
     _use_prefix_substitution,
     diakron,
 )
@@ -670,7 +672,9 @@ class TPMatricesLUFactors(nnx.Pytree):
             Ftilde = jnp.moveaxis(Ftilde, 0, i)
 
         # Denominator: D[i0,i1,...] = sum_k s_k * Λ_k[0][i0] * Λ_k[1][i1] * ...
-        dtype = jnp.result_type(Ftilde.dtype, jnp.float32)
+        # A scale can be complex with real eigenvectors and RHS, e.g. the 1j of
+        # K⊗M + (1j M)⊗K, so it takes part in the dtype.
+        dtype = jnp.result_type(Ftilde.dtype, jnp.float32, *self.scales)
         D = jnp.zeros(shape, dtype=dtype)
         for evals_k, s_k in zip(self.per_term_eigenvalues, self.scales):
             term = jnp.ones(shape, dtype=dtype)
@@ -1058,8 +1062,10 @@ def _banded_lu_batch(
     band_lu = jax.jit(jax.vmap(lambda b: _lu_banded_no_pivot_kernel(b, p, q, center)))(
         band
     )
-    L = jnp.stack([band_lu[:, center + off, :] for off in range(-p, 0)], axis=1)
-    U = jnp.stack([band_lu[:, center + off, :] for off in range(0, q + 1)], axis=1)
+    # Rows center - p, ..., center - 1 hold offsets -p, ..., -1: none when p = 0,
+    # as for an upper-triangular matrix.
+    L = band_lu[:, :center, :]
+    U = band_lu[:, center:, :]
     return L, U, tuple(range(-p, 0)), tuple(range(0, q + 1))
 
 
@@ -1480,7 +1486,11 @@ def _merge_shared_factors(tpmats: Sequence[TPMatrix]) -> list[TPMatrix]:
     blocks: dict[tuple[int, int], list[TPMatrix]] = {}
     for tp in terms:
         blocks.setdefault(tp.global_indices, []).append(tp)
-    return [tp for block in blocks.values() for tp in _merge_block(block)]
+    # The inputs are concrete, but under jit the sums of factors formed while
+    # merging would be traced, and they are compared next. Evaluated eagerly,
+    # they enter the trace as constants.
+    with jax.ensure_compile_time_eval():
+        return [tp for block in blocks.values() for tp in _merge_block(block)]
 
 
 def _merge_block(tpmats: list[TPMatrix]) -> list[TPMatrix]:
@@ -1708,7 +1718,8 @@ class TPMatricesSchurSolver(nnx.Pytree):
     :math:`Y_1 = Q T Z^H` of the pair on one axis, the *Schur axis*, makes
     :math:`S` and :math:`T` upper triangular. The solution then follows one
     Schur index :math:`j` at a time, last to first, each a banded solve along
-    the other axis with the matrix :math:`S_{jj} X_0 + T_{jj} X_1`.
+    the other axis with the matrix :math:`S_{jj} X_0 + T_{jj} X_1`, factorised
+    with partial pivoting.
 
     Only unitary transforms enter, so unlike :class:`TPMatricesLUFactors` the
     solver stays accurate when the factor matrices are far from normal, such as
@@ -1740,20 +1751,35 @@ class TPMatricesSchurSolver(nnx.Pytree):
     ) -> None:
         n_p = shape[1 - schur_axis]
         offsets = tuple(sorted(set(X[0].offsets) | set(X[1].offsets)))
+        p = max((-o for o in offsets if o < 0), default=0)
+        q = max((o for o in offsets if o > 0), default=0)
         X0, X1 = (_align_dia_data(x, offsets, n_p).astype(Q.dtype) for x in X)
-        # S[j, j] X_0 + T[j, j] X_1 for every j, factorised in one batch. Without
-        # pivoting, as in the wavenumber solver; a zero pivot is reported below.
+        # S[j, j] X_0 + T[j, j] X_1 for every j, factorised in one batch with
+        # partial pivoting within the band, as LAPACK's gbtrf. These matrices are
+        # not diagonally dominant in general, and an unpivoted LU of them can
+        # lose all accuracy without meeting a zero pivot. In the band layout of
+        # `DiaMatrix.lu_factor`: L's multipliers below the center, U above,
+        # widened by p for the fill from row swaps.
         B = jnp.diagonal(S)[:, None, None] * X0 + jnp.diagonal(T)[:, None, None] * X1
-        L, U, L_offsets, U_offsets = _batched_banded_lu(B, offsets)
-        if not (
-            bool(jnp.all(jnp.isfinite(L)))
-            and bool(jnp.all(jnp.isfinite(U)))
-            and bool(jnp.all(U[:, U_offsets.index(0)] != 0))
-        ):
+        center = p
+        band = (
+            jnp.zeros((B.shape[0], center + p + q + 1, n_p), dtype=B.dtype)
+            .at[:, jnp.array([center + o for o in offsets]), :]
+            .set(B)
+        )
+        band_lu, pivots = jax.vmap(lambda b: _lu_banded_kernel(b, p, p + q, center))(
+            band
+        )
+        diagonal = band_lu[:, center]
+        if not bool(jnp.all(jnp.isfinite(band_lu))) or bool(jnp.any(diagonal == 0)):
             raise SolverNotApplicable(
-                "A banded matrix S[j, j] X_0 + T[j, j] X_1 has a zero pivot: the "
-                "system is singular or needs pivoting."
+                "A banded matrix S[j, j] X_0 + T[j, j] X_1 is singular."
             )
+        # Multipliers as (n, n_p, p), column t - 1 for the row t below.
+        multipliers = jnp.flip(band_lu[:, :center], axis=1).transpose(0, 2, 1)
+        _, U, _, U_offsets = _prune_zero_diagonals(
+            band_lu[:, :0], band_lu[:, center:], (), tuple(range(p + q + 1))
+        )
         self.schur_axis = schur_axis
         self.shape = shape
         self.X = nnx.List(X)
@@ -1761,10 +1787,11 @@ class TPMatricesSchurSolver(nnx.Pytree):
         self.Z = Z
         self.S_upper = jnp.triu(S, 1)
         self.T_upper = jnp.triu(T, 1)
-        self.L = L
+        self.multipliers = multipliers
+        self.pivots = pivots
         self.U = U
         self.real_operator = real_operator
-        self._solve_one = _make_wavenumber_solve(L_offsets, U_offsets, n_p, L.dtype)
+        self._backward = _make_wavenumber_solve((), U_offsets, n_p, U.dtype)
 
     @jax.jit
     def solve(self, rhs: Array) -> Array:
@@ -1784,12 +1811,20 @@ class TPMatricesSchurSolver(nnx.Pytree):
         R = self.Q.conj().T @ jnp.moveaxis(rhs.reshape(self.shape), q, 0)
 
         def step(R: Array, xs: tuple) -> tuple[Array, Array]:
-            j, L_j, U_j, s_j, t_j = xs
-            v = self._solve_one(L_j[None], U_j[None], R[j][None])[0]
+            j, m_j, piv_j, U_j, s_j, t_j = xs
+            y = _pivoted_forward(m_j, piv_j, R[j][:, None])[:, 0]
+            v = self._backward(U_j[None, :0], U_j[None], y[None])[0]
             R = R - jnp.outer(s_j, X0.matvec(v)) - jnp.outer(t_j, X1.matvec(v))
             return R, v
 
-        xs = (jnp.arange(n), self.L, self.U, self.S_upper.T, self.T_upper.T)
+        xs = (
+            jnp.arange(n),
+            self.multipliers,
+            self.pivots,
+            self.U,
+            self.S_upper.T,
+            self.T_upper.T,
+        )
         _, V = jax.lax.scan(step, R, xs, reverse=True)
         u = jnp.moveaxis(self.Z @ V, 0, q)
         if self.real_operator and not jnp.iscomplexobj(rhs):
@@ -1822,7 +1857,7 @@ def tpmats_schur_factor(
     Raises:
         SolverNotApplicable: if the system is not 2D, does not reduce to two
             terms, has no axis with banded factors, or one of the banded
-            matrices has a zero pivot.
+            matrices is singular.
     """
     if isinstance(A, TPMatrices):
         tpmats = list(A.tpmats)
@@ -1903,7 +1938,8 @@ def tpmats_wavenumber_factor(
     Raises:
         TypeError: If ``A`` is not a ``list[TPMatrix]`` or
             :class:`TPMatrices`.
-        ValueError: If the structure does not have exactly one non-diagonal
+        SolverNotApplicable: If a factor is not a :class:`~jaxfun.la.DiaMatrix`,
+            or the structure does not have exactly one non-diagonal
             (polynomial) axis, e.g. for fully symmetric problems where
             :func:`tpmats_lu_factor` should be used instead.
     """
@@ -1915,6 +1951,10 @@ def tpmats_wavenumber_factor(
         raise TypeError(
             f"tpmats_wavenumber_factor expects a list[TPMatrix] or TPMatrices, "
             f"got {type(A).__name__!r}."
+        )
+    if not all(isinstance(m, DiaMatrix) for tp in tpmats for m in tp.mats):
+        raise SolverNotApplicable(
+            "tpmats_wavenumber_factor requires DiaMatrix factors on every axis."
         )
     ndim: int = tpmats[0].dims
 

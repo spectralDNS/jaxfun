@@ -1414,6 +1414,12 @@ def _tau_rows(
     psi = np.array(psi, dtype=float)[:, :N]
     P = (psi * np.asarray(orth.norm_squared(), dtype=float)) @ X.T
     top = np.arange(N - m, N)
+    # The tau polynomials' normalisations are arbitrary and leave G unchanged;
+    # scaling them out keeps the rank test from depending on them. Over all of
+    # P, not only the top rows: there a column may be round-off only, which
+    # must not be scaled up.
+    column_scale = np.abs(P).max(axis=0)
+    P /= np.where(column_scale > 0, column_scale, 1.0)[None, :]
     if np.linalg.matrix_rank(P[top], tol=tol * np.abs(P[top]).max()) < m:
         raise ValueError(
             "The tau polynomials leave the tau method undetermined: their "

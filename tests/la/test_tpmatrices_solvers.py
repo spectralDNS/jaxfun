@@ -331,6 +331,24 @@ def test_tpmatrices_solve_dispatches_schur_for_advection_diffusion():
     assert float(err) < float(jnp.sqrt(ulp(1.0)))
 
 
+def test_tpmatrices_wavenumber_upper_triangular():
+    """An upper-triangular polynomial axis: the LU factors have no L diagonals."""
+    J = np.eye(5) + np.eye(5, k=1)
+    F = DiaMatrix.from_dense(jnp.asarray(np.diag(np.arange(1.0, 5.0))))
+    A = TPMatrices(
+        [
+            TPMatrix([F, DiaMatrix.from_dense(jnp.asarray(J))], 1),
+            TPMatrix(
+                [DiaMatrix.from_dense(jnp.eye(4)), DiaMatrix.from_dense(jnp.eye(5))], 1
+            ),
+        ]
+    )
+    assert isinstance(A.lu_factor(), TPMatricesWavenumberSolver)
+    b = jnp.ones((4, 5))
+    uh = A.solve(b, method="lu")
+    assert jnp.linalg.norm(A(uh) - b) < ulp(100) * jnp.linalg.norm(b)
+
+
 def test_tpmatrices_lu_factor_caching():
     """lu_factor called twice returns the same cached object."""
     _, A, _, _ = _poisson_fourier_poly_2d(8, Legendre.Legendre)

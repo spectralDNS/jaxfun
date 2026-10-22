@@ -83,6 +83,20 @@ def test_merge_is_skipped_for_traced_values():
     assert jnp.allclose(apply(1.0), A.merge()(u))
 
 
+def test_merge_of_a_concrete_operator_under_jit():
+    A = _advection_diffusion(6, 7)
+    u = jnp.asarray(np.random.default_rng(0).standard_normal((6, 7)))
+
+    @jax.jit
+    def apply(u):
+        merged = A.merge()
+        assert len(merged) == 2
+        return merged(u)
+
+    err = jnp.linalg.norm(apply(u) - A(u)) / jnp.linalg.norm(A(u))
+    assert float(err) < float(ulp(100))
+
+
 def test_block_matrix_merges_within_blocks_only():
     n = 6
     D = FunctionSpace(
@@ -176,6 +190,17 @@ def test_lu_factor_counts_factors_up_to_a_scalar():
     assert np.linalg.norm(uh - ref) / np.linalg.norm(ref) < float(ulp(100))
 
 
+def test_lu_factor_with_a_complex_scale_and_real_eigenvectors():
+    # 1j M counts as M with the scale 1j, so the eigenvectors stay real.
+    n = 6
+    K, M = _dia(_stiffness(n)), _dia(_mass(n))
+    A = TPMatrices([TPMatrix([K, M], 1), TPMatrix([M.scale(1j), K], 1)])
+    lu = tpmats_lu_factor(list(A.tpmats))
+    assert not jnp.iscomplexobj(lu.eigvecs[0])
+    b = jnp.ones((n, n))
+    assert _residual(A, lu.solve(b), b) < float(ulp(100))
+
+
 def test_lu_factor_accepts_a_scaled_symmetric_definite_pencil():
     # A basis scaling, as `scaling=n+1` applies, spreads the norms of the
     # M-orthonormal eigenvectors and inflates cond(V); the pencil stays normal
@@ -220,10 +245,33 @@ def test_schur_solver(shape, dense_axis1, schur_axis):
     assert _residual(A, uh, b) < float(ulp(100))
 
 
-def test_lu_factor_falls_back_to_schur():
-    A = _advection_diffusion(8, 10)
+def test_schur_solver_pivots():
+    """Both S[j, j] X_0 + T[j, j] X_1 are [[1e-20, 1], [1, 2]]: finite, nonzero
+    pivots without row swaps, but an unpivoted LU of them loses all accuracy."""
+    X0, X1 = _dia(np.array([[1e-20, 1], [1, 1]])), _dia(np.diag([0.0, 1]))
+    Y0, Y1 = _dia(np.array([[1.0, 1], [0, 1]])), _dia(np.eye(2))
+    A = TPMatrices([TPMatrix([X0, Y0], 1), TPMatrix([X1, Y1], 1)])
+    b = jnp.ones((2, 2))
+    assert _residual(A, tpmats_schur_factor(A).solve(b), b) < float(ulp(100))
+
+
+@pytest.mark.parametrize("dense_axis1", [False, True], ids=["banded", "dense"])
+def test_lu_factor_falls_back_to_schur(dense_axis1):
+    A = _advection_diffusion(8, 10, dense_axis1=dense_axis1)
     assert isinstance(A.lu_factor(), TPMatricesSchurSolver)
     b = jnp.ones((8, 10))
+    assert _residual(A, A.solve(b, method="lu"), b) < float(ulp(100))
+
+
+def test_schur_solver_upper_triangular():
+    """J_3⊗J_2 + I_3⊗I_2 with J_n = I_n + superdiag(1): the pencils are defective,
+    so diagonalization rejects them, and the banded factors have no L part."""
+    J = lambda n: _dia(np.eye(n) + np.eye(n, k=1))  # noqa: E731
+    A = TPMatrices(
+        [TPMatrix([J(3), J(2)], 1), TPMatrix([_dia(np.eye(3)), _dia(np.eye(2))], 1)]
+    )
+    assert isinstance(A.lu_factor(), TPMatricesSchurSolver)
+    b = jnp.ones((3, 2))
     assert _residual(A, A.solve(b, method="lu"), b) < float(ulp(100))
 
 

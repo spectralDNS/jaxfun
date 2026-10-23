@@ -4,7 +4,7 @@ import copy
 import functools
 import itertools
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -966,7 +966,18 @@ class DirectSum:
         return self._ds_from_orthogonal(self[0].orthogonal.forward(uj), bvals)
 
 
-class PGComposite(Composite):
+class _TestSpace:
+    """Mixin of the spaces that are only ever test spaces."""
+
+    def get_testspace(self, *args: Any, **kwargs: Any) -> NoReturn:
+        """Raise, since test spaces are created from a trial space only."""
+        raise TypeError(
+            f"{type(self).__name__} is a test space; call get_testspace on the "
+            "trial space instead"
+        )
+
+
+class PGComposite(_TestSpace, Composite):
     r"""Composite basis with Petrov-Galerkin [1] test functions (stencil on test side).
 
     The test functions of order k are
@@ -1143,6 +1154,15 @@ class PGComposite(Composite):
         assert isinstance(u, Jacobi | Composite), (
             "Trial space must be Jacobi or Composite."
         )
+        # The recurrences hold only for trial functions of the family, and with
+        # the parameters, that the test functions are derived from. Any other
+        # trial space falls back to quadrature.
+        orth = u.orthogonal
+        if (
+            type(orth) is not type(self.orthogonal)
+            or orth.parameters != self.orthogonal.parameters
+        ):
+            return None
 
         def Bkl(k: int, l: int, V: Jacobi | Composite) -> DiaMatrix:
             B = V.orthogonal.B(V.N + 2 * (k - l))
@@ -1187,7 +1207,7 @@ class PGComposite(Composite):
         return z
 
 
-class GalerkinRecombined(Composite):
+class GalerkinRecombined(_TestSpace, Composite):
     r"""Galerkin test functions recombined for sparsity of operators.
 
     Create with `V.get_testspace("GR")`, where `V` is a trial space.
@@ -1290,7 +1310,7 @@ class GalerkinRecombined(Composite):
         return _replace_rows(z, self._replaced, self._replaced_rows, self, trial, q)
 
 
-class TauRecombined(Composite):
+class TauRecombined(_TestSpace, Composite):
     r"""Petrov-Galerkin or Galerkin test functions recombined to give a tau method.
 
     Create with `V.get_testspace("tau", tau_basis=...)`, where `V` is a
@@ -1461,9 +1481,9 @@ def _tau_rows(
         The changed rows, unscaled, by index, as coefficients of `orth`.
     """
     N, m = orth.N, len(X)
-    psi = base.stencil.matrix((N, N + max(base.stencil.rule))).todense()
+    psi = base.stencil.matrix((N, N)).todense()
     tol = np.sqrt(np.finfo(psi.dtype).eps)
-    psi = np.array(psi, dtype=float)[:, :N]
+    psi = np.array(psi, dtype=float)
     P = (psi * np.asarray(orth.norm_squared(), dtype=float)) @ X.T
     top = np.arange(N - m, N)
     # The tau polynomials' normalisations are arbitrary and leave G unchanged;

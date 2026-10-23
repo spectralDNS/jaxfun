@@ -26,6 +26,7 @@ DIRICHLET = {"left": {"D": 0}, "right": {"D": 0}}
 NEUMANN = {"left": {"N": 0}, "right": {"N": 0}}
 BIHARMONIC = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
 THREE = {"left": {"D": 0, "N": 0}, "right": {"D": 0}}
+ROBIN = {"left": {"R": (1, 0)}}
 METHODS = ("tau-T", "tau-C2", "tau-U", "tau-U2", "tau-U3")
 
 
@@ -267,7 +268,9 @@ def test_legendre_has_galerkin_sparsity(bcs):
 
 
 @pytest.mark.parametrize("family", [Chebyshev, Legendre])
-@pytest.mark.parametrize("bcs", [DIRICHLET, THREE, BIHARMONIC], ids=["2", "3", "4"])
+@pytest.mark.parametrize(
+    "bcs", [ROBIN, DIRICHLET, THREE, BIHARMONIC], ids=["R", "2", "3", "4"]
+)
 def test_default_is_lanczos(family, bcs):
     """Without `tau_basis` the tau polynomials are the last orthogonal modes."""
     N = 12
@@ -295,3 +298,10 @@ def test_errors():
         B.get_testspace("tau", tau_basis=[(Chebyshev(N + 2), -1), (T, -2)])
     with pytest.raises(NotImplementedError, match="boundary conditions"):
         T.get_testspace("tau")
+
+
+@pytest.mark.parametrize("kind", ["PG", "GR", "tau"])
+def test_no_test_space_of_a_test_space(kind):
+    V = FunctionSpace(8, Chebyshev, bcs=DIRICHLET).get_testspace(kind)
+    with pytest.raises(TypeError, match="is a test space"):
+        V.get_testspace("G", name="W")

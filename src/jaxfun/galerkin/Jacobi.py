@@ -228,12 +228,14 @@ class Jacobi(OrthogonalSpace):
         if self.alpha != self.beta:
             aa = sp.lambdify(n, self.a(n, n), modules="jax")(jnp.arange(i))
 
+        x1 = (X - aa[0]) / am[0] * x0
+
         def body_fun(n: int, val: tuple[Array, Array]) -> tuple[Array, Array]:
             x0, x1 = val
             x2 = ((X - aa[n - 1]) * x1 - ap[n - 2] * x0) / am[n - 1]
             return x1, x2
 
-        return jax.lax.fori_loop(2, i + 1, body_fun, (x0, X))[-1]
+        return jax.lax.fori_loop(2, i + 1, body_fun, (x0, x1))[-1]
 
     @jit_vmap(in_axes=0)
     def eval_basis_functions(self, X: float | Array) -> Array:

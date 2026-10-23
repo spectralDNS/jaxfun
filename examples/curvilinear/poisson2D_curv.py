@@ -14,18 +14,14 @@ from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
-from jaxfun.utils.common import lambdify, n, ulp
+from jaxfun.utils.common import lambdify, ulp
 
 M = 20
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
 r, theta = sp.symbols("r,theta", real=True, positive=True)
 C = get_CoordSys("C", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta))))
-D0 = FunctionSpace(
-    M, Legendre, bcs, scaling=n + 1, domain=(sp.S.Half, 1), name="D0", fun_str="psi"
-)
-D1 = FunctionSpace(
-    M, Legendre, bcs, scaling=n + 1, domain=(0, sp.pi / 2), name="D1", fun_str="phi"
-)
+D0 = FunctionSpace(M, Legendre, bcs, domain=(sp.S.Half, 1), name="D0", fun_str="psi")
+D1 = FunctionSpace(M, Legendre, bcs, domain=(0, sp.pi / 2), name="D1", fun_str="phi")
 T = TensorProduct(D0, D1, system=C, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
@@ -38,7 +34,7 @@ ue = (1 - r) * (sp.S.Half - r) * theta * (sp.pi / 2 - theta)
 # A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
 A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue))), sparse=True, kind="system")
 
-uh = A.solve(b, kron_method="rcm")
+uh = A.solve(b)
 
 rj, tj = T.mesh(kind="uniform", N=(100, 100))
 xc, yc = T.cartesian_mesh(kind="uniform", N=(100, 100))

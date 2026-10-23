@@ -592,9 +592,9 @@ class OrthogonalSpace(BaseSpace):
         """Return the test space of `kind` for this space as trial space.
 
         The same basis whatever the kind, so every kind is the Galerkin method
-        here. Spaces with dedicated test spaces, Chebyshev and Legendre,
-        override this; for the rest, Fourier among them, there is no other test
-        space to give. It is this space itself unless `name` or `fun_str` is
+        here. Jacobi spaces, which have Petrov-Galerkin test spaces, override
+        this; for the rest, Fourier among them, there is no other test space to
+        give. It is this space itself unless `name` or `fun_str` is
         given, and then a copy carrying them.
 
         Raises:

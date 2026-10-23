@@ -14,7 +14,7 @@ from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
-from jaxfun.utils.common import lambdify, n, ulp
+from jaxfun.utils.common import lambdify, ulp
 
 M = 40
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
@@ -27,10 +27,8 @@ C = get_CoordSys(
     sp.Lambda((tau, sigma), (tau * sigma, (tau**2 - sigma**2) / 2)),
     assumptions=sp.Q.positive(tau) & sp.Q.positive(sigma + 1),
 )
-D0 = FunctionSpace(
-    M, Legendre, bcs, scaling=n + 1, domain=(0, 1), name="D0", fun_str="phi"
-)
-D1 = FunctionSpace(M, Legendre, bcs, scaling=n + 1, name="D1", fun_str="psi")
+D0 = FunctionSpace(M, Legendre, bcs, domain=(0, 1), name="D0", fun_str="phi")
+D1 = FunctionSpace(M, Legendre, bcs, name="D1", fun_str="psi")
 T = TensorProduct(D0, D1, system=C, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
@@ -42,7 +40,7 @@ ue = (tau * (1 - tau)) ** 2 * (1 - sigma**2) ** 1 * sp.sin(4 * sp.pi * sigma)
 # Assemble linear system of equations
 A, b = inner((v * Div(Grad(u)) - v * Div(Grad(ue))) * C.sg, sparse=True, kind="system")
 
-un = A.solve(b, kron_method="rcm")
+un = A.solve(b, method="kron", kron_method="rcm")
 
 N = 100
 rj, tj = T.mesh(kind="uniform", N=(N, N))

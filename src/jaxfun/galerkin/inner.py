@@ -1,6 +1,6 @@
 import warnings
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Literal, TypeGuard, cast, overload
 
 import jax
@@ -140,6 +140,11 @@ class _InnerContext:
     # When set, the boundary blocks of every bilinear form are recorded here
     # instead of being contracted into a load vector. See `inner_boundary`.
     boundary_blocks: list[_BoundaryBlock] | None = None
+    # One-dimensional matrices assembled so far, unscaled. Many terms of a form
+    # share their factor along one axis, so each distinct factor is assembled
+    # once. The cache lives and dies with the context, i.e. with one call to
+    # `inner`, so it never outlives the spaces it was built from.
+    matrices: dict[tuple, Matrix | DiaMatrix] = field(default_factory=dict)
 
 
 @overload
@@ -705,6 +710,7 @@ def _assemble_bilinear_factor(
     is_multivar: bool,
     num_quad_points: _NumQuadPoints,
     use_precomputed_matrices: bool,
+    cache: dict[tuple, Matrix | DiaMatrix],
 ) -> tuple[_BilinearFactor, tuple[int, int], OrthogonalSpace]:
     v, u = get_basisfunctions(ai)
     assert v is not None and u is not None, (
@@ -726,8 +732,20 @@ def _assemble_bilinear_factor(
     assert _has_globalindex(u)
 
     N = _quad_points_for_space(num_quad_points, vf)
-    z = inner_bilinear(ai, vf, uf, scale, is_multivar, N, use_precomputed_matrices)
-    return z, (v.global_index, u.global_index), uf
+    indices = (v.global_index, u.global_index)
+    if is_multivar:
+        z = inner_bilinear(ai, vf, uf, scale, True, N, use_precomputed_matrices)
+        return z, indices, uf
+
+    # The matrix is linear in the scalar coefficient, so the cache holds it
+    # unscaled and the coefficient is applied on the way out.
+    key = (ai, vf, uf, N, use_precomputed_matrices)
+    z = cache.get(key)
+    if z is None:
+        z = inner_bilinear(ai, vf, uf, 1, False, N, use_precomputed_matrices)
+        assert isinstance(z, Matrix | DiaMatrix)
+        cache[key] = z
+    return (z if scale == 1 else z * scale), indices, uf
 
 
 def _assemble_bilinear_form(
@@ -745,7 +763,12 @@ def _assemble_bilinear_form(
     for ai in _form_factors(a0):
         is_multivar = "multivar" in a0 or "jaxfunction" in a0
         z, global_indices, uf = _assemble_bilinear_factor(
-            ai, sc, is_multivar, context.num_quad_points, use_precomputed_matrices
+            ai,
+            sc,
+            is_multivar,
+            context.num_quad_points,
+            use_precomputed_matrices,
+            context.matrices,
         )
         trial.append(uf)
         if isinstance(uf, BCGeneric):

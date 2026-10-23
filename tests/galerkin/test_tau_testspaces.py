@@ -26,6 +26,7 @@ DIRICHLET = {"left": {"D": 0}, "right": {"D": 0}}
 NEUMANN = {"left": {"N": 0}, "right": {"N": 0}}
 BIHARMONIC = {"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}}
 THREE = {"left": {"D": 0, "N": 0}, "right": {"D": 0}}
+ROBIN = {"left": {"R": (1, 0)}}
 METHODS = ("tau-T", "tau-C2", "tau-U", "tau-U2", "tau-U3")
 
 
@@ -210,7 +211,12 @@ def test_three_conditions_petrov_galerkin(family, lam):
     C = Ultraspherical(N, lambda_=lam)
     V = B.get_testspace("tau", tau_basis=[(C, -1), (C, -2), (C, -3)])
     pg = B.get_testspace("PG")
-    assert np.array_equal(np.asarray(V.S.todense()), np.asarray(pg.S.todense()))
+    S, P = np.asarray(V.S.todense()), np.asarray(pg.S.todense())
+    rows = np.vstack([S, P])
+    rows = rows / np.abs(rows).max(axis=1, keepdims=True)
+    assert np.linalg.matrix_rank(rows, tol=_tol()) == len(S) == len(P)
+    if family is Chebyshev:  # recombined from the PG functions, row for row
+        assert np.array_equal(S, P)
 
 
 def test_three_conditions_lanczos():
@@ -242,8 +248,29 @@ def test_legendre():
     assert np.abs(rows[:, N - 2 :]).max() < _tol()
 
 
+@pytest.mark.parametrize("bcs", [DIRICHLET, BIHARMONIC], ids=["2", "4"])
+def test_legendre_has_galerkin_sparsity(bcs):
+    """Recombined from the Galerkin functions, Lanczos' method for Legendre has
+    the matrices of the Galerkin method in band, and correct to quadrature."""
+    N = 12
+    B = FunctionSpace(N, Legendre, bcs=bcs)
+    V = B.get_testspace("tau")
+    x = B.system.x
+    u = TrialFunction(B)
+    for form in (u.diff(x, B.bcs.num_bcs()), u):
+        A = inner(form * TestFunction(V), kind="bilinear")
+        ref = inner(
+            form * TestFunction(V), kind="bilinear", use_precomputed_matrices=False
+        )
+        assert _offsets(A) == _offsets(inner(form * TestFunction(B), kind="bilinear"))
+        err = np.abs(np.asarray(A.todense()) - np.asarray(ref.todense())).max()
+        assert err < _tol() * np.abs(np.asarray(ref.todense())).max()
+
+
 @pytest.mark.parametrize("family", [Chebyshev, Legendre])
-@pytest.mark.parametrize("bcs", [DIRICHLET, THREE, BIHARMONIC], ids=["2", "3", "4"])
+@pytest.mark.parametrize(
+    "bcs", [ROBIN, DIRICHLET, THREE, BIHARMONIC], ids=["R", "2", "3", "4"]
+)
 def test_default_is_lanczos(family, bcs):
     """Without `tau_basis` the tau polynomials are the last orthogonal modes."""
     N = 12
@@ -271,3 +298,10 @@ def test_errors():
         B.get_testspace("tau", tau_basis=[(Chebyshev(N + 2), -1), (T, -2)])
     with pytest.raises(NotImplementedError, match="boundary conditions"):
         T.get_testspace("tau")
+
+
+@pytest.mark.parametrize("kind", ["PG", "GR", "tau"])
+def test_no_test_space_of_a_test_space(kind):
+    V = FunctionSpace(8, Chebyshev, bcs=DIRICHLET).get_testspace(kind)
+    with pytest.raises(TypeError, match="is a test space"):
+        V.get_testspace("G", name="W")

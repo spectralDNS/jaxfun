@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from functools import cached_property
-from typing import cast
 
 import jax
 import jax.numpy as jnp
@@ -10,7 +8,7 @@ import sympy as sp
 from jax import Array
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.galerkin.composite import BCGeneric, Composite, PGComposite, Stencil
+from jaxfun.galerkin.composite import BCGeneric, Composite, Stencil
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TestSpaceKind
 from jaxfun.utils.common import Domain, cache_static, jit_method, jit_vmap, n
@@ -182,38 +180,6 @@ class Legendre(Jacobi):
         """Return the Gauss-Legendre nodes and weights; the weight function is 1."""
         return self.quad_points_and_weights(N)
 
-    def get_testspace(
-        self,
-        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
-        name: str | None = None,
-        fun_str: str | None = None,
-        scaling: sp.Expr | None = None,
-    ) -> OrthogonalSpace:
-        """Return the test space of `kind` for this space as trial space.
-
-        Galerkin is this space itself, or a copy carrying `name` or `fun_str`
-        when given; it takes no `scaling`. Petrov-Galerkin is `LegPhi_0`, the
-        order-1 test functions, one per mode, which keep operators of up to
-        first derivatives banded. It spans this space, so Galerkin-recombined
-        is the same space.
-        """
-        kind = TestSpaceKind.coerce(kind)
-        if kind == TestSpaceKind.GALERKIN:
-            return super().get_testspace(kind, name, fun_str, scaling)
-        if kind not in (TestSpaceKind.PETROV_GALERKIN, TestSpaceKind.GR):
-            raise NotImplementedError(f"Unsupported test space kind {kind!r}.")
-        P = LegPhi_0(
-            self.N,
-            domain=self.domain,
-            system=self.system,
-            name=name,
-            fun_str=fun_str,
-            scaling=scaling,
-        )
-        if kind == TestSpaceKind.PETROV_GALERKIN:
-            return P
-        return P.recombine(self, name=name, fun_str=fun_str)
-
     @jit_vmap(in_axes=(0, None), static_argnums=2)
     def eval_basis_function(self, X: float | Array, i: int) -> Array:
         """Evaluate single Legendre polynomial P_i at X.
@@ -369,11 +335,11 @@ class Legendre(Jacobi):
         return None
 
 
-### Predefined Composite spaces #####
-
-
 class LGComposite(Composite):
     """Legendre Composite basis with Galerkin test functions.
+
+    The 'tau' test functions are the Galerkin ones recombined, since those keep
+    the operator matrices as sparse as possible; see `TauRecombined`.
 
     Args:
         N: Target (unconstrained) number of modes of underlying orthogonal.
@@ -395,6 +361,8 @@ class LGComposite(Composite):
         scaling: Scaling expression applied to user stencil.
         derivative_stencils: Stencils of the derivatives of the basis.
     """
+
+    _tau_base = TestSpaceKind.GALERKIN
 
     @cached_property
     def derivative_stencils(self) -> tuple[DiaMatrix, ...]:
@@ -421,74 +389,6 @@ class LGComposite(Composite):
             stencils.append(G)
             stencil = _differentiate_stencil(stencil)
         return tuple(stencils)
-
-    def get_testspace(
-        self,
-        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
-        name: str | None = None,
-        fun_str: str | None = None,
-        scaling: sp.Expr | None = None,
-        tau_basis: Sequence[tuple[OrthogonalSpace, int]] | None = None,
-    ) -> Composite:
-        """Return the test space of `kind`, scaled by `scaling` only.
-
-        The test space does not inherit this space's scaling, so the Galerkin
-        one is this space itself only when neither is scaled. The 'tau' test
-        space makes testing the tau method with the tau polynomials
-        `tau_basis`, by default Lanczos' method; see `TauRecombined`.
-        """
-        kind = TestSpaceKind.coerce(kind)
-        if kind == TestSpaceKind.TAU:
-            return self._tau_testspace(tau_basis, name, fun_str, scaling)
-        if kind == TestSpaceKind.GALERKIN:
-            unchanged = name is None and fun_str is None and scaling is None
-            if unchanged and self.scaling == 1:
-                return self
-            return LGComposite(
-                N=self.orthogonal.dim,
-                orthogonal=Legendre,
-                bcs=self.bcs,
-                domain=self.domain,
-                name=name if name is not None else self.name,
-                fun_str=fun_str if fun_str is not None else self.fun_str,
-                system=self.system,
-                stencil=self.stencil,
-                scaling=scaling,
-            )
-
-        if kind == TestSpaceKind.GALERKIN_RECOMBINED:
-            # The PG test functions with the last few, which reach beyond the
-            # trial degree, swapped for trial functions: Galerkin, PG's band.
-            P = self.get_testspace(TestSpaceKind.PETROV_GALERKIN, scaling=scaling)
-            return cast(PGComposite, P).recombine(self, name=name, fun_str=fun_str)
-
-        assert kind == TestSpaceKind.PETROV_GALERKIN, (
-            f"Unsupported test space kind {kind!r} for Legendre LGComposite. "
-            f"Supported: {TestSpaceKind.GALERKIN!r}, {TestSpaceKind.PETROV_GALERKIN!r}."
-        )
-        match self.bcs.num_bcs():
-            case 1:
-                P = LegPhi_1
-            case 2:
-                P = LegPhi_2
-            case 3:
-                P = LegPhi_3
-            case 4:
-                P = LegPhi_4
-            case _:
-                raise NotImplementedError(
-                    f"Unsupported number of BCs {self.bcs.num_bcs()} for PGComposite. "
-                    f"Supported: 1, 2, 3 or 4."
-                )
-
-        return P(
-            self.N,
-            domain=self.domain,
-            system=self.system,
-            name=name,
-            fun_str=fun_str,
-            scaling=scaling,
-        )
 
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
@@ -569,373 +469,3 @@ class LGComposite(Composite):
         return -A - q * B
 
         return None
-
-
-class LegPhi_0(PGComposite):
-    r"""
-    Composite space for Galerkin recombination of the orthogonal space.
-
-    The test functions for an orthogonal Legendre trial space: those of
-    `LegPhi_1`, but one per mode,
-
-    .. math::
-
-        \phi_k = \frac{1}{2}(L_k - L_{k+2}), \, k=0, 1, \ldots, N-1,
-
-    with the last two truncated to the first N Legendre polynomials, which
-    leaves them proportional to L_{N-2} and L_{N-1}; see `PGComposite`. The test
-    functions then span the trial space, so the method is Galerkin, while the
-    matrices of operators with up to first derivatives are banded, as for
-    `LegPhi_1`. Create with `Legendre(N).get_testspace("GR")`.
-    """
-
-    def __init__(
-        self,
-        N: int,
-        domain: Domain | None = None,
-        system: CoordSys | None = None,
-        name: str | None = None,
-        fun_str: str | None = None,
-        scaling: sp.Expr | None = None,
-    ) -> None:
-        name = name if name is not None else "LegPhi_0"
-        fun_str = fun_str if fun_str is not None else "phi_0"
-        PGComposite.__init__(
-            self,
-            N,
-            Legendre,
-            bcs={"left": {"D": 0}, "right": {"D": 0}},
-            domain=domain,
-            system=system,
-            stencil={0: sp.S.Half, 2: -sp.S.Half},
-            scaling=scaling,
-            name=name,
-            fun_str=fun_str,
-            order=0,
-        )
-
-
-class LegPhi_1(PGComposite):
-    r"""
-    Composite space for Mortensen's Petrov-Galerkin method order 1.
-
-    The test functions are defined by
-
-    .. math::
-
-        \phi_k = \frac{1}{2}(L_k - L_{k+2}) = \frac{(2k+3)(1-x^2)}{2(k+1)(k+2)} L'_{k+1}
-
-    where :math:`L'_{k+1}` is the derivative of Legendre polynomial k+1.
-    The last one is truncated to the first N Legendre polynomials, like the
-    trial functions; see `PGComposite`.
-
-    When used as a test function space, the resulting inner product is a skewed
-    diagonal matrix with entries
-
-    .. math::
-        \langle \phi_k, L'_j \rangle = \delta_{k,j-1}
-
-    The advantage of using this space is that the resulting operator matrices are
-    sparse, whereas a regular Legendre test space (Galerkin method) would yield
-    dense operator matrices for the same problem.
-
-    Examples:
-        >>> from jaxfun.galerkin.Legendre import LegPhi_1
-        >>> from jaxfun.galerkin import inner, Legendre, TrialFunction, TestFunction
-        >>> from jaxfun.galerkin import FunctionSpace
-        >>> N = 6
-        >>> P = LegPhi_1(N)
-        >>> V = Legendre.Legendre(N)
-        >>> u = TrialFunction(V)
-        >>> v = TestFunction(P)
-        >>> x = V.system.x
-        >>> A = inner(u.diff(x, 1) * v, sparse=True)
-        >>> A.todense()
-        Array([[0., 1., 0., 0., 0., 0.],
-               [0., 0., 1., 0., 0., 0.],
-               [0., 0., 0., 1., 0., 0.],
-               [0., 0., 0., 0., 1., 0.],
-               [0., 0., 0., 0., 0., 1.]], dtype=float32)
-        >>> D = FunctionSpace(N, Legendre.Legendre, {"left": {"D": 0}})
-        >>> x = D.system.x
-        >>> u = TrialFunction(D)
-        >>> A = inner(u.diff(x, 1) * v, sparse=True)
-        >>> A.todense()
-        Array([[1., 1., 0., 0., 0.],
-               [0., 1., 1., 0., 0.],
-               [0., 0., 1., 1., 0.],
-               [0., 0., 0., 1., 1.],
-               [0., 0., 0., 0., 1.]], dtype=float32)
-    """
-
-    def __init__(
-        self,
-        N: int,
-        domain: Domain | None = None,
-        system: CoordSys | None = None,
-        name: str | None = None,
-        fun_str: str | None = None,
-        scaling: sp.Expr | None = None,
-    ) -> None:
-        name = name if name is not None else "LegPhi_1"
-        fun_str = fun_str if fun_str is not None else "phi_1"
-        PGComposite.__init__(
-            self,
-            N,
-            Legendre,
-            bcs={"left": {"D": 0}, "right": {"D": 0}},
-            domain=domain,
-            system=system,
-            stencil={0: sp.S.Half, 2: -sp.S.Half},
-            scaling=scaling,
-            name=name,
-            fun_str=fun_str,
-            order=1,
-        )
-
-
-class LegPhi_2(PGComposite):
-    r"""Composite space for Mortensen's Petrov-Galerkin method order 2.
-
-    The test functions are defined by
-
-    .. math::
-
-        \phi_k &= \frac{(1-x^2)^2 L''_{k+2}}{h^{(2)}_{k+2}} \\
-        h^{(2)}_{k+2} &= \int_{-1}^1 L''_{k+2} L''_{k+2} (1-x^2)^2 dx, \\
-               &= \frac{2 (k+1)(k+2)(k+3)(k+4)}{2k+5},
-
-    where :math:`L''_{k+2}` is the second derivative of Legendre polynomials k+2.
-    The last two are truncated to the first N Legendre polynomials, like the
-    trial functions; see `PGComposite`.
-
-    When used as a test function space, the resulting inner product is a skewed
-    diagonal matrix with entries
-
-    .. math::
-        \langle \phi_k, L''_j \rangle = \delta_{k,j-2}
-
-    The advantage of using this space is that the resulting operator matrices are
-    sparse, whereas a regular Legendre test space (Galerkin method) would yield
-    dense operator matrices for the same problem.
-
-    Examples:
-        >>> from jaxfun.galerkin.Legendre import LegPhi_2
-        >>> from jaxfun.galerkin import inner, Legendre, TrialFunction, TestFunction
-        >>> from jaxfun.galerkin import FunctionSpace
-        >>> N = 7
-        >>> P = LegPhi_2(N)
-        >>> V = Legendre.Legendre(N)
-        >>> u = TrialFunction(V)
-        >>> v = TestFunction(P)
-        >>> x = V.system.x
-        >>> A = inner(u.diff(x, 2) * v, sparse=True)
-        >>> A.todense()
-        Array([[0., 0., 1., 0., 0., 0., 0.],
-               [0., 0., 0., 1., 0., 0., 0.],
-               [0., 0., 0., 0., 1., 0., 0.],
-               [0., 0., 0., 0., 0., 1., 0.],
-               [0., 0., 0., 0., 0., 0., 1.]], dtype=float32)
-        >>> D = FunctionSpace(
-        ...     N, Legendre.Legendre, {"left": {"D": 0}, "right": {"D": 0}}
-        ... )
-        >>> x = D.system.x
-        >>> u = TrialFunction(D)
-        >>> A = inner(u.diff(x, 2) * v, sparse=True)
-        >>> A.todense()
-        Array([[-1.,  0.,  1.,  0.,  0.],
-               [ 0., -1.,  0.,  1.,  0.],
-               [ 0.,  0., -1.,  0.,  1.],
-               [ 0.,  0.,  0., -1.,  0.],
-               [ 0.,  0.,  0.,  0., -1.]], dtype=float32)
-    """  # noqa: E501
-
-    def __init__(
-        self,
-        N: int,
-        domain: Domain | None = None,
-        system: CoordSys | None = None,
-        name: str | None = None,
-        fun_str: str | None = None,
-        scaling: sp.Expr | None = None,
-    ) -> None:
-        name = name if name is not None else "LegPhi_2"
-        fun_str = fun_str if fun_str is not None else "phi_2"
-        PGComposite.__init__(
-            self,
-            N,
-            Legendre,
-            bcs={"left": {"D": 0, "N": 0}, "right": {"D": 0, "N": 0}},
-            domain=domain,
-            system=system,
-            stencil={
-                0: 1 / (2 * (2 * n + 3)),
-                2: -(2 * n + 5) / (2 * n + 7) / (2 * n + 3),
-                4: 1 / (2 * (2 * n + 7)),
-            },
-            scaling=scaling,
-            name=name,
-            fun_str=fun_str,
-            order=2,
-        )
-
-
-class LegPhi_3(PGComposite):
-    r"""Composite space for Mortensen's Petrov-Galerkin method order 3.
-
-    The test functions are defined by
-
-    .. math::
-
-        \phi_k &= \frac{(1-x^2)^3}{h^{(3)}_{k+3}} L^{(3)}_{k+3}, \\
-        h^{(3)}_{k+3} &= \int_{-1}^1 L^{(3)}_{k+3} L^{(3)}_{k+3} (1-x^2)^3 dx,
-
-    where :math:`L^{(3)}_{k+3}` is the third derivative of Legendre polynomial
-    k+3.
-
-    The last three are truncated to the first N Legendre polynomials, like the
-    trial functions; see `PGComposite`.
-
-    When used as a test function space, the resulting inner product is a skewed
-    diagonal matrix with entries
-
-    .. math::
-        \langle \phi_k, L^{(3)}_j \rangle = \delta_{k,j-3}
-
-    The advantage of using this space is that the resulting operator matrices are
-    sparse, whereas a regular Legendre test space (Galerkin method) would yield
-    dense operator matrices for the same problem.
-
-    Examples:
-        >>> from jaxfun.galerkin.Legendre import LegPhi_3
-        >>> from jaxfun.galerkin import inner, Legendre, TrialFunction, TestFunction
-        >>> from jaxfun.galerkin import FunctionSpace
-        >>> N = 8
-        >>> P = LegPhi_3(N)
-        >>> V = Legendre.Legendre(N)
-        >>> u = TrialFunction(V)
-        >>> v = TestFunction(P)
-        >>> x = V.system.x
-        >>> A = inner(u.diff(x, 3) * v, sparse=True)
-        >>> A.todense()
-        Array([[0., 0., 0., 1., 0., 0., 0., 0.],
-               [0., 0., 0., 0., 1., 0., 0., 0.],
-               [0., 0., 0., 0., 0., 1., 0., 0.],
-               [0., 0., 0., 0., 0., 0., 1., 0.],
-               [0., 0., 0., 0., 0., 0., 0., 1.]], dtype=float32)
-
-    """  # noqa: E501
-
-    def __init__(
-        self,
-        N: int,
-        domain: Domain | None = None,
-        system: CoordSys | None = None,
-        name: str | None = None,
-        fun_str: str | None = None,
-        scaling: sp.Expr | None = None,
-    ) -> None:
-        name = name if name is not None else "LegPhi_3"
-        fun_str = fun_str if fun_str is not None else "phi_3"
-        PGComposite.__init__(
-            self,
-            N,
-            Legendre,
-            bcs={
-                "left": {"D": 0, "N": 0, "N2": 0},
-                "right": {"D": 0, "N": 0, "N2": 0},
-            },
-            domain=domain,
-            system=system,
-            stencil={
-                0: 1 / (2 * (4 * n**2 + 16 * n + 15)),
-                2: -3 / (8 * n**2 + 48 * n + 54),
-                4: 3 / (2 * (4 * n**2 + 32 * n + 55)),
-                6: -1 / (8 * n**2 + 80 * n + 198),
-            },
-            scaling=scaling,
-            name=name,
-            fun_str=fun_str,
-            order=3,
-        )
-
-
-class LegPhi_4(PGComposite):
-    r"""Composite space for Mortensen's Petrov-Galerkin method order 4.
-
-    The test functions are defined by
-
-    .. math::
-
-        \phi_k &= \frac{(1-x^2)^4}{h^{(4)}_{k+4}} L^{(4)}_{k+4}, \\
-        h^{(4)}_{k+4} &= \frac{2\Gamma(k+9)}{\Gamma(k+1)(2k+9)} = \int_{-1}^1 L^{(4)}_{k+4} L^{(4)}_{k+4} (1-x^2)^4 dx,
-
-    where :math:`L^{(4)}_{k+4}` is the fourth derivative of Legendre polynomial
-    k+4.
-    The last four are truncated to the first N Legendre polynomials, like the
-    trial functions; see `PGComposite`.
-
-    When used as a test function space, the resulting inner product is a skewed
-    diagonal matrix with entries
-
-    .. math::
-        \langle \phi_k, L^{(4)}_j \rangle = \delta_{k,j-4}
-
-    The advantage of using this space is that the resulting operator matrices are
-    sparse, whereas a regular Legendre test space (Galerkin method) would yield
-    dense operator matrices for the same problem.
-
-    Examples:
-        >>> from jaxfun.galerkin.Legendre import LegPhi_4
-        >>> from jaxfun.galerkin import inner, Legendre, TrialFunction, TestFunction
-        >>> from jaxfun.galerkin import FunctionSpace
-        >>> N = 9
-        >>> P = LegPhi_4(N)
-        >>> V = Legendre.Legendre(N)
-        >>> u = TrialFunction(V)
-        >>> v = TestFunction(P)
-        >>> x = V.system.x
-        >>> A = inner(u.diff(x, 4) * v, sparse=True)
-        >>> A.todense()
-        Array([[0., 0., 0., 0., 1., 0., 0., 0., 0.],
-               [0., 0., 0., 0., 0., 1., 0., 0., 0.],
-               [0., 0., 0., 0., 0., 0., 1., 0., 0.],
-               [0., 0., 0., 0., 0., 0., 0., 1., 0.],
-               [0., 0., 0., 0., 0., 0., 0., 0., 1.]], dtype=float32)
-    """  # noqa: E501
-
-    def __init__(
-        self,
-        N: int,
-        domain: Domain | None = None,
-        system: CoordSys | None = None,
-        name: str | None = None,
-        fun_str: str | None = None,
-        scaling: sp.Expr | None = None,
-    ) -> None:
-        name = name if name is not None else "LegPhi_4"
-        fun_str = fun_str if fun_str is not None else "phi_4"
-        PGComposite.__init__(
-            self,
-            N,
-            Legendre,
-            bcs={
-                "left": {"D": 0, "N": 0, "N2": 0, "N3": 0},
-                "right": {"D": 0, "N": 0, "N2": 0, "N3": 0},
-            },
-            domain=domain,
-            system=system,
-            stencil={
-                0: 1 / (2 * (8 * n**3 + 60 * n**2 + 142 * n + 105)),
-                2: -2 / (8 * n**3 + 84 * n**2 + 262 * n + 231),
-                4: 3
-                * (2 * n + 9)
-                / ((2 * n + 5) * (2 * n + 7) * (2 * n + 11) * (2 * n + 13)),
-                6: -2 / (8 * n**3 + 132 * n**2 + 694 * n + 1155),
-                8: 1 / (2 * (8 * n**3 + 156 * n**2 + 1006 * n + 2145)),
-            },
-            scaling=scaling,
-            name=name,
-            fun_str=fun_str,
-            order=4,
-        )

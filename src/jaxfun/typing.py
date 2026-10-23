@@ -84,7 +84,7 @@ class SympyExpr(Protocol):
 
 
 type ArrayFun = Callable[[Array], Array]
-type TriDiagMatrixFun = Callable[[sp.Symbol | int, sp.Symbol | int], sp.Expr]
+type TriDiagMatrixFun = Callable[[sp.Symbol | int, sp.Symbol | int], sp.Expr | float]
 type Activation = Callable[[ArrayLike], Array]
 type LossValue = sp.Number | complex | Array
 type Loss_Tuple = (

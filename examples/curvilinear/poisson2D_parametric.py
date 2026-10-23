@@ -16,34 +16,33 @@ from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, ulp
 
+xi, eta = sp.symbols("xi,eta", real=True)
+
+
+def bilinear_map(nodes, xi, eta):
+    """Map the reference square [-1, 1]^2 onto the quadrilateral with given nodes."""
+    nodes = [tuple(sp.nsimplify(c, rational=True) for c in p) for p in nodes]
+    phi = (
+        (1 - xi) * (1 - eta) / 4,
+        (1 + xi) * (1 - eta) / 4,
+        (1 + xi) * (1 + eta) / 4,
+        (1 - xi) * (1 + eta) / 4,
+    )
+    return sp.Lambda(
+        (xi, eta), tuple(sum(phi[i] * nodes[i][k] for i in range(4)) for k in range(2))
+    )
+
+
 # Some quadrilateral
 nodes = ((0, 0), (4, 0), (3, 2), (0, 3))
-# nodes = ((0, 0), (1, 0), (2, 1), (0, 1))
-# x0, x1, x2, x3  = sp.symbols('x:4', real=True)
-# y0, y1, y2, y3  = sp.symbols('y:4', real=True)
-# nodes =((x0, y0), (x1, y1), (x2, y2), (x3, y3))
 
-xi, eta = sp.symbols("xi,eta", real=True)
-phi = (
-    (1 - xi) * (1 - eta) / 4,
-    (1 + xi) * (1 - eta) / 4,
-    (1 + xi) * (1 + eta) / 4,
-    (1 - xi) * (1 + eta) / 4,
-)
 C = get_CoordSys(
     "C",
-    sp.Lambda(
-        (xi, eta),
-        (
-            sum([phi[i] * nodes[i][0] for i in range(4)]),
-            sum([phi[i] * nodes[i][1] for i in range(4)]),
-        ),
-    ),
+    bilinear_map(nodes, xi, eta),
     assumptions=sp.Q.positive(xi + 1)
     & sp.Q.positive(eta + 1)
     & sp.Q.positive(1 - eta)
     & sp.Q.positive(1 - xi),
-    # replace=((x0, 0), (y0, 0), (x1, 4), (y1, 0), (x2, 3), (y2, 2), (x3, 0), (y3, 3))
 )
 
 # Method of manufactured solution
@@ -56,14 +55,16 @@ bcsy = {"left": {"D": ue.subs(eta, -1)}, "right": {"D": ue.subs(eta, 1)}}
 D0 = FunctionSpace(M, Chebyshev, bcsx, name="D0", fun_str="phi")
 D1 = FunctionSpace(M, Chebyshev, bcsy, name="D1", fun_str="psi")
 T = TensorProduct(D0, D1, system=C, name="T")
+P = T.get_testspace("GR")
 
-v = TestFunction(T, name="v")
+v = TestFunction(P, name="v")
 u = TrialFunction(T, name="u")
 
-# A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=False)
-A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
+A, b = inner(
+    (v * Div(Grad(u)) - v * Div(Grad(ue))) * C.sg**2, sparse=True, kind="system"
+)
 
-uh = A.solve(b)
+uh = A.solve(b, method="kron", kron_method="rcm")
 
 N = 100
 xij, etaj = T.mesh(kind="uniform", N=(N, N))

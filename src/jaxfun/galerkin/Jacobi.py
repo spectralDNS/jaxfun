@@ -576,7 +576,7 @@ class Jacobi(OrthogonalSpace):
         Returns:
             DiaMatrix for A.
         """
-        return self._get_tridiagonal(cast(TriDiagMatrixFun, self.a), N=N)
+        return self._get_tridiagonal(self.a, N=N)
 
     def B(self, N: int | None = None) -> DiaMatrix:
         """Return recursion matrix B for normalized Jacobi polynomials.
@@ -589,7 +589,7 @@ class Jacobi(OrthogonalSpace):
         Returns:
             DiaMatrix for B.
         """
-        return self._get_tridiagonal(cast(TriDiagMatrixFun, self.b), N=N)
+        return self._get_tridiagonal(self.b, N=N)
 
     def A_(self, N: int | None = None, k: int = 0) -> DiaMatrix:
         """Return recursion matrix A_ for k-th derivative of normalized Jacobi polynomials.
@@ -603,20 +603,17 @@ class Jacobi(OrthogonalSpace):
         Returns:
             DiaMatrix for A_.
         """  # noqa: E501
-        return self._get_tridiagonal(cast(TriDiagMatrixFun, partial(self.a_, k=k)), N=N)
+        return self._get_tridiagonal(partial(self.a_, k=k), N=N)
 
     def _get_tridiagonal(
         self, mat: TriDiagMatrixFun, N: int | None = None
     ) -> DiaMatrix:
         N = self.num_quad_points if N is None else N
+        sub, main, sup = _tridiagonal_functions(self, mat)
         d: list[Array | complex] = [
-            sp.lambdify(n, sp.simplify(mat(n, n - 1)), modules=["jax"])(
-                jnp.arange(1, N)
-            ),
-            sp.lambdify(n, sp.simplify(mat(n, n)), modules=["jax"])(jnp.arange(0, N)),
-            sp.lambdify(n, sp.simplify(mat(n, n + 1)), modules=["jax"])(
-                jnp.arange(0, N - 1)
-            ),
+            sub(jnp.arange(1, N)),
+            main(jnp.arange(0, N)),
+            sup(jnp.arange(0, N - 1)),
         ]
         if bool(jnp.all(jnp.atleast_1d(d[1]) == 0)):
             d = [d[0], d[2]]
@@ -657,6 +654,35 @@ class Jacobi(OrthogonalSpace):
             M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
             return M if A is None else A.T @ M
         return None
+
+
+# Sub-, main and superdiagonal of a recurrence matrix as functions of n, keyed by
+# what they depend on: the family and its parameters, and the recurrence with
+# its keyword arguments (the derivative order of `a_`). Not on N, nor on any
+# other state of the space.
+_tridiagonals: dict[tuple[Any, ...], tuple[Callable[[Array], Array], ...]] = {}
+
+
+def _tridiagonal_functions(
+    space: Jacobi, mat: TriDiagMatrixFun
+) -> tuple[Callable[[Array], Array], ...]:
+    """Return the three diagonals of `mat` lambdified in n, built once per process."""
+    func, keywords = (mat.func, mat.keywords) if isinstance(mat, partial) else (mat, {})
+    key = (
+        type(space),
+        tuple(space.parameters.items()),
+        getattr(func, "__func__", func),  # the function behind a bound method
+        tuple(sorted(keywords.items())),
+    )
+    if key not in _tridiagonals:
+        # The normalization g_n brings in ratios of gamma functions or rising
+        # factorials, which gammasimp reduces to rational functions of n much
+        # faster than simplify does.
+        _tridiagonals[key] = tuple(
+            sp.lambdify(n, sp.gammasimp(sp.sympify(mat(n, n + o))), modules=["jax"])
+            for o in (-1, 0, 1)
+        )
+    return _tridiagonals[key]
 
 
 @cache

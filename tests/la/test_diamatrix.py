@@ -1699,3 +1699,15 @@ def test_get_rows_and_columns_match_dense(make):
     assert jnp.allclose(A.get_rows(idx), dense[idx])
     assert jnp.allclose(A.get_columns(idx), dense[:, idx])
     assert jnp.allclose(jax.jit(A.get_columns)(idx), dense[:, idx])
+
+
+def test_diagonal_matches_dense_for_every_offset():
+    """Stored, unstored and out-of-range offsets of a non-square matrix."""
+    A = diags(
+        [jnp.arange(1.0, 4.0), jnp.arange(4.0, 8.0), jnp.arange(8.0, 12.0)],
+        offsets=(-1, 0, 2),
+        shape=(4, 6),
+    )
+    dense = A.todense()
+    for k in range(-5, 8):
+        assert jnp.array_equal(A.diagonal(k), jnp.diagonal(dense, k))

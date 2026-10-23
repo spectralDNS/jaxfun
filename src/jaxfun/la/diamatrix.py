@@ -850,20 +850,14 @@ class DiaMatrix(BaseMatrix):
         length = min(n - max(0, -k), m - max(0, k))
         if length <= 0:
             return jnp.zeros(0, dtype=self.data.dtype)
+        if k not in self.offsets:
+            return jnp.zeros(length, dtype=self.data.dtype)
 
-        zero_diag = jnp.zeros(length, dtype=self.data.dtype)
-
-        # Scan over stored diagonals; pick the one that matches k.
-        def _pick(acc: Array, args: tuple) -> tuple:
-            d, off = args
-            col_start = jnp.maximum(0, off)
-            vals = jax.lax.dynamic_slice(d, (col_start,), (length,))
-            return jnp.where(off == k, vals, acc), None
-
-        result, _ = jax.lax.scan(
-            _pick, zero_diag, (self.data, jnp.array(self.offsets, dtype=int))
-        )
-        return result
+        # The offsets are static, so the row is found in Python and sliced
+        # statically: column-aligned storage puts diagonal k in columns
+        # max(0, k) to max(0, k) + length, which always fit in the row.
+        start = max(0, k)
+        return self.data[self.offsets.index(k), start : start + length]
 
     @property
     def is_diagonal(self) -> bool:

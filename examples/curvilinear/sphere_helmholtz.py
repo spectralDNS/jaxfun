@@ -1,4 +1,5 @@
 # Solve Poisson's equation in spherical coordinates
+
 import os
 import sys
 
@@ -17,7 +18,7 @@ from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, ulp
 
-N, M = 50, 50
+N, M = 48, 48
 
 # Define spherical coordinates
 r = 1
@@ -37,11 +38,9 @@ C = get_CoordSys(
     & sp.Q.positive(phi)
     & sp.Q.positive(sp.sin(theta)),
 )
-L = FunctionSpace(N, Legendre, domain=(0, np.pi), name="L", fun_str="theta")
-F = FunctionSpace(M, Fourier, name="F", fun_str="phi")
-T = TensorProduct(
-    F, L, system=C, name="T"
-)  # Fourier first for efficient wavenumber solver
+L = FunctionSpace(N, Legendre, domain=(0, np.pi), name="L", fun_str="f")
+F = FunctionSpace(M, Fourier, name="F", fun_str="E")
+T = TensorProduct(F, L, system=C, name="T")  # Fourier first for wavenumber solver
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
 
@@ -52,7 +51,7 @@ ue = sph(6, 3, theta, phi)
 
 # Assemble linear system of equations
 A, b = inner(
-    (v * (2 * u - Div(Grad(u))) - v * (2 * ue - Div(Grad(ue)))),
+    (v * (2 * u - Div(Grad(u))) - v * (2 * ue - Div(Grad(ue)))) * C.sg,
     sparse=True,
     kind="system",
 )

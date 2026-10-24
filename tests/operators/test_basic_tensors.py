@@ -118,8 +118,8 @@ def test_cross_same_vectors_zero():
 def test_cross_cylindrical():
     res = cross(C.b_r, C.b_theta)
     comp = components(res)
-    # Component should be C.r (the first base scalar of coordinate system C)
-    assert C.b_zz in comp and comp[C.b_zz] == C.r
+    # b_r x b_theta = sqrt(g) b^z, with sqrt(g) = r
+    assert C.bt_zz in comp and comp[C.bt_zz] == C.r
 
 
 @pytest.mark.parametrize(
@@ -249,6 +249,9 @@ def test_gradient_scalar_cylindrical():
     s = C.r * C.theta
     g = gradient(s)
     comp = components(g)
+    # grad(s) = ds/dq^i b^i
+    assert comp == {C.bt_r: C.theta, C.bt_theta: C.r}
+    comp = components(C.to_covariant_basis(g))
     assert sp.simplify(comp[C.b_r] - C.theta) == 0
     assert sp.simplify(comp[C.b_theta] - 1 / C.r) == 0
 

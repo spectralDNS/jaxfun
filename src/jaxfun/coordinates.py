@@ -322,7 +322,8 @@ class BaseVector(Vector, AtomicExpr):  # ty:ignore[invalid-method-override]
     For Cartesian systems, these are the regular constant unit vectors.
 
     Wraps a SymPy Vector basis element with additional metadata and pretty/LaTeX
-    formats.
+    formats. The contravariant base vectors are the subclass
+    `ContravariantBaseVector`.
 
     Args:
         index: Basis vector index (0, 1 or 2).
@@ -354,6 +355,11 @@ class BaseVector(Vector, AtomicExpr):  # ty:ignore[invalid-method-override]
     _latex_form: str
     args: tuple[sp.Integer, CoordSys]
 
+    # True for the contravariant subclass
+    is_contravariant: bool = False
+    # Name of the CoordSys attribute holding the names of this kind of vector
+    _names_attr: str = "_vector_names"
+
     def __new__(
         cls,
         index: int,
@@ -370,7 +376,7 @@ class BaseVector(Vector, AtomicExpr):  # ty:ignore[invalid-method-override]
         # Verify arguments
         if index not in range(0, 3):
             raise ValueError("index must be 0, 1 or 2")
-        name = system._vector_names[index]
+        name = getattr(system, cls._names_attr)[index]
         # Initialize an object
         obj: Self = super().__new__(cls, sp.sympify(index), system)
         # Assign important attributes
@@ -397,12 +403,16 @@ class BaseVector(Vector, AtomicExpr):  # ty:ignore[invalid-method-override]
     def system(self) -> CoordSys:
         return self._system
 
+    @property
+    def index(self) -> int:
+        return int(self._id[0])
+
     def _sympystr(self, printer: Any) -> str:
         return self._name
 
     def _sympyrepr(self, printer: Any) -> str:
         index, system = self._id
-        return f"{printer._print(system)}.{system._vector_names[index]}"
+        return f"{printer._print(system)}.{getattr(system, self._names_attr)[index]}"
 
     @property
     def free_symbols(self) -> set[Basic]:
@@ -412,12 +422,36 @@ class BaseVector(Vector, AtomicExpr):  # ty:ignore[invalid-method-override]
         return self._system.to_cartesian(self)
 
 
+class ContravariantBaseVector(BaseVector):
+    """Contravariant base vector of a coordinate system
+
+        b^j = ∇q^j = g^jk b_k
+
+    where q^j are the curvilinear coordinates, g^jk the contravariant metric
+    tensor and b_k the covariant base vectors. The two sets are dual,
+    b^i·b_j = δ^i_j, which is what makes contractions with them cheap.
+
+    Cartesian systems have no separate contravariant base vectors, since there
+    b^j = b_j.
+
+    Args:
+        index: Basis vector index (0, 1 or 2).
+        system: The parent coordinate system.
+        pretty_str: Optional pretty (ASCII) representation.
+        latex_str: Optional LaTeX representation.
+    """
+
+    is_contravariant = True
+    _names_attr = "_contravariant_vector_names"
+
+
 class BaseDyadic(Dyadic, AtomicExpr):  # ty:ignore[invalid-method-override]
     """Dyadic (tensor product) of two base vectors.
 
-    Represents a rank-2 basis tensor constructed from two covariant base vectors
+    Represents a rank-2 basis tensor constructed from two base vectors, each
+    either covariant or contravariant
 
-        b_i ⊗ b_j
+        b_i ⊗ b_j,  b_i ⊗ b^j,  b^i ⊗ b_j  or  b^i ⊗ b^j
 
     Args:
         vector1: First base vector.
@@ -487,11 +521,9 @@ class CoordSys(Basic):
         _name: System name.
         _base_scalars: Tuple of BaseScalar objects (psi / computational coordinates).
         _base_vectors: Tuple of BaseVector objects (covariant basis).
-        _base_dyadics: Tuple of BaseDyadic objects.
-        _covariant_basis_map: Mapping from coordinate index to base vector
-        _covariant_basis_dyadic_map: Mapping from coordinate indices to base dyadic.
-        _covariant_basis_map_inv: Inverse of _covariant_basis_map.
-        _covariant_basis_dyadic_map_inv: Inverse of _covariant_basis_dyadic_map.
+        _contravariant_base_vectors: Tuple of ContravariantBaseVector objects
+            (contravariant basis). Equal to _base_vectors for Cartesian systems.
+        _base_dyadics: Tuple of BaseDyadic objects (covariant b_i ⊗ b_j).
         _position_vector: Position vector expressed in parent Cartesian coordinates.
         _is_cartesian: True if transformation is identity.
         _parent: Parent coordinate system (Cartesian root) or None.
@@ -504,9 +536,11 @@ class CoordSys(Basic):
 
     _name: str
     _vector_names: tuple[str, ...]
+    _contravariant_vector_names: tuple[str, ...]
     _variable_names: tuple[str, ...]
     _base_scalars: Tuple
     _base_vectors: Tuple
+    _contravariant_base_vectors: Tuple
     _base_dyadics: Tuple
     _position_vector: Tuple
     _is_cartesian: bool
@@ -531,10 +565,7 @@ class CoordSys(Basic):
     _ct: np.ndarray[Any, np.dtype[np.object_]] | None
     _det_g: dict[bool, Expr | None]
     _sqrt_det_g: dict[bool, Expr | None]
-    _covariant_basis_map: dict[int, BaseVector]
-    _covariant_basis_dyadic_map: dict[tuple[int, int], BaseDyadic]
-    _covariant_basis_map_inv: dict[BaseVector, int]
-    _covariant_basis_dyadic_map_inv: dict[BaseDyadic, tuple[int, int]]
+    _dbase: dict[tuple[BaseVector, int], VectorLike]
     _map_base_scalar_to_index: dict[BaseScalar, int]
 
     # NOTE: Many coordinate and basis attributes are set dynamically during
@@ -557,6 +588,10 @@ class CoordSys(Basic):
         b_theta: BaseVector
         b_z: BaseVector
         b_zz: BaseVector
+        bt_r: ContravariantBaseVector
+        bt_theta: ContravariantBaseVector
+        bt_z: ContravariantBaseVector
+        bt_zz: ContravariantBaseVector
 
     def __new__(
         cls,
@@ -628,6 +663,22 @@ class CoordSys(Basic):
 
         obj._base_vectors = Tuple(*v)
 
+        # Contravariant basis vectors. In Cartesian systems b^i = b_i.
+        vt: list[BaseVector] = v
+        obj._contravariant_vector_names = tuple(vector_names)
+        if not is_cartesian:
+            obj._contravariant_vector_names = tuple(f"bt_{s}" for s in variable_names)
+            vt = [
+                ContravariantBaseVector(
+                    i,
+                    obj,
+                    f"b^{variable_names[i]}",
+                    r"\mathbf{b}^{%s}" % (latex_symbols[variable_names[i]],),  # noqa: UP031
+                )
+                for i in range(n_vecs)
+            ]
+        obj._contravariant_base_vectors = Tuple(*vt)
+
         variable_names = list(variable_names)
         latex_scalars = [latex_symbols[x] for x in variable_names]
         pretty_scalars = variable_names
@@ -685,13 +736,7 @@ class CoordSys(Basic):
         obj._ct = None
         obj._det_g = {True: None, False: None}
         obj._sqrt_det_g = {True: None, False: None}
-        obj._covariant_basis_map = {k: v for k, v in enumerate(obj._base_vectors)}
-        obj._covariant_basis_map_inv = reverse_dict(obj._covariant_basis_map)
-        cov_dyad: dict[tuple[int, int], BaseDyadic] = {
-            (i // n_vecs, i % n_vecs): v for i, v in enumerate(obj._base_dyadics)
-        }
-        obj._covariant_basis_dyadic_map = cov_dyad
-        obj._covariant_basis_dyadic_map_inv = reverse_dict(cov_dyad)
+        obj._dbase = {}
 
         for k in obj._cartesian_xyz:
             setattr(obj, k.name, k)
@@ -699,6 +744,7 @@ class CoordSys(Basic):
         for i in range(len(base_scalars)):
             setattr(obj, variable_names[i], base_scalars[i])
             setattr(obj, vector_names[i], v[i])
+            setattr(obj, obj._contravariant_vector_names[i], vt[i])
 
         # Assign params
         obj._parent = parent
@@ -732,6 +778,13 @@ class CoordSys(Basic):
 
     def base_vectors(self) -> Tuple:
         return self._base_vectors
+
+    def contravariant_base_vectors(self) -> Tuple:
+        """Return the contravariant base vectors b^i.
+
+        For a Cartesian system these are the base vectors themselves.
+        """
+        return self._contravariant_base_vectors
 
     def base_scalars(self) -> Tuple:
         return self._base_scalars
@@ -837,7 +890,7 @@ class CoordSys(Basic):
     @overload
     def to_cartesian(self, v: DyadicLike) -> DyadicLike: ...
     def to_cartesian(self, v: TensorLike) -> TensorLike:
-        # v either Cartesian or a vector/dyadic with covariant basis vectors
+        # v either Cartesian or a vector/dyadic with co- or contravariant basis
         if isinstance(v, VectorZero | DyadicZero):
             return v
 
@@ -845,19 +898,80 @@ class CoordSys(Basic):
         if v._sys.is_cartesian:
             return v
 
-        cart_map = {
-            k: v for k, v in zip(self.base_vectors(), self.get_covariant_basis(True))
-        }
+        cart_map: dict[Basic, Any] = dict(
+            zip(self.base_vectors(), self.get_covariant_basis(True), strict=True)
+        )
+        if v.atoms(ContravariantBaseVector):
+            cart_map.update(
+                zip(
+                    self.contravariant_base_vectors(),
+                    self.get_contravariant_basis(True),
+                    strict=True,
+                )
+            )
 
         if not v.is_Vector:
             cart_map.update(
                 {
                     k: (cart_map[k.args[0]] | cart_map[k.args[1]])
-                    for k in self.base_dyadics()
+                    for k in v.atoms(BaseDyadic)
                 }
             )
 
         return v.xreplace(cart_map)
+
+    def to_covariant_basis(self, v: TensorLike) -> TensorLike:
+        """Return v expressed with covariant base vectors only.
+
+        Every contravariant base vector is replaced by b^i = g^ij b_j, also in
+        both legs of a dyadic.
+
+        Args:
+            v: Vector or dyadic in this coordinate system.
+
+        Returns:
+            The same tensor in the covariant basis.
+        """
+        if self.is_cartesian:
+            return v
+        gt = self.get_contravariant_metric_tensor()
+        b = self.base_vectors()
+        rule = {bt: gt[i] @ b for i, bt in enumerate(self.contravariant_base_vectors())}
+        return self._replace_base_vectors(v, rule)
+
+    def to_contravariant_basis(self, v: TensorLike) -> TensorLike:
+        """Return v expressed with contravariant base vectors only.
+
+        Every covariant base vector is replaced by b_i = g_ij b^j, also in both
+        legs of a dyadic.
+
+        Args:
+            v: Vector or dyadic in this coordinate system.
+
+        Returns:
+            The same tensor in the contravariant basis.
+        """
+        if self.is_cartesian:
+            return v
+        g = self.get_covariant_metric_tensor()
+        bt = self.contravariant_base_vectors()
+        rule = {b: g[i] @ bt for i, b in enumerate(self.base_vectors())}
+        return self._replace_base_vectors(v, rule)
+
+    def _replace_base_vectors(
+        self, v: TensorLike, rule: dict[BaseVector, VectorLike]
+    ) -> TensorLike:
+        from jaxfun.operators import outer
+
+        if isinstance(v, VectorZero | DyadicZero):
+            return v
+        full_rule: dict[Basic, Any] = {**rule}
+        if _is_dyadiclike(v):
+            for d in v.atoms(BaseDyadic):
+                a, b = d.args
+                if a in rule or b in rule:
+                    full_rule[d] = outer(rule.get(a, a), rule.get(b, b))
+        return v.xreplace(full_rule)
 
     @overload
     def from_cartesian(self, v: VectorLike) -> VectorLike: ...
@@ -904,41 +1018,38 @@ class CoordSys(Basic):
     ) -> Expr:
         """Return a contravariant component of a vector or dyadic.
 
-        For a vector expressed in this coordinate system using the covariant
-        basis {b_i}, the stored components are already the contravariant
-        components v^i (since v = sum_i v^i b_i). For a dyadic (2nd-order
-        tensor) expressed with dyadic bases {b_i ⊗ b_j}, the stored components
-        are v^{ij}.
+        The contravariant components are obtained by contracting with the
+        contravariant basis vectors:
+            v^k = v · b^k
+            v^{kj} = b^k · v · b^j
+
+        For a vector in the covariant basis, v = v^i b_i, this is the
+        coefficient of b_k, since b_i · b^k = δ_i^k.
 
         Args:
-            v: A SymPy Vector or Dyadic expressed in this coordinate system
-                (i.e. its components are keyed by the covariant basis (or
-                dyadic) objects).
+            v: A SymPy Vector or Dyadic expressed in this coordinate system,
+                in any mix of co- and contravariant base vectors.
             k: Index of the (first) basis direction.
             j: (Optional) Second index for a Dyadic component. Must be
                 provided when v is a Dyadic.
 
         Returns:
             The scalar SymPy expression representing v^k (if v is a Vector) or
-            v^{kj} (if v is a Dyadic). Returns 0 if the component is not
-            present.
+            v^{kj} (if v is a Dyadic).
 
         Raises:
             ValueError: If j is None while querying a Dyadic component.
         """
-        # We use covariant basis vectors, so the vector v already contains the
-        # contravariant components.
+        from jaxfun.operators import dot
+
         if isinstance(v, VectorZero | DyadicZero):
             return sp.S.Zero
+        bt = self.contravariant_base_vectors()
         if _is_vectorlike(v):
-            vk = self._covariant_basis_map[k]
-            res: Expr = v.components.get(vk, sp.S.Zero)
-            return res
+            return dot(v, bt[k])
         if j is None:
             raise ValueError("Second index j must be provided for Dyadic components.")
-        vkj = self._covariant_basis_dyadic_map[k, j]
-        res: Expr = v.components.get(vkj, sp.S.Zero)
-        return res
+        return dot(dot(bt[k], v), bt[j])
 
     def get_covariant_component(
         self, v: TensorLike, k: int, j: int | None = None
@@ -1088,21 +1199,23 @@ class CoordSys(Basic):
             return b @ np.array(self.get_cartesian_basis_vectors())[: b.shape[1]]
         return b
 
-    def get_contravariant_basis_vector(self, i: int) -> VectorLike:
+    def get_contravariant_basis_vector(self, i: int) -> BaseVector:
         """Returns contravariant basis vector i.
 
             b^i = grad(q^i) = g^ij b_j
 
         where g^ij is the contravariant metric tensor and b_j the covariant
-        basis vector.
+        basis vector. b^i is returned as a base vector of its own (the
+        covariant b_i in a Cartesian system). Use `to_covariant_basis` to
+        expand it as g^ij b_j.
 
         Args:
             i: Basis index.
 
         Returns:
-            SymPy Vector representing b^i.
+            The contravariant base vector b^i.
         """
-        return self.get_contravariant_metric_tensor()[i] @ self.base_vectors()
+        return self._contravariant_base_vectors[i]
 
     def get_covariant_basis_vector(self, i: int) -> BaseVector:
         """Returns covariant basis vector i.
@@ -1202,6 +1315,38 @@ class CoordSys(Basic):
                     ct[k, i, j] = self.simplify(np.dot(db, bt[k]))
         self._ct = ct
         return ct
+
+    def diff_base_vector(self, bv: BaseVector, j: int) -> VectorLike:
+        """Returns the derivative of a base vector with respect to q^j.
+
+            ∂b_i/∂q^j = Γ^k_ij b_k
+            ∂b^i/∂q^j = -Γ^i_jk b^k
+
+        where Γ^k_ij are the Christoffel symbols of the second kind.
+
+        Args:
+            bv: Covariant or contravariant base vector of this system.
+            j: Index of the coordinate q^j.
+
+        Returns:
+            SymPy Vector, in the same basis as bv.
+        """
+        if self.is_cartesian:
+            return Vector.zero
+        key = (bv, j)
+        if key in self._dbase:
+            return self._dbase[key]
+        ct = self.get_christoffel_second()
+        i = bv.index
+        n = range(self.dims)
+        if bv.is_contravariant:
+            bt = self.contravariant_base_vectors()
+            dbv = VectorAdd.fromiter(-ct[i, j, k] * bt[k] for k in n)
+        else:
+            b = self.base_vectors()
+            dbv = VectorAdd.fromiter(ct[k, i, j] * b[k] for k in n)
+        self._dbase[key] = dbv
+        return dbv
 
     @overload
     def simplify(self, expr: TensorLike) -> TensorLike: ...
@@ -1412,6 +1557,21 @@ def get_CoordSys(
     )
 
 
+def _vectoradd_sympystr(self: VectorAdd, printer: Any) -> str:
+    # SymPy's version prints only the components along system.base_vectors(),
+    # which would drop every contravariant component.
+    items = sorted(
+        self.components.items(),
+        key=lambda x: (
+            str(x[0].system),
+            getattr(x[0], "is_contravariant", False),
+            int(x[0]._id[0]),
+        ),
+    )
+    return " + ".join(printer._print(m * k) for k, m in items)
+
+
+VectorAdd._sympystr = _vectoradd_sympystr
 sp.vector.BaseDyadic = BaseDyadic  # ty:ignore[possibly-missing-submodule]
 sp.vector.BaseVector = BaseVector  # ty:ignore[possibly-missing-submodule]
 sp.vector.BaseScalar = BaseScalar  # ty:ignore[possibly-missing-submodule]

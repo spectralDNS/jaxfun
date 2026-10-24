@@ -111,7 +111,9 @@ def _(mo):
 
     where ${v}_{i}(\mathbf{X})$ and ${v}^{i}(\mathbf{X})$ are co- and contravariant vector components, respectively. The sub- or superscript of the coefficient are used to recognise which basis functions are used. The vector $\mathbf{v}$ can also be given in Cartesian basis vectors, but since both sub- and superscripts are taken, we must make use of an alternative notation that includes the Cartesian variables $\mathbf{v}(\mathbf{x}) = v^{i}(\mathbf{x}) \mathbf{i}_i$.
 
-    When a vector is written with contravariant vector components $\mathbf{v} = {v}^{i} \mathbf{b}_i$, the vector is called a contravariant vector. This is the default used by Jaxfun. When the vector is written with covariant components $\mathbf{v} = {v}_i \mathbf{b}^{i}$ it is called a covariant vector. This is a bit confusing since a contravariant vector is using covariant basis vectors and vice versa!
+    When a vector is written with contravariant vector components $\mathbf{v} = {v}^{i} \mathbf{b}_i$, the vector is called a contravariant vector. When the vector is written with covariant components $\mathbf{v} = {v}_i \mathbf{b}^{i}$ it is called a covariant vector. This is a bit confusing since a contravariant vector is using covariant basis vectors and vice versa!
+
+    Jaxfun has symbols for both sets of basis vectors. For a coordinate system `C` with coordinates $(r, \theta)$ the covariant basis vectors are `C.b_r` and `C.b_theta`, and the contravariant basis vectors are `C.bt_r` and `C.bt_theta`. They are also available as `C.base_vectors()` and `C.contravariant_base_vectors()`. In a Cartesian coordinate system the two sets are the same, $\mathbf{b}^i = \mathbf{b}_i$, and only the regular unit vectors, like `R.i` and `R.j`, are used.
     """)
     return
 
@@ -119,7 +121,7 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    In Jaxfun we work by default in the covariant basis with contravariant vector components. However, we can obtain the covariant components ${v}_{i}$ as
+    Vector-valued test and trial functions in Jaxfun are always contravariant vectors, $\mathbf{v} = {v}^{i} \mathbf{b}_i$, and the unknowns of a vector function space are the contravariant components ${v}^i$. Other vectors use whichever basis is natural. For example, the gradient of a scalar is a covariant vector, $\nabla f = \frac{\partial f}{\partial X^i} \mathbf{b}^i$ (see below), and sums such as $\mathbf{u} + \nabla p$ contain both kinds of basis vectors. We can obtain the covariant components ${v}_{i}$ of a contravariant vector as
 
     $$
     {v}_{i} = {v}^j \mathbf{b}_j \cdot \mathbf{b}_i = {v}^j g_{ji}
@@ -150,7 +152,7 @@ def _(mo):
     \end{align*}
     $$
 
-    The metric tensors are available in Jaxfun using methods `get_covariant_metric_tensor` and `get_contravariant_metric_tensor` on the given curvilinear coordinate system.
+    The metric tensors are available in Jaxfun using methods `get_covariant_metric_tensor` and `get_contravariant_metric_tensor` on the given curvilinear coordinate system. A vector or dyadic can be rewritten using only covariant basis vectors with `to_covariant_basis`, which applies $\mathbf{b}^{i} = g^{ij} \mathbf{b}_{j}$, or only contravariant basis vectors with `to_contravariant_basis`, which applies $\mathbf{b}_{i} = g_{ij} \mathbf{b}^{j}$.
     """)
     return
 
@@ -171,6 +173,8 @@ def _(mo):
     $$
     {u}^{i}\mathbf{b}_i \cdot {v}^{j} \mathbf{b}_{j} = {u}^{i} {v}^{j} g_{ij}
     $$
+
+    and likewise ${u}_{i}\mathbf{b}^i \cdot {v}_{j} \mathbf{b}^{j} = {u}_{i} {v}_{j} g^{ij}$. Jaxfun computes all dot products from these three rules for the basis vectors, $\mathbf{b}^{i} \cdot \mathbf{b}_{j} = \delta^{i}_{j}$, $\mathbf{b}_{i} \cdot \mathbf{b}_{j} = g_{ij}$ and $\mathbf{b}^{i} \cdot \mathbf{b}^{j} = g^{ij}$. The first rule makes contractions between co- and contravariant vectors particularly cheap, since no metric is involved.
     """)
     return
 
@@ -328,7 +332,7 @@ def _(mo):
     r = \sqrt{x^2+y^2}, \quad \theta = \tan^{-1}(y/x), \quad z = z.
     $$
 
-    This is because Jaxfun is using the covariant basis vectors computed from the forward map, and the contravariant basis vector may then be computed simply from the $\mathbf{b}^i = g^{ij} \mathbf{b}_j$, where $[g^{ij}] = [g_{ij}]^{-1}$. So the reverse map is not explicitly used and as such it does not have to be provided by the user.
+    This is because Jaxfun is using the covariant basis vectors computed from the forward map, and whenever the Cartesian form of a contravariant basis vector is needed, it is computed from $\mathbf{b}^i = g^{ij} \mathbf{b}_j$, where $[g^{ij}] = [g_{ij}]^{-1}$. So the reverse map is not explicitly used and as such it does not have to be provided by the user.
 
     Note that on the last line in the code section above we overwrite the sympy symbols `r`, `theta`, `z` with objects of type `BaseScalar`.
 
@@ -358,6 +362,22 @@ def _(mo):
 @app.cell
 def _(dot, u, v):
     dot(u, v)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    The basis vectors themselves follow the three rules for the dot product. For cylindrical coordinates $g_{\theta \theta} = r^2$ and $g^{\theta \theta} = 1/r^2$, so $\mathbf{b}^{\theta} \cdot \mathbf{b}_{\theta}$, $\mathbf{b}_{\theta} \cdot \mathbf{b}_{\theta}$ and $\mathbf{b}^{\theta} \cdot \mathbf{b}^{\theta}$ are:
+    """)
+    return
+
+
+@app.cell
+def _(C, display, dot):
+    display(dot(C.bt_theta, C.b_theta))
+    display(dot(C.b_theta, C.b_theta))
+    display(dot(C.bt_theta, C.bt_theta))
     return
 
 
@@ -471,8 +491,10 @@ def _(mo):
     The cross product between two vectors can be obtained as
 
     $$
-    \mathbf{u} \times \mathbf{v} = \varepsilon_{ijk} \sqrt{g} {u}^j {v}^k \mathbf{b}^{i} = \varepsilon_{ijk} \sqrt{g} {u}^j {v}^k g^{il}\mathbf{b}_l
+    \mathbf{u} \times \mathbf{v} = \varepsilon_{ijk} \sqrt{g} {u}^j {v}^k \mathbf{b}^{i} = \frac{\varepsilon^{ijk}}{\sqrt{g}} {u}_j {v}_k \mathbf{b}_{i}
     $$
+
+    Hence the cross product of two contravariant vectors is a covariant vector, and vice versa. For cylindrical coordinates $\sqrt{g} = r$, and $\mathbf{b}_r \times \mathbf{b}_{\theta} = r \mathbf{b}^z$:
     """)
     return
 
@@ -509,13 +531,13 @@ def _(mo):
     \end{align*}
     $$
 
-    In Jaxfun we use the last one, with two covariant base vectors $\mathbf{b}_{i} \otimes \mathbf{b}_{j}$. In this case
+    All four may occur in Jaxfun. With two covariant base vectors $\mathbf{b}_{i} \otimes \mathbf{b}_{j}$ we have
 
     $$
     \mathbf{A} = A^{ij} \mathbf{b}_i \otimes \mathbf{b}_j.
     $$
 
-    where $A^{ij}$ are called the contravariant components.
+    where $A^{ij}$ are called the contravariant components. These are the base dyadics returned by `base_dyadics()`. The gradient of a vector is, on the other hand, naturally mixed, $\nabla \mathbf{v} = {v}^{i}|_{j} \, \mathbf{b}_i \otimes \mathbf{b}^j$ (see below), and the identity tensor is $\mathbf{I} = \mathbf{b}_i \otimes \mathbf{b}^i$.
 
     The outer product of two vectors is computed as
 
@@ -595,6 +617,8 @@ def _(mo):
     \text{grad}(f) = \nabla f = \frac{\partial {F}}{\partial X^{i}}\,\mathbf{b}^{i} = \frac{\partial {F}}{\partial X^{i}} g^{ij} \,\mathbf{b}_{j}. \tag{15}
     \end{equation}
 
+    Jaxfun returns the first form, with the contravariant basis vectors $\mathbf{b}^{i}$ kept as they are.
+
     Note that the computation in curvilinear coordinates is simply using a change of variables and the chain rule
 
     $$
@@ -610,8 +634,10 @@ def _(mo):
     and the Laplacian of the scalar field $f$ can be written as
 
     \begin{equation}
-    \text{div}(\text{grad}(f)) = \nabla^2 f  = \frac{1}{\sqrt{g}}\frac{\partial}{\partial X^{i}}\left( g^{ij} \sqrt{g} \frac{\partial {F}}{\partial X^{j}}\right). \tag{17}
+    \text{div}(\text{grad}(f)) = \nabla^2 f  = \frac{1}{\sqrt{g}}\frac{\partial}{\partial X^{i}}\left( g^{ij} \sqrt{g} \frac{\partial {F}}{\partial X^{j}}\right) = g^{ij}\left(\frac{\partial^2 F}{\partial X^{i} \partial X^{j}} - \Gamma^{k}_{ij} \frac{\partial F}{\partial X^{k}}\right). \tag{17}
     \end{equation}
+
+    Jaxfun computes the last form, since it follows directly from contracting the derivative of Eq. (15) with $\mathbf{b}^j$, using $\mathbf{b}^{i} \cdot \mathbf{b}^{j} = g^{ij}$.
 
     Note that $g^{ij}$ and $\sqrt{g}$ will act as variable coefficients when the operators are used in differential equations.
 
@@ -624,7 +650,13 @@ def _(mo):
     The partial derivative $\frac{\partial \mathbf{v}}{\partial X^j}$ is implemented in Jaxfun as the `diff` operator working on vectors. The partial derivative can be computed as
 
     $$
-    \frac{\partial \mathbf{v}}{\partial X^j} = \left(\frac{\partial {v}^{i}}{\partial X^j} + \Gamma^{i}_{kj} {v}^k\right) \mathbf{b}_i \tag{19}
+    \frac{\partial \mathbf{v}}{\partial X^j} = \left(\frac{\partial {v}^{i}}{\partial X^j} + \Gamma^{i}_{kj} {v}^k\right) \mathbf{b}_i = \left(\frac{\partial {v}_{i}}{\partial X^j} - \Gamma^{k}_{ij} {v}_k\right) \mathbf{b}^i \tag{19}
+    $$
+
+    for a contravariant and a covariant vector, respectively. These follow from the derivatives of the basis vectors
+
+    $$
+    \frac{\partial \mathbf{b}_i}{\partial X^j} = \Gamma^{k}_{ij} \mathbf{b}_k, \quad \frac{\partial \mathbf{b}^i}{\partial X^j} = -\Gamma^{i}_{jk} \mathbf{b}^k,
     $$
 
     where $\Gamma^{i}_{kj}$ is the Christoffel symbol of the second kind
@@ -653,7 +685,7 @@ def _(mo):
     \text{grad}(\mathbf{v}) = \frac{\partial \mathbf{v}}{\partial X^j} \otimes \mathbf{b}^j \tag{21}
     $$
 
-    Note that if $\nabla$ is interpreted as a vector, then this corresponds to $(\nabla \otimes \mathbf{v})^T$. However, in Jaxfun printing we interpret $\nabla$ as an operator and as such $\text{grad}(\mathbf{v})$ is printed as $\nabla \mathbf{v}$.
+    For a contravariant vector $\mathbf{v} = {v}^{i} \mathbf{b}_i$ this is the mixed dyadic ${v}^{i}|_{j} \, \mathbf{b}_i \otimes \mathbf{b}^j$, where ${v}^{i}|_{j}$ is the covariant derivative of Eq. (19). Note that if $\nabla$ is interpreted as a vector, then this corresponds to $(\nabla \otimes \mathbf{v})^T$. However, in Jaxfun printing we interpret $\nabla$ as an operator and as such $\text{grad}(\mathbf{v})$ is printed as $\nabla \mathbf{v}$.
 
     The divergence of a second order tensor $\mathbf{A}$ is
 
@@ -745,14 +777,20 @@ def _(Grad, display, u_):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Note the small difference here from most textbooks that present the gradient as (see, e.g., [wikipedia](https://en.wikipedia.org/wiki/Gradient))
+    The gradient is returned in the contravariant basis, $\nabla u = \frac{\partial U}{\partial r} \mathbf{b}^r + \frac{\partial U}{\partial \theta} \mathbf{b}^{\theta} + \frac{\partial U}{\partial z}\mathbf{b}^z$. Note the small difference here from most textbooks that present the gradient as (see, e.g., [wikipedia](https://en.wikipedia.org/wiki/Gradient))
 
     $$
     \nabla u = \frac{\partial U}{\partial r} \hat{\mathbf{b}}_r + \frac{1}{r}\frac{\partial U}{\partial \theta} \hat{\mathbf{b}}_{\theta} + \frac{\partial U}{\partial z}\hat{\mathbf{b}}_z
     $$
 
-    using normalized (unit) basis vectors $\hat{\mathbf{b}}_r = {\mathbf{b}}_r, \hat{\mathbf{b}}_{\theta} = \mathbf{b}_{\theta} / r$ and $\hat{\mathbf{b}}_z = \mathbf{b}_z$. Replacing the hat vectors above with the covariant basis vectors leads to the same result.
+    using normalized (unit) basis vectors $\hat{\mathbf{b}}_r = {\mathbf{b}}_r, \hat{\mathbf{b}}_{\theta} = \mathbf{b}_{\theta} / r$ and $\hat{\mathbf{b}}_z = \mathbf{b}_z$. Since $\mathbf{b}^{\theta} = g^{\theta \theta} \mathbf{b}_{\theta} = \mathbf{b}_{\theta} / r^2 = \hat{\mathbf{b}}_{\theta} / r$, the two are the same. The covariant form is obtained with `to_covariant_basis`:
     """)
+    return
+
+
+@app.cell
+def _(C, Grad, display, u_):
+    display(C.to_covariant_basis(Grad(u_).doit()))
     return
 
 
@@ -775,6 +813,35 @@ def _(Grad, display, u_):
 @app.cell
 def _(Curl, Grad, display, u_):
     display(Curl(Grad(u_)).doit())
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Non-orthogonal coordinates
+
+    Keeping both sets of basis vectors pays off most for non-orthogonal coordinates, where the metric tensors are not diagonal. Consider again the skewed coordinates $x = u + v$ and $y = v$, with
+
+    $$
+    [g_{ij}] = \begin{bmatrix} 1 & 1 \\ 1 & 2 \end{bmatrix}, \quad [g^{ij}] = \begin{bmatrix} 2 & -1 \\ -1 & 1 \end{bmatrix}.
+    $$
+
+    The dot product of two gradients is $\nabla f \cdot \nabla h = \frac{\partial F}{\partial X^i} \frac{\partial H}{\partial X^j} \mathbf{b}^i \cdot \mathbf{b}^j = g^{ij} \frac{\partial F}{\partial X^i} \frac{\partial H}{\partial X^j}$, and the Laplacian is computed as the last form of Eq. (17). Had the gradients been expanded in covariant basis vectors, the dot product would instead contain the products $g^{ik} g^{jl} g_{kl}$, which only reduce to $g^{ij}$ after simplification.
+    """)
+    return
+
+
+@app.cell
+def _(Div, Dot, Grad, display, get_CoordSys, sp):
+    from jaxfun.galerkin.arguments import ScalarFunction as _ScalarFunction
+
+    _u, _v = sp.symbols("u, v", real=True)
+    _S = get_CoordSys("S", sp.Lambda((_u, _v), (_u + _v, _v)))
+    _f = _ScalarFunction("f", _S)
+    _h = _ScalarFunction("h", _S)
+    display(Dot(Grad(_f), Grad(_h)).doit())
+    display(Div(Grad(_f)).doit())
     return
 
 

@@ -1733,10 +1733,11 @@ def project(
         else:
             assert t is None, "`t` is only supported for scalar spaces"
             s = V.system.base_scalars()
-            bv = V.system.base_vectors()
+            # The coefficients are the contravariant components u^i = u·b^i
+            bt = V.system.contravariant_base_vectors()
             if V.rank == RankTag.VECTOR:  # VectorTensorProductSpace
                 assert isinstance(ue, sp.Expr)
-                uj = (lambdify(s, Dot(ue, n).doit())(*V.mesh()) for n in bv)
+                uj = (lambdify(s, Dot(ue, n).doit())(*V.mesh()) for n in bt)
             else:
                 assert isinstance(V, CartesianTensorProductSpace)
                 assert isinstance(ue, sp.Tuple) and len(ue) == V.num_components

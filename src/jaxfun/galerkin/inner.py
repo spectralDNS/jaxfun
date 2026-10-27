@@ -1468,14 +1468,17 @@ def assemble_multivar(
     """
     P0, P1 = mats[0]
     P2, P3 = mats[1]
+    # The factors of axis 0 (P0, P1) and axis 1 (P2, P3) are evaluated at the
+    # quadrature points of their own axis
+    shape = (P0.shape[0], P2.shape[0])
     sci = jnp.array([1.0])
     for sc in scale if isinstance(scale, list) else [scale]:
         if not isinstance(sc, Array) and contains_sympy_symbols(sc):
             s = test_space.system.base_scalars()
-            xj = test_space.mesh(N=(P0.shape[0], P1.shape[0]))
+            xj = test_space.mesh(N=shape)
             sc = lambdify(s, sc, modules="jax")(*xj)
         elif isinstance(sc, float | complex):
-            sc = jnp.ones((P0.shape[0], P1.shape[0])) * sc
+            sc = jnp.ones(shape) * sc
         else:
             sc = cast(Array, sc)
         sci = sci * sc

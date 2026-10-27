@@ -2,6 +2,7 @@ import importlib
 from typing import assert_type, cast
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 import sympy as sp
 from jax import Array
@@ -713,6 +714,21 @@ def test_inner_exact_multivar_2d():
     assert jnp.allclose(A[-1, -1, -1, -1], float(t), atol=jnp.sqrt(ulp(100))), abs(
         A[-1, -1, -1, -1] - float(t)
     )
+
+
+def test_inner_multivar_with_unequal_axes() -> None:
+    N, M = (5, 4), (7, 5)  # basis functions and quadrature points per axis
+    T = TensorProduct(Legendre(N[0], name="L0"), Legendre(N[1], name="L1"))
+    x, y = T.system.base_scalars()
+    form = TestFunction(T) * TrialFunction(T) / (3 + x + y)
+    A = inner(form, num_quad_points=M, kind="bilinear").data
+    # The same Gauss quadrature, written out
+    (xp, wp), (yq, wq) = (np.polynomial.legendre.leggauss(m) for m in M)
+    Px = np.polynomial.legendre.legvander(xp, N[0] - 1)
+    Py = np.polynomial.legendre.legvander(yq, N[1] - 1)
+    c = 1 / (3 + xp[:, None] + yq[None, :])
+    ref = np.einsum("p,q,pq,pi,pk,qj,ql->ikjl", wp, wq, c, Px, Px, Py, Py)
+    assert jnp.allclose(A, ref, atol=ulp(100))
 
 
 @pytest.mark.parametrize("bilinear", (False, True))

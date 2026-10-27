@@ -36,6 +36,8 @@ nu = sp.Symbol("nu", **pos)
 nu_o = sp.Symbol("nu", real=True)  # oblate spheroidal nu lies in (-pi/2, pi/2)
 xi, eta = sp.symbols("xi eta", real=True)
 x = sp.Symbol("x", real=True)
+phi_m = sp.Symbol("phi", real=True)  # the Möbius strip angle lies in (-pi, pi)
+t = sp.Symbol("t", real=True)
 
 # The Pythagorean identities, written towards cos and cosh or towards sin and sinh
 towards_cos = [
@@ -44,7 +46,7 @@ towards_cos = [
 ]
 towards_sin = [(cos(nu) ** 2, 1 - sin(nu) ** 2), (cosh(mu) ** 2, 1 + sinh(mu) ** 2)]
 
-R = 2  # major radius of the tori
+R = 2  # major radius of the tori and the Möbius strip
 D = cosh(tau) - cos(sigma)  # denominator of bipolar and toroidal coordinates
 
 
@@ -169,6 +171,20 @@ systems = [
         sp.diag(1, (R + cos(theta)) ** 2),
         R + cos(theta),
         {"assumptions": sp.Q.positive(R + cos(theta))},
+    ),
+    # A twisted surface, covered twice by phi in (-pi, pi). SymPy does not
+    # complete the square, so the textbook form is multiplied out.
+    System(
+        "Möbius strip",
+        (phi_m, t),
+        (
+            (R - t * cos(phi_m)) * cos(2 * phi_m),
+            (R - t * cos(phi_m)) * sin(2 * phi_m),
+            -t * sin(phi_m),
+        ),
+        sp.diag(sp.expand(t**2 + 4 * (R - t * cos(phi_m)) ** 2), 1),
+        sp.sqrt(sp.expand(t**2 + 4 * (R - t * cos(phi_m)) ** 2)),
+        {"replace": [(sin(phi_m) ** 2, 1 - cos(phi_m) ** 2)]},
     ),
     # A one-dimensional map that clusters points around x = 0 of the periodic
     # domain [0, 2 pi). Its derivative is smooth only once simplified.

@@ -1,3 +1,4 @@
+import importlib
 from typing import assert_type, cast
 
 import jax.numpy as jnp
@@ -820,3 +821,31 @@ def test_inner_merges_terms_that_share_factors():
     # Helmholtz: K⊗M + M⊗K + c M⊗M has only two separate terms.
     H = inner((-Div(Grad(u)) + 3 * u) * v, sparse=True)
     assert isinstance(H, TPMatrices) and len(H) == 2
+
+
+@pytest.mark.parametrize("shared", ["x", "y"])
+def test_inner_assembles_each_shared_factor_once(
+    shared: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two terms sharing their factor along one axis assemble it once, with the
+    scalar coefficient of each term still applied."""
+    inner_module = importlib.import_module("jaxfun.galerkin.inner")
+    original = inner_module.inner_bilinear
+    calls: list[sp.Expr] = []
+
+    def counting(*args):
+        calls.append(args[0])
+        return original(*args)
+
+    monkeypatch.setattr(inner_module, "inner_bilinear", counting)
+    V = Legendre(5)
+    T = TensorProduct(V, V)
+    x, y = T.system.base_scalars()
+    s = y if shared == "x" else x  # the varying factor lives on the other axis
+    v, u = TestFunction(T), TrialFunction(T)
+    A = cast(TPMatrices, inner(v * u * (3 + 2 * s), kind="bilinear"))
+    assert len(calls) == 3  # the shared factor once, plus one per varying factor
+
+    terms = [inner(3 * v * u, kind="bilinear"), inner(2 * s * v * u, kind="bilinear")]
+    expected = sum(cast(TPMatrix, t).todense() for t in terms)
+    assert jnp.allclose(A.todense(), expected, atol=ulp(100))

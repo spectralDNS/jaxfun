@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from functools import partial
-from typing import cast
+from functools import cache, partial
+from typing import TYPE_CHECKING, Any, cast
 
 import jax
 import jax.numpy as jnp
@@ -13,10 +13,13 @@ from sympy import Expr, Number, Symbol
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
-from jaxfun.typing import TriDiagMatrixFun
+from jaxfun.typing import TestSpaceKind, TriDiagMatrixFun
 from jaxfun.utils.common import Domain, cache_static, jit_method, jit_vmap, n
 
 from .orthogonal import OrthogonalSpace
+
+if TYPE_CHECKING:
+    from .composite import GalerkinRecombined, PGComposite
 
 alf, bet = sp.symbols("a,b", real=True)
 delta = sp.KroneckerDelta
@@ -61,6 +64,77 @@ class Jacobi(OrthogonalSpace):
         )
         self.alpha: Number | float = alpha
         self.beta: Number | float = beta
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """Return the keyword arguments, besides N, domain and system, that
+        rebuild this basis, e.g. at another N."""
+        return {"alpha": self.alpha, "beta": self.beta}
+
+    def pg_stencil(self, k: int) -> dict[int, Expr]:
+        r"""Return the stencil of the Petrov-Galerkin test functions of order k.
+
+        The test functions are
+
+        .. math::
+            \psi_j = \frac{(1-x^2)^k}{h^{(k)}_{j+k}} \partial^k Q_{j+k},
+            \quad j = 0, 1, \ldots
+
+        so that :math:`(\psi_j, \partial^k Q_l)_{\omega} = \delta_{j, l-k}`, and
+        :math:`\psi_j` combines :math:`Q_j, Q_{j+2}, \ldots, Q_{j+2k}`.
+
+        Args:
+            k: Order, the number of derivatives.
+
+        Returns:
+            Dictionary shift -> coefficient, an expression in `n`.
+
+        Raises:
+            NotImplementedError: if alpha != beta.
+        """
+        if self.alpha != self.beta:
+            raise NotImplementedError("Petrov-Galerkin needs alpha = beta")
+        return _pg_stencil(type(self), tuple(self.parameters.items()), k)
+
+    def get_testspace(
+        self,
+        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
+        name: str | None = None,
+        fun_str: str | None = None,
+        scaling: sp.Expr | None = None,
+    ) -> OrthogonalSpace | PGComposite | GalerkinRecombined:
+        """Return the test space of `kind` for this space as trial space.
+
+        Galerkin is this space itself, or a copy carrying `name` or `fun_str`
+        when given; it takes no `scaling`. Petrov-Galerkin is the `PGComposite`
+        of order 0: the order-1 test functions, one per mode, which keep
+        operators of up to first derivatives banded. It spans this space, so
+        Galerkin-recombined is the same space. Jacobi spaces with alpha != beta
+        have only the Galerkin test space.
+        """
+        from .composite import PGComposite
+
+        kind = TestSpaceKind.coerce(kind)
+        if kind == TestSpaceKind.GALERKIN or self.alpha != self.beta:
+            return super().get_testspace(kind, name, fun_str, scaling)
+        if kind == TestSpaceKind.TAU:
+            raise NotImplementedError(
+                "The 'tau' test space needs a trial space with boundary conditions."
+            )
+        P = PGComposite(
+            self.N,
+            type(self),
+            order=0,
+            domain=self.domain,
+            system=self.system,
+            name=name,
+            fun_str=fun_str,
+            scaling=scaling,
+            **self.parameters,
+        )
+        if kind == TestSpaceKind.PETROV_GALERKIN:
+            return P
+        return P.recombine(self, name=name, fun_str=fun_str)
 
     def _evaluate(self, X: float | Array, c: Array) -> Array:
         """Evaluate Jacobi series sum_k c_k P_k^{(α,β)}(X)
@@ -154,12 +228,14 @@ class Jacobi(OrthogonalSpace):
         if self.alpha != self.beta:
             aa = sp.lambdify(n, self.a(n, n), modules="jax")(jnp.arange(i))
 
+        x1 = (X - aa[0]) / am[0] * x0
+
         def body_fun(n: int, val: tuple[Array, Array]) -> tuple[Array, Array]:
             x0, x1 = val
             x2 = ((X - aa[n - 1]) * x1 - ap[n - 2] * x0) / am[n - 1]
             return x1, x2
 
-        return jax.lax.fori_loop(2, i + 1, body_fun, (x0, X))[-1]
+        return jax.lax.fori_loop(2, i + 1, body_fun, (x0, x1))[-1]
 
     @jit_vmap(in_axes=0)
     def eval_basis_functions(self, X: float | Array) -> Array:
@@ -247,7 +323,8 @@ class Jacobi(OrthogonalSpace):
 
     def norm_squared(self) -> Array:
         """Return L2 norms squared h_n^{(0)} for n=0..N-1."""
-        return sp.lambdify(n, self.h(n, 0), modules="jax")(jnp.arange(self.N))
+        h = sp.lambdify(n, self.h(n, 0), modules="jax")(jnp.arange(self.N))
+        return jnp.broadcast_to(h, (self.N,))  # h may not depend on n
 
     @property
     def reference_domain(self) -> Domain:
@@ -499,7 +576,7 @@ class Jacobi(OrthogonalSpace):
         Returns:
             DiaMatrix for A.
         """
-        return self._get_tridiagonal(cast(TriDiagMatrixFun, self.a), N=N)
+        return self._get_tridiagonal(self.a, N=N)
 
     def B(self, N: int | None = None) -> DiaMatrix:
         """Return recursion matrix B for normalized Jacobi polynomials.
@@ -512,7 +589,7 @@ class Jacobi(OrthogonalSpace):
         Returns:
             DiaMatrix for B.
         """
-        return self._get_tridiagonal(cast(TriDiagMatrixFun, self.b), N=N)
+        return self._get_tridiagonal(self.b, N=N)
 
     def A_(self, N: int | None = None, k: int = 0) -> DiaMatrix:
         """Return recursion matrix A_ for k-th derivative of normalized Jacobi polynomials.
@@ -526,20 +603,17 @@ class Jacobi(OrthogonalSpace):
         Returns:
             DiaMatrix for A_.
         """  # noqa: E501
-        return self._get_tridiagonal(cast(TriDiagMatrixFun, partial(self.a_, k=k)), N=N)
+        return self._get_tridiagonal(partial(self.a_, k=k), N=N)
 
     def _get_tridiagonal(
         self, mat: TriDiagMatrixFun, N: int | None = None
     ) -> DiaMatrix:
         N = self.num_quad_points if N is None else N
+        sub, main, sup = _tridiagonal_functions(self, mat)
         d: list[Array | complex] = [
-            sp.lambdify(n, sp.simplify(mat(n, n - 1)), modules=["jax"])(
-                jnp.arange(1, N)
-            ),
-            sp.lambdify(n, sp.simplify(mat(n, n)), modules=["jax"])(jnp.arange(0, N)),
-            sp.lambdify(n, sp.simplify(mat(n, n + 1)), modules=["jax"])(
-                jnp.arange(0, N - 1)
-            ),
+            sub(jnp.arange(1, N)),
+            main(jnp.arange(0, N)),
+            sup(jnp.arange(0, N - 1)),
         ]
         if bool(jnp.all(jnp.atleast_1d(d[1]) == 0)):
             d = [d[0], d[2]]
@@ -580,3 +654,62 @@ class Jacobi(OrthogonalSpace):
             M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
             return M if A is None else A.T @ M
         return None
+
+
+# Sub-, main and superdiagonal of a recurrence matrix as functions of n, keyed by
+# what they depend on: the family and its parameters, and the recurrence with
+# its keyword arguments (the derivative order of `a_`). Not on N, nor on any
+# other state of the space.
+_tridiagonals: dict[tuple[Any, ...], tuple[Callable[[Array], Array], ...]] = {}
+
+
+def _tridiagonal_functions(
+    space: Jacobi, mat: TriDiagMatrixFun
+) -> tuple[Callable[[Array], Array], ...]:
+    """Return the three diagonals of `mat` lambdified in n, built once per process."""
+    func, keywords = (mat.func, mat.keywords) if isinstance(mat, partial) else (mat, {})
+    key = (
+        type(space),
+        tuple(space.parameters.items()),
+        getattr(func, "__func__", func),  # the function behind a bound method
+        tuple(sorted(keywords.items())),
+    )
+    if key not in _tridiagonals:
+        # The normalization g_n brings in ratios of gamma functions or rising
+        # factorials, which gammasimp reduces to rational functions of n much
+        # faster than simplify does.
+        _tridiagonals[key] = tuple(
+            sp.lambdify(n, sp.gammasimp(sp.sympify(mat(n, n + o))), modules=["jax"])
+            for o in (-1, 0, 1)
+        )
+    return _tridiagonals[key]
+
+
+@cache
+def _pg_stencil(
+    family: type[Jacobi], parameters: tuple[tuple[str, Any], ...], k: int
+) -> dict[int, Expr]:
+    """Return `family(**parameters).pg_stencil(k)`, computed once per process."""
+    Q = family(0, **dict(parameters))
+    j = Symbol("j", integer=True, nonnegative=True)  # settles Piecewise for j < 0
+    # Write d^k Q_{j+k} = g_{j+k} psi^{(k)}_{j+k} P^{(a+k,a+k)}_j and expand
+    # (1-x^2)^k P^{(a+k,a+k)}_j in P^{(a,a)}_{j+2m}, one factor at a time, with
+    #   (1-x^2) P^{(c+1,c+1)}_p = 2(p+c+1) / (2p+2c+3) P^{(c,c)}_p
+    #                             - 4(p+1)(p+2) / ((2p+2c+3)(2p+2c+4)) P^{(c,c)}_{p+2}
+    # for c = a+k-1, ..., a. It has no singularity, unlike the Gegenbauer form,
+    # which degenerates for Chebyshev (a = -1/2). Then P^{(a,a)}_p = Q_p / g_p.
+    e: dict[int, Expr] = {0: sp.S.One}
+    for c in (Q.alpha + i for i in reversed(range(k))):
+        f: dict[int, Expr] = {}
+        for m, v in e.items():
+            p = j + 2 * m
+            f[m] = f.get(m, 0) + v * 2 * (p + c + 1) / (2 * p + 2 * c + 3)
+            f[m + 1] = f.get(m + 1, 0) - v * 4 * (p + 1) * (p + 2) / (
+                (2 * p + 2 * c + 3) * (2 * p + 2 * c + 4)
+            )
+        e = f
+    s = Q.gn(j + k) * Q.psi(j + k, k) / Q.h(j + k, k)
+    return {
+        2 * m: sp.factor(sp.gammasimp(s * v / Q.gn(j + 2 * m))).subs(j, n)
+        for m, v in e.items()
+    }

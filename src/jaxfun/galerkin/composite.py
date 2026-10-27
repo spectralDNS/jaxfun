@@ -4,7 +4,7 @@ import copy
 import functools
 import itertools
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -314,9 +314,9 @@ class Composite(OrthogonalSpace):
         fun_str: Symbol stem for basis functions.
         system: Optional coordinate system.
         stencil: Optional custom stencil, a `Stencil` or a dict {shift: sympy_expr}.
-        alpha: Jacobi alpha (for Jacobi-based bases).
-        beta: Jacobi beta.
         scaling: SymPy expression scaling the stencil diagonals.
+        **kw: Keyword arguments of the orthogonal basis, e.g. alpha and beta
+            for Jacobi, lambda_ and normalization for Ultraspherical.
 
     Attributes:
         orthogonal: Instance of underlying orthogonal basis.
@@ -328,6 +328,9 @@ class Composite(OrthogonalSpace):
     """
 
     is_orthogonal: bool = False
+    # The test space the 'tau' test functions are recombined from, chosen for
+    # the sparsest matrices of the family.
+    _tau_base: TestSpaceKind = TestSpaceKind.PETROV_GALERKIN
 
     def __init__(  # noqa: D401  (docstring above)
         self,
@@ -339,23 +342,20 @@ class Composite(OrthogonalSpace):
         fun_str: str = "phi",
         system: CoordSys | None = None,
         stencil: Stencil | dict | None = None,
-        alpha: Number | float = 0,  # Used if orthogonal is Jacobi; ignored otherwise.
-        beta: Number | float = 0,  # Used if orthogonal is Jacobi; ignored otherwise.
         scaling: sp.Expr | None = None,
+        **kw: Any,
     ) -> None:
         scaling = scaling if scaling is not None else sp.S.One
         domain = Domain(-1, 1) if domain is None else domain
         super().__init__(N, domain=domain, system=system, name=name, fun_str=fun_str)
-        self.orthogonal: Jacobi = orthogonal(
-            N, domain=domain, alpha=alpha, beta=beta, system=system
-        )
+        self.orthogonal: Jacobi = orthogonal(N, domain=domain, system=system, **kw)
         self.bcs: BoundaryConditions = BoundaryConditions(bcs)
         if stencil is None:
             assert isinstance(self.orthogonal, Jacobi), (
                 "Automatic stencil derivation only supported for Jacobi-based "
                 "orthogonal bases. Provide custom stencil dict otherwise."
             )
-            stencil = get_stencil_matrix(self.bcs, self.orthogonal)
+            stencil = self._default_stencil()
         stencil = stencil if isinstance(stencil, Stencil) else Stencil(stencil)
         shape = (self.dim, N)
         # The stencil is kept unscaled, so that copies of this space, and test
@@ -364,6 +364,10 @@ class Composite(OrthogonalSpace):
         self.stencil: Stencil = stencil.resolved(shape, self.bcs, self.orthogonal)
         self.S: DiaMatrix = self.stencil.scaled(scaling).matrix(shape)
         self.ST: DiaMatrix = self.S.T
+
+    def _default_stencil(self) -> dict:
+        """Return the stencil of the basis when none is given."""
+        return get_stencil_matrix(self.bcs, self.orthogonal)
 
     @functools.cached_property
     def P(self) -> DiaMatrix:
@@ -556,9 +560,8 @@ class Composite(OrthogonalSpace):
             fun_str=self.fun_str,
             system=self.system,
             stencil=self.stencil,
-            alpha=self.orthogonal.alpha,
-            beta=self.orthogonal.beta,
             scaling=self.scaling,
+            **self.orthogonal.parameters,
         )
 
     def get_orthogonal(self) -> OrthogonalSpace:
@@ -573,21 +576,39 @@ class Composite(OrthogonalSpace):
         scaling: sp.Expr | None = None,
         tau_basis: Sequence[tuple[OrthogonalSpace, int]] | None = None,
     ) -> Composite:
-        """Return the Galerkin test space, scaled by `scaling` only.
+        """Return the test space of `kind`, scaled by `scaling` only.
 
-        The test space does not inherit this space's scaling, so it is this
-        space itself only when neither is scaled. `tau_basis` is for the 'tau'
-        test spaces of the subclasses that have one.
+        The test space does not inherit this space's scaling, so the Galerkin
+        one is this space itself only when neither is scaled. Petrov-Galerkin is
+        the `PGComposite` of order the number of boundary conditions, and
+        Galerkin-recombined is that with its last few test functions, which
+        reach beyond the trial degree, swapped for trial functions. The 'tau'
+        test space makes testing the tau method with the tau polynomials
+        `tau_basis`, by default Lanczos' method; see `TauRecombined`.
         """
         kind = TestSpaceKind.coerce(kind)
-        if kind != TestSpaceKind.GALERKIN:
-            raise NotImplementedError(
-                f"Unsupported test space kind {kind!r} for Composite. "
+        if kind == TestSpaceKind.TAU:
+            return self._tau_testspace(tau_basis, name, fun_str, scaling)
+        if kind == TestSpaceKind.GALERKIN_RECOMBINED:
+            P = self.get_testspace(TestSpaceKind.PETROV_GALERKIN, scaling=scaling)
+            return cast(PGComposite, P).recombine(self, name=name, fun_str=fun_str)
+        if kind == TestSpaceKind.PETROV_GALERKIN:
+            return PGComposite(
+                self.N,
+                type(self.orthogonal),
+                order=self.bcs.num_bcs(),
+                domain=self.domain,
+                system=self.system,
+                name=name,
+                fun_str=fun_str,
+                scaling=scaling,
+                **self.orthogonal.parameters,
             )
         if name is None and fun_str is None and scaling is None and self.scaling == 1:
             return self
 
-        return Composite(
+        # type(self) keeps the Galerkin fast paths of a subclass like LGComposite.
+        return type(self)(
             N=self.orthogonal.dim,
             orthogonal=self.orthogonal.__class__,
             bcs=self.bcs,
@@ -597,8 +618,7 @@ class Composite(OrthogonalSpace):
             system=self.system,
             stencil=self.stencil,
             scaling=scaling,
-            alpha=self.orthogonal.alpha,
-            beta=self.orthogonal.beta,
+            **self.orthogonal.parameters,
         )
 
     def _tau_testspace(
@@ -609,9 +629,8 @@ class Composite(OrthogonalSpace):
         scaling: sp.Expr | None,
     ) -> TauRecombined:
         """Return the test space that makes testing the tau method `tau_basis`."""
-        pg = self.get_testspace(TestSpaceKind.PETROV_GALERKIN, scaling=scaling)
-        pg = cast(PGComposite, pg)
-        return TauRecombined(pg, self, tau_basis, name=name, fun_str=fun_str)
+        base = self.get_testspace(self._tau_base, scaling=scaling)
+        return TauRecombined(base, self, tau_basis, name=name, fun_str=fun_str)
 
     def __add__(self, b: BCGeneric) -> DirectSum:
         """Direct sum self ⊕ b."""
@@ -649,6 +668,7 @@ class BCGeneric(Composite):
 
     All degrees of freedom correspond to boundary modes; num_dofs == 0.
     Used to construct direct sums (solution space ⊕ boundary lift space).
+    Keyword arguments `**kw` go to the orthogonal basis, as for `Composite`.
     """
 
     def __init__(  # noqa: D401
@@ -661,9 +681,8 @@ class BCGeneric(Composite):
         fun_str: str = "B",
         system: CoordSys | None = None,
         stencil: dict | None = None,
-        alpha: Number | float = 0,
-        beta: Number | float = 0,
         num_quad_points: int = 0,
+        **kw: Any,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
         bcs: BoundaryConditions = BoundaryConditions(bcs, domain=domain)
@@ -673,11 +692,7 @@ class BCGeneric(Composite):
         self.bcs = bcs
         self._num_quad_points = num_quad_points
         self.orthogonal = orthogonal(
-            bcs.num_bcs() + bcs.num_derivatives(),
-            domain=domain,
-            alpha=alpha,
-            beta=beta,
-            system=system,
+            bcs.num_bcs() + bcs.num_derivatives(), domain=domain, system=system, **kw
         )
         S = get_bc_basis(bcs, self.orthogonal)
         self.orthogonal.N = S.shape[1]
@@ -951,8 +966,33 @@ class DirectSum:
         return self._ds_from_orthogonal(self[0].orthogonal.forward(uj), bvals)
 
 
-class PGComposite(Composite):
-    """Composite basis with Petrov-Galerkin [1] test functions (stencil on test side).
+class _TestSpace:
+    """Mixin of the spaces that are only ever test spaces."""
+
+    def get_testspace(self, *args: Any, **kwargs: Any) -> NoReturn:
+        """Raise, since test spaces are created from a trial space only."""
+        raise TypeError(
+            f"{type(self).__name__} is a test space; call get_testspace on the "
+            "trial space instead"
+        )
+
+
+class PGComposite(_TestSpace, Composite):
+    r"""Composite basis with Petrov-Galerkin [1] test functions (stencil on test side).
+
+    The test functions of order k are
+
+    .. math::
+        \psi_j = \frac{(1-x^2)^k}{h^{(k)}_{j+k}} \partial^k Q_{j+k},
+        \quad j = 0, 1, \ldots, N-k-1,
+
+    for the orthogonal functions :math:`Q_j`, here of a Jacobi space with
+    alpha = beta, see `Jacobi.pg_stencil`. They satisfy
+    :math:`(\psi_j, \partial^k Q_l)_{\omega} = \delta_{j, l-k}`, which makes the
+    matrices of operators with up to k derivatives and polynomial coefficients
+    banded, where Galerkin would give dense ones. Create with
+    `V.get_testspace("PG")` for a trial space `V`, which takes k as the number
+    of boundary conditions of `V`.
 
     The test functions of [1] reach `order` degrees above the trial functions.
     Here they are truncated to the N orthogonal modes of the trial space, which
@@ -968,16 +1008,13 @@ class PGComposite(Composite):
     Args:
         N: Target (unconstrained) number of modes of underlying orthogonal.
         orthogonal: Underlying orthogonal basis class (e.g. Chebyshev).
-        bcs: BoundaryConditions specification.
-        domain: Physical domain (defaults to [-1, 1]).
-        name: Space name.
-        fun_str: Symbol stem for basis functions.
-        system: Optional coordinate system.
-        stencil: Optional custom stencil dict {shift: sympy_expr}.
-        alpha: Jacobi alpha (for Jacobi-based bases).
-        beta: Jacobi beta.
-        scaling: SymPy expression scaling the stencil diagonals.
         order: Highest derivative order for trial function.
+        domain: Physical domain (defaults to [-1, 1]).
+        name: Space name, by default "PG{order}".
+        fun_str: Symbol stem for basis functions, by default "phi_{order}".
+        system: Optional coordinate system.
+        scaling: SymPy expression scaling the stencil diagonals.
+        **kw: Keyword arguments of the orthogonal basis, as for `Composite`.
 
     Attributes:
         orthogonal: Instance of underlying orthogonal basis.
@@ -985,6 +1022,22 @@ class PGComposite(Composite):
         S_test: Sparse (DiaMatrix) stencil matrix for test functions.
         scaling: Scaling expression applied to user stencil.
         order: Highest derivative order for trial functions.
+
+    Examples:
+        >>> from jaxfun.galerkin import FunctionSpace, TestFunction, TrialFunction
+        >>> from jaxfun.galerkin import inner
+        >>> from jaxfun.galerkin.Chebyshev import Chebyshev
+        >>> from jaxfun.galerkin.composite import PGComposite
+        >>> V = Chebyshev(7)
+        >>> P = PGComposite(7, Chebyshev, order=2)
+        >>> x = V.system.x
+        >>> A = inner(TrialFunction(V).diff(x, 2) * TestFunction(P), sparse=True)
+        >>> A.todense()
+        Array([[0., 0., 1., 0., 0., 0., 0.],
+               [0., 0., 0., 1., 0., 0., 0.],
+               [0., 0., 0., 0., 1., 0., 0.],
+               [0., 0., 0., 0., 0., 1., 0.],
+               [0., 0., 0., 0., 0., 0., 1.]], dtype=float32)
 
     References:
         [1] M. Mortensen, A Generic and Strictly Banded Spectral Petrov-Galerkin
@@ -996,32 +1049,29 @@ class PGComposite(Composite):
         self,
         N: int,
         orthogonal: type[Jacobi],
-        bcs: BoundaryConditions | dict,
-        domain: Domain | None = None,
-        name: str = "PGComposite",
-        fun_str: str = "phi",
-        system: CoordSys | None = None,
-        stencil: dict | None = None,
-        alpha: Number | float = 0,
-        beta: Number | float = 0,
-        scaling: sp.Expr | None = None,
         order: int = 1,
+        domain: Domain | None = None,
+        name: str | None = None,
+        fun_str: str | None = None,
+        system: CoordSys | None = None,
+        scaling: sp.Expr | None = None,
+        **kw: Any,
     ) -> None:
         assert order >= 0, "Order must be nonnegative for Petrov-Galerkin composite."
-        # Set before the parent builds S, whose rows `dim` counts.
         self.order = order
+        # The test functions vanish at both ends with their first k - 1
+        # derivatives; order 0 has those of order 1.
+        bc = dict.fromkeys(("D", "N", "N2", "N3", "N4")[: max(order, 1)], 0)
         super().__init__(
             N,
             orthogonal,
-            bcs,
+            {"left": bc, "right": bc},
             domain=domain,
-            name=name,
-            fun_str=fun_str,
+            name=name if name is not None else f"PG{order}",
+            fun_str=fun_str if fun_str is not None else f"phi_{order}",
             system=system,
-            stencil=stencil,
-            alpha=alpha,
-            beta=beta,
             scaling=scaling,
+            **kw,
         )
         # The full PG space has N - order rows, as wide as its stencil reaches,
         # and the rows that reach past N are cut at width N in S.
@@ -1033,6 +1083,10 @@ class PGComposite(Composite):
     def dim(self) -> int:
         """Return dimension of the test space, one function per trial function."""
         return self.N - self.order
+
+    def _default_stencil(self) -> dict:
+        """Return the stencil of the test functions, see `Jacobi.pg_stencil`."""
+        return self.orthogonal.pg_stencil(max(self.order, 1))
 
     def recombine(
         self,
@@ -1100,6 +1154,15 @@ class PGComposite(Composite):
         assert isinstance(u, Jacobi | Composite), (
             "Trial space must be Jacobi or Composite."
         )
+        # The recurrences hold only for trial functions of the family, and with
+        # the parameters, that the test functions are derived from. Any other
+        # trial space falls back to quadrature.
+        orth = u.orthogonal
+        if (
+            type(orth) is not type(self.orthogonal)
+            or orth.parameters != self.orthogonal.parameters
+        ):
+            return None
 
         def Bkl(k: int, l: int, V: Jacobi | Composite) -> DiaMatrix:
             B = V.orthogonal.B(V.N + 2 * (k - l))
@@ -1144,7 +1207,7 @@ class PGComposite(Composite):
         return z
 
 
-class GalerkinRecombined(Composite):
+class GalerkinRecombined(_TestSpace, Composite):
     r"""Galerkin test functions recombined for sparsity of operators.
 
     Create with `V.get_testspace("GR")`, where `V` is a trial space.
@@ -1224,6 +1287,7 @@ class GalerkinRecombined(Composite):
             system=trial.system,
             stencil=pg.stencil.with_overrides({int(i): S_trial[i] for i in rows}),
             scaling=pg.scaling,
+            **trial.orthogonal.parameters,
         )
         self._pg = pg
         self._replaced = rows
@@ -1246,8 +1310,8 @@ class GalerkinRecombined(Composite):
         return _replace_rows(z, self._replaced, self._replaced_rows, self, trial, q)
 
 
-class TauRecombined(Composite):
-    r"""Petrov-Galerkin test functions recombined to give a tau method.
+class TauRecombined(_TestSpace, Composite):
+    r"""Petrov-Galerkin or Galerkin test functions recombined to give a tau method.
 
     Create with `V.get_testspace("tau", tau_basis=...)`, where `V` is a
     Chebyshev or Legendre trial space with boundary conditions. `tau_basis`
@@ -1267,9 +1331,10 @@ class TauRecombined(Composite):
     less than N. That is the same as testing with the polynomials of degree
     less than N that are orthogonal to every :math:`X_t` in the inner product
     of the trial space. This space is a basis of those made of the
-    Petrov-Galerkin test functions :math:`\psi_k`. The few of the last ones
-    that have to change are recombined with the next Petrov-Galerkin
-    functions and truncated to N modes, which keeps their banded matrices.
+    Petrov-Galerkin test functions :math:`\psi_k`, or for Legendre of the
+    Galerkin ones, which give it the sparser matrices. The few of the last ones
+    that have to change are recombined with the next functions of the same
+    kind and truncated to N modes, which keeps their banded matrices.
 
     For two boundary conditions in Chebyshev polynomials, with `T`, `U` and
     `C2` the spaces of the Chebyshev polynomials of the first and second kind
@@ -1290,7 +1355,7 @@ class TauRecombined(Composite):
     for a Dirichlet trial space.
 
     Args:
-        pg: The Petrov-Galerkin test space.
+        base: The test space recombined, Petrov-Galerkin or Galerkin.
         trial: The trial space it tests.
         tau_basis: The tau polynomials, as pairs `(S, k)` of an orthogonal
             space and one of its modes. Defaults to the last modes of the
@@ -1311,6 +1376,14 @@ class TauRecombined(Composite):
         For Neumann conditions, the tau polynomials of the Galerkin method are
         combinations of several modes, which `tau_basis` does not take.
 
+        For a Legendre trial space with the a conditions
+        :math:`u = u' = \ldots = u^{(a-1)} = 0` at x = -1 and the b like them
+        at x = 1, the Galerkin method is the tau method with the last a + b
+        modes of
+        `Jacobi(N, alpha=b, beta=a)`, for a = b = 1 those of
+        `Ultraspherical(N, lambda_=3/2)`, the derivatives of the Legendre
+        polynomials. They leave every Galerkin test function unchanged.
+
         For a Chebyshev trial space with m boundary conditions of any kind,
         the Petrov-Galerkin method, `V.get_testspace("PG")`, is the tau method
         with :math:`C^{(m)}_{N-1}, \ldots, C^{(m)}_{N-m}`. When m is also the
@@ -1325,55 +1398,54 @@ class TauRecombined(Composite):
 
     def __init__(
         self,
-        pg: PGComposite,
+        base: Composite,
         trial: Composite,
         tau_basis: Sequence[tuple[OrthogonalSpace, int]] | None = None,
         name: str | None = None,
         fun_str: str | None = None,
     ) -> None:
         orth = trial.orthogonal
+        m = trial.bcs.num_bcs()
         if tau_basis is None:
-            tau_basis = [(orth, -k) for k in range(1, pg.order + 1)]
-        if len(tau_basis) != pg.order:
+            tau_basis = [(orth, -k) for k in range(1, m + 1)]
+        if len(tau_basis) != m:
             raise ValueError(
-                f"Got {len(tau_basis)} tau polynomials for {pg.order} boundary "
+                f"Got {len(tau_basis)} tau polynomials for {m} boundary "
                 "conditions; there must be one per condition."
             )
         X = np.array([_coefficients_in(orth, S, k) for S, k in tau_basis])
-        rows = _tau_rows(pg, orth, X)
+        rows = _tau_rows(base, orth, X)
         super().__init__(
             trial.N,
             type(orth),
             trial.bcs,
             domain=trial.domain,
-            name=name if name is not None else pg.name + "_tau",
-            fun_str=fun_str if fun_str is not None else pg.fun_str,
+            name=name if name is not None else base.name + "_tau",
+            fun_str=fun_str if fun_str is not None else base.fun_str,
             system=trial.system,
-            stencil=pg.stencil.with_overrides(rows),
-            scaling=pg.scaling,
+            stencil=base.stencil.with_overrides(rows),
+            scaling=base.scaling,
+            **orth.parameters,
         )
-        self._pg = pg
+        self._base = base
         self._replaced = np.array(sorted(rows), dtype=int)
 
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
     ) -> DiaMatrix | Matrix | None:
-        """Return the PG matrix with the replaced rows recomputed.
+        """Return the matrix of the base test space with the replaced rows
+        recomputed.
 
         The replaced rows come from the recurrences of the orthogonal basis, as
         for `GalerkinRecombined`.
         """
-        z = self._pg._recurrence_matrices(i, trial, q)
-        if z is None:
+        if i != 0:  # the replaced rows are computed for the test functions only
             return None
-        rows = self._replaced
-        if q > trial[1]:
-            # As in `PGComposite`: x^q lifts the trial functions past mode N - 1,
-            # which the kept PG rows truncated at N do not see.
-            rows = np.union1d(rows, self._pg._truncated)
-        if len(rows) == 0:
+        z = self._base._matrices(i, trial, q)
+        if z is None or len(self._replaced) == 0:
             return z
-        return _replace_rows(z, rows, np.asarray(self.S.get_rows(rows)), self, trial, q)
+        rows = np.asarray(self.S.get_rows(self._replaced))
+        return _replace_rows(z, self._replaced, rows, self, trial, q)
 
 
 def _coefficients_in(orth: OrthogonalSpace, S: OrthogonalSpace, k: int) -> np.ndarray:
@@ -1389,11 +1461,11 @@ def _coefficients_in(orth: OrthogonalSpace, S: OrthogonalSpace, k: int) -> np.nd
 
 
 def _tau_rows(
-    pg: PGComposite, orth: OrthogonalSpace, X: np.ndarray
+    base: Composite, orth: OrthogonalSpace, X: np.ndarray
 ) -> dict[int, np.ndarray]:
-    """Return the rows of `pg` that the tau polynomials `X` change, and to what.
+    """Return the rows of `base` that the tau polynomials `X` change, and to what.
 
-    The Petrov-Galerkin functions extended to N rows, psi_0, ..., psi_{N-1},
+    The test functions of `base` extended to N rows, psi_0, ..., psi_{N-1},
     determine every polynomial of degree less than N through its inner
     products with them. Testing the tau equation with all N and eliminating
     the taus from the last m rows, one per tau polynomial, leaves N - m test
@@ -1401,7 +1473,7 @@ def _tau_rows(
     N modes matter, since the residual has degree less than N.
 
     Args:
-        pg: The Petrov-Galerkin test space, of N - m functions.
+        base: The test space recombined, of N - m functions.
         orth: The orthogonal space of the trial space.
         X: The tau polynomials as coefficients of `orth`, shape (m, N).
 
@@ -1409,9 +1481,9 @@ def _tau_rows(
         The changed rows, unscaled, by index, as coefficients of `orth`.
     """
     N, m = orth.N, len(X)
-    psi = pg.stencil.matrix((N, N + pg.order)).todense()
+    psi = base.stencil.matrix((N, N)).todense()
     tol = np.sqrt(np.finfo(psi.dtype).eps)
-    psi = np.array(psi, dtype=float)[:, :N]
+    psi = np.array(psi, dtype=float)
     P = (psi * np.asarray(orth.norm_squared(), dtype=float)) @ X.T
     top = np.arange(N - m, N)
     # The tau polynomials' normalisations are arbitrary and leave G unchanged;
@@ -1427,7 +1499,7 @@ def _tau_rows(
         )
     G = np.eye(N) - P @ np.linalg.solve(P[top], np.eye(N)[top])
     rows, kept = (G @ psi)[: N - m], psi[: N - m]
-    # Rows changed by round-off only keep their PG function exactly.
+    # Rows changed by round-off only keep their base function exactly.
     scale = np.abs(kept).max(axis=1, keepdims=True)
     changed = np.flatnonzero(np.abs(rows - kept).max(axis=1) > tol * scale[:, 0])
     rows[np.abs(rows) < tol * scale] = 0
@@ -1550,11 +1622,16 @@ def get_stencil_matrix(bcs: BoundaryConditions, orthogonal: Jacobi) -> dict:
         elif orthogonal.name == "Chebyshev":
             return {0: 1, 2: 2 * (-n - 2) / (n + 3), 4: (n + 1) / (n + 3)}
 
+    def simplify(expr: sp.Expr) -> sp.Expr:
+        # The traces are ratios of Gamma functions; this does what `sp.simplify`
+        # does with them, but several times faster.
+        return sp.factor(sp.gammasimp(expr))
+
     traces = _bc_traces(bcs, orthogonal)
     shifts = range(1, 1 + len(traces))
-    A = sp.Matrix([[sp.simplify(g(n + j)) for j in shifts] for g in traces])
-    b = sp.Matrix([-sp.simplify(g(n)) for g in traces])
-    M = sp.simplify(A.solve(b))
+    A = sp.Matrix([[simplify(g(n + j)) for j in shifts] for g in traces])
+    b = sp.Matrix([-simplify(g(n)) for g in traces])
+    M = A.solve(b).applyfunc(simplify)
     d = {0: 1}
     for i, s in enumerate(M):
         if s != 0:

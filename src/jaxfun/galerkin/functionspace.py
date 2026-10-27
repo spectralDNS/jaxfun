@@ -99,7 +99,8 @@ def FunctionSpace(
         name: Name of the resulting space (used for symbolic function ids).
         fun_str: Basis function symbol stem.
         **kw: Extra keyword arguments forwarded to the base `space`
-            constructor (e.g. alpha/beta for Jacobi, scaling, stencil).
+            constructor (e.g. alpha/beta for Jacobi, lambda_/normalization for
+            Ultraspherical) or, with bcs, to the composite (scaling, stencil).
 
     Returns:
         BaseSpace | Composite | DirectSum:
@@ -118,7 +119,6 @@ def FunctionSpace(
         No boundary conditions:
             V = FunctionSpace(32, Chebyshev)
     """
-    from jaxfun.galerkin.Chebyshev import CGComposite, Chebyshev
     from jaxfun.galerkin.Legendre import Legendre, LGComposite
 
     N = operator.index(N)
@@ -136,13 +136,7 @@ def FunctionSpace(
         bcs = BoundaryConditions(bcs, domain=domain)
         assert issubclass(space, Jacobi)
 
-        compspace = (
-            LGComposite
-            if issubclass(space, Legendre)
-            else CGComposite
-            if issubclass(space, Chebyshev)
-            else Composite
-        )
+        compspace = LGComposite if issubclass(space, Legendre) else Composite
         C = compspace(
             N,
             space,
@@ -168,6 +162,7 @@ def FunctionSpace(
             system=system,
             num_quad_points=N,
             **kwb,
+            **C.orthogonal.parameters,
         )
         C.name += "0"
         return DirectSum(C, B)

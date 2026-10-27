@@ -313,6 +313,71 @@ class BaseScalar(AtomicExpr):
         return self.system._map_base_scalar_to_symbol[self]
 
 
+class MetricSymbol(sp.Function):
+    """A metric quantity of a coordinate system, kept as a symbol.
+
+    A coordinate system created with ``symbolic_metric=True`` writes its metric
+    in terms of symbols instead of expanding it in the coordinates: the
+    covariant components g_ij (`MetricComponent`) and their determinant g
+    (`MetricDeterminant`). The symbols are functions of the coordinates. Their
+    derivatives are those of the explicit expressions, and generated code
+    (``lambdify``) evaluates the explicit expressions. Use
+    :meth:`CoordSys.expand_metric` to replace them by the explicit expressions.
+
+    Each coordinate system has its own subclass per symbol, applied to its base
+    scalars.
+    """
+
+    _system: CoordSys
+    _key: tuple[int, int] | None  # (i, j) for g_ij, None for g
+    _label: str
+    _latex_label: str
+    is_real = True
+
+    @property
+    def system(self) -> CoordSys:
+        return self._system
+
+    @property
+    def explicit(self) -> Expr:
+        """Return the expression in the coordinates that the symbol stands for."""
+        return self._system._explicit_metric(self._key)
+
+    def fdiff(self, argindex: int = 1) -> Expr:
+        return self._system._diff_explicit_metric(self._key, argindex - 1)
+
+    def _sympystr(self, printer: Any) -> str:
+        return self._label
+
+    def _latex(self, printer: Any = None) -> str:
+        return self._latex_label
+
+    def _pretty(self, printer: Any = None) -> prettyForm:
+        return prettyForm(self._label)
+
+    def _jaxcode(self, printer: Any) -> str:
+        return printer._print(self.explicit)
+
+
+class MetricDeterminant(MetricSymbol):
+    """Determinant g = det(g_ij) of the covariant metric tensor, as a symbol.
+
+    g is positive, so powers of it combine as they do for a positive symbol
+    (``sqrt(g)**2 == g``). A ``symbolic_metric`` system writes
+    ``g^ij = adj(g_ij) / g`` and ``sqrt(g)`` for the volume element.
+    """
+
+    is_positive = True
+
+
+class MetricComponent(MetricSymbol):
+    """Component g_ij of the covariant metric tensor, as a symbol.
+
+    The diagonal components are positive. Components that vanish identically
+    are kept as zero rather than as symbols.
+    """
+
+
 class BaseVector(Vector, AtomicExpr):  # ty:ignore[invalid-method-override]
     """Covariant base vector of a coordinate system
 
@@ -565,6 +630,11 @@ class CoordSys(Basic):
     _ct: np.ndarray[Any, np.dtype[np.object_]] | None
     _det_g: dict[bool, Expr | None]
     _sqrt_det_g: dict[bool, Expr | None]
+    _symbolic_metric: bool
+    _g_symbol: MetricDeterminant | None
+    _g_sym: np.ndarray[Any, np.dtype[np.object_]] | None
+    _adj: np.ndarray[Any, np.dtype[np.object_]] | None
+    _d_metric: dict[tuple[tuple[int, int] | None, int], Expr]
     _dbase: dict[tuple[BaseVector, int], VectorLike]
     _map_base_scalar_to_index: dict[BaseScalar, int]
 
@@ -602,6 +672,7 @@ class CoordSys(Basic):
         assumptions: AssumptionKeys | bool = True,
         replace: Sequence[tuple[Any, Any]] = (),
         measure: Callable[..., Any] = sp.count_ops,
+        symbolic_metric: bool = False,
     ):
         """Creates and initializes a coordinate system.
 
@@ -616,6 +687,11 @@ class CoordSys(Basic):
             replace: List/tuple of (pattern, replacement) pairs to aid simplification.
             measure: Custom operation counting function for complexity-guided
                 simplification.
+            symbolic_metric: If True, keep the covariant metric components g_ij
+                and their determinant g as symbols (see `MetricSymbol`), so that
+                `sg` is sqrt(g) and the contravariant metric tensor and the
+                Christoffel symbols are written over g in terms of g_ij. Use
+                `expand_metric` for the explicit expressions.
 
         Returns:
             The constructed coordinate system instance.
@@ -737,6 +813,15 @@ class CoordSys(Basic):
         obj._det_g = {True: None, False: None}
         obj._sqrt_det_g = {True: None, False: None}
         obj._dbase = {}
+        obj._symbolic_metric = symbolic_metric and not is_cartesian
+        obj._g_symbol = None
+        if obj._symbolic_metric:
+            obj._g_symbol = cast(
+                MetricDeterminant, obj._metric_symbol(MetricDeterminant, None, "g")
+            )
+        obj._g_sym = None
+        obj._adj = None
+        obj._d_metric = {}
 
         for k in obj._cartesian_xyz:
             setattr(obj, k.name, k)
@@ -842,6 +927,85 @@ class CoordSys(Basic):
             return sp.Integer(1)
         return self.get_sqrt_det_g(True)
 
+    @property
+    def symbolic_metric(self) -> bool:
+        """Whether the metric determinant is kept as a symbol g."""
+        return self._symbolic_metric
+
+    def expand_metric[T: sp.Basic](self, expr: T) -> T:
+        """Return `expr` with the metric symbols made explicit.
+
+        For a system created with ``symbolic_metric=True``, the symbols g_ij and
+        every power of g are replaced by their explicit expressions in the
+        coordinates; in particular sqrt(g) becomes the explicit (refined) square
+        root. Other systems return `expr` unchanged.
+
+        Args:
+            expr: Expression that may contain the metric symbols.
+
+        Returns:
+            The expression without metric symbols.
+        """
+        if not self._symbolic_metric:
+            return expr
+        g = self._g_symbol
+        sg = self.get_sqrt_det_g(True, explicit=True)
+        # Powers first: g**e is sg**(2e), where replacing g alone would leave
+        # sqrt(sg**2), which SymPy does not reduce to sg.
+        out = sp.sympify(expr).replace(
+            lambda e: e.is_Pow and e.base == g, lambda e: sg ** (2 * e.exp)
+        )
+        rule: dict[Basic, Expr] = {cast(MetricDeterminant, g): sg**2}
+        if self._g_sym is not None:
+            rule |= {
+                c: c.explicit for c in self._g_sym.flat if isinstance(c, MetricSymbol)
+            }
+        return cast(T, out.xreplace(rule))
+
+    def _metric_symbol(
+        self,
+        cls: type[MetricSymbol],
+        key: tuple[int, int] | None,
+        label: str,
+        latex_label: str | None = None,
+        **assumptions: bool,
+    ) -> MetricSymbol:
+        """Return a metric symbol of this system, applied to its base scalars.
+
+        Each symbol gets a subclass of its own that carries the system, so it
+        knows its system whatever its arguments, e.g. after
+        expr_base_scalar_to_psi.
+        """
+        attrs = {
+            "_system": self,
+            "_key": key,
+            "_label": label,
+            "_latex_label": label if latex_label is None else latex_label,
+            **{f"is_{k}": v for k, v in assumptions.items()},
+        }
+        symbol = cast(type[MetricSymbol], type(label, (cls,), attrs))
+        return symbol(*self._base_scalars)
+
+    def _explicit_metric(self, key: tuple[int, int] | None) -> Expr:
+        """Return the explicit g_ij for key (i, j), or det(g_ij) for key None."""
+        if key is None:
+            return self.get_det_g(True, explicit=True)
+        return self.get_covariant_metric_tensor(explicit=True)[key]
+
+    def _diff_explicit_metric(self, key: tuple[int, int] | None, i: int) -> Expr:
+        """Return the derivative of `_explicit_metric(key)` with respect to q^i."""
+        if (key, i) not in self._d_metric:
+            d = self._explicit_metric(key).diff(self._base_scalars[i])
+            self._d_metric[key, i] = self.simplify(d)
+        return self._d_metric[key, i]
+
+    def _metric_adjugate(self) -> np.ndarray[Any, np.dtype[np.object_]]:
+        """Return the adjugate of the covariant metric tensor, adj(g_ij) = g g^ij."""
+        if self._adj is None:
+            adj = sp.Matrix(self.get_covariant_metric_tensor()).adjugate()
+            self._adj = np.array(adj.applyfunc(self.simplify))
+        return self._adj
+
     def get_normal_basis(
         self, as_Vector: bool = False
     ) -> np.ndarray[Any, np.dtype[np.object_]]:
@@ -879,7 +1043,7 @@ class CoordSys(Basic):
 
     @property
     def is_orthogonal(self) -> bool:
-        return sp.Matrix(self.get_covariant_metric_tensor()).is_diagonal()
+        return sp.Matrix(self.get_covariant_metric_tensor(True)).is_diagonal()
 
     @property
     def is_cartesian(self) -> bool:
@@ -1083,49 +1247,62 @@ class CoordSys(Basic):
             raise ValueError("Second index j must be provided for Dyadic components.")
         return b[k] & v & b[j]
 
-    def get_det_g(self, covariant: bool = True) -> Expr:
+    def get_det_g(self, covariant: bool = True, explicit: bool = False) -> Expr:
         """Returns determinant of the metric tensor.
 
         Args:
             covariant: If True, returns det(g_ij); otherwise det(g^ij).
+            explicit: If True, returns the expression in the coordinates also for
+                a system with ``symbolic_metric=True``, which otherwise returns
+                the symbol g (or 1/g).
 
         Returns:
             SymPy expression representing the determinant.
         """
         from jaxfun.operators import express
 
+        if self._symbolic_metric and not explicit:
+            g_sym = cast(MetricDeterminant, self._g_symbol)
+            return g_sym if covariant else 1 / g_sym
         cached = self._det_g[covariant]
         if cached is not None:
             return cached
         if covariant:
-            g: sp.Basic = sp.Matrix(self.get_covariant_metric_tensor()).det()
+            g: sp.Basic = sp.Matrix(self.get_covariant_metric_tensor(True)).det()
+            g = sp.factor(g)
         else:
-            g: sp.Basic = sp.Matrix(self.get_contravariant_metric_tensor()).det()
-        g = sp.factor(self.replace(g))
-        g_out = express(self.refine(self.simplify(g)), self)
+            g = 1 / self.get_det_g(True, explicit=True)
+        g_out = express(self.refine(g), self)
         if not _is_expr(g_out):
             raise TypeError("get_det_g produced a non-scalar expression")
         g = g_out
         self._det_g[covariant] = g
         return g
 
-    def get_sqrt_det_g(self, covariant: bool = True) -> Expr:
+    def get_sqrt_det_g(self, covariant: bool = True, explicit: bool = False) -> Expr:
         """Returns square root of the metric determinant.
 
         Args:
             covariant: If True, uses det(g_ij); else uses det(g^ij).
+            explicit: If True, returns the expression in the coordinates also for
+                a system with ``symbolic_metric=True``, which otherwise returns
+                sqrt(g) (or 1/sqrt(g)) of the symbol g.
 
         Returns:
             SymPy expression (possibly simplified) for sqrt(det(g)).
         """
         from jaxfun.operators import express
 
+        if self._symbolic_metric and not explicit:
+            sg_sym = sp.sqrt(cast(MetricDeterminant, self._g_symbol))
+            return sg_sym if covariant else 1 / sg_sym
         cached = self._sqrt_det_g[covariant]
         if cached is not None:
             return cached
-        g = self.get_det_g(covariant)
-        # sg = self.refine(self.simplify(sp.sqrt(g)))
-        sg = self.refine(sp.sqrt(g))
+        g = self.get_det_g(covariant, explicit=True)
+        # The square root, refined with the assumptions, may leave the bases of
+        # a power differing only by sign, e.g. (a - b)/(b - a)**4.
+        sg = self.simplify(self.refine(sp.sqrt(g)))
         if isinstance(sg, numbers.Number):
             if isinstance(sg, numbers.Real):
                 sg = float(sg)
@@ -1156,12 +1333,10 @@ class CoordSys(Basic):
 
         if self._hi is not None:
             return self._hi
-        hi = np.zeros_like(self.psi)
-
-        for i, s in enumerate(np.sum(self.b**2, axis=1)):
-            hi[i] = sp.sqrt(self.refine(self.simplify(s)))
-            hi[i] = self.refine(hi[i])
-
+        g = self.get_covariant_metric_tensor(True)
+        hi = np.array(
+            [self.refine(sp.sqrt(g[i, i])) for i in range(self.dims)], dtype=object
+        )
         hi = np.array(express(hi, self))
         self._hi = hi
         return hi
@@ -1191,8 +1366,9 @@ class CoordSys(Basic):
         b = np.zeros((len(self.psi), len(self.rv)), dtype=object)
         for i, ti in enumerate(self.psi):
             for j, rj in enumerate(self.rv):
-                b[i, j] = rj.diff(ti, 1)
-                b[i, j] = express(self.refine_replace(self.simplify(b[i, j])), self)
+                # Simplified here, not only in g_ij: a derivative like that of
+                # atan(k tan(x/2)) is smooth only after simplification.
+                b[i, j] = express(self.simplify(rj.diff(ti, 1)), self)
 
         self._b = b
         if as_Vector:
@@ -1254,45 +1430,74 @@ class CoordSys(Basic):
                 )
             return self._bt
 
-        gt = self.get_contravariant_metric_tensor()
         b = self.b
-        bt = np.array(self.simplify(gt @ b))
+        if self._symbolic_metric:
+            # b^k = adj(g_ij)_kl b_l / g, simplifying only the numerators.
+            g_sym = cast(MetricDeterminant, self._g_symbol)
+            num = self._metric_adjugate() @ b
+            bt = np.array([[self.simplify(c) / g_sym for c in row] for row in num])
+        else:
+            gt = self.get_contravariant_metric_tensor()
+            bt = np.array(self.simplify(gt @ b))
         self._bt = bt
         if as_Vector:
             return bt @ np.array(self.get_cartesian_basis_vectors())[: bt.shape[1]]
         return bt
 
-    def get_covariant_metric_tensor(self) -> np.ndarray[Any, np.dtype[np.object_]]:
+    def get_covariant_metric_tensor(
+        self, explicit: bool = False
+    ) -> np.ndarray[Any, np.dtype[np.object_]]:
         """Returns covariant metric tensor g_ij.
 
             g_ij = b_i · b_j
 
+        Args:
+            explicit: If True, returns the expressions in the coordinates also for
+                a system with ``symbolic_metric=True``, which otherwise returns
+                the symbols g_ij (zero where g_ij vanishes identically).
+
         Returns:
             Numpy object array (square matrix) of SymPy expressions.
         """
-        if self._g is not None:
+        if self._g is None:
+            b = self.b
+            # The replacement patterns act here, where they can help simplify
+            # all that follows from the metric.
+            self._g = np.array(self.simplify(self.replace(b @ b.T)))
+        if not self._symbolic_metric or explicit:
             return self._g
-        b = self.b
-        g = np.array(self.refine(self.simplify(b @ b.T)))
-        self._g = g
-        return g
+        if self._g_sym is None:
+            n = self.dims
+            G = np.full((n, n), sp.S.Zero, dtype=object)
+            for i in range(n):
+                for j in range(i, n):
+                    if self._g[i, j] != 0:
+                        G[i, j] = G[j, i] = self._metric_symbol(
+                            MetricComponent,
+                            (i, j),
+                            f"g_{i}{j}",
+                            f"g_{{{i}{j}}}",
+                            **({"positive": True} if i == j else {}),
+                        )
+            self._g_sym = G
+        return self._g_sym
 
     def get_contravariant_metric_tensor(self) -> np.ndarray[Any, np.dtype[np.object_]]:
         """Returns contravariant metric tensor g^ij (inverse of g_ij).
 
-            g^ij = b^i · b^j
+            g^ij = b^i · b^j = adj(g_ij) / det(g_ij)
+
+        For a system with ``symbolic_metric=True`` this is written in the symbols
+        g_ij and g.
 
         Returns:
             Numpy object array of SymPy expressions.
         """
-        if self._gt is not None:
-            return self._gt
-        g = self.get_covariant_metric_tensor()
-        gt = sp.Matrix(g).inv()
-        gt = sp.factor(self.simplify(gt))
-        gt = np.array(gt)
-        self._gt = gt
-        return gt
+        if self._gt is None:
+            det = self.get_det_g()
+            adj = self._metric_adjugate()
+            self._gt = np.array([[a / det for a in row] for row in adj])
+        return self._gt
 
     def get_christoffel_second(self) -> np.ndarray[Any, np.dtype[np.object_]]:
         """Returns Christoffel symbols Γ^k_{ij} (second kind).
@@ -1306,8 +1511,23 @@ class CoordSys(Basic):
         if self._ct is not None:
             return self._ct
         b = self.get_covariant_basis()
-        bt = self.get_contravariant_basis()
         ct = np.zeros((len(self.psi),) * 3, object)
+        if self._symbolic_metric:
+            # Γ^k_ij = adj(g_ij)_kl [ij,l] / g with the first kind symbols
+            # [ij,l] = ∂b_i/∂q^j · b_l, simplifying only the numerators.
+            adj = self._metric_adjugate()
+            g_sym = cast(MetricDeterminant, self._g_symbol)
+            n = range(len(self.psi))
+            for i in n:
+                for j in n:
+                    db = np.array([bij.diff(self.psi[j], 1) for bij in b[i]])
+                    first = [np.dot(db, b[l]) for l in n]
+                    for k in n:
+                        num = sp.Add(*(adj[k, l] * first[l] for l in n))
+                        ct[k, i, j] = self.simplify(num) / g_sym
+            self._ct = ct
+            return ct
+        bt = self.get_contravariant_basis()
         for i in range(len(self.psi)):
             for j in range(len(self.psi)):
                 db = np.array([bij.diff(self.psi[j], 1) for bij in b[i]])
@@ -1395,8 +1615,12 @@ class CoordSys(Basic):
         sc = sp.refine(sc, self._assumptions)
         return self.expr_psi_to_base_scalar(sc)
 
-    def replace[T: sp.Basic](self, sc: T) -> T:  # ty:ignore[invalid-method-override]
+    def replace[T: sp.Basic](self, sc: T, *args: Any, **kwargs: Any) -> T:
         """Performs pattern replacements then restores base scalars.
+
+        Applies the (pattern, replacement) pairs given as ``replace`` when the
+        system was created. Called with more arguments, as SymPy's
+        ``Basic.replace(query, value, ...)``, it acts on the system itself.
 
         Args:
             sc: Expression to process.
@@ -1404,6 +1628,10 @@ class CoordSys(Basic):
         Returns:
             Mutated expression with replacements applied.
         """
+        if args or kwargs:
+            # SymPy walks into the system held by a base scalar, e.g. in
+            # sp.simplify, and calls Basic.replace on it.
+            return cast(T, super().replace(sc, *args, **kwargs))
         sc = self.expr_base_scalar_to_psi(sc)
         for a, b in self._replace:
             sc = cast(T, sc.replace(a, b))
@@ -1526,6 +1754,7 @@ def get_CoordSys(
     assumptions: AssumptionKeys | bool = True,
     replace: Sequence[tuple[Any, Any]] = (),
     measure: Callable[..., Any] = sp.count_ops,
+    symbolic_metric: bool = False,
 ) -> CoordSys:
     """Creates a curvilinear coordinate system with a Cartesian parent.
 
@@ -1539,6 +1768,8 @@ def get_CoordSys(
         assumptions: SymPy assumptions (e.g. sp.Q.real & sp.Q.positive).
         replace: (pattern, replacement) pairs for simplification assistance.
         measure: Custom complexity function used during simplification.
+        symbolic_metric: If True, keep the metric determinant as a symbol g
+            (see `CoordSys`).
 
     Returns:
         A fully constructed CoordSys instance.
@@ -1554,6 +1785,7 @@ def get_CoordSys(
         assumptions=assumptions,
         replace=replace,
         measure=measure,
+        symbolic_metric=symbolic_metric,
     )
 
 

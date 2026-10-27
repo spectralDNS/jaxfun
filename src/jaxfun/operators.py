@@ -368,38 +368,28 @@ def dot(t1: TensorLike, t2: TensorLike) -> TensorLike | Expr:
     ):
         sys1 = t1._sys
         sys2 = t2._sys
-        same_sys: bool = sys1 == sys2
-        same_and_cartesian: bool = same_sys and sys1.is_cartesian
-        if not same_sys:
+        if sys1 != sys2:
             cart1 = sys1.to_cartesian(t1)
             cart2 = sys2.to_cartesian(t2)
             out = dot(cart1, cart2)
             return from_cartesian(out) if _is_tensorlike(out) else out
 
     if isinstance(t1, BaseVector) and isinstance(t2, BaseVector):
-        if same_and_cartesian:
-            return sp.S.One if t1 == t2 else rank_zero
         return _dot_base(t1, t2)
 
     if isinstance(t1, BaseDyadic) and isinstance(t2, BaseVector):
-        if same_and_cartesian:
-            return t1.args[0] if t1.args[1] == t2 else rank_zero
         g0 = _dot_base(t1.args[1], t2)
         if g0 == 0:
             return rank_zero
         return g0 * t1.args[0]
 
     if isinstance(t1, BaseVector) and isinstance(t2, BaseDyadic):
-        if same_and_cartesian:
-            return t2.args[1] if t1 == t2.args[0] else rank_zero
         g0 = _dot_base(t1, t2.args[0])
         if g0 == 0:
             return rank_zero
         return g0 * t2.args[1]
 
     assert isinstance(t1, BaseDyadic) and isinstance(t2, BaseDyadic)
-    if same_and_cartesian:
-        return t1.args[0] | t2.args[1] if t1.args[1] == t2.args[0] else rank_zero
     g0 = _dot_base(t1.args[1], t2.args[0])
     if g0 == 0:
         return rank_zero

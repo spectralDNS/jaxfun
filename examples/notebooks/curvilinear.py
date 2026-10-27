@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.19.11"
+__generated_with = "0.23.15"
 app = marimo.App(width="medium")
 
 
@@ -332,7 +332,7 @@ def _(mo):
     r = \sqrt{x^2+y^2}, \quad \theta = \tan^{-1}(y/x), \quad z = z.
     $$
 
-    This is because Jaxfun is using the covariant basis vectors computed from the forward map, and whenever the Cartesian form of a contravariant basis vector is needed, it is computed from $\mathbf{b}^i = g^{ij} \mathbf{b}_j$, where $[g^{ij}] = [g_{ij}]^{-1}$. So the reverse map is not explicitly used and as such it does not have to be provided by the user.
+    This is because Jaxfun is using the covariant basis vectors computed from the forward map, and whenever a contravariant basis vector is needed, it may be computed from $\mathbf{b}^i = g^{ij} \mathbf{b}_j$, where $[g^{ij}] = [g_{ij}]^{-1}$. So the reverse map is not explicitly used and as such it does not have to be provided by the user.
 
     Note that on the last line in the code section above we overwrite the sympy symbols `r`, `theta`, `z` with objects of type `BaseScalar`.
 
@@ -827,7 +827,7 @@ def _(mo):
     [g_{ij}] = \begin{bmatrix} 1 & 1 \\ 1 & 2 \end{bmatrix}, \quad [g^{ij}] = \begin{bmatrix} 2 & -1 \\ -1 & 1 \end{bmatrix}.
     $$
 
-    The dot product of two gradients is $\nabla f \cdot \nabla h = \frac{\partial F}{\partial X^i} \frac{\partial H}{\partial X^j} \mathbf{b}^i \cdot \mathbf{b}^j = g^{ij} \frac{\partial F}{\partial X^i} \frac{\partial H}{\partial X^j}$, and the Laplacian is computed as the last form of Eq. (17). Had the gradients been expanded in covariant basis vectors, the dot product would instead contain the products $g^{ik} g^{jl} g_{kl}$, which only reduce to $g^{ij}$ after simplification.
+    The dot product of two gradients is $\nabla f \cdot \nabla h = \frac{\partial F}{\partial X^i} \frac{\partial H}{\partial X^j} \mathbf{b}^i \cdot \mathbf{b}^j = g^{ij} \frac{\partial F}{\partial X^i} \frac{\partial H}{\partial X^j}$, and the Laplacian is computed as the last form of Eq. (17).
     """)
     return
 

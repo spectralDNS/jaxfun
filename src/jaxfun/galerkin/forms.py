@@ -313,6 +313,11 @@ def split(forms: sp.Expr) -> ResultDict:
         basisfunctions = get_basisfunctions(arg)
         bilinear = basisfunctions[1] not in (None, set())
         arg = arg.doit(linear=not (bilinear or check_if_nonlinear_in_jaxfunction(arg)))
+        if getattr(V.system, "symbolic_metric", False):
+            # Expanding first lets the powers of the symbol g combine, so a form
+            # scaled by a power of sqrt(g) is polynomial before g is made
+            # explicit and needs no cancellation of rational functions.
+            arg = V.system.expand_metric(sp.expand(arg))
         for argi in sp.Add.make_args(arg.factor().expand()):
             basisfunctions = get_basisfunctions(argi)
             d = _split(argi)

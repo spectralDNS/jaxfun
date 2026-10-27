@@ -7,7 +7,7 @@ import sympy as sp
 from jax import Array
 from scipy.integrate import dblquad
 
-from jaxfun.coordinates import R
+from jaxfun.coordinates import R, get_CoordSys
 from jaxfun.galerkin import (
     CartesianProduct,
     Composite,
@@ -849,3 +849,28 @@ def test_inner_assembles_each_shared_factor_once(
     terms = [inner(3 * v * u, kind="bilinear"), inner(2 * s * v * u, kind="bilinear")]
     expected = sum(cast(TPMatrix, t).todense() for t in terms)
     assert jnp.allclose(A.todense(), expected, atol=ulp(100))
+
+
+def test_inner_symbolic_metric_matches_explicit() -> None:
+    """A system keeping det(g_ij) as a symbol assembles the same operator."""
+    xi, eta = sp.symbols("xi,eta", real=True)
+    mapping = sp.Lambda((xi, eta), ((1 + xi) * (7 - eta) / 4, (1 + eta) * (5 - xi) / 4))
+    assumptions = (
+        sp.Q.positive(xi + 1)
+        & sp.Q.positive(1 - xi)
+        & sp.Q.positive(eta + 1)
+        & sp.Q.positive(1 - eta)
+    )
+    dense = []
+    for name, symbolic in (("IE", False), ("IS", True)):
+        C = get_CoordSys(
+            name, mapping, assumptions=assumptions, symbolic_metric=symbolic
+        )
+        bcs = {"left": {"D": 0}, "right": {"D": 0}}
+        T = TensorProduct(
+            FunctionSpace(4, Legendre, bcs), FunctionSpace(4, Legendre, bcs), system=C
+        )
+        v, u = TestFunction(T), TrialFunction(T)
+        A = cast(TPMatrices, inner(v * Div(Grad(u)) * C.sg**2, sparse=True))
+        dense.append(A.todense())
+    assert jnp.allclose(dense[0], dense[1], atol=ulp(1000))

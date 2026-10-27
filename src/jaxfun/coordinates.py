@@ -592,10 +592,8 @@ class CoordSys(Basic):
     _measure: Callable[..., Any]
     _assumptions: AssumptionKeys | bool
     _replace: Sequence[tuple[Any, Any]]
-    _hi: np.ndarray[Any, np.dtype[np.object_]] | None
     _b: np.ndarray[Any, np.dtype[np.object_]] | None
     _bt: np.ndarray[Any, np.dtype[np.object_]] | None
-    _e: np.ndarray[Any, np.dtype[np.object_]] | None
     _g: np.ndarray[Any, np.dtype[np.object_]] | None
     _gt: np.ndarray[Any, np.dtype[np.object_]] | None
     _ct: np.ndarray[Any, np.dtype[np.object_]] | None
@@ -739,7 +737,7 @@ class CoordSys(Basic):
         obj._root = obj if parent is None else parent._root
 
         # Metric quantities, computed when first asked for
-        obj._hi = obj._b = obj._bt = obj._e = obj._g = obj._gt = obj._ct = None
+        obj._b = obj._bt = obj._g = obj._gt = obj._ct = None
         obj._det_g = obj._sqrt_det_g = None
         obj._g_sym = obj._adj = None
         obj._dbase = {}
@@ -823,14 +821,6 @@ class CoordSys(Basic):
     @property
     def bt(self) -> np.ndarray[Any, np.dtype[np.object_]]:
         return self.get_contravariant_basis()
-
-    @property
-    def e(self) -> np.ndarray[Any, np.dtype[np.object_]]:
-        return self.get_normal_basis()
-
-    @property
-    def hi(self) -> np.ndarray[Any, np.dtype[np.object_]]:
-        return self.get_scaling_factors()
 
     @property
     def sg(self) -> Expr:
@@ -935,29 +925,6 @@ class CoordSys(Basic):
     ) -> np.ndarray[Any, np.dtype[np.object_]]:
         """Return the rows of `a`, holding Cartesian components, as vectors."""
         return a @ np.array(self.get_cartesian_basis_vectors())[: a.shape[1]]
-
-    def get_normal_basis(
-        self, as_Vector: bool = False
-    ) -> np.ndarray[Any, np.dtype[np.object_]]:
-        """Returns orthonormal ("normal") basis vectors.
-
-        For orthogonal coordinate systems, the normal basis vectors are
-        e_i = b_i / h_i where b_i are covariant basis vectors and h_i are
-        the scaling factors.
-
-        Args:
-            as_Vector: If True, returns SymPy Vectors; otherwise returns a
-                raw component array.
-
-        Returns:
-            Numpy object array representing the normal basis.
-        """
-        if self._e is None:
-            if not self.is_orthogonal:
-                raise RuntimeError("Normal basis only defined for orthogonal systems")
-            b = self.get_covariant_basis()
-            self._e = np.array(b / self.get_scaling_factors()[:, None])
-        return self._as_vectors(self._e) if as_Vector else self._e
 
     @property
     def is_orthogonal(self) -> bool:
@@ -1213,26 +1180,6 @@ class CoordSys(Basic):
             g = self.get_det_g(True, explicit=True)
             self._sqrt_det_g = self.simplify(self.refine(sp.sqrt(g)))
         return self._sqrt_det_g
-
-    def get_scaling_factors(self) -> np.ndarray[Any, np.dtype[np.object_]]:
-        """Returns orthogonal scaling factors {h_i}.
-
-        Raises:
-            RuntimeError: If the coordinate system is not orthogonal.
-
-        Returns:
-            Numpy object array of SymPy expressions for each coordinate scale factor.
-        """
-        if self._hi is None:
-            if not self.is_orthogonal:
-                raise RuntimeError(
-                    "Scaling factors only defined for orthogonal systems"
-                )
-            g = self.get_covariant_metric_tensor(True)
-            self._hi = np.array(
-                [self.refine(sp.sqrt(g[i, i])) for i in range(self.dims)], dtype=object
-            )
-        return self._hi
 
     def get_covariant_basis(
         self, as_Vector: bool = False

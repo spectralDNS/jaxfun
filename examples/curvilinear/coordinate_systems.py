@@ -8,8 +8,8 @@ that mix circular and hyperbolic functions are often not found. A coordinate
 system can therefore be given two kinds of hints:
 
 * ``assumptions``, used where a square root is taken, that is, for the volume
-  element sqrt(g) and the scaling factors h_i. For example
-  ``sp.Q.positive(sp.sin(theta))`` for spherical coordinates.
+  element sqrt(g). For example ``sp.Q.positive(sp.sin(theta))`` for spherical
+  coordinates.
 * ``replace``, (pattern, replacement) pairs applied to the covariant metric
   tensor g_ij = b_i . b_j before it is simplified. For example the Pythagorean
   identity, written in the direction that lets the entries collapse.

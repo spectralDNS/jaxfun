@@ -38,12 +38,7 @@ def test_contravariant_basis_properties():
     )
 
 
-def test_scaling_factors_and_sqrt_det():
-    hi = C.get_scaling_factors()
-    assert hi.shape == (3,)
-    assert sp.simplify(hi[0] - 1) == 0
-    # hi[1] should be r (string compare to avoid triggering sympy simplify on CoordSys)
-    assert str(hi[1]) == str(r)
+def test_sqrt_det():
     sg = C.get_sqrt_det_g(True)
     assert str(sg) == str(r)
 

@@ -47,7 +47,7 @@
           "file": "poisson2D.html",
           "label": "Poisson 2D",
           "description": "Galerkin solver for 2D Poisson equation"
-        },
+        }
       ]
     }
   ]

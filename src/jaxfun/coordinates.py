@@ -303,11 +303,23 @@ class MetricSymbol(sp.Function):
 
     @property
     def explicit(self) -> Expr:
-        """Return the expression in the coordinates that the symbol stands for."""
-        return self._system._explicit_metric(self._key)
+        """Return the expression the symbol stands for, at its arguments."""
+        return self.at_args(self._system._explicit_metric(self._key))
 
     def fdiff(self, argindex: int = 1) -> Expr:
-        return self._system._diff_explicit_metric(self._key, argindex - 1)
+        d = self._system._diff_explicit_metric(self._key, argindex - 1)
+        return self.at_args(d)
+
+    def at_args(self, expr: Expr) -> Expr:
+        """Return `expr`, given in the base scalars, at the arguments of the symbol.
+
+        The arguments are the base scalars unless the symbol has been
+        substituted into, e.g. ``g.subs(C.r, 2 * C.r)``.
+        """
+        base = self._system.base_scalars()
+        if self.args == tuple(base):
+            return expr
+        return expr.xreplace(dict(zip(base, self.args, strict=True)))
 
     def _sympystr(self, printer: Any) -> str:
         return self._label
@@ -847,18 +859,22 @@ class CoordSys(Basic):
         """
         if not self._symbolic_metric:
             return expr
-        g = self._g_symbol
+
+        def is_g(e: Basic) -> bool:
+            return isinstance(e, MetricDeterminant) and e._system is self
+
         sg = self.get_sqrt_det_g(True, explicit=True)
         # Powers first: g**e is sg**(2e), where replacing g alone would leave
         # sqrt(sg**2), which SymPy does not reduce to sg.
         out = sp.sympify(expr).replace(
-            lambda e: e.is_Pow and e.base == g, lambda e: sg ** (2 * e.exp)
+            lambda e: e.is_Pow and is_g(e.base),
+            lambda e: e.base.at_args(sg) ** (2 * e.exp),
         )
-        rule: dict[Basic, Expr] = {cast(MetricDeterminant, g): sg**2}
-        if self._g_sym is not None:
-            rule |= {
-                c: c.explicit for c in self._g_sym.flat if isinstance(c, MetricSymbol)
-            }
+        rule: dict[Basic, Expr] = {
+            s: s.at_args(sg) ** 2 if is_g(s) else s.explicit
+            for s in out.atoms(MetricSymbol)
+            if s._system is self
+        }
         return cast(T, out.xreplace(rule))
 
     def _metric_symbol(

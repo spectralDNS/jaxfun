@@ -101,3 +101,21 @@ def test_lambdify_evaluates_the_explicit_expressions(systems) -> None:
     ):
         expected = lambdify(E.base_scalars(), b)(x, y)
         assert np.allclose(lambdify(S.base_scalars(), a)(x, y), expected)
+
+
+def test_metric_symbols_follow_their_arguments() -> None:
+    r, t = sp.symbols("r theta", real=True, positive=True)
+    mapping = sp.Lambda((r, t), (r * sp.cos(t), r * sp.sin(t)))
+    C = get_CoordSys("PA", mapping, symbolic_metric=True)
+    r, t = C.base_scalars()
+    # g_11 = r**2 and g = r**2, evaluated at 2 r
+    m = C.get_covariant_metric_tensor()[1, 1].subs(r, 2 * r)
+    g = C.get_det_g().subs(r, 2 * r)
+    assert m.explicit == 4 * r**2
+    assert m.diff(r) == 8 * r
+    assert C.expand_metric(m) == 4 * r**2
+    assert C.expand_metric(sp.sqrt(g)) == 2 * r
+    # A number substituted, and a power of the determinant
+    assert C.expand_metric(C.get_covariant_metric_tensor()[1, 1].subs(r, 2)) == 4
+    assert C.expand_metric(C.get_det_g().subs(r, 2) ** sp.Rational(3, 2)) == 8
+    assert np.allclose(lambdify((r, t), m)(np.array([1.5]), np.array([0.3])), 9)

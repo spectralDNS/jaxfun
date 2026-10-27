@@ -153,10 +153,11 @@ def test_covariant_diff_matches_cartesian(system):
 def test_gradient_and_laplacian():
     C = curved()
     u, v = C.base_scalars()
-    N = C._parent
+    bt_u, bt_v = C.contravariant_base_vectors()
+    N = C._root
     f = u**2 * v + sp.sin(v)
     g = gradient(f)
-    assert g == sp.diff(f, u) * C.bt_u + sp.diff(f, v) * C.bt_v
+    assert g == sp.diff(f, u) * bt_u + sp.diff(f, v) * bt_v
     # f = x*y in Cartesian coordinates has gradient y*i + x*j
     gc = C.to_cartesian(gradient((u + v**2) * v))
     assert is_zero(C, gc - (v * N.i + (u + v**2) * N.j))
@@ -186,16 +187,18 @@ def test_cross_and_curl():
     assert cross(C.bt_r, C.bt_theta) == C.b_z / C.r
 
     K = curved3()
-    N = K._parent
-    basis = (*K.base_vectors(), *K.contravariant_base_vectors())
+    N = K._root
+    u, v, w = K.base_scalars()
+    b_u, b_v, b_w = K.base_vectors()
+    bt_u, bt_v, bt_w = K.contravariant_base_vectors()
+    basis = (b_u, b_v, b_w, bt_u, bt_v, bt_w)
     for a, b in product(basis, repeat=2):
         ref = cross(K.to_cartesian(a), K.to_cartesian(b))
         assert is_zero(K, K.to_cartesian(cross(a, b)) - ref)
     # b_i x b^i is not zero in a non-orthogonal system
-    assert cross(K.b_u, K.bt_u) != Vector.zero
-    ref = cross(N.i, N.i - 2 * K.v * N.j)
-    assert is_zero(K, K.to_cartesian(cross(K.b_u, K.bt_u)) - ref)
+    assert cross(b_u, bt_u) != Vector.zero
+    ref = cross(N.i, N.i - 2 * v * N.j)
+    assert is_zero(K, K.to_cartesian(cross(b_u, bt_u)) - ref)
 
-    u, v, w = K.base_scalars()
     assert curl(gradient(u**2 * v * w)) == Vector.zero
-    assert K.simplify(divergence(curl(u * v * K.b_u + w * K.bt_v))) == 0
+    assert K.simplify(divergence(curl(u * v * b_u + w * bt_v))) == 0

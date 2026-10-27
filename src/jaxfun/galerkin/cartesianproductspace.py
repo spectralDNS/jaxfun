@@ -178,7 +178,7 @@ class CartesianBaseSpace(ABC):
     @abstractmethod
     def evaluate_mesh(
         self,
-        u: tuple[Array, ...],
+        u: Array | tuple[Array, ...],
         kind: MeshKind | str = MeshKind.QUADRATURE,
         N: Any = None,
     ) -> Array: ...
@@ -186,14 +186,14 @@ class CartesianBaseSpace(ABC):
     @abstractmethod
     def backward(
         self,
-        u: tuple[Array, ...],
+        u: Array | tuple[Array, ...],
         N: Any = None,
     ) -> Array: ...
 
     @abstractmethod
     def backward_primitive(
         self,
-        u: tuple[Array, ...],
+        u: Array | tuple[Array, ...],
         k: Any,
         N: Any = None,
     ) -> Array: ...
@@ -371,7 +371,7 @@ class CartesianTensorProductSpace(CartesianBaseSpace):
 
     def evaluate_mesh(
         self,
-        u: tuple[Array, ...],
+        u: Array | tuple[Array, ...],
         kind: MeshKind | str = MeshKind.QUADRATURE,
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
@@ -394,7 +394,7 @@ class CartesianTensorProductSpace(CartesianBaseSpace):
 
     def backward(
         self,
-        u: tuple[Array, ...],
+        u: Array | tuple[Array, ...],
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
         """Backward transform per-component spectral coefficients to physical
@@ -413,7 +413,7 @@ class CartesianTensorProductSpace(CartesianBaseSpace):
 
     def backward_primitive(
         self,
-        u: tuple[Array, ...],
+        u: Array | tuple[Array, ...],
         k: tuple[tuple[int, ...], ...],
         N: tuple[int | None, ...] | None = None,
     ) -> Array:
@@ -530,7 +530,7 @@ class CartesianProductSpace(CartesianBaseSpace):
 
     def evaluate_mesh(
         self,
-        u: tuple[Array, ...],
+        u: Array | tuple[Array, ...],
         kind: MeshKind | str = MeshKind.QUADRATURE,
         N: int | None = None,
     ) -> Array:
@@ -553,7 +553,7 @@ class CartesianProductSpace(CartesianBaseSpace):
 
     def backward(
         self,
-        u: tuple[Array, ...],
+        u: Array | tuple[Array, ...],
         N: int | None = None,
     ) -> Array:
         """Backward transform per-component spectral coefficients to physical
@@ -572,7 +572,7 @@ class CartesianProductSpace(CartesianBaseSpace):
 
     def backward_primitive(
         self,
-        u: tuple[Array, ...],
+        u: Array | tuple[Array, ...],
         k: tuple[int, ...],
         N: int | None = None,
     ) -> Array:

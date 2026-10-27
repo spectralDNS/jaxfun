@@ -118,6 +118,32 @@ def test_basis_conversions():
     assert is_zero(C, Ac - A)
 
 
+def test_change_basis_per_dyadic_leg():
+    C = curved()
+    u, v = C.base_scalars()
+    b, bt = C.base_vectors(), C.contravariant_base_vectors()
+    A = u * (b[0] | b[1]) + (bt[1] | bt[0])
+    # The natural basis b_i ⊗ b^j
+    An = C.change_basis(A, b, bt)
+    assert {d.args for d in An.atoms(BaseDyadic)} <= set(product(b, bt))
+    assert is_zero(C, An - A)
+
+
+def test_change_basis_round_trip_through_cartesian():
+    C = curved()
+    u, v = C.base_scalars()
+    b, bt = C.base_vectors(), C.contravariant_base_vectors()
+    w = u * b[0] + v * bt[1]
+    wc = C.from_cartesian(C.to_cartesian(w))
+    assert wc.atoms(BaseVector) <= set(b)
+    assert is_zero(C, wc - w)
+
+
+def test_change_basis_rejects_another_system():
+    with pytest.raises(ValueError, match="not a base vector"):
+        curved().to_cartesian(polar().b_r)
+
+
 def test_components_of_mixed_tensors():
     C = curved()
     b, bt = C.base_vectors(), C.contravariant_base_vectors()

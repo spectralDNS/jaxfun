@@ -9,8 +9,6 @@ Much of the theory and notation is taken from:
 
 from __future__ import annotations
 
-import numbers
-from collections import UserDict
 from collections.abc import Callable, Iterable, Sequence
 from itertools import product
 from types import MethodType
@@ -61,37 +59,14 @@ def _is_dyadiclike(obj: Basic) -> TypeGuard[DyadicLike]:
     )
 
 
-def _is_expr(obj: Basic) -> TypeGuard[Expr]:
-    return isinstance(obj, Expr)
-
-
 tensor_product_symbol = "\u2297"
 
-latex_sym_dict = {
-    "alpha": r"\alpha",
-    "beta": r"\beta",
-    "gamma": r"\gamma",
-    "delta": r"\delta",
-    "epsilon": r"\epsilon",
-    "zeta": r"\zeta",
-    "eta": r"\eta",
-    "theta": r"\theta",
-    "iota": r"\iota",
-    "kappa": r"\kappa",
-    "lambda": r"\lambda",
-    "mu": r"\mu",
-    "nu": r"\nu",
-    "xi": r"\xi",
-    "omicron": r"\omicron",
-    "rho": r"\rho",
-    "sigma": r"\sigma",
-    "tau": r"\tau",
-    "upsilon": r"\upsilon",
-    "phi": r"\phi",
-    "chi": r"\chi",
-    "psi": r"\psi",
-    "omega": r"\omega",
-}
+
+def latex_symbol(name: str) -> str:
+    r"""Return the LaTeX form of a symbol name, e.g. ``\theta`` for ``theta``."""
+    return sp.latex(sp.Symbol(name))
+
+
 t, x, y, z = sp.symbols("t,x,y,z", real=True)
 t: sp.Symbol
 x: sp.Symbol
@@ -115,14 +90,6 @@ def R(dim: int) -> CoordSys:
         raise ValueError(f"dim must be 1, 2, or 3; got {dim}")
 
     return CartCoordSys(f"R{dim}", (x, y, z)[:dim])
-
-
-class defaultdict(UserDict[str, str]):
-    def __missing__(self, key: str) -> str:
-        return key
-
-
-latex_symbols = defaultdict(latex_sym_dict)
 
 
 def get_system(a: sp.Expr) -> CoordSys:
@@ -251,12 +218,8 @@ class BaseScalar(AtomicExpr):
     ) -> Self:
         if pretty_str is None:
             pretty_str = f"x{index}"
-        elif isinstance(pretty_str, sp.Symbol):
-            pretty_str = pretty_str.name
         if latex_str is None:
             latex_str = f"x_{index}"
-        elif isinstance(latex_str, sp.Symbol):
-            latex_str = latex_str.name
 
         index = _sympify(index)
         system = _sympify(system)
@@ -266,7 +229,7 @@ class BaseScalar(AtomicExpr):
         # The _id is used for equating purposes, and for hashing
         obj._id = (index, system)
         obj._name = obj.name = system._variable_names[index]
-        obj._pretty_form = "" + pretty_str
+        obj._pretty_form = pretty_str
         obj._latex_form = latex_str
         obj._system = system
 
@@ -403,7 +366,8 @@ class BaseVector(Vector, AtomicExpr):  # ty:ignore[invalid-method-override]
         _components: Mapping of this base vector to its coefficient (always 1).
         _measure_number: Always 1 for a base vector.
         _name: Fully qualified name (system.name + '.' + base label).
-        _system: Reference to the parent system.
+        _sys: Reference to the parent system, as on SymPy's VectorMul and
+            VectorAdd, which copy it from their base vectors.
         _id: (index, system) tuple for hashing.
         _assumptions: SymPy assumptions (commutative=True).
     """
@@ -413,7 +377,6 @@ class BaseVector(Vector, AtomicExpr):  # ty:ignore[invalid-method-override]
     _components: dict[BaseVector, Expr]
     _measure_number: Expr
     _assumptions: StdFactKB
-    _system: CoordSys
     _sys: CoordSys
     _name: str
     _pretty_form: str
@@ -451,7 +414,6 @@ class BaseVector(Vector, AtomicExpr):  # ty:ignore[invalid-method-override]
         obj._name = system._name + "." + name
         obj._pretty_form = "" + pretty_str
         obj._latex_form = latex_str
-        obj._system = system
         # The _id is used for printing purposes
         obj._id = (index, system)
         assumptions = {"commutative": True}
@@ -466,7 +428,7 @@ class BaseVector(Vector, AtomicExpr):  # ty:ignore[invalid-method-override]
 
     @property
     def system(self) -> CoordSys:
-        return self._system
+        return self._sys
 
     @property
     def index(self) -> int:
@@ -484,7 +446,7 @@ class BaseVector(Vector, AtomicExpr):  # ty:ignore[invalid-method-override]
         return {self}
 
     def to_cartesian(self) -> Vector:
-        return self._system.to_cartesian(self)
+        return self._sys.to_cartesian(self)
 
 
 class ContravariantBaseVector(BaseVector):
@@ -562,9 +524,7 @@ class BaseDyadic(Dyadic, AtomicExpr):  # ty:ignore[invalid-method-override]
         return f"BaseDyadic({arg0}, {arg1})"
 
     def to_cartesian(self) -> Dyadic:
-        cart_arg0 = self._sys.to_cartesian(self.args[0])
-        cart_arg1 = self._sys.to_cartesian(self.args[1])
-        return cart_arg0 | cart_arg1
+        return self._sys.to_cartesian(self)
 
 
 class CoordSys(Basic):
@@ -626,10 +586,9 @@ class CoordSys(Basic):
     _e: np.ndarray[Any, np.dtype[np.object_]] | None
     _g: np.ndarray[Any, np.dtype[np.object_]] | None
     _gt: np.ndarray[Any, np.dtype[np.object_]] | None
-    _gn: np.ndarray[Any, np.dtype[np.object_]] | None
     _ct: np.ndarray[Any, np.dtype[np.object_]] | None
-    _det_g: dict[bool, Expr | None]
-    _sqrt_det_g: dict[bool, Expr | None]
+    _det_g: Expr | None
+    _sqrt_det_g: Expr | None
     _symbolic_metric: bool
     _g_symbol: MetricDeterminant | None
     _g_sym: np.ndarray[Any, np.dtype[np.object_]] | None
@@ -638,30 +597,18 @@ class CoordSys(Basic):
     _dbase: dict[tuple[BaseVector, int], VectorLike]
     _map_base_scalar_to_index: dict[BaseScalar, int]
 
-    # NOTE: Many coordinate and basis attributes are set dynamically during
-    # construction (e.g. CartCoordSys adds x/y/z, get_CoordSys adds r/theta/zz and
-    # corresponding basis vectors). We annotate common ones here for static type
-    # checkers without changing runtime behavior.
     if TYPE_CHECKING:
-        t: BaseScalar
+        # Cartesian coordinates and base vectors, named by jaxfun
         x: BaseScalar
         y: BaseScalar
         z: BaseScalar
-        r: BaseScalar
-        theta: BaseScalar
-        zz: BaseScalar
-
         i: BaseVector
         j: BaseVector
         k: BaseVector
-        b_r: BaseVector
-        b_theta: BaseVector
-        b_z: BaseVector
-        b_zz: BaseVector
-        bt_r: ContravariantBaseVector
-        bt_theta: ContravariantBaseVector
-        bt_z: ContravariantBaseVector
-        bt_zz: ContravariantBaseVector
+
+        # Coordinates and base vectors named after the user's symbols, such as
+        # C.r, C.b_r and C.bt_r, exist only at runtime.
+        def __getattr__(self, name: str) -> Any: ...
 
     def __new__(
         cls,
@@ -697,92 +644,69 @@ class CoordSys(Basic):
             The constructed coordinate system instance.
         """
         name = str(name)
-
-        if transformation is None:
-            raise TypeError("transformation must be provided")
-
         psi, position_vector = transformation.args
         assert isinstance(psi, Tuple)
         assert isinstance(position_vector, Tuple)
 
-        variable_names: list[str] = [i.name for i in psi]
-        is_cartesian = False
-        if len(position_vector) == len(psi):  # noqa: SIM102
-            if np.all(np.array(position_vector) == np.array(psi)):
-                is_cartesian = True
+        variable_names = tuple(s.name for s in psi)
+        is_cartesian = position_vector == psi
         if vector_names is None:
-            if is_cartesian:
-                vector_names = ["i", "j", "k"]
-            else:
-                vector_names = [f"b_{s}" for s in variable_names]
+            vector_names = (
+                ["i", "j", "k"] if is_cartesian else [f"b_{s}" for s in variable_names]
+            )
 
         obj = cast("CoordSys", super().__new__(cls, Str(name), transformation))
         obj._name = name
-
-        vector_names = list(vector_names)
-        if is_cartesian:
-            latex_vects = [r"\mathbf{{%s}}" % (x,) for x in vector_names]  # noqa: UP031
-        else:
-            latex_vects = [
-                r"\mathbf{b_{%s}}" % (latex_symbols[x],)  # noqa: UP031
-                for x in variable_names
-            ]
-        pretty_vects = vector_names
-
+        obj._variable_names = variable_names
         obj._vector_names = tuple(vector_names)
 
-        # Create covariant basis vectors in case of curvilinear
-        n_vecs = len(psi)
-        v: list[BaseVector] = []
-        for i in range(n_vecs):
-            v.append(BaseVector(i, obj, pretty_vects[i], latex_vects[i]))
-
+        # Covariant base vectors
+        if is_cartesian:
+            latex_vects = [r"\mathbf{{%s}}" % (s,) for s in vector_names]  # noqa: UP031
+        else:
+            latex_vects = [
+                r"\mathbf{b_{%s}}" % (latex_symbol(s),)  # noqa: UP031
+                for s in variable_names
+            ]
+        v: list[BaseVector] = [
+            BaseVector(i, obj, vector_names[i], latex_vects[i]) for i in range(len(psi))
+        ]
         obj._base_vectors = Tuple(*v)
 
-        # Contravariant basis vectors. In Cartesian systems b^i = b_i.
+        # Contravariant base vectors. In Cartesian systems b^i = b_i.
         vt: list[BaseVector] = v
-        obj._contravariant_vector_names = tuple(vector_names)
+        obj._contravariant_vector_names = obj._vector_names
         if not is_cartesian:
             obj._contravariant_vector_names = tuple(f"bt_{s}" for s in variable_names)
             vt = [
                 ContravariantBaseVector(
                     i,
                     obj,
-                    f"b^{variable_names[i]}",
-                    r"\mathbf{b}^{%s}" % (latex_symbols[variable_names[i]],),  # noqa: UP031
+                    f"b^{s}",
+                    r"\mathbf{b}^{%s}" % (latex_symbol(s),),  # noqa: UP031
                 )
-                for i in range(n_vecs)
+                for i, s in enumerate(variable_names)
             ]
         obj._contravariant_base_vectors = Tuple(*vt)
 
-        variable_names = list(variable_names)
-        latex_scalars = [latex_symbols[x] for x in variable_names]
-        pretty_scalars = variable_names
-
-        obj._variable_names = tuple(variable_names)
-
-        base_scalars: list[BaseScalar] = []
-        for i in range(n_vecs):
-            base_scalars.append(BaseScalar(i, obj, pretty_scalars[i], latex_scalars[i]))
+        base_scalars = [
+            BaseScalar(i, obj, s, latex_symbol(s)) for i, s in enumerate(variable_names)
+        ]
+        obj._base_scalars = Tuple(*base_scalars)
         obj._psi = psi
-        psi = cast(tuple[Symbol, ...], psi)
         obj._cartesian_xyz = (
-            Tuple(*base_scalars) if parent is None else parent._cartesian_xyz
+            obj._base_scalars if parent is None else parent._cartesian_xyz
         )
-
-        bs_to_symb: dict[BaseScalar, Symbol] = {k: v for k, v in zip(base_scalars, psi)}
+        bs_to_symb: dict[BaseScalar, Symbol] = dict(
+            zip(base_scalars, cast(tuple[Symbol, ...], psi))
+        )
         obj._map_base_scalar_to_symbol = bs_to_symb
         obj._map_symbol_to_base_scalar = reverse_dict(bs_to_symb)
-
-        bs_to_idx: dict[BaseScalar, int] = {k: i for i, k in enumerate(base_scalars)}
-        obj._map_base_scalar_to_index = bs_to_idx
+        obj._map_base_scalar_to_index = {s: i for i, s in enumerate(base_scalars)}
 
         position_vector = position_vector.xreplace(obj._map_symbol_to_base_scalar)
         assert isinstance(position_vector, Tuple)
-        xyz_to_bs: dict[Symbol, BaseScalar] = {
-            k: v for k, v in zip(obj._cartesian_xyz, position_vector)
-        }
-        obj._map_xyz_to_base_scalar = xyz_to_bs
+        obj._map_xyz_to_base_scalar = dict(zip(obj._cartesian_xyz, position_vector))
 
         # Add doit to Cartesian coordinates, such that x, y, z are evaluated in
         # computational space as x(psi), y(psi), z(psi)
@@ -792,53 +716,36 @@ class CoordSys(Basic):
                     lambda self, **hints: obj._map_xyz_to_base_scalar[self], s
                 )
 
-        obj._base_scalars = Tuple(*base_scalars)
-        obj._base_dyadics = Tuple(
-            *[d[0] | d[1] for d in product(*(obj._base_vectors,) * 2)]
-        )
+        obj._base_dyadics = Tuple(*[a | b for a, b in product(v, repeat=2)])
         obj._position_vector = position_vector
         obj._is_cartesian = is_cartesian
         obj._transformation = transformation
         obj._measure = measure
         obj._assumptions = assumptions
         obj._replace = replace
-        obj._hi = None
-        obj._b = None
-        obj._bt = None
-        obj._e = None
-        obj._g = None
-        obj._gt = None
-        obj._gn = None
-        obj._ct = None
-        obj._det_g = {True: None, False: None}
-        obj._sqrt_det_g = {True: None, False: None}
+        obj._parent = parent
+        obj._root = obj if parent is None else parent._root
+
+        # Metric quantities, computed when first asked for
+        obj._hi = obj._b = obj._bt = obj._e = obj._g = obj._gt = obj._ct = None
+        obj._det_g = obj._sqrt_det_g = None
+        obj._g_sym = obj._adj = None
         obj._dbase = {}
+        obj._d_metric = {}
         obj._symbolic_metric = symbolic_metric and not is_cartesian
         obj._g_symbol = None
         if obj._symbolic_metric:
             obj._g_symbol = cast(
                 MetricDeterminant, obj._metric_symbol(MetricDeterminant, None, "g")
             )
-        obj._g_sym = None
-        obj._adj = None
-        obj._d_metric = {}
 
-        for k in obj._cartesian_xyz:
-            setattr(obj, k.name, k)
-
-        for i in range(len(base_scalars)):
-            setattr(obj, variable_names[i], base_scalars[i])
+        for s in obj._cartesian_xyz:
+            setattr(obj, s.name, s)
+        for i, s in enumerate(base_scalars):
+            setattr(obj, variable_names[i], s)
             setattr(obj, vector_names[i], v[i])
             setattr(obj, obj._contravariant_vector_names[i], vt[i])
 
-        # Assign params
-        obj._parent = parent
-        if obj._parent is not None:
-            obj._root = obj._parent._root
-        else:
-            obj._root = obj
-
-        # Return the instance
         return obj
 
     def __deepcopy__(self, memo: dict) -> Self:
@@ -892,18 +799,10 @@ class CoordSys(Basic):
     @overload
     def position_vector(self, as_Vector: Literal[True]) -> VectorLike: ...
     def position_vector(self, as_Vector: bool = False) -> Tuple | VectorLike:
-        r_out = self.refine_replace(self.rv)
-        assert isinstance(r_out, Tuple)
-        r = r_out
-        base_vectors = self.get_cartesian_basis_vectors()
+        r = self.refine_replace(self.rv)
         if as_Vector:
-            out: VectorLike = np.array(r) @ base_vectors
-            return out
+            return np.array(r) @ self.get_cartesian_basis_vectors()
         return r
-
-    @property
-    def psi(self) -> Tuple:
-        return self._base_scalars
 
     @property
     def b(self) -> np.ndarray[Any, np.dtype[np.object_]]:
@@ -1006,6 +905,21 @@ class CoordSys(Basic):
             self._adj = np.array(adj.applyfunc(self.simplify))
         return self._adj
 
+    def _over_det(self, num: Expr) -> Expr:
+        """Return num / det(g_ij), simplified.
+
+        With a symbolic metric only the numerator is simplified, over the symbol g.
+        """
+        if self._symbolic_metric:
+            return self.simplify(num) / cast(MetricDeterminant, self._g_symbol)
+        return self.simplify(num / self.get_det_g())
+
+    def _as_vectors(
+        self, a: np.ndarray[Any, np.dtype[np.object_]]
+    ) -> np.ndarray[Any, np.dtype[np.object_]]:
+        """Return the rows of `a`, holding Cartesian components, as vectors."""
+        return a @ np.array(self.get_cartesian_basis_vectors())[: a.shape[1]]
+
     def get_normal_basis(
         self, as_Vector: bool = False
     ) -> np.ndarray[Any, np.dtype[np.object_]]:
@@ -1022,24 +936,12 @@ class CoordSys(Basic):
         Returns:
             Numpy object array representing the normal basis.
         """
-        if self._e is not None:
-            if as_Vector:
-                return (
-                    self._e
-                    @ np.array(self.get_cartesian_basis_vectors())[: self._e.shape[1]]
-                )
-            return self._e
-
-        if not self.is_orthogonal:
-            raise RuntimeError("Normal basis only defined for orthogonal systems")
-
-        b = self.get_covariant_basis()
-        hi = self.get_scaling_factors()
-        e = np.array(b / hi[:, None])
-        self._e = e
-        if as_Vector:
-            return e @ np.array(self.get_cartesian_basis_vectors())[: e.shape[1]]
-        return e
+        if self._e is None:
+            if not self.is_orthogonal:
+                raise RuntimeError("Normal basis only defined for orthogonal systems")
+            b = self.get_covariant_basis()
+            self._e = np.array(b / self.get_scaling_factors()[:, None])
+        return self._as_vectors(self._e) if as_Vector else self._e
 
     @property
     def is_orthogonal(self) -> bool:
@@ -1049,127 +951,132 @@ class CoordSys(Basic):
     def is_cartesian(self) -> bool:
         return self._is_cartesian
 
+    def change_basis(
+        self,
+        v: TensorLike,
+        basis: Sequence[BaseVector] | Tuple,
+        basis2: Sequence[BaseVector] | Tuple | None = None,
+        simplify: bool = False,
+    ) -> TensorLike:
+        """Return v written in another basis of this coordinate system.
+
+        Every base vector s of v is expanded in the target basis {t} as
+
+            s = (s · t*) t   (summed over t)
+
+        where t* is the dual of t: b^j for b_j, b_j for b^j, and e_k for a
+        Cartesian e_k. The coefficients are δ, the metric tensors g_ij and g^ij,
+        or the Cartesian components of b_i and b^i. A Cartesian vector written
+        in the basis of a surface embedded in 3D is projected onto the tangent
+        plane.
+
+        Args:
+            v: Vector or dyadic with base vectors of this system or of its
+                Cartesian system.
+            basis: The target basis: ``base_vectors()``,
+                ``contravariant_base_vectors()`` or
+                ``get_cartesian_basis_vectors()``.
+            basis2: The target basis of the second leg of a dyadic, if it differs
+                from `basis`. For example the natural basis b_i ⊗ b^j.
+            simplify: Whether to simplify the components of the result.
+
+        Returns:
+            The same tensor in the target basis.
+
+        Raises:
+            ValueError: If v has a base vector of another system.
+        """
+        from jaxfun.operators import outer
+
+        def expand(s: BaseVector, target: Sequence[BaseVector] | Tuple) -> VectorLike:
+            if s in target:
+                return s
+            ts = cast(Sequence[BaseVector], target)
+            return VectorAdd.fromiter(self._basis_coefficient(s, t) * t for t in ts)
+
+        if _is_dyadiclike(v):
+            second = basis if basis2 is None else basis2
+            out: TensorLike = DyadicAdd.fromiter(
+                c * outer(expand(d.args[0], basis), expand(d.args[1], second))
+                for d, c in v.components.items()
+            )
+        else:
+            out = VectorAdd.fromiter(
+                c * expand(s, basis) for s, c in v.components.items()
+            )
+        return self.simplify(out) if simplify else out
+
+    def _basis_kind(self, s: BaseVector) -> str:
+        """Return whether s is a Cartesian, covariant or contravariant base vector."""
+        if s in self.get_cartesian_basis_vectors():
+            return "cartesian"
+        if s in self._base_vectors:
+            return "covariant"
+        if s in self._contravariant_base_vectors:
+            return "contravariant"
+        raise ValueError(f"{s} is not a base vector of {self} or its Cartesian system")
+
+    def _basis_coefficient(self, s: BaseVector, t: BaseVector) -> Expr:
+        """Return s · t*, the coefficient of t when s is written in the basis of t."""
+        i, j = s.index, t.index
+        match self._basis_kind(s), self._basis_kind(t):
+            case "covariant", "contravariant":
+                return self.get_covariant_metric_tensor()[i, j]
+            case "contravariant", "covariant":
+                return self.get_contravariant_metric_tensor()[i, j]
+            case "covariant", "cartesian":
+                return self.b[i, j]
+            case "contravariant", "cartesian":
+                return self.bt[i, j]
+            case "cartesian", "covariant":
+                return self.bt[j, i]
+            case "cartesian", "contravariant":
+                return self.b[j, i]
+        return sp.S.One if i == j else sp.S.Zero
+
     @overload
     def to_cartesian(self, v: VectorLike) -> VectorLike: ...
     @overload
     def to_cartesian(self, v: DyadicLike) -> DyadicLike: ...
     def to_cartesian(self, v: TensorLike) -> TensorLike:
-        # v either Cartesian or a vector/dyadic with co- or contravariant basis
-        if isinstance(v, VectorZero | DyadicZero):
-            return v
+        """Return v written in the Cartesian base vectors (see `change_basis`).
 
-        assert hasattr(v, "_sys") and isinstance(v._sys, CoordSys)
-        if v._sys.is_cartesian:
-            return v
-
-        cart_map: dict[Basic, Any] = dict(
-            zip(self.base_vectors(), self.get_covariant_basis(True), strict=True)
-        )
-        if v.atoms(ContravariantBaseVector):
-            cart_map.update(
-                zip(
-                    self.contravariant_base_vectors(),
-                    self.get_contravariant_basis(True),
-                    strict=True,
-                )
-            )
-
-        if not v.is_Vector:
-            cart_map.update(
-                {
-                    k: (cart_map[k.args[0]] | cart_map[k.args[1]])
-                    for k in v.atoms(BaseDyadic)
-                }
-            )
-
-        return v.xreplace(cart_map)
+        The components stay in the coordinates of this system.
+        """
+        return self.change_basis(v, self.get_cartesian_basis_vectors())
 
     def to_covariant_basis(self, v: TensorLike) -> TensorLike:
-        """Return v expressed with covariant base vectors only.
+        """Return v written in the covariant base vectors (see `change_basis`).
 
-        Every contravariant base vector is replaced by b^i = g^ij b_j, also in
-        both legs of a dyadic.
-
-        Args:
-            v: Vector or dyadic in this coordinate system.
-
-        Returns:
-            The same tensor in the covariant basis.
+        Every contravariant base vector becomes b^i = g^ij b_j, also in both legs
+        of a dyadic.
         """
-        if self.is_cartesian:
-            return v
-        gt = self.get_contravariant_metric_tensor()
-        b = self.base_vectors()
-        rule = {bt: gt[i] @ b for i, bt in enumerate(self.contravariant_base_vectors())}
-        return self._replace_base_vectors(v, rule)
+        return self.change_basis(v, self.base_vectors())
 
     def to_contravariant_basis(self, v: TensorLike) -> TensorLike:
-        """Return v expressed with contravariant base vectors only.
+        """Return v written in the contravariant base vectors (see `change_basis`).
 
-        Every covariant base vector is replaced by b_i = g_ij b^j, also in both
-        legs of a dyadic.
-
-        Args:
-            v: Vector or dyadic in this coordinate system.
-
-        Returns:
-            The same tensor in the contravariant basis.
+        Every covariant base vector becomes b_i = g_ij b^j, also in both legs of
+        a dyadic.
         """
-        if self.is_cartesian:
-            return v
-        g = self.get_covariant_metric_tensor()
-        bt = self.contravariant_base_vectors()
-        rule = {b: g[i] @ bt for i, b in enumerate(self.base_vectors())}
-        return self._replace_base_vectors(v, rule)
-
-    def _replace_base_vectors(
-        self, v: TensorLike, rule: dict[BaseVector, VectorLike]
-    ) -> TensorLike:
-        from jaxfun.operators import outer
-
-        if isinstance(v, VectorZero | DyadicZero):
-            return v
-        full_rule: dict[Basic, Any] = {**rule}
-        if _is_dyadiclike(v):
-            for d in v.atoms(BaseDyadic):
-                a, b = d.args
-                if a in rule or b in rule:
-                    full_rule[d] = outer(rule.get(a, a), rule.get(b, b))
-        return v.xreplace(full_rule)
+        return self.change_basis(v, self.contravariant_base_vectors())
 
     @overload
     def from_cartesian(self, v: VectorLike) -> VectorLike: ...
     @overload
     def from_cartesian(self, v: DyadicLike) -> DyadicLike: ...
     def from_cartesian(self, v: TensorLike) -> TensorLike:
+        """Return a Cartesian vector or dyadic written in the covariant basis.
+
+        Cartesian coordinates in the components are written in the coordinates
+        of this system, and the components are simplified (see `change_basis`).
+        """
         from jaxfun.operators import express
-        from jaxfun.typing import cast_bd, cast_bv
 
         if self.is_cartesian:
             return v
-
-        assert hasattr(v, "_sys") and isinstance(v._sys, CoordSys)
-        assert v._sys.is_cartesian
-
-        v = v.doit()
-        bt = cast(tuple[VectorLike, ...], self.get_contravariant_basis(True))
-        bv = cast_bv(self.base_vectors())
-        if _is_vectorlike(v):
-            terms: list[VectorLike] = []
-            for i in range(len(bv)):
-                terms.append(self.simplify(v & bt[i]) * bv[i])
-            expr = VectorAdd(*terms)
-        else:
-            bd = cast_bd(self.base_dyadics())
-            terms: list[DyadicLike] = []
-            for i in range(len(bt)):
-                for j in range(len(bt)):
-                    terms.append(self.simplify(bt[i] & v & bt[j]) * bd[i * len(bv) + j])
-            expr = DyadicAdd(*terms)
-        out = express(expr, self)
-        if _is_tensorlike(out):
-            return out
-        raise TypeError("from_cartesian produced a non-tensor expression")
+        out = self.change_basis(v.doit(), self.base_vectors(), simplify=True)
+        return express(out, self)
 
     def expr_base_scalar_to_psi[T: sp.Basic](self, v: T) -> T:
         return sp.sympify(v).xreplace(self._map_base_scalar_to_symbol)
@@ -1259,25 +1166,14 @@ class CoordSys(Basic):
         Returns:
             SymPy expression representing the determinant.
         """
-        from jaxfun.operators import express
-
+        if not covariant:
+            return 1 / self.get_det_g(True, explicit)
         if self._symbolic_metric and not explicit:
-            g_sym = cast(MetricDeterminant, self._g_symbol)
-            return g_sym if covariant else 1 / g_sym
-        cached = self._det_g[covariant]
-        if cached is not None:
-            return cached
-        if covariant:
-            g: sp.Basic = sp.Matrix(self.get_covariant_metric_tensor(True)).det()
-            g = sp.factor(g)
-        else:
-            g = 1 / self.get_det_g(True, explicit=True)
-        g_out = express(self.refine(g), self)
-        if not _is_expr(g_out):
-            raise TypeError("get_det_g produced a non-scalar expression")
-        g = g_out
-        self._det_g[covariant] = g
-        return g
+            return cast(MetricDeterminant, self._g_symbol)
+        if self._det_g is None:
+            g = sp.Matrix(self.get_covariant_metric_tensor(True)).det()
+            self._det_g = cast(Expr, self.refine(sp.factor(g)))
+        return self._det_g
 
     def get_sqrt_det_g(self, covariant: bool = True, explicit: bool = False) -> Expr:
         """Returns square root of the metric determinant.
@@ -1291,31 +1187,16 @@ class CoordSys(Basic):
         Returns:
             SymPy expression (possibly simplified) for sqrt(det(g)).
         """
-        from jaxfun.operators import express
-
+        if not covariant:
+            return 1 / self.get_sqrt_det_g(True, explicit)
         if self._symbolic_metric and not explicit:
-            sg_sym = sp.sqrt(cast(MetricDeterminant, self._g_symbol))
-            return sg_sym if covariant else 1 / sg_sym
-        cached = self._sqrt_det_g[covariant]
-        if cached is not None:
-            return cached
-        g = self.get_det_g(covariant, explicit=True)
-        # The square root, refined with the assumptions, may leave the bases of
-        # a power differing only by sign, e.g. (a - b)/(b - a)**4.
-        sg = self.simplify(self.refine(sp.sqrt(g)))
-        if isinstance(sg, numbers.Number):
-            if isinstance(sg, numbers.Real):
-                sg = float(sg)
-            elif isinstance(sg, numbers.Complex):
-                sg = complex(sg)
-            else:
-                raise RuntimeError
-        sg_out = express(sp.sympify(sg), self)
-        if not _is_expr(sg_out):
-            raise TypeError("get_sqrt_det_g produced a non-scalar expression")
-        sg = sg_out
-        self._sqrt_det_g[covariant] = sg
-        return sg
+            return sp.sqrt(cast(MetricDeterminant, self._g_symbol))
+        if self._sqrt_det_g is None:
+            # The square root, refined with the assumptions, may leave the bases
+            # of a power differing only by sign, e.g. (a - b)/(b - a)**4.
+            g = self.get_det_g(True, explicit=True)
+            self._sqrt_det_g = self.simplify(self.refine(sp.sqrt(g)))
+        return self._sqrt_det_g
 
     def get_scaling_factors(self) -> np.ndarray[Any, np.dtype[np.object_]]:
         """Returns orthogonal scaling factors {h_i}.
@@ -1326,20 +1207,16 @@ class CoordSys(Basic):
         Returns:
             Numpy object array of SymPy expressions for each coordinate scale factor.
         """
-        from jaxfun.operators import express
-
-        if not self.is_orthogonal:
-            raise RuntimeError("Scaling factors only defined for orthogonal systems")
-
-        if self._hi is not None:
-            return self._hi
-        g = self.get_covariant_metric_tensor(True)
-        hi = np.array(
-            [self.refine(sp.sqrt(g[i, i])) for i in range(self.dims)], dtype=object
-        )
-        hi = np.array(express(hi, self))
-        self._hi = hi
-        return hi
+        if self._hi is None:
+            if not self.is_orthogonal:
+                raise RuntimeError(
+                    "Scaling factors only defined for orthogonal systems"
+                )
+            g = self.get_covariant_metric_tensor(True)
+            self._hi = np.array(
+                [self.refine(sp.sqrt(g[i, i])) for i in range(self.dims)], dtype=object
+            )
+        return self._hi
 
     def get_covariant_basis(
         self, as_Vector: bool = False
@@ -1353,27 +1230,14 @@ class CoordSys(Basic):
         Returns:
             Numpy object array representing covariant basis rows.
         """
-        from jaxfun.operators import express
-
-        if self._b is not None:
-            if as_Vector:
-                return (
-                    self._b
-                    @ np.array(self.get_cartesian_basis_vectors())[: self._b.shape[1]]
-                )
-            return self._b
-
-        b = np.zeros((len(self.psi), len(self.rv)), dtype=object)
-        for i, ti in enumerate(self.psi):
-            for j, rj in enumerate(self.rv):
-                # Simplified here, not only in g_ij: a derivative like that of
-                # atan(k tan(x/2)) is smooth only after simplification.
-                b[i, j] = express(self.simplify(rj.diff(ti, 1)), self)
-
-        self._b = b
-        if as_Vector:
-            return b @ np.array(self.get_cartesian_basis_vectors())[: b.shape[1]]
-        return b
+        if self._b is None:
+            # Simplified here, not only in g_ij: a derivative like that of
+            # atan(k tan(x/2)) is smooth only after simplification.
+            q, r = self.base_scalars(), self.rv
+            self._b = np.array(
+                [[self.simplify(rj.diff(qi)) for rj in r] for qi in q], dtype=object
+            )
+        return self._as_vectors(self._b) if as_Vector else self._b
 
     def get_contravariant_basis_vector(self, i: int) -> BaseVector:
         """Returns contravariant basis vector i.
@@ -1419,30 +1283,11 @@ class CoordSys(Basic):
         Returns:
             Numpy object array with contravariant basis rows.
         """
-        # Note. Since we only require the transformation to Cartesian in the creation
-        # of this CoordSys, we need to make use of b and gt in order to find bt.
-
-        if self._bt is not None:
-            if as_Vector:
-                return (
-                    self._bt
-                    @ np.array(self.get_cartesian_basis_vectors())[: self._bt.shape[1]]
-                )
-            return self._bt
-
-        b = self.b
-        if self._symbolic_metric:
-            # b^k = adj(g_ij)_kl b_l / g, simplifying only the numerators.
-            g_sym = cast(MetricDeterminant, self._g_symbol)
-            num = self._metric_adjugate() @ b
-            bt = np.array([[self.simplify(c) / g_sym for c in row] for row in num])
-        else:
-            gt = self.get_contravariant_metric_tensor()
-            bt = np.array(self.simplify(gt @ b))
-        self._bt = bt
-        if as_Vector:
-            return bt @ np.array(self.get_cartesian_basis_vectors())[: bt.shape[1]]
-        return bt
+        if self._bt is None:
+            # b^k = g^kl b_l = adj(g_ij)_kl b_l / g
+            num = self._metric_adjugate() @ self.b
+            self._bt = np.array([[self._over_det(c) for c in row] for row in num])
+        return self._as_vectors(self._bt) if as_Vector else self._bt
 
     def get_covariant_metric_tensor(
         self, explicit: bool = False
@@ -1508,33 +1353,20 @@ class CoordSys(Basic):
             3D Numpy object array with shape (dim, dim, dim) containing SymPy
             expressions.
         """
-        if self._ct is not None:
-            return self._ct
-        b = self.get_covariant_basis()
-        ct = np.zeros((len(self.psi),) * 3, object)
-        if self._symbolic_metric:
+        if self._ct is None:
             # Γ^k_ij = adj(g_ij)_kl [ij,l] / g with the first kind symbols
-            # [ij,l] = ∂b_i/∂q^j · b_l, simplifying only the numerators.
-            adj = self._metric_adjugate()
-            g_sym = cast(MetricDeterminant, self._g_symbol)
-            n = range(len(self.psi))
-            for i in n:
-                for j in n:
-                    db = np.array([bij.diff(self.psi[j], 1) for bij in b[i]])
-                    first = [np.dot(db, b[l]) for l in n]
-                    for k in n:
-                        num = sp.Add(*(adj[k, l] * first[l] for l in n))
-                        ct[k, i, j] = self.simplify(num) / g_sym
+            # [ij,l] = ∂b_i/∂q^j · b_l
+            b, adj, q = self.b, self._metric_adjugate(), self.base_scalars()
+            n = range(self.dims)
+            ct = np.zeros((self.dims,) * 3, dtype=object)
+            for i, j in product(n, n):
+                db = np.array([bij.diff(q[j]) for bij in b[i]])
+                first = [np.dot(db, b[l]) for l in n]
+                for k in n:
+                    num = sp.Add(*(adj[k, l] * first[l] for l in n))
+                    ct[k, i, j] = self._over_det(num)
             self._ct = ct
-            return ct
-        bt = self.get_contravariant_basis()
-        for i in range(len(self.psi)):
-            for j in range(len(self.psi)):
-                db = np.array([bij.diff(self.psi[j], 1) for bij in b[i]])
-                for k in range(len(self.psi)):
-                    ct[k, i, j] = self.simplify(np.dot(db, bt[k]))
-        self._ct = ct
-        return ct
+        return self._ct
 
     def diff_base_vector(self, bv: BaseVector, j: int) -> VectorLike:
         """Returns the derivative of a base vector with respect to q^j.
@@ -1646,12 +1478,7 @@ class CoordSys(Basic):
         Returns:
             Refined and replaced expression.
         """
-        sc = self.expr_base_scalar_to_psi(sc)
-        sc = sp.refine(sc, self._assumptions)
-        for a, b in self._replace:
-            sc = sc.replace(a, b)
-        cast(T, sc)
-        return self.expr_psi_to_base_scalar(sc)
+        return self.replace(self.refine(sc))
 
 
 class SubCoordSys:
@@ -1676,7 +1503,6 @@ class SubCoordSys:
     Attributes:
         _base_scalars: Tuple containing the single selected BaseScalar.
         _base_vectors: Tuple containing the single selected BaseVector.
-        _psi: Tuple with the underlying symbolic parameter.
         _cartesian_xyz: List with the parent Cartesian coordinate symbol.
         _variable_names: List with the variable name (string) of the sub–coordinate.
         _position_vector: The positional expression (component) along this axis.
@@ -1707,7 +1533,6 @@ class SubCoordSys:
         )
         self._base_scalars = (system._base_scalars[index],)
         self._base_vectors = (system._base_vectors[index],)
-        self._psi = (system._psi[index],)
         self._cartesian_xyz = [system._cartesian_xyz[index]]
         self._variable_names = [system._variable_names[index]]
         self._position_vector = system._position_vector[index]
@@ -1731,21 +1556,6 @@ class SubCoordSys:
     def base_time(self) -> BaseTime:
         return self._parent.base_time()
 
-    @property
-    def rv(self) -> Expr:
-        """Return the positional expression along this axis."""
-        return self._position_vector
-
-    @property
-    def position_vector(self) -> Expr:
-        """Return the positional expression along this axis."""
-        return self._position_vector
-
-    @property
-    def psi(self) -> tuple[Symbol]:
-        """Return the underlying symbolic parameter (tuple of length 1)."""
-        return self._base_scalars
-
 
 def get_CoordSys(
     name: str,
@@ -1768,8 +1578,8 @@ def get_CoordSys(
         assumptions: SymPy assumptions (e.g. sp.Q.real & sp.Q.positive).
         replace: (pattern, replacement) pairs for simplification assistance.
         measure: Custom complexity function used during simplification.
-        symbolic_metric: If True, keep the metric determinant as a symbol g
-            (see `CoordSys`).
+        symbolic_metric: If True, keep the metric components g_ij and their
+            determinant g as symbols (see `CoordSys`).
 
     Returns:
         A fully constructed CoordSys instance.
@@ -1813,9 +1623,5 @@ sp.vector.vector.BaseScalar = BaseScalar  # ty:ignore[possibly-missing-submodule
 sp.vector.dyadic.BaseVector = BaseVector  # ty:ignore[possibly-missing-submodule]
 sp.vector.dyadic.BaseScalar = BaseScalar  # ty:ignore[possibly-missing-submodule]
 sp.vector.dyadic.BaseDyadic = BaseDyadic  # ty:ignore[possibly-missing-submodule]
-# sp.vector.Vector._base_func = BaseVector
 sp.vector.vector.VectorMul._base_func = BaseVector  # ty:ignore[possibly-missing-submodule]
 sp.vector.dyadic.DyadicMul._base_func = BaseDyadic  # ty:ignore[possibly-missing-submodule]
-# sp.vector.vector.VectorMul._base_instance = BaseVector
-# sp.vector.functions.BaseVector = BaseVector
-# sp.vector.functions.BaseScalar = BaseScalar

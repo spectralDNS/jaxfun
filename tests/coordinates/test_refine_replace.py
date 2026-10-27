@@ -28,7 +28,7 @@ def test_simplify_vector_and_dyadic():
     assert getattr(simp, "is_Vector", False)
     simp_v = cast(Vector, simp)
     # Should not alter structure, but ensure mapping back to base scalars
-    assert all(hasattr(k, "_system") for k in simp_v.components)
+    assert set(simp_v.components) <= set(C.base_vectors())
 
 
 def test_sympy_simplify_walks_into_base_scalars() -> None:

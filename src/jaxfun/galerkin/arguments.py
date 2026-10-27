@@ -27,7 +27,7 @@ from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
 from jaxfun.basespace import BaseSpace
-from jaxfun.coordinates import BaseScalar, CoordSys, Vector, latex_symbols
+from jaxfun.coordinates import BaseScalar, CoordSys, Vector, latex_symbol
 from jaxfun.galerkin.cartesianproductspace import (
     CartesianProductSpace,
     CartesianTensorProductSpace,
@@ -145,8 +145,8 @@ def get_BasisFunction(
 
     def _latex(cls, printer: Any = None, exp: float | None = None) -> str:
         index = indices[cls.local_index + cls.offset]
-        lhs = f"{latex_symbols[cls.name]}_{index}"
-        rhs = f"({latex_symbols[cls.args[0].name]})"
+        lhs = f"{latex_symbol(cls.name)}_{index}"
+        rhs = f"({latex_symbol(cls.args[0].name)})"
         if cls.rank == RankTag.SCALAR:
             s = lhs + rhs
         elif cls.rank == RankTag.VECTOR:
@@ -533,7 +533,7 @@ class ScalarFunction(BaseFunction):
         return f"{self.name}{self.arg_str}"
 
     def _latex(self, printer: Any = None) -> str:  # prob always want latex here?
-        return f"{latex_symbols[self.name]}{self.arg_str}"
+        return f"{latex_symbol(self.name)}{self.arg_str}"
 
 
 class VectorFunction(BaseFunction):
@@ -558,7 +558,7 @@ class VectorFunction(BaseFunction):
         """Return function in computational domain"""
         vn = self.system._variable_names
         return VectorAdd.fromiter(
-            Function(f"{self.name.upper()}_{latex_symbols[vn[i]]}")(
+            Function(f"{self.name.upper()}_{latex_symbol(vn[i])}")(
                 *self.system.base_scalars()
             )  # ty:ignore[call-non-callable]
             * bi
@@ -566,7 +566,7 @@ class VectorFunction(BaseFunction):
         )
 
     def _latex(self, printer: Any = None) -> str:
-        return r"\mathbf{{%s}}" % (latex_symbols[self.name],) + str(self.args[:-1])  # noqa: UP031
+        return r"\mathbf{{%s}}" % (latex_symbol(self.name),) + str(self.args[:-1])  # noqa: UP031
 
 
 class Jaxc(sp.Dummy):
@@ -633,7 +633,7 @@ class Jaxc(sp.Dummy):
         return self.__str__()
 
     def _latex(self, printer: Any = None) -> str:
-        return latex_symbols[self.name]
+        return latex_symbol(self.name)
 
 
 def get_JAXFunction(
@@ -687,16 +687,12 @@ def get_JAXFunction(
         return cls.__str__()
 
     def _latex(cls, printer: Any = None, exp: float | None = None) -> str:
-        lhs = f"{latex_symbols[cls.name]}"
+        lhs = f"{latex_symbol(cls.name)}"
         if cls.rank == RankTag.SCALAR:
-            rhs = (
-                f"({latex_symbols[cls.args[0]]})"
-                if len(cls.args) == 1
-                else f"{latex_symbols[cls.args]}"
-            )
+            rhs = f"({cls.args[0]})" if len(cls.args) == 1 else f"{cls.args}"
             s = lhs + rhs
         elif cls.rank == RankTag.VECTOR:
-            rhs = f"{latex_symbols[cls.args]}"
+            rhs = f"{cls.args}"
             sup = "^{(" + str(cls.global_index) + ")}"
             s = lhs + sup + rhs
         else:

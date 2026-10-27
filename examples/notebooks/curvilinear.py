@@ -152,7 +152,7 @@ def _(mo):
     \end{align*}
     $$
 
-    The metric tensors are available in Jaxfun using methods `get_covariant_metric_tensor` and `get_contravariant_metric_tensor` on the given curvilinear coordinate system. A vector or dyadic can be rewritten using only covariant basis vectors with `to_covariant_basis`, which applies $\mathbf{b}^{i} = g^{ij} \mathbf{b}_{j}$, or only contravariant basis vectors with `to_contravariant_basis`, which applies $\mathbf{b}_{i} = g_{ij} \mathbf{b}^{j}$.
+    The metric tensors are available in Jaxfun using methods `get_covariant_metric_tensor` and `get_contravariant_metric_tensor` on the given curvilinear coordinate system. A vector or dyadic can be rewritten using only covariant basis vectors with `to_covariant_basis`, which applies $\mathbf{b}^{i} = g^{ij} \mathbf{b}_{j}$, or only contravariant basis vectors with `to_contravariant_basis`, which applies $\mathbf{b}_{i} = g_{ij} \mathbf{b}^{j}$. Both are special cases of `change_basis(v, basis, basis2=None)`, which writes a vector or dyadic in the Cartesian, covariant or contravariant basis, optionally with a different basis for the second leg of a dyadic, such as the mixed basis $\mathbf{b}_{i} \otimes \mathbf{b}^{j}$.
     """)
     return
 
@@ -433,10 +433,10 @@ def _(mo):
     We can get this vector $\mathbf{p}$ as fully contravariant by computing
 
     $$
-    \boldsymbol{p} = (\boldsymbol{p} \cdot \boldsymbol{b}_r) \boldsymbol{b}_r + (\boldsymbol{p} \cdot \boldsymbol{b}_{\theta}) \boldsymbol{b}_{\theta} + (\boldsymbol{p} \cdot \boldsymbol{b}_{z}) \boldsymbol{b}_{z} = r \boldsymbol{b}_r + z \mathbf{b}_z
+    \boldsymbol{p} = (\boldsymbol{p} \cdot \boldsymbol{b}^r) \boldsymbol{b}_r + (\boldsymbol{p} \cdot \boldsymbol{b}^{\theta}) \boldsymbol{b}_{\theta} + (\boldsymbol{p} \cdot \boldsymbol{b}^{z}) \boldsymbol{b}_{z} = r \boldsymbol{b}_r + z \mathbf{b}_z
     $$
 
-    This is called a projection of the vector $\boldsymbol{p}$ onto the covariant cylinder basis. The projection can be computed with method `from_cartesian`:
+    where the contravariant basis vectors pick out the components because of Eq. (10). This is called a projection of the vector $\boldsymbol{p}$ onto the covariant cylinder basis. The projection can be computed with method `from_cartesian`:
     """)
     return
 
@@ -902,7 +902,7 @@ def _(mo):
 
     where $d{X}=\prod_{i\in \mathcal{I}^m} dX^{i}$ and ${L}U$ is an operator transformed to computational space, like Eqs. (17). The computational weights $W(\mathbf{X})$ are determined by the choice of basis functions. Note that the transformation makes use of $d\lambda^m = \sqrt{g}d{X}$ for all $m \le n$.
 
-    An example solving Helmholtz equation on an annulus is given in the following  [notebook](https://spectraldns.github.io/jaxfun/annulus.html).
+    An example solving Helmholtz equation on an annulus is given in the following  [notebook](https://spectraldns.github.io/jaxfun/annulus.html). Note that the annulus example orders the polar coordinates $(\theta, r)$, since the Fourier direction should be the first axis of a tensor product space.
     """)
     return
 

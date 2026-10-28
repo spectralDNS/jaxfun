@@ -624,7 +624,6 @@ class CoordSys(Basic):
         cls,
         name: str,
         transformation: Lambda,
-        vector_names: list[str] | None = None,
         parent: CoordSys | None = None,
         assumptions: AssumptionKeys | bool = True,
         replace: Sequence[tuple[Any, Any]] = (),
@@ -637,7 +636,6 @@ class CoordSys(Basic):
             name: Name identifier.
             transformation: A SymPy Lambda mapping computational
                 coordinates (psi) to Cartesian coordinates (position vector).
-            vector_names: Optional custom names for the base vectors.
             parent: Parent (typically Cartesian) system. If None and the
                 transformation is identity, system is Cartesian.
             assumptions: SymPy logical assumption set (e.g. sp.Q.real & sp.Q.positive).
@@ -660,15 +658,16 @@ class CoordSys(Basic):
 
         variable_names = tuple(s.name for s in psi)
         is_cartesian = position_vector == psi
-        if vector_names is None:
-            vector_names = (
-                ["i", "j", "k"] if is_cartesian else [f"b_{s}" for s in variable_names]
-            )
+        vector_names = (
+            ("i", "j", "k")[: len(psi)]
+            if is_cartesian
+            else tuple(f"b_{s}" for s in variable_names)
+        )
 
         obj = cast("CoordSys", super().__new__(cls, Str(name), transformation))
         obj._name = name
         obj._variable_names = variable_names
-        obj._vector_names = tuple(vector_names)
+        obj._vector_names = vector_names
 
         # Covariant base vectors
         if is_cartesian:
@@ -1279,14 +1278,15 @@ class CoordSys(Basic):
             G = np.full((n, n), sp.S.Zero, dtype=object)
             for i in range(n):
                 for j in range(i, n):
-                    if self._g[i, j] != 0:
-                        G[i, j] = G[j, i] = self._metric_symbol(
-                            MetricComponent,
-                            (i, j),
-                            f"g_{i}{j}",
-                            f"g_{{{i}{j}}}",
-                            **({"positive": True} if i == j else {}),
-                        )
+                    if self._g[i, j] == 0:
+                        continue
+                    G[i, j] = G[j, i] = self._metric_symbol(
+                        MetricComponent,
+                        (i, j),
+                        f"g_{i}{j}",
+                        f"g_{{{i}{j}}}",
+                        **({"positive": True} if i == j else {}),
+                    )
             self._g_sym = G
         return self._g_sym
 
@@ -1530,7 +1530,6 @@ class SubCoordSys:
 def get_CoordSys(
     name: str,
     transformation: Lambda,
-    vector_names: list[str] | None = None,
     assumptions: AssumptionKeys | bool = True,
     replace: Sequence[tuple[Any, Any]] = (),
     measure: Callable[..., Any] = sp.count_ops,
@@ -1544,7 +1543,6 @@ def get_CoordSys(
     Args:
         name: Name of the new system.
         transformation: SymPy Lambda mapping (psi...) -> (x,y,z).
-        vector_names: Optional custom base vector names.
         assumptions: SymPy assumptions (e.g. sp.Q.real & sp.Q.positive).
         replace: (pattern, replacement) pairs for simplification assistance.
         measure: Custom complexity function used during simplification.
@@ -1560,7 +1558,6 @@ def get_CoordSys(
     return CoordSys(
         name,
         transformation,
-        vector_names=vector_names,
         parent=R(len(position_vector)),
         assumptions=assumptions,
         replace=replace,

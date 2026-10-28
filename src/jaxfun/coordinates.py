@@ -1504,6 +1504,13 @@ class SubCoordSys:
         for k in self._cartesian_xyz:
             setattr(self, k.name, k)
 
+    def __deepcopy__(self, memo: dict) -> Self:
+        memo[id(self)] = self
+        return self
+
+    def __copy__(self) -> Self:
+        return self
+
     def __iter__(self) -> Iterable[BaseVector]:
         """Iterate over base vectors (single element iterator)."""
         return iter(self.base_vectors())

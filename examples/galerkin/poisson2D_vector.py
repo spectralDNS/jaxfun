@@ -37,12 +37,12 @@ x, y = T.system.base_scalars()
 i, j = T.system.base_vectors()
 ue = (1 - x**2) * (1 - y**2) * i + (1 - x**2) * (1 - y**2) * sp.sin(2 * sp.pi * x) * j
 
-A = inner(-Grad(u), Grad(v), sparse=False)
+A = inner(-Grad(u), Grad(v), sparse=True)
 b = inner(Div(Grad(ue)), v)
 
 assert isinstance(A, BlockMatrix)
 assert isinstance(b, BlockArray)
-uh = A.solve(b, method="dense")
+uh = A.solve(b, method="rcm")
 
 N = 100
 uj = V.evaluate_mesh(uh.array, kind="uniform", N=(N, N))

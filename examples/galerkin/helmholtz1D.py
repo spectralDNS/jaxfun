@@ -13,32 +13,31 @@ from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
 from jaxfun.operators import Div, Grad
 from jaxfun.typing import TestSpaceKind
-from jaxfun.utils.common import lambdify, n, ulp
+from jaxfun.utils.common import lambdify, ulp
 
 N = 60
-# Method of manufactured solution
 R1 = R(1)
 x = R1.x
-ue = sp.exp(sp.cos(2 * sp.pi * x))
+ue = sp.exp(sp.cos(2 * sp.pi * x))  # Manufactured solution
 
 domain = (0, 1)
 bcs = {
-    "left": {"D": float(ue.subs(x, domain[0]))},
-    "right": {"D": float(ue.subs(x, domain[1]))},
+    "left": {"D": ue.subs(x, domain[0])},
+    "right": {"D": ue.subs(x, domain[1])},
 }
 D = FunctionSpace(N, Chebyshev, bcs=bcs, name="D", fun_str="psi", domain=domain)
-P = D.get_testspace(kind=TestSpaceKind.GR, scaling=n + 1)
+P = D.get_testspace(kind=TestSpaceKind.GR)
 v = TestFunction(P, name="v")
 u = TrialFunction(D, name="u")
+f = Div(Grad(ue)) + ue
 
-A, L = inner(
-    v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True, kind="system"
-)
+A, b = inner(v, Div(Grad(u)) + u - f, sparse=True, kind="system")
+
+uh = A.solve(b)
 
 xj = D.mesh(kind="uniform", N=100)
-uh = A.solve(L)
 uj = D.evaluate(xj, uh)
-uej = lambdify(D.system.x, ue)(xj)
+uej = lambdify(x, ue)(xj)
 error = jnp.linalg.norm(uj - uej)
 if "PYTEST" in os.environ:
     assert error < jnp.sqrt(ulp(10)), error

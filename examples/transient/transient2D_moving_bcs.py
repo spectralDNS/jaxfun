@@ -23,7 +23,6 @@
 
 import os
 import sys
-from typing import cast
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -58,7 +57,8 @@ hom = {"left": {"D": 0}, "right": {"D": 0}}
 mov = {"left": {"D": 0}, "right": {"D": wall}}
 Lx = FunctionSpace(N, Legendre.Legendre, bcs=hom, name="Lx")
 Ly = FunctionSpace(N, Legendre.Legendre, bcs=mov, name="Ly")
-V: DirectSumTPS = cast(DirectSumTPS, TensorProduct(Lx, Ly, name="V"))
+V = TensorProduct(Lx, Ly, name="V")
+assert isinstance(V, DirectSumTPS)
 U = V.get_orthogonal()
 
 v = TrialFunction(V, name="v")  # constrained: no transient=True

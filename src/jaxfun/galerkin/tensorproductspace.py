@@ -373,7 +373,7 @@ class TensorProductSpace:
         xj = self.mesh(kind, N, True)
         mesh = []
         for r in rv:
-            mesh.append(lambdify(x, r, modules="jax")(*xj))
+            mesh.append(lambdify(x, r.doit(), modules="jax")(*xj))
         return tuple(mesh)
 
     def broadcast_to_ndims(self, x: Array, axis: int = 0) -> Array:

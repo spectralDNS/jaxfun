@@ -1,3 +1,5 @@
+import copy
+
 import pytest
 import sympy as sp
 from sympy import Lambda
@@ -36,6 +38,15 @@ def test_base_time_and_subsystem_assertion():
     with pytest.raises(AssertionError):
         # Cannot create sub system for 1D system
         C.sub_system()
+
+
+def test_subsystem_copies_are_itself():
+    r, theta = sp.symbols("r theta", real=True, positive=True)
+    C = get_CoordSys("C", Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta))))
+    S = C.sub_system(1)
+    assert copy.copy(S) is S
+    assert copy.deepcopy(S) is S
+    assert copy.deepcopy([S, C]) == [S, C]
 
 
 def test_to_from_cartesian_cartesian_shortcuts_and_dyadic():

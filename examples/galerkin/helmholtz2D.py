@@ -28,12 +28,11 @@ Dy = FunctionSpace(M, space, bcs=bcsy, name="Dy", fun_str="phi", domain=(0, 1))
 T = TensorProduct(Dx, Dy, name="T")
 v = TestFunction(T, name="v")
 u = TrialFunction(T, name="u")
+f = Div(Grad(ue)) + ue
 
-A, L = inner(
-    v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), sparse=True, kind="system"
-)
+A, b = inner(v, Div(Grad(u)) + u - f, sparse=True, kind="system")
 
-un = A.solve(L, method="lu")
+un = A.solve(b, method="lu")
 
 N = 100
 uj = T.evaluate_mesh(un, kind="uniform", N=(N, N))

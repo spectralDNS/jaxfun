@@ -571,7 +571,7 @@ class OrthogonalSpace(BaseSpace):
         xj = self.mesh(kind, N)
         mesh = []
         for r in rv:
-            mesh.append(lambdify(t, r, modules="jax")(xj))
+            mesh.append(lambdify(t, r.doit(), modules="jax")(xj))
         return tuple(mesh)
 
     def __len__(self) -> int:

@@ -1,3 +1,5 @@
+import copy
+import pickle
 from typing import cast
 
 import pytest
@@ -325,6 +327,13 @@ def test_constant_and_identity():
         assert any(
             isinstance(arg, BaseDyadic) and arg.args == (v, v) for arg in Id.args
         )
+
+
+def test_constant_copy_and_pickle():
+    c = Constant("c0", sp.Rational(1, 3), positive=True)
+    for d in (copy.deepcopy(c), pickle.loads(pickle.dumps(c))):
+        assert isinstance(d, Constant)
+        assert d == c and d.val == c.val and d.is_positive
 
 
 def test_vector_diff_override():

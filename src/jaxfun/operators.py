@@ -939,6 +939,10 @@ class Constant(sp.Symbol):
         obj.val = val
         return obj
 
+    def __getnewargs_ex__(self) -> tuple[tuple[str, Expr | float], dict[str, Any]]:
+        # Symbol's (name,) would drop val, so copy and pickle could not rebuild us
+        return ((self.name, self.val), self._assumptions_orig)
+
     def doit(self, **hints: Any) -> Expr | float:
         return self.val
 

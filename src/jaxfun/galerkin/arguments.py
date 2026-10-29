@@ -24,10 +24,10 @@ from jax import Array
 from sympy import Basic, Expr, Function, Tuple
 from sympy.core.function import AppliedUndef
 from sympy.printing.pretty.stringpict import prettyForm
-from sympy.vector import VectorAdd
+from sympy.vector import Vector, VectorAdd
 
 from jaxfun.basespace import BaseSpace
-from jaxfun.coordinates import BaseScalar, CoordSys, Vector, latex_symbol
+from jaxfun.coordinates import BaseScalar, CoordSys, latex_symbol
 from jaxfun.galerkin.cartesianproductspace import (
     CartesianProductSpace,
     CartesianTensorProductSpace,

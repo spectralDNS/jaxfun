@@ -25,7 +25,6 @@ tau, sigma = sp.symbols("tau, sigma", real=True)
 C = get_CoordSys(
     "C",
     sp.Lambda((tau, sigma), (tau * sigma, (tau**2 - sigma**2) / 2)),
-    assumptions=sp.Q.positive(tau) & sp.Q.positive(sigma + 1),
 )
 D0 = FunctionSpace(M, Legendre, bcs, domain=(0, 1), name="D0", fun_str="phi")
 D1 = FunctionSpace(M, Legendre, bcs, name="D1", fun_str="psi")

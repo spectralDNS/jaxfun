@@ -28,4 +28,26 @@ def test_simplify_vector_and_dyadic():
     assert getattr(simp, "is_Vector", False)
     simp_v = cast(Vector, simp)
     # Should not alter structure, but ensure mapping back to base scalars
-    assert all(hasattr(k, "_system") for k in simp_v.components)
+    assert set(simp_v.components) <= set(C.base_vectors())
+
+
+def test_sympy_simplify_walks_into_base_scalars() -> None:
+    # sp.simplify reaches the system held by a base scalar and calls
+    # Basic.replace(query, value) on it, which CoordSys.replace must allow.
+    assert sp.simplify(C.r * sp.sin(C.theta) ** 2 + C.r * sp.cos(C.theta) ** 2) == C.r
+
+
+def test_replace_patterns_act_on_the_metric() -> None:
+    mu, nu = sp.symbols("mu nu", real=True, positive=True)
+    mapping = sp.Lambda((mu, nu), (sp.cosh(mu) * sp.cos(nu), sp.sinh(mu) * sp.sin(nu)))
+    E = get_CoordSys(
+        "E",
+        mapping,
+        replace=[
+            (sp.cos(nu) ** 2, 1 - sp.sin(nu) ** 2),
+            (sp.cosh(mu) ** 2, 1 + sp.sinh(mu) ** 2),
+        ],
+    )
+    m, n = E.base_scalars()
+    assert E.get_covariant_metric_tensor()[0, 0] == sp.sinh(m) ** 2 + sp.sin(n) ** 2
+    assert E.sg == sp.sinh(m) ** 2 + sp.sin(n) ** 2

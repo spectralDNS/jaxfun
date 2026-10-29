@@ -60,7 +60,7 @@ def test_cross_add_branch_and_vector_mul():
     c = cross(v, w)
     # Should simplify; at least be a VectorAdd or VectorZero
     assert c.is_Vector
-    assert c.components[C.b_zz] == C.r
+    assert c.components[C.bt_zz] == C.r
 
 
 def test_dot_various_combinations():
@@ -132,8 +132,9 @@ def test_identity_and_constant():
     assert c0.doit() == 5
     I = Identity(C)
     Id = I.doit()
-    for k in (C.b_r, C.b_theta, C.b_zz):
-        assert any(isinstance(a, BaseDyadic) and a.args == (k, k) for a in Id.args)
+    # I = b_i ⊗ b^i
+    for k, kt in zip(C.base_vectors(), C.contravariant_base_vectors(), strict=True):
+        assert any(isinstance(a, BaseDyadic) and a.args == (k, kt) for a in Id.args)
 
 
 def test_express_between_systems():

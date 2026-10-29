@@ -8,12 +8,12 @@ from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.galerkin.tensorproductspace import TensorProduct
-from jaxfun.operators import Div, Grad
-from jaxfun.utils.common import lambdify, n, ulp
+from jaxfun.operators import Div, Dot, Grad
+from jaxfun.utils.common import lambdify, ulp
 
 M = 20
 bcs = {"left": {"D": 0}, "right": {"D": 0}}
-D = FunctionSpace(M, Legendre, bcs, scaling=n + 1, name="D", fun_str="psi")
+D = FunctionSpace(M, Legendre, bcs, name="D", fun_str="psi")
 T = TensorProduct(D, D, D, name="T")
 v = TestFunction(T)
 u = TrialFunction(T)
@@ -22,8 +22,7 @@ u = TrialFunction(T)
 x, y, z = T.system.base_scalars()
 ue = (1 - x**2) * (1 - y**2) * (1 - z**2)
 
-# A, b = inner(-Dot(Grad(u), Grad(v)) + v * Div(Grad(ue)), sparse=False)
-A, b = inner(v * Div(Grad(u)) - v * Div(Grad(ue)), sparse=True, kind="system")
+A, b = inner(-Dot(Grad(u), Grad(v)) - v * Div(Grad(ue)), sparse=True, kind="system")
 
 uh = A.solve(b, method="lu")
 

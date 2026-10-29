@@ -14,6 +14,7 @@ from jaxfun.galerkin import (
     TrialFunction,
 )
 from jaxfun.galerkin.arguments import JAXFunction, ScalarFunction, VectorFunction
+from jaxfun.utils.common import ulp
 
 
 def test_jaxfunction_doit_and_matmul_rank1():
@@ -67,3 +68,19 @@ def test_vector_component_is_projection_of_the_field():
         assert sp.simplify(u[k].doit() - full.components[bk]) == 0
     ux, uy = u
     assert ux == u[0] and uy == u[1]
+
+
+def test_vector_projection_gives_contravariant_components():
+    r, theta = sp.symbols("r theta", real=True, positive=True)
+    C = get_CoordSys("C", sp.Lambda((r, theta), (r * sp.cos(theta), r * sp.sin(theta))))
+    L0 = Legendre.Legendre(4, domain=Domain(1, 2))
+    L1 = Legendre.Legendre(4, domain=Domain(0, 1))
+    T = TensorProduct(L0, L1, system=C)
+    V = CartesianProduct(T, T, rank=1)
+    r, theta = C.base_scalars()
+    # The coefficients are u^i = u·b^i, so u^theta = r**2, not u_theta = r**4
+    u = JAXFunction(r * theta * C.b_r + r**2 * C.b_theta, V)
+    ua = V.backward(u.array)
+    ri, tj = T.mesh()
+    assert jnp.linalg.norm(ua[0] - ri * tj) < ulp(1000)
+    assert jnp.linalg.norm(ua[1] - ri**2) < ulp(1000)

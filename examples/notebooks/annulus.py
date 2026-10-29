@@ -101,7 +101,7 @@ def _(C, Domain, Fourier, FunctionSpace, Legendre, TensorProduct, sp):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Note that we place the Fourier space along the first axis in order to use the real Hermitian symmetry of the Fourier coefficients.
+    Note that we place the Fourier space along the first axis. This lets us use the real Hermitian symmetry of the Fourier coefficients, and it suits the linear algebra: the system decouples into one radial system per Fourier wavenumber, and a multi-device solve splits the wavenumbers along the first axis.
 
     To implement Helmholtz' equation we need test and trial functions for the tensor product space
     """)
@@ -146,7 +146,7 @@ def _(u):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Notice that $\phi_k(r)$ is component $k$ of the trial functions of the radial coordinate and $E_l(\theta)=\exp(\imath \underline{l} \theta)$ is component $l$ of the complex exponentials. (We defined the function names "phi" and "E" when creating the spaces.) The trial function is actually an expansion
+    Notice that $\phi_l(r)$ is component $l$ of the trial functions of the radial coordinate and $E_k(\theta)=\exp(\imath \underline{k} \theta)$ is component $k$ of the complex exponentials. (We defined the function names "phi" and "E" when creating the spaces.) The trial function is actually an expansion
 
     $$
     u(x, y) = U(\theta, r) = \sum_{k=0}^{N-1}\sum_{l=0}^{N-3} \hat{u}_{kl} \exp(\imath \underline{k} \theta) \phi_{l}(r)
@@ -156,7 +156,7 @@ def _(mo):
 
     $$
     \underline{k} = \begin{cases} k, \quad &\text{if} \, k < N/2 \\
-    -(N-l) \quad &\text{if} \, k \ge N/2
+    -(N-k) \quad &\text{if} \, k \ge N/2
     \end{cases}
     $$
 
@@ -233,7 +233,7 @@ def _(mo):
     Notice that the scalar function use a lowercase letter in physical space and an upper case letter in computational space
 
     $$
-    h(x, y) = H(r, \theta).
+    h(x, y) = H(\theta, r).
     $$
     """)
     return
@@ -308,7 +308,7 @@ def _(C, eq, sp, v):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Here the test function uses indices $i$ and $j$, whereas the trial function uses $k$ and $l$. Each term with four indices is one `TPMatrix` in `A`. As seen above, there are 4 tensor product matrices (4 items with 4 indices). Note that the complex conjugate of the test function is evaluated automatically inside the `inner` function and it is not necessary to call it explicitly as above. Hence `eq*v` would produce the same result, but it would not print as nicely (and correctly) as above. Also, when evaluating the inner product, the equation is multiplied by an additional `r`, since the domain measure $d\Omega = rdrd\theta$
+    Here the test function uses indices $i$ and $j$, whereas the trial function uses $k$ and $l$. Each term with four indices is one tensor product matrix. With the measure included (see below) there are 4 such terms, but terms that share a factor along one axis are merged, so `A` holds two `TPMatrix` items. Note that the complex conjugate of the test function is evaluated automatically inside the `inner` function and it is not necessary to call it explicitly as above. Hence `eq*v` would produce the same result, but it would not print as nicely (and correctly) as above. Also, when evaluating the inner product, the equation is multiplied by an additional `r`, since the domain measure $d\Omega = rdrd\theta$
 
     In the end we solve the linear system of equations:
     """)

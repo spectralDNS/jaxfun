@@ -1,3 +1,5 @@
+import copy
+import pickle
 from typing import cast
 
 import pytest
@@ -118,8 +120,8 @@ def test_cross_same_vectors_zero():
 def test_cross_cylindrical():
     res = cross(C.b_r, C.b_theta)
     comp = components(res)
-    # Component should be C.r (the first base scalar of coordinate system C)
-    assert C.b_zz in comp and comp[C.b_zz] == C.r
+    # b_r x b_theta = sqrt(g) b^z, with sqrt(g) = r
+    assert C.bt_zz in comp and comp[C.bt_zz] == C.r
 
 
 @pytest.mark.parametrize(
@@ -249,6 +251,9 @@ def test_gradient_scalar_cylindrical():
     s = C.r * C.theta
     g = gradient(s)
     comp = components(g)
+    # grad(s) = ds/dq^i b^i
+    assert comp == {C.bt_r: C.theta, C.bt_theta: C.r}
+    comp = components(C.to_covariant_basis(g))
     assert sp.simplify(comp[C.b_r] - C.theta) == 0
     assert sp.simplify(comp[C.b_theta] - 1 / C.r) == 0
 
@@ -322,6 +327,13 @@ def test_constant_and_identity():
         assert any(
             isinstance(arg, BaseDyadic) and arg.args == (v, v) for arg in Id.args
         )
+
+
+def test_constant_copy_and_pickle():
+    c = Constant("c0", sp.Rational(1, 3), positive=True)
+    for d in (copy.deepcopy(c), pickle.loads(pickle.dumps(c))):
+        assert isinstance(d, Constant)
+        assert d == c and d.val == c.val and d.is_positive
 
 
 def test_vector_diff_override():

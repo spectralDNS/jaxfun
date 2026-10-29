@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import sympy as sp
 
+from jaxfun.coordinates import get_CoordSys
 from jaxfun.galerkin import (
     Chebyshev,
     DirectSum,
@@ -15,6 +16,7 @@ from jaxfun.galerkin import (
 )
 from jaxfun.galerkin.inner import inner, project
 from jaxfun.la import TPMatrix, tpmats_to_kron, tpmats_to_scipy_kron
+from jaxfun.operators import Constant
 from jaxfun.utils.common import ulp
 
 
@@ -33,6 +35,20 @@ def test_tensorproductspace_broadcast_and_evaluate_2d():
     val = T.evaluate_mesh(coeffs)
     # evaluate inserts singleton axis for second dimension order (shape (N0,1,N1))
     assert val.shape[0] == coeffs.shape[0] and val.shape[-1] == coeffs.shape[1]
+
+
+def test_tensorproductspace_cartesian_mesh_with_constant():
+    a = Constant("a", 2)
+    r, theta = sp.symbols("r theta", real=True, positive=True)
+    C = get_CoordSys(
+        "C", sp.Lambda((r, theta), (a * r * sp.cos(theta), a * r * sp.sin(theta)))
+    )
+    L0 = FunctionSpace(4, Legendre.Legendre, domain=(1, 2))
+    T = TensorProduct(L0, Legendre.Legendre(4), system=C)
+    xc, yc = T.cartesian_mesh()
+    rj, tj = T.mesh()
+    assert jnp.allclose(xc, 2 * rj * jnp.cos(tj))
+    assert jnp.allclose(yc, 2 * rj * jnp.sin(tj))
 
 
 def test_tensorproductspace_forward_directsum():

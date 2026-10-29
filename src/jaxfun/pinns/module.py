@@ -1173,7 +1173,7 @@ class FlaxFunction(Function):
         s = system.base_scalars()
         mesh = []
         for r in rv:
-            mesh.append(lambdify(s, r, modules="jax")(*xs.T))
+            mesh.append(lambdify(s, r.doit(), modules="jax")(*xs.T))
         return jnp.array(mesh).T
 
     @property

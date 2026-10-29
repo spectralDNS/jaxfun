@@ -279,13 +279,13 @@ def test_laplace():
     theta, r = P.base_scalars()
     f = (r * theta) ** 2
     Lf = Div(Grad(f)).doit()
-    assert Lf == 4 * theta**2 + 2
+    assert P.simplify(Lf - (4 * theta**2 + 2)) == 0
 
     P = get_cylindrical()
     theta, r, z = P.base_scalars()
     f = (r * theta * z) ** 2
     Lf = Div(Grad(f)).doit()
-    assert Lf == 4 * theta**2 * z**2 + 2 * z**2 + 2 * r**2 * theta**2
+    assert P.simplify(Lf - (4 * theta**2 * z**2 + 2 * z**2 + 2 * r**2 * theta**2)) == 0
 
 
 def test_projection():

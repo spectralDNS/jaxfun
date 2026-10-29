@@ -165,12 +165,17 @@ def outer(v1: VectorLike, v2: VectorLike) -> DyadicLike:
 def cross(v1: VectorLike, v2: VectorLike) -> VectorLike:
     """Return the cross product of two vectors.
 
-        v1 x v2 = ε_{ijk} √g v1^i v2^j b^k
+        v1 x v2 = ε_{ijk} √g v1^i v2^j b^k = ε^{ijk} v1_i v2_j b_k / √g
 
-    where {b^k} are the contravariant basis vectors, v1^i = v1·b^i and
-    ε_{ijk} = ε^{ijk} is the Levi-Civita symbol, and √g the scale factor
-    product (square root of determinant of the Jacobian of the coordinate
-    transformation). Summation implied by repeating indices.
+    where {b_k} and {b^k} are the co- and contravariant basis vectors,
+    v1^i = v1·b^i, v1_i = v1·b_i, ε_{ijk} = ε^{ijk} is the Levi-Civita symbol,
+    and √g the scale factor product (square root of determinant of the Jacobian
+    of the coordinate transformation). Summation implied by repeating indices.
+
+    The cross product of two covariant base vectors is returned in the
+    contravariant basis, and vice versa. A covariant base vector crossed with
+    a contravariant one is computed as b_i = g_ij b^j, so that the result is
+    in the covariant basis.
 
     For unevaluated cross product, use Cross.
 
@@ -193,7 +198,7 @@ def cross(v1: VectorLike, v2: VectorLike) -> VectorLike:
         ...     "C", sp.Lambda((r, theta, z), (r * sp.cos(theta), r * sp.sin(theta), z))
         ... )
         >>> cross(C.b_r, C.b_theta)
-        r*C.b_z
+        r*C.bt_z
     """
     if isinstance(v1, VectorZero) or isinstance(v2, VectorZero):
         return Vector.zero
@@ -211,23 +216,35 @@ def cross(v1: VectorLike, v2: VectorLike) -> VectorLike:
         "cross product vectors not recognized. Consider using Cross."
     )
     if v1._sys == v2._sys:
-        n1 = v1.args[0]
-        n2 = v2.args[0]
+        sys = v1._sys
+        n1, n2 = v1.index, v2.index
+        if v1.is_contravariant != v2.is_contravariant:
+            # b_i x b^j is not zero for i == j. Raise the covariant operand,
+            # b_i = g_il b^l, and use the rule for two contravariant vectors.
+            g = sys.get_covariant_metric_tensor()
+            bt = sys.contravariant_base_vectors()
+            if v1.is_contravariant:
+                return VectorAdd.fromiter(
+                    g[n2, l] * cross(v1, bt[l]) for l in range(sys.dims)
+                )
+            return VectorAdd.fromiter(
+                g[n1, l] * cross(bt[l], v2) for l in range(sys.dims)
+            )
+
         if n1 == n2:
             return Vector.zero
 
-        assert len(v1._sys.base_scalars()) == 3, "Can only compute cross product in 3D"
+        assert sys.dims == 3, "Can only compute cross product in 3D"
 
         n3: int = ({0, 1, 2}.difference({n1, n2})).pop()
-        if v1._sys.is_cartesian:
+        if sys.is_cartesian:
             sgn = 1 if ((n1 + 1) % 3 == n2) else -1
-            return sgn * v1._sys.base_vectors()[n3]
+            return sgn * sys.base_vectors()[n3]
 
-        gt = v1._sys.get_contravariant_metric_tensor()
-        sg = v1._sys.sg
         ei = eijk(n1, n2, n3)
-        b = v1._sys.base_vectors()
-        return sg * ei * gt[n3] @ b
+        if v1.is_contravariant:
+            return ei / sys.sg * sys.base_vectors()[n3]
+        return ei * sys.sg * sys.contravariant_base_vectors()[n3]
 
     return from_cartesian(cross(v1._sys.to_cartesian(v1), v2._sys.to_cartesian(v2)))
 
@@ -351,46 +368,48 @@ def dot(t1: TensorLike, t2: TensorLike) -> TensorLike | Expr:
     ):
         sys1 = t1._sys
         sys2 = t2._sys
-        same_sys: bool = sys1 == sys2
-        same_and_cartesian: bool = same_sys and sys1.is_cartesian
-        if not same_sys:
+        if sys1 != sys2:
             cart1 = sys1.to_cartesian(t1)
             cart2 = sys2.to_cartesian(t2)
             out = dot(cart1, cart2)
             return from_cartesian(out) if _is_tensorlike(out) else out
 
     if isinstance(t1, BaseVector) and isinstance(t2, BaseVector):
-        if same_and_cartesian:
-            return sp.S.One if t1 == t2 else rank_zero
-        g = sys1.get_covariant_metric_tensor()
-        return g[t1._id[0], t2._id[0]]
+        return _dot_base(t1, t2)
 
     if isinstance(t1, BaseDyadic) and isinstance(t2, BaseVector):
-        if same_and_cartesian:
-            return t1.args[0] if t1.args[1] == t2 else rank_zero
-        g = sys1.get_covariant_metric_tensor()
-        g0 = g[t1.args[1]._id[0], t2._id[0]]
+        g0 = _dot_base(t1.args[1], t2)
         if g0 == 0:
             return rank_zero
         return g0 * t1.args[0]
 
     if isinstance(t1, BaseVector) and isinstance(t2, BaseDyadic):
-        if same_and_cartesian:
-            return t2.args[1] if t1 == t2.args[0] else rank_zero
-        g = sys1.get_covariant_metric_tensor()
-        g0 = g[t1._id[0], t2.args[0]._id[0]]
+        g0 = _dot_base(t1, t2.args[0])
         if g0 == 0:
             return rank_zero
         return g0 * t2.args[1]
 
     assert isinstance(t1, BaseDyadic) and isinstance(t2, BaseDyadic)
-    if same_and_cartesian:
-        return t1.args[0] | t2.args[1] if t1.args[1] == t2.args[0] else rank_zero
-    g = sys1.get_covariant_metric_tensor()
-    g0 = g[t1.args[1]._id[0], t2.args[0]._id[0]]
+    g0 = _dot_base(t1.args[1], t2.args[0])
     if g0 == 0:
         return rank_zero
     return g0 * t1.args[0] | t2.args[1]
+
+
+def _dot_base(v1: BaseVector, v2: BaseVector) -> Expr:
+    """Return the dot product of two base vectors of the same system.
+
+        b_i·b_j = g_ij,  b^i·b^j = g^ij,  b^i·b_j = b_j·b^i = δ^i_j
+
+    where g_ij and g^ij are the co- and contravariant metric tensors.
+    """
+    i, j = v1.index, v2.index
+    if v1.is_contravariant != v2.is_contravariant:
+        return sp.S.One if i == j else sp.S.Zero
+    sys = v1._sys
+    if v1.is_contravariant:
+        return sys.get_contravariant_metric_tensor()[i, j]
+    return sys.get_covariant_metric_tensor()[i, j]
 
 
 def _rank_of(t: TensorLike | Expr) -> RankTag:
@@ -474,7 +493,7 @@ def divergence(v: TensorLike) -> VectorLike | Expr:
     For vectors the result equals ∇·v and for dyadics the result equals ∇·v^T,
     if ∇ is interpreted as a vector.
 
-    The dyadic result is transformed to a covariant basis before returning.
+    The vector result of a dyadic is in the basis of the dyadic's first leg.
 
     For unevaluated divergence, use Div.
 
@@ -504,11 +523,10 @@ def divergence(v: TensorLike) -> VectorLike | Expr:
         return _zero_for_rank(rank)
     coord_sys = _get_coord_systems(v)
     if len(coord_sys) == 1:
-        # v should be a vector/dyadic with Cartesian or covariant basis vectors
         coord_sys = next(iter(coord_sys))
         x = coord_sys.base_scalars()
-        bt = coord_sys.get_contravariant_basis_vector
-        res = Add.fromiter(Dot(Derivative(v, x[i]), bt(i)) for i in range(len(x)))
+        bt = coord_sys.contravariant_base_vectors()
+        res = Add.fromiter(Dot(Derivative(v, x[i]), bt[i]) for i in range(len(x)))
         return res.doit()
 
     assert hasattr(v, "_sys") and isinstance(v._sys, CoordSys)
@@ -533,7 +551,11 @@ def gradient(field: Expr | VectorLike, transpose: bool = False) -> TensorLike:
 
     For scalar f: returns ∇f = ∂f/∂q^j b^j.
     For vector v: returns (∇ ⊗ v)^T = (∂v/∂q^j) ⊗ b^j (or its transpose).
-        The tensors are expressed in the covariant basis before returning.
+
+    The contravariant base vectors b^j are kept, so the gradient of a scalar
+    is in the contravariant basis, and the gradient of a vector v = v^i b_i is
+    the mixed dyadic v^i|_j b_i ⊗ b^j. Use `CoordSys.to_covariant_basis` to
+    expand b^j = g^jk b_k.
 
     For unevaluated gradient, use Grad.
 
@@ -554,7 +576,7 @@ def gradient(field: Expr | VectorLike, transpose: bool = False) -> TensorLike:
         ... )
         >>> s = P.r * P.theta
         >>> gradient(s)
-        theta*P.b_r + 1/r*P.b_theta
+        theta*P.bt_r + r*P.bt_theta
     """
     field = field.doit()
     coord_sys = _get_coord_systems(field)
@@ -567,7 +589,7 @@ def gradient(field: Expr | VectorLike, transpose: bool = False) -> TensorLike:
     if len(coord_sys) == 1:
         coord_sys = next(iter(coord_sys))
         x = cast_bs(coord_sys.base_scalars())
-        b = tuple(coord_sys.get_contravariant_basis_vector(i) for i in range(len(x)))
+        b = coord_sys.contravariant_base_vectors()
         if _is_vectorlike(field):
             dv = Add.fromiter(
                 Outer(b[i], Derivative(field, x[i]))
@@ -597,15 +619,16 @@ def curl(v: VectorLike) -> VectorLike:
 
         curl(v) = ∇ × v = b^j×(∂v/∂q^j) = ε^{ijk} ∂v_k/∂q^j b_i / √g
 
-    where {b^j} are the contravariant basis vectors, q^j the coordinates,
-    ε^{ijk} the Levi-Civita symbol, and √g the scale factor product
-    (square root of determinant of the Jacobian of the coordinate transformation).
+    where {b_i} and {b^j} are the co- and contravariant basis vectors, q^j the
+    coordinates, v_k = v·b_k the covariant components of v, ε^{ijk} the
+    Levi-Civita symbol, and √g the scale factor product (square root of
+    determinant of the Jacobian of the coordinate transformation). The last
+    form is used, so the result is in the covariant basis.
 
     For unevaluated curl, use Curl.
 
     Args:
         v: Vector expression (must lie in a 3D system).
-        doit: If True, evaluate derivatives; else return unevaluated form.
 
     Returns:
         Vector representing curl(v), ∇ × v.
@@ -634,10 +657,16 @@ def curl(v: VectorLike) -> VectorLike:
         return Vector.zero
     if len(coord_sys) == 1:
         coord_sys = next(iter(coord_sys))
+        assert coord_sys.dims == 3, "Can only compute curl in 3D"
         x = cast_bs(coord_sys.base_scalars())
-        b = tuple(coord_sys.get_contravariant_basis_vector(i) for i in range(len(x)))
-        outvec = Add.fromiter(Cross(b[i], v.diff(x[i])) for i in range(len(x)))
-        return coord_sys.simplify(outvec.doit())
+        b = coord_sys.base_vectors()
+        vk = [dot(v, bk) for bk in b]
+        outvec = VectorAdd.fromiter(
+            eijk(i, j, k) * df(vk[k], x[j]) * b[i]
+            for i, j, k in product(range(3), repeat=3)
+            if eijk(i, j, k) != 0
+        )
+        return coord_sys.simplify(outvec / coord_sys.sg)
 
     assert hasattr(v, "_sys") and isinstance(v._sys, CoordSys)
     if len(coord_sys) == 2 and v._sys.is_cartesian:
@@ -910,16 +939,24 @@ class Constant(sp.Symbol):
         obj.val = val
         return obj
 
+    def __getnewargs_ex__(self) -> tuple[tuple[str, Expr | float], dict[str, Any]]:
+        # Symbol's (name,) would drop val, so copy and pickle could not rebuild us
+        return ((self.name, self.val), self._assumptions_orig)
+
     def doit(self, **hints: Any) -> Expr | float:
         return self.val
 
 
 class Identity(Expr):
+    """Identity tensor I = b_i ⊗ b^i of a coordinate system."""
+
     def __init__(self, sys: CoordSys) -> None:
         self.sys = sys
 
     def doit(self, **hints: Any) -> Dyadic:
-        return sum(self.sys.base_dyadics()[:: self.sys.dims + 1], DyadicZero())
+        b = self.sys.base_vectors()
+        bt = self.sys.contravariant_base_vectors()
+        return DyadicAdd.fromiter(b[i] | bt[i] for i in range(self.sys.dims))
 
 
 def covariant_diff_cartesian(self, *args, **kwargs) -> TensorLike:
@@ -947,27 +984,34 @@ def covariant_diff_cartesian(self, *args, **kwargs) -> TensorLike:
     return self._sys.from_cartesian(f)
 
 
-def diff_covariant_vector(
-    self: VectorLike, *args: BaseScalar | int, **kwargs: Any
-) -> VectorLike:
-    r"""Covariant derivative of a vector (component-wise) wrt provided variables.
+def _diff_base_tensor(t: BaseVector | BaseDyadic, j: int) -> TensorLike:
+    """Return ∂t/∂q^j for a base vector or base dyadic t."""
+    if isinstance(t, BaseVector):
+        return t._sys.diff_base_vector(t, j)
+    a, b = t.args
+    return outer(a._sys.diff_base_vector(a, j), b) + outer(
+        a, b._sys.diff_base_vector(b, j)
+    )
+
+
+def _diff_tensor(
+    self: TensorLike, *args: BaseScalar | int, **kwargs: Any
+) -> TensorLike:
+    r"""Covariant derivative of a vector or dyadic wrt provided variables.
+
+    Uses the product rule on each term c B, with c a scalar component and B a
+    base vector or base dyadic
 
     .. math::
 
-        \frac{\partial v}{\partial q^j} = (\partial_j v^i + \Gamma^i_{kj} v^k) b_i
+        \frac{\partial (c B)}{\partial q^j} = \frac{\partial c}{\partial q^j} B
+            + c \frac{\partial B}{\partial q^j},
 
-    Args:
-        *args: Differentiation variables (BaseScalars, ints).
-        **kwargs: Passed to sympy.diff.
-
-    Returns:
-        Vector with differentiated components.
-
-    Raises:
-        TypeError: If any differentiation target is itself a basis-dependent object.
+    with :math:`\partial (a \otimes b) = \partial a \otimes b + a \otimes \partial b`
+    and the base vector derivatives from `CoordSys.diff_base_vector`. Any mix
+    of co- and contravariant base vectors is handled.
     """
-
-    if isinstance(self, VectorZero):
+    if isinstance(self, BasisDependentZero):
         return self
 
     if len(args) > 1:  # (x, 2), (x, y), (x, 2, y, 2), etc
@@ -977,81 +1021,20 @@ def diff_covariant_vector(
                 der_arg = arg
             if isinstance(arg, int):  # repeat arg-1 times
                 for _ in range(1, arg):
-                    res = diff_covariant_vector(res, der_arg, **kwargs)
+                    res = _diff_tensor(res, der_arg, **kwargs)
             else:
-                res = diff_covariant_vector(res, der_arg, **kwargs)
+                res = _diff_tensor(res, der_arg, **kwargs)
         return res
 
     assert hasattr(self, "_sys") and isinstance(self._sys, CoordSys)
     assert isinstance(args[0], BaseScalar)
-    ct = self._sys.get_christoffel_second()
-    b2i = self._sys._covariant_basis_map_inv
-    x2i = self._sys._map_base_scalar_to_index
     arg = args[0]
-    j = x2i[arg]
-    res = _zero_for_rank(rank=RankTag.VECTOR)
-    for bi, vi in self.components.items():
-        i = b2i[bi]
-        di = df(vi, arg, **kwargs)
-        for bk, vk in self.components.items():
-            k = b2i[bk]
-            di += ct[i, k, j] * vk
-        res += di * bi
-    return res
-
-
-def diff_covariant_dyadic(
-    self: DyadicLike, *args: BaseScalar | int, **kwargs: Any
-) -> DyadicLike:
-    r"""Covariant derivative of a dyadic (component-wise) wrt provided variables.
-
-    .. math::
-
-        \frac{\partial a}{\partial q^k} = (\partial_k a^{ij} + \Gamma^i_{mk} a^{mj} + \Gamma^j_{mk} a^{im}) b_i \otimes b_j
-
-    Args:
-        *args: Differentiation variables (BaseScalars, ints).
-        **kwargs: Passed to sympy.diff.
-
-    Returns:
-        Vector with differentiated components.
-
-    Raises:
-        TypeError: If any differentiation target is itself a basis-dependent object.
-    """  # noqa: E501
-    if isinstance(self, DyadicZero):
-        return self
-
-    if len(args) > 1:  # (x, 2), (x, y), (x, 2, y, 2), etc
-        res = self
-        for arg in args:
-            if isinstance(arg, BaseScalar):
-                der_arg = arg
-            if isinstance(arg, int):  # repeat arg-1 times
-                for _ in range(1, arg):
-                    res = diff_covariant_dyadic(res, der_arg, **kwargs)
-            else:
-                res = diff_covariant_dyadic(res, der_arg, **kwargs)
-        return res
-    assert hasattr(self, "_sys") and isinstance(self._sys, CoordSys)
-    assert isinstance(args[0], BaseScalar)
-    ct = self._sys.get_christoffel_second()
-    bb2ij = self._sys._covariant_basis_dyadic_map_inv
-    x2i = self._sys._map_base_scalar_to_index
-    arg = args[0]
-    k = x2i[arg]
-    res = _zero_for_rank(RankTag.DYADIC)
-    for bij, aij in self.components.items():
-        i, j = bb2ij[bij]
-        di = df(aij, arg, **kwargs)
-        for bml, aml in self.components.items():
-            m, l = bb2ij[bml]
-            if l == j:
-                di += ct[i, m, k] * aml
-            if m == i:
-                di += ct[j, l, k] * aml
-        res += di * bij
-    return res
+    j = self._sys._map_base_scalar_to_index[arg]
+    adder = VectorAdd if _is_vectorlike(self) else DyadicAdd
+    return adder.fromiter(
+        df(c, arg, **kwargs) * B + c * _diff_base_tensor(B, j)
+        for B, c in self.components.items()
+    )
 
 
 @overload
@@ -1067,17 +1050,20 @@ def covariant_diff(
 ) -> TensorLike:
     r"""Covariant derivative of a tensor (vector/dyadic) wrt provided variables.
 
-    Vector:
+    Vector, in the covariant or the contravariant basis:
 
     .. math::
         \frac{\partial v}{\partial q^j} = (\partial_j v^i + \Gamma^i_{kj} v^k) b_i
+            = (\partial_j v_i - \Gamma^k_{ij} v_k) b^i
 
-    Dyadic:
+    Dyadic, here in the covariant basis:
 
     .. math::
         \frac{\partial a}{\partial q^k} = (\partial_k a^{ij} + \Gamma^i_{mk} a^{mj} + \Gamma^j_{mk} a^{im}) b_i \otimes b_j
 
-    Uses Christoffel symbols :math:`\Gamma^i_{jk}` to differentiate basis vectors correctly.
+    Uses Christoffel symbols :math:`\Gamma^i_{jk}` to differentiate basis vectors
+    correctly. Tensors in any mix of co- and contravariant base vectors are
+    accepted.
 
     Args:
         *args: Differentiation variables / (variable, order) pairs.
@@ -1097,12 +1083,9 @@ def covariant_diff(
     if len(coord_sys) == 2 and self._sys.is_cartesian:
         self = from_cartesian(self)
     assert len(coord_sys) == 1
-    if _is_vectorlike(self):
-        out = diff_covariant_vector(self, *args, **kwargs)
-    elif _is_dyadiclike(self):
-        out = diff_covariant_dyadic(self, *args, **kwargs)
-    else:
+    if not _is_tensorlike(self):
         raise TypeError("covariant_diff only defined for Vector or Dyadic types.")
+    out = _diff_tensor(self, *args, **kwargs)
     coord_sys_out = _get_coord_systems(out)
     if len(coord_sys_out) > 1:
         return cast(TensorLike, express(out.doit(), list(coord_sys)[0]))

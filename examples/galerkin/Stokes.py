@@ -55,6 +55,8 @@ sol = C.solve(c, pins=[(2, (0, 0))], method="rcm")
 
 up_ = W.backward(sol, N=(N, N))  # Need to provide N since spaces have different shape
 
+solver = C.solver(pins=[(2, (0, 0))], method="rcm")
+
 if "PYTEST" in os.environ:
     for i in range(3):
         assert jnp.all(jnp.isfinite(up_[i]))
@@ -63,8 +65,12 @@ if "PYTEST" in os.environ:
 xj = W.mesh()
 shape = up_[0].shape
 x0, y0 = jnp.broadcast_to(xj[0], shape), jnp.broadcast_to(xj[1], shape)
-plt.figure()
-plt.spy(C.solver(pins=[(2, (0, 0))], method="rcm").matrix.todense())
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+ax1.spy(solver.matrix.todense())
+ax2.spy(solver.matrix.matrix._rcm_cache.value.matrix.todense())
+ax1.set_title("Coefficient matrix")
+ax2.set_title("RCM reordered matrix")
 plt.figure()
 plt.contourf(x0, y0, jnp.sqrt(up_[0] ** 2 + up_[1] ** 2))
 plt.quiver(x0, y0, up_[0], up_[1])

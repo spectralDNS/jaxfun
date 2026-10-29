@@ -43,11 +43,12 @@ C = get_CoordSys(
     & sp.Q.positive(eta + 1)
     & sp.Q.positive(1 - eta)
     & sp.Q.positive(1 - xi),
+    symbolic_metric=True,
 )
 
 # Method of manufactured solution
 xi, eta = C.base_scalars()
-ue = (1 + xi**2) * (1 + eta**2)
+ue = (1 - xi**2) * (1 - eta**2)
 
 M = 20
 bcsx = {"left": {"D": ue.subs(xi, -1)}, "right": {"D": ue.subs(xi, 1)}}

@@ -940,9 +940,12 @@ source = { editable = "." }
 dependencies = [
     { name = "flax" },
     { name = "jax" },
+    { name = "jaxtyping" },
     { name = "matplotlib" },
     { name = "optax" },
+    { name = "shapely" },
     { name = "sympy" },
+    { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
@@ -976,9 +979,12 @@ requires-dist = [
     { name = "flax", specifier = ">=0.12.8" },
     { name = "h5py", marker = "extra == 'io'", specifier = ">=3.11" },
     { name = "jax", specifier = ">=0.11" },
+    { name = "jaxtyping", specifier = ">=0.3.7" },
     { name = "matplotlib", specifier = ">=3.9.3" },
     { name = "optax", specifier = ">=0.2.8" },
+    { name = "shapely", specifier = ">=2.1.2" },
     { name = "sympy", specifier = ">=1.14" },
+    { name = "tqdm", specifier = ">=4.67.3" },
 ]
 provides-extras = ["io"]
 

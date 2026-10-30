@@ -19,9 +19,12 @@ classifiers = [
 dependencies = [
   "flax>=0.12.8",
   "jax>=0.11",
+  "jaxtyping>=0.3.7",
   "matplotlib>=3.9.3",
   "optax>=0.2.8",
+  "shapely>=2.1.2",
   "sympy>=1.14",
+  "tqdm>=4.67.3",
 ]
 optional-dependencies.io = [
   "h5py>=3.11",

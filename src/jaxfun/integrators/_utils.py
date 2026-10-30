@@ -423,8 +423,8 @@ def split_transient_terms(expr: sp.Expr, time: sp.Symbol) -> tuple[sp.Expr, sp.E
     neither the operator nor the steady forcing.
 
     A term that does not mention time is returned untouched -- not rebuilt, not
-    expanded -- so the steady assembly cannot drift. `sp.expand_trig` is applied
-    only to the terms that do, which is what brings a travelling wave
+    expanded -- so the steady assembly cannot drift. The terms that do are
+    expanded, after `separate_time_in_angles` has brought a travelling wave
     `sin(kx - wt)` into the separable form the source assembly supports.
 
     Raises:
@@ -444,5 +444,41 @@ def split_transient_terms(expr: sp.Expr, time: sp.Symbol) -> tuple[sp.Expr, sp.E
                 "Operators are assembled and factorized once, at construction, "
                 f"so only source terms and boundary data may depend on {time}."
             )
-        transient.append(sp.expand(sp.expand_trig(term)))
+        transient.append(sp.expand(separate_time_in_angles(term, time)))
     return sp.Add(*steady), sp.Add(*transient)
+
+
+def separate_time_in_angles(expr: sp.Expr, time: sp.Symbol) -> sp.Expr:
+    """Split each `sin`, `cos`, `sinh` and `cosh` whose argument mixes time in.
+
+    `f(a(t) + b)` becomes the angle-addition sum of products of `a(t)` and `b`
+    alone, e.g. `sin(kx - wt) = sin(kx) cos(wt) - cos(kx) sin(wt)`. Nothing else
+    is rewritten: an argument of time alone, or of time plus a number, is
+    already a function of time, and neither half is expanded further.
+    """
+    # Not `sp.expand_trig` on the whole term: that also rewrites every spatial
+    # factor it reaches, and multiple angles with them. `cos(n*acos(x))` turns
+    # into its power-basis Chebyshev polynomial, so a source made of K such
+    # modes separates into monomials x^j whose time factors each sum every
+    # frequency of every mode of degree >= j -- O(K^2) scalar terms for the
+    # trace to carry, and a cancellation whose coefficients grow like 2.4^n.
+    # Expanding a function of two dummies applies only the addition formula.
+    a, b = sp.Dummy("a"), sp.Dummy("b")
+
+    def split(fn: sp.Function) -> sp.Expr:
+        terms = sp.Add.make_args(sp.expand(fn.args[0]))
+        moving = sp.Add(*(term for term in terms if term.has(time)))
+        rest = sp.Add(*(term for term in terms if not term.has(time)))
+        if rest.is_number:
+            return fn
+        return sp.expand_trig(fn.func(a + b)).xreplace({a: moving, b: rest})
+
+    return cast(
+        sp.Expr,
+        expr.replace(
+            lambda e: (
+                isinstance(e, sp.sin | sp.cos | sp.sinh | sp.cosh) and e.has(time)
+            ),
+            split,
+        ),
+    )

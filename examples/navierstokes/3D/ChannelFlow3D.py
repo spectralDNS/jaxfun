@@ -444,6 +444,7 @@ from jaxfun.galerkin import (
 )
 from jaxfun.galerkin.composite import Composite
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
+from jaxfun.galerkin.Ultraspherical import Ultraspherical
 from jaxfun.integrators import ARS443, IMEXRungeKutta, IMEXTableau
 from jaxfun.integrators.base import TimeStepper
 from jaxfun.la import BaseMatrix, DiaMatrix, TPMatrix
@@ -457,7 +458,14 @@ from jaxfun.sharding import (
     batched_physical_sharding,
     batched_spectral_sharding,
 )
-from jaxfun.typing import Array, PolynomialKind, ScalarPadding, TestSpaceKind
+from jaxfun.typing import (
+    Array,
+    CoercibleStrEnum,
+    PolynomialKind,
+    ScalarPadding,
+    TauBasis,
+    TestSpaceKind,
+)
 from jaxfun.utils.common import Domain
 from jaxfun.utils.operator_tools import assemble_linear_term
 
@@ -503,6 +511,47 @@ class VelocityKind(StrEnum):
     SPECTRAL = "spectral"
     PHYSICAL = "physical"
     BOTH = "both"
+
+
+class TauPolynomials(CoercibleStrEnum):
+    """The tau polynomials of the "tau" test space.
+
+    For a wall-normal basis in the ultraspherical polynomials C^(l), l = 0 for
+    Chebyshev and 1/2 for Legendre, an equation with q boundary conditions takes
+    as its j'th tau polynomial, j = 1, ..., q, mode N - j of
+
+        LANCZOS         the wall-normal basis itself: Lanczos' method
+        FIRST_ORDER     C^(l + j), as in the first-order formulation of Dedalus.
+                        For Chebyshev, [(C1, -1), (C2, -2)] in the second-order
+                        equations and [(C1, -1), ..., (C4, -4)] in the
+                        fourth-order one
+        FIRST_ORDER_C3  C^(l + min(j, 3)), which differs from FIRST_ORDER only in
+                        the fourth-order equation. For Chebyshev,
+                        [(C1, -1), (C2, -2), (C3, -3), (C3, -4)]
+        MIXED           C^(l + q) for odd j, as Petrov-Galerkin, and C^(l + q/2)
+                        for even j, as Galerkin
+    """
+
+    LANCZOS = "lanczos"
+    FIRST_ORDER = "first_order"
+    FIRST_ORDER_C3 = "first_order_c3"
+    MIXED = "mixed"
+
+    def basis(self, space: Composite) -> TauBasis | None:
+        """Return the `tau_basis` of `space`; None is Lanczos' method."""
+        if self is TauPolynomials.LANCZOS:
+            return None
+        q = space.bcs.num_bcs()
+        lam = space.orthogonal.alpha + sp.Rational(1, 2)
+
+        def C(n: int) -> Any:
+            return partial(Ultraspherical, lambda_=lam + n)
+
+        if self is TauPolynomials.FIRST_ORDER:
+            return [(C(j), -j) for j in range(1, q + 1)]
+        if self is TauPolynomials.FIRST_ORDER_C3:
+            return [(C(min(j, 3)), -j) for j in range(1, q + 1)]
+        return [(C(q if j % 2 else q // 2), -j) for j in range(1, q + 1)]
 
 
 def snapshot_times(dt: float, steps: int, n_batches: int) -> Array:
@@ -569,6 +618,7 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         padding: tuple[int, int, int] | None = None,
         polynomial: PolynomialKind = PolynomialKind.LEGENDRE,
         kind: TestSpaceKind = TestSpaceKind.GALERKIN,
+        tau_polynomials: TauPolynomials | str = TauPolynomials.LANCZOS,
     ) -> None:
         """Assemble the velocity spaces, operators and sub-integrators.
 
@@ -592,10 +642,9 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
                 the keys of `POLYNOMIALS`, by member name or short form. See
                 "CHOICE OF BASIS AND TEST SPACE" in the header: pair LEGENDRE
                 with GALERKIN and CHEBYSHEV with GALERKIN_RECOMBINED.
-            kind: Test space kind, either GALERKIN or GALERKIN_RECOMBINED. Short
-                forms G or GR. PETROV_GALERKIN is refused; see the header.
-                CHEBYSHEVU has no GR test space yet and raises
-                NotImplementedError if asked for one.
+            kind: Test space kind
+            tau_polynomials: The tau polynomials of kind TAU, a `TauPolynomials`
+                member, name or value. Other kinds ignore them.
         """
         if not tableau.is_stiffly_accurate:
             raise ValueError(
@@ -607,12 +656,7 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
             )
         polynomial = PolynomialKind.coerce(polynomial)
         kind = TestSpaceKind.coerce(kind)
-        if kind is TestSpaceKind.PETROV_GALERKIN:
-            raise ValueError(
-                "Petrov-Galerkin is not supported: Use GALERKIN_RECOMBINED ('GR'),"
-                "which has the same band and is Galerkin."
-            )
-        GR = kind is TestSpaceKind.GALERKIN_RECOMBINED
+        tau_polynomials = TauPolynomials.coerce(tau_polynomials)
         if polynomial not in POLYNOMIALS:
             raise NotImplementedError(
                 f"{polynomial.name} is not available here; pick one of "
@@ -658,10 +702,12 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         Wo = VD.get_orthogonal()
         D1 = VD.basespaces[2]
 
-        if GR:
-            PB = VB.get_testspace("GR", name="PB")
-            PD = VD.get_testspace("GR", name="PD")
-            P1 = cast(Composite, D1).get_testspace("GR", name="P1")
+        if kind is not TestSpaceKind.GALERKIN:
+            tau_D = tau_polynomials.basis(cast(Composite, D))
+            tau_B = tau_polynomials.basis(cast(Composite, B))
+            PB = VB.get_testspace(kind, name="PB", tau_basis=tau_B)
+            PD = VD.get_testspace(kind, name="PD", tau_basis=tau_D)
+            P1 = cast(Composite, D1).get_testspace(kind, name="P1", tau_basis=tau_D)
         else:
             PB, PD, P1 = VB, VD, D1
 
@@ -682,6 +728,7 @@ class KMM3D(TimeStepper[tuple[Array, ...]]):
         )
         self.polspace = nnx.static(polspace)
         self.testkind = nnx.static(kind)
+        self.tau_polynomials = nnx.static(tau_polynomials)
 
         x, y, z = VD.system.base_scalars()
         t = VD.system.base_time()

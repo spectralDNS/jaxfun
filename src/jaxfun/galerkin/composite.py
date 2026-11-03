@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import functools
 import itertools
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast, overload
 
 import jax
@@ -15,7 +15,7 @@ from sympy import Number
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
-from jaxfun.typing import MeshKind, TestSpaceKind
+from jaxfun.typing import MeshKind, TauBasis, TestSpaceKind
 from jaxfun.utils.common import (
     Domain,
     cache_static,
@@ -574,7 +574,7 @@ class Composite(OrthogonalSpace):
         name: str | None = None,
         fun_str: str | None = None,
         scaling: sp.Expr | None = None,
-        tau_basis: Sequence[tuple[OrthogonalSpace, int]] | None = None,
+        tau_basis: TauBasis | None = None,
     ) -> Composite:
         """Return the test space of `kind`, scaled by `scaling` only.
 
@@ -623,7 +623,7 @@ class Composite(OrthogonalSpace):
 
     def _tau_testspace(
         self,
-        tau_basis: Sequence[tuple[OrthogonalSpace, int]] | None,
+        tau_basis: TauBasis | None,
         name: str | None,
         fun_str: str | None,
         scaling: sp.Expr | None,
@@ -673,7 +673,6 @@ class BCGeneric(Composite):
 
     def __init__(  # noqa: D401
         self,
-        N: int,
         orthogonal: type[Jacobi],
         bcs: dict,
         domain: Domain | None = None,
@@ -686,17 +685,20 @@ class BCGeneric(Composite):
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
         bcs: BoundaryConditions = BoundaryConditions(bcs, domain=domain)
+        orth = orthogonal(
+            bcs.num_bcs() + bcs.num_derivatives(), domain=domain, system=system, **kw
+        )
+        S = get_bc_basis(bcs, orth)
+        # S is (dim, N), as for Composite. Conditions on derivatives alone skip
+        # the lowest modes, so N can exceed dim.
+        orth.N = S.shape[1]
+        orth._num_quad_points = num_quad_points
         OrthogonalSpace.__init__(
-            self, N, domain=domain, system=system, name=name, fun_str=fun_str
+            self, orth.N, domain=domain, system=system, name=name, fun_str=fun_str
         )
         self.bcs = bcs
         self._num_quad_points = num_quad_points
-        self.orthogonal = orthogonal(
-            bcs.num_bcs() + bcs.num_derivatives(), domain=domain, system=system, **kw
-        )
-        S = get_bc_basis(bcs, self.orthogonal)
-        self.orthogonal.N = S.shape[1]
-        self.orthogonal._num_quad_points = num_quad_points
+        self.orthogonal = orth
         S = S.__array__().astype(float)
         # No rule: every lifting function is given outright.
         self.stencil = Stencil({}, dict(enumerate(S)))
@@ -1316,9 +1318,12 @@ class TauRecombined(_TestSpace, Composite):
     Create with `V.get_testspace("tau", tau_basis=...)`, where `V` is a
     Chebyshev or Legendre trial space with boundary conditions. `tau_basis`
     lists the tau polynomials, one per boundary condition, as pairs `(S, k)`:
-    mode `k` of the orthogonal space `S`, counted from the end if negative.
-    Without it, the tau polynomials are the last modes of the orthogonal space
-    of `V`, which is Lanczos' method: `V.get_testspace("tau")`.
+    mode `k`, counted from the end if negative, of the orthogonal space `S(N)`,
+    where N is the size of the orthogonal space of `V`. `S` is a class of
+    orthogonal spaces, such as `ChebyshevU`, or a callable that builds one from
+    N, such as `functools.partial(Ultraspherical, lambda_=2)`, so the same
+    `tau_basis` serves any N. Without it, the tau polynomials are the last modes of the
+    orthogonal space of `V`, which is Lanczos' method: `V.get_testspace("tau")`.
 
     A tau method solves
 
@@ -1337,8 +1342,9 @@ class TauRecombined(_TestSpace, Composite):
     kind and truncated to N modes, which keeps their banded matrices.
 
     For two boundary conditions in Chebyshev polynomials, with `T`, `U` and
-    `C2` the spaces of the Chebyshev polynomials of the first and second kind
-    and of the Gegenbauer polynomials :math:`C^{(2)}_k`:
+    `C2` the spaces `Chebyshev`, `ChebyshevU` and
+    `partial(Ultraspherical, lambda_=2)` of the Chebyshev polynomials of the
+    first and second kind and of the Gegenbauer polynomials :math:`C^{(2)}_k`:
 
     ==========================  ==============================================
     tau_basis                   test functions
@@ -1357,9 +1363,10 @@ class TauRecombined(_TestSpace, Composite):
     Args:
         base: The test space recombined, Petrov-Galerkin or Galerkin.
         trial: The trial space it tests.
-        tau_basis: The tau polynomials, as pairs `(S, k)` of an orthogonal
-            space and one of its modes. Defaults to the last modes of the
-            orthogonal space of `trial`, one per boundary condition.
+        tau_basis: The tau polynomials, as pairs `(S, k)` of a class of
+            orthogonal spaces, or a callable that builds one from its size, and
+            one of its modes. Defaults to the last modes of the orthogonal
+            space of `trial`, one per boundary condition.
         name: Space name.
         fun_str: Symbol stem for basis functions.
 
@@ -1400,20 +1407,22 @@ class TauRecombined(_TestSpace, Composite):
         self,
         base: Composite,
         trial: Composite,
-        tau_basis: Sequence[tuple[OrthogonalSpace, int]] | None = None,
+        tau_basis: TauBasis | None = None,
         name: str | None = None,
         fun_str: str | None = None,
     ) -> None:
         orth = trial.orthogonal
         m = trial.bcs.num_bcs()
         if tau_basis is None:
-            tau_basis = [(orth, -k) for k in range(1, m + 1)]
-        if len(tau_basis) != m:
+            modes = [(orth, -k) for k in range(1, m + 1)]
+        else:
+            modes = [(S(orth.N), k) for S, k in tau_basis]
+        if len(modes) != m:
             raise ValueError(
-                f"Got {len(tau_basis)} tau polynomials for {m} boundary "
+                f"Got {len(modes)} tau polynomials for {m} boundary "
                 "conditions; there must be one per condition."
             )
-        X = np.array([_coefficients_in(orth, S, k) for S, k in tau_basis])
+        X = np.array([_coefficients_in(orth, S, k) for S, k in modes])
         rows = _tau_rows(base, orth, X)
         super().__init__(
             trial.N,
@@ -1450,12 +1459,12 @@ class TauRecombined(_TestSpace, Composite):
 
 def _coefficients_in(orth: OrthogonalSpace, S: OrthogonalSpace, k: int) -> np.ndarray:
     """Return mode `k` of `S` as coefficients of `orth`, in reference coordinates."""
-    k = range(S.N)[k]
-    if k >= orth.N:
+    if not -S.N <= k < orth.N:
         raise ValueError(
-            f"Mode {k} of {S.name} has degree {k}, but a tau polynomial must have "
-            f"degree less than {orth.N}."
+            f"Mode {k} of {S.name} is not a polynomial of degree less than "
+            f"{orth.N}, as a tau polynomial must be."
         )
+    k = range(S.N)[k]
     X = orth.quad_points_and_weights()[0]
     return np.asarray(orth.forward(S.eval_basis_functions(X)[:, k]), dtype=float)
 

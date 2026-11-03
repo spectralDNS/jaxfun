@@ -6,7 +6,7 @@ with a comment and is the place to start a new case from::
 
     [flow]            Re_tau, Lx, Ly
     [grid]            Nx, Ny, Nz, Px, Py, Pz
-    [discretization]  polynomial, kind, tableau
+    [discretization]  polynomial, kind, tau_polynomials, tableau
     [time]            dt, t_transient, t_end, regrid_transient
     [output]          sample_every, checkpoint_every, log_every,
                       checkpoint_dir, plot, snapshot_every, snapshot_file,
@@ -33,7 +33,7 @@ from typing import Any
 SECTIONS: dict[str, tuple[str, ...]] = {
     "flow": ("Re_tau", "Lx", "Ly"),
     "grid": ("Nx", "Ny", "Nz", "Px", "Py", "Pz"),
-    "discretization": ("polynomial", "kind", "tableau"),
+    "discretization": ("polynomial", "kind", "tau_polynomials", "tableau"),
     "time": ("dt", "t_transient", "t_end", "regrid_transient"),
     "output": (
         "sample_every",
@@ -66,6 +66,8 @@ class ChannelCase:
         Pz: Dealiasing factor (wall-normal)
         polynomial: Wall-normal basis, a `PolynomialKind` name or value.
         kind: Test space, a `TestSpaceKind` name or value.
+        tau_polynomials: Tau polynomials of the tau test space, a
+            `TauPolynomials` name or value.
         tableau: Name of a globally stiffly accurate IMEX tableau in
             `jaxfun.integrators`.
         dt: Time step, in h/u_tau.
@@ -101,6 +103,7 @@ class ChannelCase:
     Pz: float = 1.0
     polynomial: str = "chebyshev"
     kind: str = "galerkin_recombined"
+    tau_polynomials: str = "lanczos"
     tableau: str = "ARS443"
     dt: float = 0.001
     t_transient: float = 20.0

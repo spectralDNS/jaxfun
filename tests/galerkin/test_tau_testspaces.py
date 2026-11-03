@@ -34,14 +34,11 @@ def _tol() -> float:
     return 1e3 * float(jnp.finfo(jnp.result_type(float)).eps)
 
 
-@functools.cache
-def _families(N: int) -> tuple[Chebyshev, ChebyshevU, Ultraspherical]:
-    return Chebyshev(N), ChebyshevU(N), Ultraspherical(N, lambda_=2)
+T, U, C2 = Chebyshev, ChebyshevU, functools.partial(Ultraspherical, lambda_=2)
 
 
-def _tau_basis(method: str, N: int) -> list:
+def _tau_basis(method: str) -> list:
     """Return the `tau_basis` of the Chebyshev tau method `method`."""
-    T, U, C2 = _families(N)
     return {
         "tau-T": [(T, -1), (T, -2)],
         "tau-C2": [(C2, -1), (C2, -2)],
@@ -116,7 +113,7 @@ def test_coerce():
 @pytest.mark.parametrize("method", METHODS)
 def test_orthogonal_to_tau_polynomials(method, bcs, N):
     B = FunctionSpace(N, Chebyshev, bcs=bcs)
-    V = B.get_testspace("tau", tau_basis=_tau_basis(method, N))
+    V = B.get_testspace("tau", tau_basis=_tau_basis(method))
     assert isinstance(V, TauRecombined)
     _assert_orthogonal(np.asarray(V.S.todense()), _tau_polynomials(method, N))
 
@@ -128,9 +125,9 @@ def test_petrov_galerkin_and_galerkin_recombined():
     def stencil(V):
         return np.asarray(V.S.todense())
 
-    tau_C2 = B.get_testspace("tau", tau_basis=_tau_basis("tau-C2", N))
+    tau_C2 = B.get_testspace("tau", tau_basis=_tau_basis("tau-C2"))
     assert np.array_equal(stencil(tau_C2), stencil(B.get_testspace("PG")))
-    tau_U2 = B.get_testspace("tau", tau_basis=_tau_basis("tau-U2", N))
+    tau_U2 = B.get_testspace("tau", tau_basis=_tau_basis("tau-U2"))
     assert np.allclose(stencil(tau_U2), stencil(B.get_testspace("GR")))
 
 
@@ -139,7 +136,7 @@ def test_petrov_galerkin_and_galerkin_recombined():
 def test_matrices(method, j, q):
     N = 12
     B = cast(Composite, FunctionSpace(N, Chebyshev, bcs=DIRICHLET))
-    V = B.get_testspace("tau", tau_basis=_tau_basis(method, N))
+    V = B.get_testspace("tau", tau_basis=_tau_basis(method))
     x = B.system.x
     u = TrialFunction(B)
     form = x**q * u.diff(x, j) if j else x**q * u
@@ -159,7 +156,7 @@ def test_solution_is_the_tau_solution(method):
     # f of degree N - 1, so that it is its own projection f_N.
     fh = 1.0 / (1 + np.arange(N))
     f = sum(sp.Rational(1, n + 1) * sp.chebyshevt(n, x) for n in range(N))
-    V = D.get_testspace("tau", tau_basis=_tau_basis(method, N))
+    V = D.get_testspace("tau", tau_basis=_tau_basis(method))
     u, v = TrialFunction(D), TestFunction(V)
     A, L = inner((u.diff(x, 2) + u) * v - f * v, kind="system")
     uh = np.asarray(D.to_orthogonal(A.solve(L)))
@@ -179,7 +176,6 @@ def test_biharmonic_lanczos():
     """Four conditions: tau_basis T_{N-1}, ..., T_{N-4} is Lanczos' method."""
     N = 14
     B = FunctionSpace(N, Chebyshev, bcs=BIHARMONIC)
-    T = _families(N)[0]
     V = B.get_testspace("tau", tau_basis=[(T, -1), (T, -2), (T, -3), (T, -4)])
     _assert_orthogonal(np.asarray(V.S.todense()), np.eye(N)[N - 4 :])
     x = B.system.x
@@ -208,7 +204,7 @@ def test_three_conditions_petrov_galerkin(family, lam):
     the tau method with C^(lam)_{N-1}, C^(lam)_{N-2} and C^(lam)_{N-3}."""
     N = 12
     B = FunctionSpace(N, family, bcs=THREE)
-    C = Ultraspherical(N, lambda_=lam)
+    C = functools.partial(Ultraspherical, lambda_=lam)
     V = B.get_testspace("tau", tau_basis=[(C, -1), (C, -2), (C, -3)])
     pg = B.get_testspace("PG")
     S, P = np.asarray(V.S.todense()), np.asarray(pg.S.todense())
@@ -222,7 +218,6 @@ def test_three_conditions_petrov_galerkin(family, lam):
 def test_three_conditions_lanczos():
     N = 12
     B = FunctionSpace(N, Chebyshev, bcs=THREE)
-    T = _families(N)[0]
     V = B.get_testspace("tau", tau_basis=[(T, -1), (T, -2), (T, -3)])
     _assert_orthogonal(np.asarray(V.S.todense()), np.eye(N)[N - 3 :])
 
@@ -230,7 +225,6 @@ def test_three_conditions_lanczos():
 def test_tau_polynomials_of_the_same_degree():
     N = 14
     B = FunctionSpace(N, Chebyshev, bcs=BIHARMONIC)
-    T, U, _ = _families(N)
     tau_basis = [(T, -1), (U, -1), (T, -2), (U, -2)]
     V = B.get_testspace("tau", tau_basis=tau_basis)
     X = np.array([_T(N - 1, N), _U(N - 1, N), _T(N - 2, N), _U(N - 2, N)])
@@ -241,7 +235,7 @@ def test_legendre():
     """Legendre polynomials as tau basis: the test space is P_{N-3}."""
     N = 12
     B = FunctionSpace(N, Legendre, bcs=DIRICHLET)
-    P = Legendre(N)
+    P = Legendre
     S = np.asarray(B.get_testspace("tau", tau_basis=[(P, -1), (P, -2)]).S.todense())
     rows = S / np.abs(S).max(axis=1, keepdims=True)
     assert np.linalg.matrix_rank(rows) == N - 2
@@ -277,8 +271,7 @@ def test_default_is_lanczos(family, bcs):
     B = FunctionSpace(N, family, bcs=bcs)
     m = B.bcs.num_bcs()
     S = np.asarray(B.get_testspace("tau").S.todense())
-    P = family(N)
-    lanczos = B.get_testspace("tau", tau_basis=[(P, -k) for k in range(1, m + 1)])
+    lanczos = B.get_testspace("tau", tau_basis=[(family, -k) for k in range(1, m + 1)])
     assert np.array_equal(S, np.asarray(lanczos.S.todense()))
     # Testing with the polynomials of degree less than N - m.
     rows = S / np.abs(S).max(axis=1, keepdims=True)
@@ -289,15 +282,14 @@ def test_default_is_lanczos(family, bcs):
 def test_errors():
     N = 12
     B = FunctionSpace(N, Chebyshev, bcs=DIRICHLET)
-    T = Chebyshev(N)
     with pytest.raises(ValueError, match="one per condition"):
         B.get_testspace("tau", tau_basis=[(T, -1)])
     with pytest.raises(ValueError, match="undetermined"):
         B.get_testspace("tau", tau_basis=[(T, -1), (T, -3)])
     with pytest.raises(ValueError, match="degree less than"):
-        B.get_testspace("tau", tau_basis=[(Chebyshev(N + 2), -1), (T, -2)])
+        B.get_testspace("tau", tau_basis=[(T, N), (T, -2)])
     with pytest.raises(NotImplementedError, match="boundary conditions"):
-        T.get_testspace("tau")
+        Chebyshev(N).get_testspace("tau")
 
 
 @pytest.mark.parametrize("kind", ["PG", "GR", "tau"])

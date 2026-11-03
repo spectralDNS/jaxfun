@@ -1,5 +1,6 @@
 """`get_testspace` on orthogonal, tensor-product and Cartesian product spaces."""
 
+from functools import partial
 from typing import cast
 
 import jax.numpy as jnp
@@ -20,14 +21,18 @@ from jaxfun.galerkin.cartesianproductspace import (
     CartesianTensorProductSpace,
     VectorTensorProductSpace,
 )
-from jaxfun.galerkin.composite import GalerkinRecombined
+from jaxfun.galerkin.ChebyshevU import ChebyshevU
+from jaxfun.galerkin.composite import GalerkinRecombined, TauRecombined
 from jaxfun.galerkin.inner import inner
 from jaxfun.galerkin.tensorproductspace import DirectSumTPS, TensorProductSpace
+from jaxfun.galerkin.Ultraspherical import Ultraspherical
 from jaxfun.la import BaseMatrix
 from jaxfun.typing import RankTag
 from jaxfun.utils.common import n
 
 DD = {"left": {"D": 0}, "right": {"D": 0}}
+# The tau polynomials U_{N-2} and C2_{N-1}.
+TAU_BASIS = [(ChebyshevU, -2), (partial(Ultraspherical, lambda_=2), -1)]
 
 
 @pytest.mark.parametrize("kind", ["G", "PG", "GR", "tau"])
@@ -77,6 +82,17 @@ def test_tensorproduct_testspace_takes_each_axis_testspace():
     assert isinstance(P[0], Fourier.Fourier)
     assert isinstance(P[1], GalerkinRecombined)
     assert P.num_dofs == T.num_dofs
+
+
+def test_tensorproduct_tau_testspace_sizes_the_tau_basis_per_axis():
+    D = [FunctionSpace(N, Chebyshev.Chebyshev, bcs=DD) for N in (10, 11)]
+    T = TensorProduct(Fourier.Fourier(8), *D)
+    P = T.get_testspace("tau", tau_basis=TAU_BASIS)
+    assert isinstance(P[0], Fourier.Fourier)
+    for Pi, Di in zip(list(P)[1:], D, strict=True):
+        ref = Di.get_testspace("tau", tau_basis=TAU_BASIS)
+        assert isinstance(Pi, TauRecombined)
+        assert jnp.array_equal(Pi.S.todense(), ref.S.todense())
 
 
 def test_tensorproduct_galerkin_testspace_is_the_space_itself():
@@ -129,6 +145,16 @@ def test_cartesian_product_testspace_takes_each_component_testspace():
     assert P.name == "C" and P.system is C.system
     assert all(isinstance(s, GalerkinRecombined) for s in P)
     assert C.get_testspace("G") is C
+
+
+def test_cartesian_product_tau_testspace_takes_the_tau_basis():
+    D = FunctionSpace(10, Chebyshev.Chebyshev, bcs=DD)
+    V = TensorProduct(Fourier.Fourier(8), D)
+    P = CartesianProduct(V, V, rank=1).get_testspace("tau", tau_basis=TAU_BASIS)
+    ref = D.get_testspace("tau", tau_basis=TAU_BASIS)
+    for T in P:
+        assert isinstance(T[1], TauRecombined)
+        assert jnp.array_equal(T[1].S.todense(), ref.S.todense())
 
 
 def test_nested_cartesian_product_testspace_keeps_structure_and_rank():

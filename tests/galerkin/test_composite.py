@@ -70,11 +70,33 @@ def test_composite_and_mass_matrix(space):
 )
 def test_bcgeneric_space(space):
     bcs = {"left": {"D": 0, "N": 1}, "right": {"D": 2}}
-    B = BCGeneric(3, space, bcs)
+    B = BCGeneric(space, bcs)
     assert B.dim == 3
     # quad_points_and_weights should use M when N==0
     xw = B.quad_points_and_weights()
     assert xw[0].shape[0] == B.orthogonal.num_quad_points
+
+
+@pytest.mark.parametrize("kind", ("PG", "GR"))
+def test_lifting_of_derivative_conditions(kind):
+    # Neumann conditions alone skip the lowest mode, so there are two lifting
+    # functions over three modes.
+    V = FunctionSpace(
+        6, Chebyshev.Chebyshev, bcs={"left": {"N": -1}, "right": {"N": 3}}
+    )
+    assert isinstance(V, DirectSum)
+    B = V[1]
+    assert B.S.shape == (B.dim, B.N) == (2, 3)
+    W = V.get_testspace(kind)
+    Sw, Sb = np.asarray(W.S.todense()), np.asarray(B.S.todense())
+    h = np.asarray(W.orthogonal.norm_squared())
+    exact = (Sw[:, :3] * h[:3]) @ Sb.T
+    z = W.matrices(0, (B, 0))
+    assert z is not None
+    assert np.allclose(np.asarray(z.todense()), exact)
+    z = W.matrices(0, (B, 1), q=1)
+    assert z is not None
+    assert z.shape == exact.shape
 
 
 @pytest.mark.parametrize(

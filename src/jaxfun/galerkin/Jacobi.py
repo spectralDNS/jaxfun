@@ -13,7 +13,7 @@ from sympy import Expr, Number, Symbol
 
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
-from jaxfun.typing import TestSpaceKind, TriDiagMatrixFun
+from jaxfun.typing import TauBasis, TestSpaceKind, TriDiagMatrixFun
 from jaxfun.utils.common import Domain, cache_static, jit_method, jit_vmap, n
 
 from .orthogonal import OrthogonalSpace
@@ -102,6 +102,7 @@ class Jacobi(OrthogonalSpace):
         name: str | None = None,
         fun_str: str | None = None,
         scaling: sp.Expr | None = None,
+        tau_basis: TauBasis | None = None,
     ) -> OrthogonalSpace | PGComposite | GalerkinRecombined:
         """Return the test space of `kind` for this space as trial space.
 
@@ -110,7 +111,8 @@ class Jacobi(OrthogonalSpace):
         of order 0: the order-1 test functions, one per mode, which keep
         operators of up to first derivatives banded. It spans this space, so
         Galerkin-recombined is the same space. Jacobi spaces with alpha != beta
-        have only the Galerkin test space.
+        have only the Galerkin test space. There is no 'tau' test space without
+        boundary conditions, so `tau_basis` is not used.
         """
         from .composite import PGComposite
 

@@ -273,8 +273,9 @@
 #
 # So pair LEGENDRE with GALERKIN and CHEBYSHEV with GALERKIN_RECOMBINED ("GR").
 # Both are the Galerkin method; GR combines the test functions so that
-# Chebyshev's operators stay banded instead of growing like N. Plain
-# Petrov-Galerkin, which has GR's band but not its span, is refused.
+# Chebyshev's operators stay banded instead of growing like N. Petrov-Galerkin and
+# the tau test spaces have GR's band but are not the Galerkin method; they are
+# offered for comparing test spaces, see `TauPolynomials`.
 #
 # Under GR there are *two* recombined test spaces to build, not one. The w
 # equation needs one for the biharmonic space, as in 2-D. The g equation needs

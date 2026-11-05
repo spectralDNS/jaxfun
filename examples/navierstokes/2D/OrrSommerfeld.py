@@ -44,7 +44,13 @@ initialize_distributed()
 
 import jax.numpy as jnp
 import sympy as sp
-from ChannelFlow2D import KMM2D, VelocityKind, growth_rate_of, snapshot_times
+from ChannelFlow2D import (
+    KMM2D,
+    TauPolynomials,
+    VelocityKind,
+    growth_rate_of,
+    snapshot_times,
+)
 from OrrSommerfeld_eigs import OrrSommerfeld
 
 from jaxfun.galerkin.inner import project
@@ -66,6 +72,8 @@ N_OS = 100  # modes in the Orr-Sommerfeld eigenproblem itself
 # at all, depends on the machine. Both give the growth rate to the same 5e-07.
 POLYNOMIAL = PolynomialKind.CHEBYSHEV
 KIND = TestSpaceKind.GALERKIN_RECOMBINED
+# Used only with KIND = TestSpaceKind.TAU.
+TAU_POLYNOMIALS = TauPolynomials.LANCZOS
 
 if "PYTEST" in os.environ:
     M, N, T_END = 16, 48, 1.0
@@ -138,6 +146,7 @@ def main() -> KMM2D:
         time=(0.0, t_end),
         padding=padding,
         kind=KIND,
+        tau_polynomials=TAU_POLYNOMIALS,
         polynomial=POLYNOMIAL,
     )
     state0, eigval, u_expected = orr_sommerfeld_state(

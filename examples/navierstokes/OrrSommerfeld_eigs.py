@@ -22,6 +22,10 @@ from functools import cached_property
 from typing import cast
 
 import jax.numpy as jnp
+import numpy as np
+import scipy.linalg
+import scipy.sparse
+import scipy.sparse.linalg
 import sympy as sp
 from flax import nnx
 from jax import Array
@@ -41,6 +45,20 @@ from jaxfun.la import BaseMatrix
 
 x = sp.Symbol("x", real=True)
 n = sp.Symbol("n", integer=True)
+
+
+class _ShiftInvert(scipy.sparse.linalg.LinearOperator):
+    """The operator (A - sigma B)^-1 B, with a sparse LU of A - sigma B."""
+
+    def __init__(self, A: np.ndarray, B: np.ndarray, sigma: complex) -> None:
+        super().__init__(dtype=np.dtype(complex), shape=A.shape)
+        self.B = scipy.sparse.csc_matrix(B)
+        self.lu = scipy.sparse.linalg.splu(
+            (scipy.sparse.csc_matrix(A) - sigma * self.B).tocsc()
+        )
+
+    def _matvec(self, x: np.ndarray) -> np.ndarray:
+        return self.lu.solve(self.B @ x)
 
 
 @nnx.dataclass
@@ -125,13 +143,38 @@ class OrrSommerfeld:
 
         return A.todense(), B.todense()
 
-    def solve(self) -> tuple[Array, Array]:
-        """Solve the Orr-Sommerfeld eigenvalue problem"""
+    def solve(self, sigma: complex | None = None, k: int = 6) -> tuple[Array, Array]:
+        """Solve the Orr-Sommerfeld eigenvalue problem A x = c B x.
+
+        Args:
+            sigma: If None, return all eigenvalues and eigenvectors. Otherwise
+                return only the `k` eigenvalues nearest to `sigma`, which is
+                much cheaper for large N.
+            k: Number of eigenvalues returned when `sigma` is given.
+        """
         if self.verbose:
             print("Solving the Orr-Sommerfeld eigenvalue problem...")
             print("Re = " + str(self.Re) + " and alfa = " + str(self.alfa))
-        A, B = self.assemble()
-        return jnp.linalg.eig(jnp.linalg.inv(B) @ A)
+        A, B = (np.asarray(m) for m in self.assemble())
+        if sigma is None:
+            # QZ on the pencil, rather than eig(inv(B) @ A): cond(B) grows like
+            # N^3, and forming the inverse loses digits that QZ keeps.
+            vals, vecs = scipy.linalg.eig(A, B)
+        else:
+            # Shift-invert Arnoldi: the eigenvalues mu of (A - sigma B)^-1 B are
+            # 1 / (c - sigma), largest for c nearest sigma. The pencil is banded,
+            # so the sparse LU is cheap.
+            mu, vecs = scipy.sparse.linalg.eigs(
+                _ShiftInvert(A, B, sigma), k=k, which="LM"
+            )
+            vals = sigma + 1 / mu
+        # Unit norm with the largest component real, as numpy's eig returns them,
+        # so that solves at different N give the same eigenfunction, phase and all.
+        # QZ fixes only the magnitude.
+        vecs = vecs / np.linalg.norm(vecs, axis=0)
+        top = vecs[np.argmax(np.abs(vecs), axis=0), np.arange(vecs.shape[1])]
+        vecs = vecs * (np.abs(top) / top)
+        return jnp.asarray(vals), jnp.asarray(vecs)
 
     @staticmethod
     def get_eigval(
@@ -184,6 +227,12 @@ if __name__ == "__main__":
 
     if args.Re == 8000.0 and args.alfa == 1.0 and args.N > 80:
         assert abs(d[1] - (0.24707506017499 + 0.002664410371114j)) < 1e-12
+    if args.Re == 10000.0 and args.alfa == 1.0 and args.N > 80:
+        # Mode A1 of Giannakis, Fischer and Rosner, J. Comput. Phys. 228 (2009)
+        # 1188-1233, Table B.1, computed with 500 modes.
+        assert abs(d[1] - (0.2375264888204708 + 0.003739670622977800j)) < 1e-13
+        near = z.get_eigval(1, z.solve(sigma=0.24 + 0.0j, k=4)[0])[1]
+        assert abs(near - d[1]) < 1e-13
 
     if plot:
         plt.figure()

@@ -431,7 +431,7 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         tableau: IMEXTableau = ARS443,
         time: tuple[float, float] | None = None,
         padding: tuple[int, int] | None = None,
-        polynomial: PolynomialKind = PolynomialKind.LEGENDRE,
+        polynomial: PolynomialKind | str = PolynomialKind.LEGENDRE,
         kind: TestSpaceKind = TestSpaceKind.GALERKIN,
         tau_polynomials: TauPolynomials | str = TauPolynomials.LANCZOS,
     ) -> None:

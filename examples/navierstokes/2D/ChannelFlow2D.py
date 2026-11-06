@@ -432,7 +432,7 @@ class KMM2D(TimeStepper[tuple[Array, ...]]):
         time: tuple[float, float] | None = None,
         padding: tuple[int, int] | None = None,
         polynomial: PolynomialKind | str = PolynomialKind.LEGENDRE,
-        kind: TestSpaceKind = TestSpaceKind.GALERKIN,
+        kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
         tau_polynomials: TauPolynomials | str = TauPolynomials.LANCZOS,
     ) -> None:
         """Assemble the velocity spaces, operators and sub-integrators.

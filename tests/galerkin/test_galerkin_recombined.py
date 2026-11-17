@@ -6,6 +6,7 @@ operator matrices keep the Petrov-Galerkin band.
 
 from __future__ import annotations
 
+import tracemalloc
 from fractions import Fraction
 from typing import cast
 
@@ -292,3 +293,25 @@ def test_pg_truncates_its_last_order_rows(family, bcs):
     pg = cast(PGComposite, trial.get_testspace("PG"))
     order = pg.order
     assert list(pg._truncated) == list(range(pg.dim - order, pg.dim))
+
+
+def test_recombining_costs_memory_linear_in_N():
+    """No step builds a dense stencil, so the memory grows with N, not N**2.
+
+    Quadratic memory is what put the large N of a singularly perturbed problem
+    out of reach: at N = 5000 a single dense (N, N) stencil is 200 MB, and the
+    recombination touched several of them.
+    """
+    small, large = 250, 1000
+    FunctionSpace(64, Chebyshev, bcs=DIRICHLET).get_testspace("GR")  # warm up JAX
+    peaks = []
+    for N in (small, large):
+        B = FunctionSpace(N, Chebyshev, bcs=DIRICHLET)
+        tracemalloc.start()
+        B.get_testspace("GR")
+        peaks.append(tracemalloc.get_traced_memory()[1])
+        tracemalloc.stop()
+    # A dense step would grow by (large / small)**2 = 16, this one by under 2.
+    assert peaks[1] < 6 * peaks[0]
+    # And one dense (large, large) array of doubles alone is twice this.
+    assert peaks[1] < large**2 * 8 / 2

@@ -549,7 +549,10 @@ class Heinrichs(Composite):
 
     ..math::
 
-        \phi_k = (1-x^2) T_k, k=0..N-3
+        \phi_k = 4 (1-x^2) T_k, k=0..N-3
+
+    By recombination, the basis function is also T_k-T_{k+2} - (T_{k-2} - T_k), where
+    negative indices T_{-1} = T_{1} and T_{-2} = T_{2}.
 
     """
 
@@ -568,7 +571,10 @@ class Heinrichs(Composite):
         assert isinstance(D, Composite)
         stencil = Stencil(
             {-2: 1, 0: -2, 2: 1},
-            overrides={0: np.asarray(D.S.get_row(0)), 1: np.asarray(D.S.get_row(1))},
+            overrides={
+                0: 2 * np.asarray(D.S.get_row(0)),
+                1: 2 * np.asarray(D.S.get_row(1)),
+            },
         )
         Composite.__init__(
             self,

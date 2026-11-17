@@ -14,7 +14,7 @@ from jax import Array
 from sympy import Number
 
 from jaxfun.coordinates import CoordSys
-from jaxfun.la import DiaMatrix, Matrix, diags
+from jaxfun.la import DiagonalMatrix, DiaMatrix, Matrix, diags
 from jaxfun.typing import MeshKind, TauBasis, TestSpaceKind
 from jaxfun.utils.common import (
     Domain,
@@ -40,11 +40,11 @@ class BoundaryConditions(dict):
     Stores boundary data under the keys "left" and "right". Each side
     maps condition code -> value. Supported codes (examples):
 
-      D  : Dirichlet
-      N  : Neumann (1st derivative)
-      N2 : 2nd derivative (etc.)
-      R  : Robin (tuple (alpha, value))
-      W  : Weighted (tuple (alpha, value))
+      D  : Dirichlet, u = value
+      N  : Neumann, u' = value
+      N2 : 2nd derivative, u'' = value (etc.)
+      R  : Robin, u + alpha u' = value (tuple (alpha, value))
+      W  : Weighted, u' + alpha u'' = value (tuple (alpha, value))
 
     Values can be:
       * Number (homogeneous / inhomogeneous)
@@ -58,13 +58,14 @@ class BoundaryConditions(dict):
         left/right: Dicts of condition_code -> value.
 
     Note:
-        Neumann boundary conditions are normalized to domain if input dict is
-        not already a BoundaryConditions instance. This ensures correct scaling
-        of Neumann BCs when using non-standard domains. Hence, if passing a
-        dict, the user can specify Neumann values in physical units and they
-        will be normalized appropriately. If passing a BoundaryConditions
-        instance, it is assumed that the values are already normalized (e.g.
-        if the instance was created with a non-standard domain).
+        A dict is given in physical units, with derivatives taken in the
+        physical coordinate x of `domain` = [a, b]. It is stored in the
+        reference coordinate X in [-1, 1] of the orthogonal basis, where
+        d/dx = df d/dX with df = 2 / (b - a): Neumann values are divided by
+        df**n, Robin u + alpha u_x = g becomes u + alpha df u_X = g, and
+        weighted u_x + alpha u_xx = g becomes u_X + alpha df u_XX = g / df.
+        A BoundaryConditions instance is taken as already converted, and is
+        not converted again.
     """
 
     def __init__(self, bc: dict, domain: Domain | None = None) -> None:
@@ -74,12 +75,18 @@ class BoundaryConditions(dict):
         bcs.update(copy.deepcopy(bc))
         dict.__init__(self, bcs)
         if not isinstance(bc, BoundaryConditions):  # Normalize if dict was passed in
-            df = 2 / (domain.upper - domain.lower)
+            # Kept exact: alpha enters the symbolic stencil, where a float
+            # leaves round-off terms and can make a regular row look singular.
+            df = sp.nsimplify(2 / (domain.upper - domain.lower))
             for val in self.values():
                 for k, v in val.items():
                     if k[0] == "N":
                         nd = int(k[1:]) if len(k) > 1 else 1
                         val[k] = v / df**nd
+                    elif k == "R":
+                        val[k] = (v[0] * df, v[1])
+                    elif k == "W":
+                        val[k] = (v[0] * df, v[1] / df)
 
     def orderednames(self) -> list[str]:
         """Return ordered boundary condition codes (prefixed with L/R)."""
@@ -283,18 +290,19 @@ class Stencil:
         coefficients = self.coefficients(rows)
         if self.is_pure:
             return diags(list(coefficients.values()), tuple(self.rule), shape=shape)
-        # Clear the overridden rows first: the rule may not be finite there.
-        keep = np.ones(rows, dtype=bool)
-        keep[list(self.overrides)] = False
-        a = np.zeros(shape)
-        for j, c in coefficients.items():
-            i = np.flatnonzero(keep[: max(0, cols - j)])
-            a[i, i + j] = np.asarray(c)[i]
-        for i, r in self.overrides.items():
-            a[i] = r[:cols]
-        # tol=0: an overridden row may be far larger than the rule's rows (as in
-        # GalerkinRecombined), and the default pruning would drop the rule's.
-        return DiaMatrix.from_dense(jnp.asarray(a), tol=0)
+        # The rule's coefficients are written straight into diagonal storage,
+        # and `_dia_with_rows` puts the overridden rows on the diagonals their
+        # own entries fall on, so no dense (rows, N) array is built. It also
+        # clears the overridden rows first: the rule may not be finite there.
+        data = np.zeros((len(self.rule), cols))
+        for p, j in enumerate(self.rule):
+            col0, row0 = max(0, j), max(0, -j)
+            length = min(cols - col0, rows - row0)
+            if length > 0:
+                c = np.asarray(coefficients[j])[row0 : row0 + length]
+                data[p, col0 : col0 + length] = c
+        base = DiaMatrix(data=jnp.asarray(data), offsets=tuple(self.rule), shape=shape)
+        return _dia_with_rows(base, {i: r[:cols] for i, r in self.overrides.items()})
 
 
 class Composite(OrthogonalSpace):
@@ -1076,10 +1084,17 @@ class PGComposite(_TestSpace, Composite):
             **kw,
         )
         # The full PG space has N - order rows, as wide as its stencil reaches,
-        # and the rows that reach past N are cut at width N in S.
+        # and the rows that reach past N are cut at width N in S. Only the
+        # columns past N are read, one entry of each diagonal's buffer, so the
+        # wide stencil is never densified.
         width = N + max(self.stencil.rule)
-        wide = np.asarray(self.stencil.matrix((self.dim, width)).todense())
-        self._truncated = np.flatnonzero(np.any(wide[:, N:] != 0, axis=1))
+        wide = self.stencil.matrix((self.dim, width))
+        data = np.asarray(wide.data)
+        truncated: set[int] = set()
+        for p, k in enumerate(wide.offsets):
+            row = N + np.flatnonzero(data[p, N:] != 0) - k
+            truncated.update(row[(row >= 0) & (row < self.dim)].tolist())
+        self._truncated = np.array(sorted(truncated), dtype=int)
 
     @property
     def dim(self) -> int:
@@ -1125,7 +1140,7 @@ class PGComposite(_TestSpace, Composite):
         # x^q lifts the trial functions to degree N - 1 + q - j >= N, where the
         # recurrences, which hold for the full test functions, see the modes
         # the truncated rows have lost.
-        rows = np.asarray(self.S.todense())[self._truncated]
+        rows = np.asarray(self.S.get_rows(self._truncated))
         return _replace_rows(z, self._truncated, rows, self, trial, q)
 
     def _recurrence_matrices(
@@ -1267,18 +1282,20 @@ class GalerkinRecombined(_TestSpace, Composite):
         name: str | None = None,
         fun_str: str | None = None,
     ) -> None:
-        # PG's unscaled rows: its scaling, if any, is applied below to all rows.
-        S_pg = np.asarray(pg.stencil.matrix(pg.S.shape).todense())
-        S_trial = np.asarray(trial.S.todense())
+        # PG's unscaled stencil: its scaling, if any, is applied below to all
+        # rows. Only the replaced rows and the two main diagonals are read out
+        # of the two stencils, so neither is densified.
+        S_pg = pg.stencil.matrix(pg.S.shape)
+        S_trial = trial.S
         assert S_pg.shape[0] == S_trial.shape[0], "test and trial dimensions differ"
-        replaced = np.isin(np.arange(S_pg.shape[0]), pg._truncated)
+        rows = np.asarray(pg._truncated, dtype=int)
+        _check_in_span(S_pg, S_trial, rows, pg, trial)
         # Scale each replacement like the PG function it replaces, by matching
         # their leading coefficients, so that all rows of a matrix are of one
         # size and the round-off of the last few is not weighted up by k^q.
-        k = np.arange(S_pg.shape[0])
-        S_trial = S_trial * np.where(replaced, S_pg[k, k] / S_trial[k, k], 1.0)[:, None]
-        _check_in_span(S_pg[~replaced, : trial.N], S_trial, pg, trial)
-        rows = np.flatnonzero(replaced)
+        scale = np.asarray(S_pg.diagonal())[rows] / np.asarray(S_trial.diagonal())[rows]
+        replacements = np.asarray(S_trial.get_rows(rows)) * scale[:, None]
+        overrides = dict(zip(rows.tolist(), replacements, strict=True))
         super().__init__(
             trial.N,
             type(trial.orthogonal),
@@ -1287,13 +1304,13 @@ class GalerkinRecombined(_TestSpace, Composite):
             name=name if name is not None else pg.name + "_GR",
             fun_str=fun_str if fun_str is not None else pg.fun_str,
             system=trial.system,
-            stencil=pg.stencil.with_overrides({int(i): S_trial[i] for i in rows}),
+            stencil=pg.stencil.with_overrides(overrides),
             scaling=pg.scaling,
             **trial.orthogonal.parameters,
         )
         self._pg = pg
         self._replaced = rows
-        self._replaced_rows = np.asarray(self.S.todense())[rows]
+        self._replaced_rows = np.asarray(self.S.get_rows(rows))
 
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0
@@ -1515,6 +1532,71 @@ def _tau_rows(
     return {int(k): rows[k] for k in changed}
 
 
+def _dia_with_rows(z: DiaMatrix, rows: dict[int, np.ndarray]) -> DiaMatrix:
+    """Return `z` with each row in `rows` replaced by the coefficients given.
+
+    The replacements go onto the diagonals their own entries fall on, so the
+    result stays in diagonal storage and nothing of size (n, m) is built. Only
+    the diagonals that end up empty are dropped, so a row far larger than the
+    rest -- as the replaced rows of `GalerkinRecombined` are -- never prunes
+    the others away.
+    """
+    n_, m = z.shape
+    data_z = np.asarray(z.data)
+    if not rows:
+        return z
+    extra: set[int] = set()
+    for i, r in rows.items():
+        k = np.flatnonzero(r) - i
+        extra.update(k[(k > -n_) & (k < m)].tolist())
+    offsets = tuple(sorted(set(z.offsets) | extra))
+    if not offsets:
+        return DiaMatrix(
+            data=jnp.zeros((0, m), dtype=z.data.dtype), offsets=(), shape=z.shape
+        )
+    # Offset k is stored in row `pos[k - base]`, with `base` the lowest offset.
+    base = offsets[0]
+    pos = np.zeros(offsets[-1] - base + 1, dtype=int)
+    pos[np.asarray(offsets, dtype=int) - base] = np.arange(len(offsets))
+    dtype = np.result_type(data_z.dtype, *(np.asarray(r).dtype for r in rows.values()))
+    data = np.zeros((len(offsets), m), dtype=dtype)
+    for p, k in enumerate(z.offsets):
+        data[pos[k - base]] = data_z[p]
+    replaced = np.fromiter(rows, dtype=int, count=len(rows))
+    for p, k in enumerate(offsets):
+        c = replaced + k
+        data[p, c[(c >= 0) & (c < m)]] = 0
+    for i, r in rows.items():
+        c = np.flatnonzero(r)
+        c = c[(c - i > -n_) & (c - i < m)]
+        data[pos[c - i - base], c] = np.asarray(r)[c]
+    keep = np.flatnonzero(np.any(data != 0, axis=1))
+    offsets = tuple(offsets[p] for p in keep)
+    if offsets == (0,) and n_ == m:
+        return DiagonalMatrix(jnp.asarray(data[keep][0]))
+    return DiaMatrix(data=jnp.asarray(data[keep]), offsets=offsets, shape=z.shape)
+
+
+def _band_strip(A: DiaMatrix, i: np.ndarray, p: np.ndarray, w: np.ndarray):
+    """Return the entries A[i + p, i + w] of a banded matrix, as (len(i),
+    len(p), len(w)); entries outside the matrix or off its diagonals are 0."""
+    n_, m = A.shape
+    data = np.asarray(A.data)
+    if data.shape[0] == 0:
+        return np.zeros((len(i), len(p), len(w)), dtype=data.dtype)
+    offs = np.asarray(A.offsets, dtype=int)
+    pos = np.full(offs.max() - offs.min() + 1, -1, dtype=int)
+    pos[offs - offs.min()] = np.arange(len(offs))
+    rows = i[:, None, None] + p[None, :, None]
+    cols = i[:, None, None] + w[None, None, :]
+    k = (w[None, :] - p[:, None])[None] - offs.min()
+    ok = (rows >= 0) & (rows < n_) & (cols >= 0) & (cols < m)
+    ok = ok & (k >= 0) & (k < len(pos))
+    d = pos[np.where(ok, k, 0)]
+    ok = ok & (d >= 0)
+    return np.where(ok, data[np.where(ok, d, 0), np.where(ok, cols, 0)], 0)
+
+
 def _replace_rows(
     z: DiaMatrix | Matrix,
     replaced: np.ndarray,
@@ -1532,44 +1614,73 @@ def _replace_rows(
     # reach those rows, and a narrow trial space (a boundary lifting) may
     # have none.
     lo = max(int(rows.nonzero()[1].min()) - q, 0)
-    G = np.zeros((test.N, uo.N))
+    tested = np.zeros((len(replaced), uo.N))
     if lo < uo.N:
         modes = jnp.arange(lo, uo.N)
-        derivative = jax.vmap(lambda m: uo.derivative_coeffs(jnp.eye(uo.N)[m], j))
+        unit = lambda m: jnp.zeros(uo.N).at[m].set(1.0)  # noqa: E731
+        derivative = jax.vmap(lambda m: uo.derivative_coeffs(unit(m), j))
         # One jit compiles once; eager vmap compiles every primitive.
         D = np.asarray(jax.jit(derivative)(modes))
         if q > 0:
             # x Q = A^T Q, so x maps coefficients c to A c. Room for q more
             # modes keeps the truncation of A out of the product.
-            A = np.asarray(cast(Jacobi, uo).A(uo.N + q).power(q).todense())
-            D = np.pad(D, ((0, 0), (0, q))) @ A.T
+            A = cast(Jacobi, uo).A(uo.N + q).power(q)
+            D = np.asarray(A.T.rmatvec(jnp.asarray(np.pad(D, ((0, 0), (0, q))))))
         k = min(D.shape[1], test.N)
         h = np.asarray(test.orthogonal.norm_squared())[:k]
-        G[:k, lo:] = (D[:, :k] * h[None, :]).T
-    tested = rows @ G
+        # Only the modes from `lo` up contribute, so the (test.N, uo.N) matrix
+        # of the inner products is used as the (test.N, uo.N - lo) strip it is.
+        tested[:, lo:] = (np.asarray(rows)[:, :k] * h[None, :]) @ D[:, :k].T
     if isinstance(u, Composite):
-        tested = tested @ np.asarray(u.ST.todense())
-    Z = np.asarray(z.todense()).copy()
-    Z[replaced] = tested
-    # tol=0: the PG rows are about k^-q times the replaced ones, and the
-    # default pruning, relative to the largest entry, would drop them.
-    return DiaMatrix.from_dense(jnp.asarray(Z), tol=0)
+        tested = np.asarray(u.ST.rmatvec(jnp.asarray(tested)))
+    return _dia_with_rows(
+        z if isinstance(z, DiaMatrix) else z.tosparse(tol=0),
+        {int(i): tested[p] for p, i in enumerate(replaced)},
+    )
 
 
 def _check_in_span(
-    rows: np.ndarray, S_trial: np.ndarray, pg: PGComposite, trial: Composite | Jacobi
+    S_pg: DiaMatrix,
+    S_trial: DiaMatrix,
+    replaced: np.ndarray,
+    pg: PGComposite,
+    trial: Composite | Jacobi,
 ) -> None:
-    """Raise unless the kept PG `rows` lie in the span of the trial stencil.
+    """Raise unless the kept PG rows lie in the span of the trial stencil.
 
     The PG test functions vanish together with their first `order` - 1
     derivatives at both ends, so they satisfy any trial conditions on lower
     derivatives -- Dirichlet, Neumann, mixed or Robin for order 2 -- but not,
-    for instance, a single Neumann condition, which gets order 1. Both stencils
-    are upper triangular, so the leading square block gives the coefficients.
+    for instance, a single Neumann condition, which gets order 1.
+
+    Both stencils are upper triangular and banded, so a PG row i that lies in
+    the span uses only trial functions i, ..., i + s, where s is the widest
+    shift of the PG stencil: the earlier ones would have to carry the columns
+    before i, where the row is zero, and a later one is ruled out by the
+    column where it first appears. The columns the s + 1 candidates cover thus
+    fix their coefficients by a triangular solve of that size, and the rest of
+    the row, out to i + s + t for the trial stencil's widest shift t, is the
+    residual. Each row is its own small solve, which keeps the check banded
+    rather than inverting the whole stencil.
     """
     M = S_trial.shape[0]
-    coef = np.linalg.solve(S_trial[:, :M].T, rows[:, :M].T).T
-    err = np.abs(rows - coef @ S_trial).max(axis=1) / np.abs(rows).max(axis=1)
+    s = max(S_pg.offsets, default=0)
+    t = max(S_trial.offsets, default=0)
+    i = np.setdiff1d(np.arange(S_pg.shape[0]), replaced)
+    a = np.arange(s + 1)
+    w = np.arange(s + t + 1)
+    B = _band_strip(S_trial, i, a, w)  # (rows, s + 1, s + t + 1)
+    rows = _band_strip(S_pg, i, np.zeros(1, dtype=int), w)[:, 0, :]
+    # The last rows run out of trial functions before s + 1 of them: pin the
+    # coefficients that do not exist to zero, which keeps the block square.
+    free = (i[:, None] + a[None, :]) < M
+    block = np.where(free[:, None, :], B[:, :, : s + 1], np.eye(s + 1)[None])
+    y = np.where(free, rows[:, : s + 1], 0)
+    coef = np.linalg.solve(block.transpose(0, 2, 1), y[..., None])[..., 0]
+    scale = np.abs(rows).max(axis=1)
+    err = np.abs(rows - np.einsum("ra,raw->rw", coef, B)).max(axis=1) / np.where(
+        scale > 0, scale, 1
+    )
     if np.any(err > np.sqrt(np.finfo(rows.dtype).eps)):
         raise ValueError(
             f"the {type(pg).__name__} test functions do not satisfy the boundary "

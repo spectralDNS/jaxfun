@@ -45,8 +45,8 @@ trainer.train(opt_lbfgs, 5000, epoch_print=1000, update_global_weights=-100)
 print("Time for LBFGS:", time.time() - t1)
 
 t2 = time.time()
-opt_hess = GaussNewton(w, use_lstsq=True, use_GN=False)
-trainer.train(opt_hess, 10, epoch_print=1, abs_limit_change=1e-8)
+opt_hess = GaussNewton(w, use_lstsq=True, use_GN=True)
+trainer.train(opt_hess, 0, epoch_print=1, abs_limit_change=1e-8)
 print("Time for Gauss-Newton:", time.time() - t2)
 
 print("time", time.time() - t0)

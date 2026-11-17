@@ -1287,6 +1287,13 @@ class GalerkinRecombined(_TestSpace, Composite):
         # of the two stencils, so neither is densified.
         S_pg = pg.stencil.matrix(pg.S.shape)
         S_trial = trial.S
+        # The span check and the leading-coefficient scaling below both rely on
+        # an upper triangular trial stencil.
+        if min(S_trial.offsets, default=0) < 0:
+            raise ValueError(
+                "get_testspace('GR') needs an upper triangular trial stencil, and "
+                f"{type(trial).__name__} has diagonals below it; use 'G' or 'PG'"
+            )
         assert S_pg.shape[0] == S_trial.shape[0], "test and trial dimensions differ"
         rows = np.asarray(pg._truncated, dtype=int)
         _check_in_span(S_pg, S_trial, rows, pg, trial)

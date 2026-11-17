@@ -23,7 +23,7 @@ from jaxfun.galerkin import (
     TrialFunction,
     inner,
 )
-from jaxfun.galerkin.Chebyshev import Chebyshev
+from jaxfun.galerkin.Chebyshev import Chebyshev, Heinrichs
 from jaxfun.galerkin.composite import Composite, GalerkinRecombined, PGComposite
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.Legendre import Legendre
@@ -194,6 +194,11 @@ def test_single_neumann_condition_is_refused(family):
     B = FunctionSpace(12, family, bcs={"left": {"N": 0}})
     with pytest.raises(ValueError, match="not Galerkin"):
         B.get_testspace("GR")
+
+
+def test_lower_triangular_trial_stencil_is_refused():
+    with pytest.raises(ValueError, match="upper triangular"):
+        Heinrichs(12).get_testspace("GR")
 
 
 def test_stencil_is_pg_rule_with_trial_rows():

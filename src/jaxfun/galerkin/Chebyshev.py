@@ -570,18 +570,18 @@ class Heinrichs(Composite):
         )
         assert isinstance(D, Composite)
         stencil = Stencil(
-            {-2: 1, 0: -2, 2: 1},
+            {-2: -1, 0: 2, 2: -1},
             overrides={
                 0: 2 * np.asarray(D.S.get_row(0)),
-                1: 2 * np.asarray(D.S.get_row(1)),
+                1: np.asarray(D.S.get_row(1)),
             },
         )
         Composite.__init__(
             self,
             N,
-            Chebyshev,
-            bcs=dirichlet,
-            stencil=stencil,
+            kw.pop("orthogonal", Chebyshev),
+            bcs=kw.pop("bcs", dirichlet),
+            stencil=kw.pop("stencil", stencil),
             domain=domain,
             system=system,
             name=name,

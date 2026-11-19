@@ -30,8 +30,8 @@ C = CartesianProduct(D, S, name="C")
 v, q = TestFunction(C, name="vq")
 u, s = TrialFunction(C, name="us")
 
-A, a = inner(s.diff(x) * v - ue.diff(x, 2) * v, kind="system", sparse=True)
-B, b = inner(u.diff(x) * q - s * q, kind="system", sparse=True)
+A, a = inner(v, s.diff(x) - ue.diff(x, 2), kind="system", sparse=True)
+B, b = inner(q, u.diff(x) - s, kind="system", sparse=True)
 
 H = A + B
 h = a + b  # ty:ignore[unsupported-operator]

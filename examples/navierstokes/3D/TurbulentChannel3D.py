@@ -149,7 +149,7 @@ import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
 from channel_case import ChannelCase, load_case, parse_cli, pytest_case, to_dict
-from ChannelFlow3D import KMM3D, VelocityKind
+from ChannelFlow3D import KMM3D, TauPolynomials, VelocityKind
 from flax import nnx
 
 from jaxfun import integrators
@@ -196,7 +196,7 @@ class TurbulentChannel(KMM3D):
             Ly: Spanwise period, in units of the half-height.
             Re_tau: Friction Reynolds number.
             **kwargs: Passed on to `KMM3D`: `padding`, `polynomial`,
-                `kind`, `tableau`, `time`.
+                `kind`, `tau_polynomials`, `tableau`, `time`.
         """
         super().__init__(Nx, Ny, Nz, Lx, Ly, 1.0 / Re_tau, body_force=1.0, **kwargs)
         self.Re_tau = nnx.static(float(Re_tau))
@@ -386,6 +386,7 @@ def build_solver(case: ChannelCase, **overrides: Any) -> TurbulentChannel:
         # pairing rule.
         polynomial=_member(PolynomialKind, case.polynomial),
         kind=_member(TestSpaceKind, case.kind),
+        tau_polynomials=_member(TauPolynomials, case.tau_polynomials),
         tableau=_tableau(case.tableau),
     )
 

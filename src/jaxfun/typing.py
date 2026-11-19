@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from enum import Enum, StrEnum, unique
 from typing import (
     TYPE_CHECKING,
@@ -73,6 +73,10 @@ type ComputationalSpaceType = (
     OrthogonalSpace | TensorProductSpace | VectorTensorProductSpace
 )
 type ScalarSpaceType = OrthogonalSpace | TensorProductSpace | DirectSum | DirectSumTPS
+# The tau polynomials of a tau test space, one per boundary condition, as pairs
+# (S, k): mode k, counted from the end if negative, of the orthogonal space S(N)
+# of the trial space's size N. See `TauRecombined`.
+type TauBasis = Sequence[tuple[Callable[[int], OrthogonalSpace], int]]
 
 type VectorLike = BaseVector | Vector | VectorAdd | VectorMul | VectorZero
 type DyadicLike = BaseDyadic | Dyadic | DyadicAdd | DyadicMul | DyadicZero

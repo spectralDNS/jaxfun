@@ -3,8 +3,10 @@ from typing import cast
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import sympy as sp
 from numpy.polynomial import chebyshev as npcheb, legendre as nplegendre
 
+from jaxfun.coordinates import R
 from jaxfun.galerkin import (
     Chebyshev,
     ChebyshevU,
@@ -20,10 +22,13 @@ from jaxfun.galerkin.composite import (
     BoundaryConditions,
     Composite,
     DirectSum,
+    Stencil,
     get_bc_basis,
     get_stencil_matrix,
 )
-from jaxfun.utils.common import n
+from jaxfun.la import DiaMatrix
+from jaxfun.operators import Div, Grad
+from jaxfun.utils.common import Domain, lambdify, n, ulp
 
 
 def test_boundary_conditions_basic():
@@ -70,11 +75,33 @@ def test_composite_and_mass_matrix(space):
 )
 def test_bcgeneric_space(space):
     bcs = {"left": {"D": 0, "N": 1}, "right": {"D": 2}}
-    B = BCGeneric(3, space, bcs)
+    B = BCGeneric(space, bcs)
     assert B.dim == 3
     # quad_points_and_weights should use M when N==0
     xw = B.quad_points_and_weights()
     assert xw[0].shape[0] == B.orthogonal.num_quad_points
+
+
+@pytest.mark.parametrize("kind", ("PG", "GR"))
+def test_lifting_of_derivative_conditions(kind):
+    # Neumann conditions alone skip the lowest mode, so there are two lifting
+    # functions over three modes.
+    V = FunctionSpace(
+        6, Chebyshev.Chebyshev, bcs={"left": {"N": -1}, "right": {"N": 3}}
+    )
+    assert isinstance(V, DirectSum)
+    B = V[1]
+    assert B.S.shape == (B.dim, B.N) == (2, 3)
+    W = V.get_testspace(kind)
+    Sw, Sb = np.asarray(W.S.todense()), np.asarray(B.S.todense())
+    h = np.asarray(W.orthogonal.norm_squared())
+    exact = (Sw[:, :3] * h[:3]) @ Sb.T
+    z = W.matrices(0, (B, 0))
+    assert z is not None
+    assert np.allclose(np.asarray(z.todense()), exact)
+    z = W.matrices(0, (B, 1), q=1)
+    assert z is not None
+    assert z.shape == exact.shape
 
 
 @pytest.mark.parametrize(
@@ -148,6 +175,28 @@ def test_single_robin_condition(space, alpha, side, row):
     assert sorted(B.stencil.overrides) == ([] if row is None else [row])
 
 
+@pytest.mark.parametrize("key", ["R", "W"])
+def test_robin_and_weighted_conditions_in_physical_units(key):
+    """Alpha and value are given in the physical coordinate of the domain:
+    u'' + u = f on [0, 1] with u + a u' = g, or u' + a u'' = g, on both sides."""
+    x = R(1).x
+    ue = x**5 - 2 * x**2 + 1
+    domain = Domain(0, 1)
+    order = {"R": 0, "W": 1}[key]
+
+    def bc(a, z):
+        trace = ue.diff(x, order) + a * ue.diff(x, order + 1)
+        return {key: (a, trace.subs(x, z))}
+
+    bcs = {"left": bc(-1, domain.lower), "right": bc(sp.Rational(1, 2), domain.upper)}
+    D = FunctionSpace(12, Chebyshev.Chebyshev, bcs=bcs, domain=domain)
+    v, u = TestFunction(D), TrialFunction(D)
+    A, b = inner(v * (Div(Grad(u)) + u) - v * (Div(Grad(ue)) + ue), kind="system")
+    xj = D.mesh()
+    uj = D.evaluate(xj, A.solve(b))
+    assert jnp.abs(uj - lambdify(x, ue)(xj)).max() < jnp.sqrt(ulp(1))
+
+
 def _dense(V) -> np.ndarray:
     return np.asarray(V.S.todense())
 
@@ -180,3 +229,25 @@ def test_scaling_is_applied_once(space):
         ref = inner(form, use_precomputed_matrices=False, kind="bilinear")
         ref = np.asarray(ref.todense())
         assert np.abs(A - ref).max() < 1e3 * np.finfo(A.dtype).eps * np.abs(ref).max()
+
+
+def test_stencil_matrix_with_overrides_matches_dense():
+    """An overridden row goes onto the diagonals its own entries fall on.
+
+    The rule is left out of that row, where it may not even be finite, and the
+    stored offsets are those of the matrix the two together make, so building
+    it through diagonal storage gives exactly what a dense array would.
+    """
+    rows, cols = 6, 9
+    override = np.zeros(cols)
+    override[[3, 4, 7]] = [2.0, -1.5, 0.25]
+    st = Stencil({0: sp.Integer(1), 2: -(n + 1) / (n - 2)}, {2: override})
+    S = st.matrix((rows, cols))
+    ref = np.zeros((rows, cols))
+    for k in (0, 1, 3, 4, 5):  # row 2 is the override; the rule is singular there
+        ref[k, k] = 1.0
+        if k + 2 < cols:
+            ref[k, k + 2] = -(k + 1) / (k - 2)
+    ref[2] = override
+    assert np.allclose(np.asarray(S.todense()), ref)
+    assert S.offsets == DiaMatrix.from_dense(jnp.asarray(ref), tol=0).offsets

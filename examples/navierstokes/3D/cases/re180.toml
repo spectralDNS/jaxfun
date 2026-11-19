@@ -25,6 +25,7 @@ Pz = 1.0         # dealiasing (padding) factor, wall-normal; 1 is no padding
 # chebyshev with galerkin_recombined, legendre with galerkin.
 polynomial = "chebyshev"
 kind = "galerkin_recombined"
+tau_polynomials = "lanczos"   # with kind = "tau": lanczos, first_order, first_order_c3 or mixed
 tableau = "ARS443"   # any globally stiffly accurate IMEX tableau in jaxfun.integrators
 
 [time]

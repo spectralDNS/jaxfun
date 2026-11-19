@@ -26,7 +26,7 @@ from jaxfun.sharding import (
     place,
     spectral_sharding,
 )
-from jaxfun.typing import ArrayFun, MeshKind, RankTag, TestSpaceKind
+from jaxfun.typing import ArrayFun, MeshKind, RankTag, TauBasis, TestSpaceKind
 from jaxfun.utils.common import jit_method, lambdify
 
 from .composite import (
@@ -529,6 +529,7 @@ class TensorProductSpace:
         self,
         kind: TestSpaceKind | str = TestSpaceKind.GALERKIN,
         name: str | None = None,
+        tau_basis: TauBasis | None = None,
     ) -> TensorProductSpace:
         """Return the tensor product of every axis's test space of `kind`.
 
@@ -539,10 +540,15 @@ class TensorProductSpace:
         space and no `name` is given.
 
         Args:
-            kind: Test space kind, e.g. ``"G"``, ``"PG"`` or ``"GR"``.
+            kind: Test space kind, e.g. ``"G"``, ``"PG"``, ``"GR"`` or ``"tau"``.
             name: Name of the test space; defaults to this space's name.
+            tau_basis: The tau polynomials of the ``"tau"`` test space, given
+                to every axis; the axes with boundary conditions use them. See
+                `TauRecombined`.
         """
-        spaces = [space.get_testspace(kind) for space in self.basespaces]
+        spaces = [
+            space.get_testspace(kind, tau_basis=tau_basis) for space in self.basespaces
+        ]
         if name is None and all(
             s is t for s, t in zip(spaces, self.basespaces, strict=True)
         ):

@@ -23,6 +23,8 @@ from jaxfun.utils.common import (
     jit_vmap,
 )
 
+from .composite import Composite, Stencil, dirichlet
+from .functionspace import FunctionSpace
 from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
 
@@ -540,3 +542,49 @@ class Chebyshev(Jacobi):
 
         M = _dense_derivative_matrix(self.N, u.N, j)
         return M if A is None else A.T @ M
+
+
+class Heinrichs(Composite):
+    r"""Composite Chebyshev basis space with Heinrichs' stencil
+
+    ..math::
+
+        \phi_k = 4 (1-x^2) T_k, k=0..N-3
+
+    By recombination, the basis function is also T_k-T_{k+2} - (T_{k-2} - T_k), where
+    negative indices T_{-1} = T_{1} and T_{-2} = T_{2}.
+
+    """
+
+    def __init__(
+        self,
+        N: int,
+        domain: Domain | None = None,
+        system: CoordSys | None = None,
+        name: str = "Heinrichs",
+        fun_str: str = "H",
+        **kw,
+    ) -> None:
+        D = FunctionSpace(
+            N, Chebyshev, bcs=dirichlet, domain=domain, system=system, name="D"
+        )
+        assert isinstance(D, Composite)
+        stencil = Stencil(
+            {-2: -1, 0: 2, 2: -1},
+            overrides={
+                0: 2 * np.asarray(D.S.get_row(0)),
+                1: np.asarray(D.S.get_row(1)),
+            },
+        )
+        Composite.__init__(
+            self,
+            N,
+            kw.pop("orthogonal", Chebyshev),
+            bcs=kw.pop("bcs", dirichlet),
+            stencil=kw.pop("stencil", stencil),
+            domain=domain,
+            system=system,
+            name=name,
+            fun_str=fun_str,
+            **kw,
+        )

@@ -29,7 +29,7 @@ import sympy as sp
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import BaseMatrix, DiaMatrix, Matrix, diags
-from jaxfun.typing import Array, MeshKind, RankTag, TestSpaceKind
+from jaxfun.typing import Array, MeshKind, RankTag, TauBasis, TestSpaceKind
 from jaxfun.utils.common import (
     Domain,
     cache_static,
@@ -588,6 +588,7 @@ class OrthogonalSpace(BaseSpace):
         name: str | None = None,
         fun_str: str | None = None,
         scaling: sp.Expr | None = None,
+        tau_basis: TauBasis | None = None,
     ) -> OrthogonalSpace:
         """Return the test space of `kind` for this space as trial space.
 
@@ -595,7 +596,8 @@ class OrthogonalSpace(BaseSpace):
         here. Jacobi spaces, which have Petrov-Galerkin test spaces, override
         this; for the rest, Fourier among them, there is no other test space to
         give. It is this space itself unless `name` or `fun_str` is
-        given, and then a copy carrying them.
+        given, and then a copy carrying them. `tau_basis` is ignored, like
+        `kind`, so that a tensor product can pass it to every axis.
 
         Raises:
             NotImplementedError: if `scaling` is given; an orthogonal space has

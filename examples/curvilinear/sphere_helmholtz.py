@@ -18,7 +18,7 @@ from jaxfun.galerkin.tensorproductspace import TensorProduct
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, ulp
 
-N, M = 48, 48
+N, M = 36, 36
 
 # Define spherical coordinates
 r = 1
@@ -37,6 +37,7 @@ C = get_CoordSys(
     assumptions=sp.Q.positive(theta)
     & sp.Q.positive(phi)
     & sp.Q.positive(sp.sin(theta)),
+    symbolic_metric=True,
 )
 L = FunctionSpace(N, Legendre, domain=(0, np.pi), name="L", fun_str="f")
 F = FunctionSpace(M, Fourier, name="F", fun_str="E")
@@ -51,7 +52,8 @@ ue = sph(6, 3, theta, phi)
 
 # Assemble linear system of equations
 A, b = inner(
-    (v * (2 * u - Div(Grad(u))) - v * (2 * ue - Div(Grad(ue)))) * C.sg,
+    v * C.sg,
+    4 * u + Div(Grad(u)) - (4 * ue + Div(Grad(ue))),
     sparse=True,
     kind="system",
 )

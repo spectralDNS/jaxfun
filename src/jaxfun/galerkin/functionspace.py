@@ -155,7 +155,6 @@ def FunctionSpace(
             kwb["fun_str"] = kw["fun_str"] + "_b"
 
         B = BCGeneric(
-            bcs.num_bcs(),
             space,
             bcs=bcs,
             domain=domain,

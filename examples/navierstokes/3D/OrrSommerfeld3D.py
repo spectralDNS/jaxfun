@@ -96,7 +96,7 @@ N_OS = 100  # modes in the Orr-Sommerfeld eigenproblem itself
 # Wall-normal basis and test space; see "CHOICE OF BASIS AND TEST SPACE" in
 # ChannelFlow3D.py for the pairing rule.
 POLYNOMIAL = PolynomialKind.CHEBYSHEV
-KIND = TestSpaceKind.GALERKIN_RECOMBINED
+KIND = TestSpaceKind.GR
 
 if "PYTEST" in os.environ:
     Nx, Ny, Nz, T_END = 16, 16, 48, 1.0

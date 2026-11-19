@@ -390,7 +390,7 @@ class TestFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
 
         if isinstance(V, CartesianProductSpace | CartesianTensorProductSpace):
             if name is None:
-                name = "abcdefg"[len(V)]
+                name = "hijklmn"[: len(V)]
             elif len(name) != len(V) and not (
                 len(name) == 1 and V.rank == RankTag.VECTOR
             ):
@@ -438,7 +438,7 @@ class TrialFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
         obj.functionspace = V
         if isinstance(V, CartesianProductSpace | CartesianTensorProductSpace):
             if name is None:
-                name = "abcdefg"[len(V)]
+                name = "abcdefg"[: len(V)]
             elif len(name) != len(V) and not (
                 len(name) == 1 and V.rank == RankTag.VECTOR
             ):

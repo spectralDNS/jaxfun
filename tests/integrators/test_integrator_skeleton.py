@@ -9,6 +9,7 @@ from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.functionspace import FunctionSpace
 from jaxfun.galerkin.inner import inner
 from jaxfun.integrators import ETDRK4, RK4
+from jaxfun.integrators._utils import split_transient_terms
 from jaxfun.operators import Constant
 from jaxfun.utils.common import ulp
 
@@ -127,3 +128,21 @@ def test_nonlinear_rhs_is_in_trial_coefficients() -> None:
     uh = 1.0 / (1.0 + jnp.arange(V.num_dofs))
     expected = V.forward(-V.backward(uh) * V.backward_primitive(uh, k=1))
     assert jnp.allclose(integrator.nonlinear_rhs(uh), expected, atol=100 * ulp(1.0))
+
+
+def test_split_transient_terms_separates_time_without_rewriting_space() -> None:
+    # Only an angle that mixes time in is split, and only by angle addition: a
+    # Chebyshev mode rewritten into its power-basis polynomial multiplies the
+    # source's scalar time terms and cancels catastrophically.
+    V = FunctionSpace(8, Chebyshev, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    (x,) = V.system.base_scalars()
+    t = V.system.base_time()
+    v = TestFunction(V, name="v")
+    mode = sp.cos(5 * sp.acos(x))
+
+    steady, transient = split_transient_terms(
+        v * (mode * sp.cos(2 * t + 1) + sp.sin(2 * x - 3 * t)), t
+    )
+    assert steady == 0
+    travelling = sp.sin(2 * x) * sp.cos(3 * t) - sp.cos(2 * x) * sp.sin(3 * t)
+    assert sp.expand(transient - v * (mode * sp.cos(2 * t + 1) + travelling)) == 0

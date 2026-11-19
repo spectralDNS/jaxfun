@@ -108,7 +108,7 @@ def test_a_travelling_wave_qualifies_after_expand_trig() -> None:
 
     Written as it stands the time rides inside the `x` factor and would be
     refused; `expand_trig` turns it into two terms that each factor cleanly.
-    `split_transient_terms` applies that on the caller's behalf.
+    `split_transient_terms` splits such angles on the caller's behalf.
     """
     T, v, x, y, t = _spaces_2d()
     raw = sp.sin(x - W * t) * sp.sin(sp.pi * y)

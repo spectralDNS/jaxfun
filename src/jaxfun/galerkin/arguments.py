@@ -12,10 +12,13 @@ Key constructs:
 
 from __future__ import annotations
 
+import itertools
+import numbers
 from abc import abstractmethod
+from collections.abc import Sequence
 from enum import Enum, unique
 from functools import partial
-from typing import Any, Literal, Self, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -29,6 +32,7 @@ from sympy.vector import Vector, VectorAdd
 from jaxfun.basespace import BaseSpace
 from jaxfun.coordinates import BaseScalar, CoordSys, latex_symbol
 from jaxfun.galerkin.cartesianproductspace import (
+    CartesianBaseSpace,
     CartesianProductSpace,
     CartesianTensorProductSpace,
     VectorTensorProductSpace,
@@ -48,9 +52,15 @@ from .composite import DirectSum
 from .orthogonal import OrthogonalSpace
 from .tensorproductspace import DirectSumTPS, TensorProductSpace
 
+if TYPE_CHECKING:
+    from .expansion import OrthogonalExpansion
+
 t, x, y, z = sp.symbols("t,x,y,z", real=True)
 
 indices = "ijklmn"
+
+# Default names of unnamed JAXFunctions, so that their printed forms differ
+_jaxfunction_counter = itertools.count()
 
 _CompositeSpaceT = TypeVar(
     "_CompositeSpaceT", bound=CartesianTensorProductSpace | CartesianProductSpace
@@ -265,6 +275,42 @@ class BaseFunction(Function):
         pass
 
 
+class _ExpansionTag(sp.Dummy):
+    """The last argument of an ExpansionFunction. It makes each function unique
+    and links back to it, so that SymPy can rebuild it from its args."""
+
+    owner: ExpansionFunction
+
+    @property
+    def free_symbols(self) -> set[sp.Basic]:
+        # Not a variable: SymPy must never rename or substitute it
+        return set()
+
+
+def _rebuilt(*given: Any) -> ExpansionFunction | sp.Expr | None:
+    """Return the function SymPy rebuilds from `args` in ``u.func(*u.args)``,
+    or None for an ordinary constructor call.
+
+    The constructor's positional parameters receive the args, the tag last;
+    the parameters after them keep their defaults (None or False), which no
+    SymPy arg can be.
+    """
+    args = tuple(a for a in given if a is not None and a is not False)
+    if args and isinstance(args[-1], _ExpansionTag):
+        return args[-1].owner._applied(cast(tuple[sp.Expr, ...], args[:-1]))
+    return None
+
+
+# Names of SymPy's own API that `dir` keeps for an ExpansionFunction. The rest of
+# what it inherits from SymPy still works but is not listed, so that tab
+# completion shows the jaxfun API.
+_SYMPY_NAMES = ("args", "diff", "doit", "free_symbols", "func", "has", "subs")
+# Internal names, typed accessors meant for code rather than interactive use
+# (`get_array` is `array` with the type narrowed by the space), and class
+# attributes SymPy's metaclass sets on each class
+_HIDDEN_NAMES = ("c_names", "default_assumptions", "get_array", "nargs", "own_name")
+
+
 class ExpansionFunction[SpaceT: FunctionSpaceType](BaseFunction):
     r"""Base class for functions that represent expansions in a given function
     space.
@@ -304,6 +350,40 @@ class ExpansionFunction[SpaceT: FunctionSpaceType](BaseFunction):
             if self.functionspace.rank == RankTag.VECTOR:
                 name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
         return f"{name}({self.c_names}; {self.functionspace.name})"
+
+    def _applied(self, arguments: tuple[sp.Expr, ...]) -> Any:
+        """Return the function applied at `arguments`, for SymPy's rebuild.
+
+        A test or trial function stands for basis functions, so it only exists
+        at its own arguments.
+        """
+        if tuple(arguments) == self.args[:-1]:
+            return self
+        raise NotImplementedError(
+            f"{self.name} stands for the basis functions of "
+            f"{self.functionspace.name}; it cannot be evaluated at, or have its "
+            f"coordinates replaced by, {tuple(arguments)}"
+        )
+
+    def _eval_simplify(self, **kwargs: Any) -> Self:
+        return self
+
+    def __dir__(self) -> list[str]:
+        names = set(_SYMPY_NAMES)
+        for cls in type(self).__mro__:
+            if cls.__module__.startswith("jaxfun"):
+                names.update(cls.__dict__)
+        names.update(self.__dict__)
+        names.difference_update(_HIDDEN_NAMES)
+        return sorted(n for n in names if not n.startswith("_"))
+
+    @property
+    def _iterable(self) -> bool:
+        # SymPy's `iterable` reads this before trying `iter`, which succeeds for
+        # any class with `__getitem__`. Only fields of product spaces have items.
+        return isinstance(
+            self.functionspace, CartesianTensorProductSpace | CartesianProductSpace
+        )
 
     @overload
     def __getitem__(
@@ -370,9 +450,14 @@ class TestFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
         cls,
         V: SpaceT,
         name: str | None = None,
+        *rebuild: sp.Expr,
     ) -> Self:
+        if (rebuilt := _rebuilt(V, name, *rebuild)) is not None:
+            return cast(Self, rebuilt)
         coors = V.system
-        obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
+        tag = _ExpansionTag()
+        obj: Self = Function.__new__(cls, *coors._cartesian_xyz, tag)
+        tag.owner = obj
         obj.argument = ArgumentTag.TEST
 
         _composite = (
@@ -429,12 +514,15 @@ class TrialFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
         V: SpaceT,
         name: str | None = None,
         transient: bool = False,
+        *rebuild: sp.Expr,
     ) -> Self:
+        if (rebuilt := _rebuilt(V, name, transient, *rebuild)) is not None:
+            return cast(Self, rebuilt)
         coors = V.system
         time_arg = [coors.base_time()] if transient else []
-        obj: Self = Function.__new__(
-            cls, *(list(coors._cartesian_xyz) + time_arg + [sp.Dummy()])
-        )
+        tag = _ExpansionTag()
+        obj: Self = Function.__new__(cls, *coors._cartesian_xyz, *time_arg, tag)
+        tag.owner = obj
         obj.functionspace = V
         if isinstance(V, CartesianProductSpace | CartesianTensorProductSpace):
             if name is None:
@@ -640,6 +728,7 @@ def get_JAXFunction(
     name: str,
     *,
     array: Array,
+    jaxfunction: JAXFunction,
     global_index: int,
     rank: RankTag,
     functionspace: FunctionSpaceType,
@@ -654,6 +743,9 @@ def get_JAXFunction(
     Args:
         name: Base name (usually space.fun_str).
         array: JAXFunction array of coefficients.
+        jaxfunction: The JAXFunction the node stands for. It is part of the
+            node's identity, so nodes of different JAXFunctions never compare
+            equal, even with equal names and spaces.
         global_index: Global component index for vector-valued spaces.
         rank: Tensor rank of the overall function space (0 or 1).
         functionspace: Parent function space object.
@@ -702,6 +794,7 @@ def get_JAXFunction(
     b: AppliedUndef = sp.Function(
         name,
         array=array,
+        jaxfunction=jaxfunction,
         global_index=global_index,
         rank=rank,
         functionspace=functionspace,
@@ -748,10 +841,25 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
         >>> a = inner(u * v)
         >>> assert jnp.all(b == a @ w.array)
 
+    The sum or difference of two different JAXFunctions is computed on the
+    coefficients and is a new JAXFunction of the same size, as is
+    ``u.scale(c)``. It lives in the space of the operands when they share one,
+    and otherwise in their common orthogonal space; a space with inhomogeneous
+    boundary conditions (a DirectSum) is always moved to its orthogonal space
+    first. Any other operation stays symbolic, including ``2 * u``, ``u + u``
+    and products of JAXFunctions.
+
+        >>> w2 = w.scale(2) - w
+        >>> assert jnp.all(w2.array == w.array)
+
+    A JAXFunction can't live in a space with time-dependent boundary
+    conditions, because its value would depend on a time it doesn't carry.
+
     Args:
         array: JAX array of coefficients.
         V: Function space instance.
-        name: Optional name for the JAXFunction object.
+        name: Optional name for the JAXFunction object. Unnamed JAXFunctions
+            are named jf0, jf1, ... in order of creation.
     """
 
     array: Array | tuple[Array, ...]
@@ -763,12 +871,20 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
         array: Array | tuple[Array, ...] | sp.Expr | sp.Tuple,
         V: SpaceT,
         name: str | None = None,
+        *rebuild: sp.Expr,
     ) -> Self:
         from .inner import project
 
-        coors: CoordSys = V.system
-        obj: Self = Function.__new__(cls, *(list(coors._cartesian_xyz) + [sp.Dummy()]))
+        if (rebuilt := _rebuilt(array, V, name, *rebuild)) is not None:
+            return cast(Self, rebuilt)
 
+        if has_time_dependent_bcs(cast(FunctionSpaceType, V)):
+            raise ValueError(
+                f"{V.name} has time-dependent boundary conditions, so a function "
+                "in it is only defined at a given time. Use its orthogonal space, "
+                "V.get_orthogonal(), with the coefficients at that time, "
+                "V.to_orthogonal(c, t)."
+            )
         if isinstance(array, sp.Expr | sp.Tuple):
             if cast(FunctionSpaceType, V).rank == RankTag.VECTOR:
                 assert isinstance(array, sp.Expr)
@@ -782,12 +898,136 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
                         cast(CartesianTensorProductSpace | CartesianProductSpace, V),
                     )
 
+        name = name if name is not None else f"jf{next(_jaxfunction_counter)}"
+        return cls._from_parts(array, V, name, _ExpansionTag())
+
+    @classmethod
+    def _from_parts(
+        cls,
+        array: Array | tuple[Array, ...],
+        V: SpaceT,
+        name: str,
+        tag: _ExpansionTag,
+        arguments: Sequence[sp.Expr] | None = None,
+    ) -> Self:
+        """Build the JAXFunction from its coefficients, space, name and the tag
+        that makes it unique, applied at `arguments` (by default its own
+        coordinates)."""
+        coors: CoordSys = V.system
+        own = tuple(coors._cartesian_xyz)
+        arguments = own if arguments is None else tuple(arguments)
+        obj: Self = Function.__new__(cls, *arguments, tag)
         obj.array = array
         obj.functionspace = V
         obj.argument = ArgumentTag.JAXFUNC
-        obj.name = name if name is not None else "JAXFunction"
+        obj.name = name
         obj.own_name = "JAXFunction"
+        if arguments == own:
+            tag.owner = obj
         return obj
+
+    def _applied(self, arguments: tuple[sp.Expr, ...]) -> sp.Expr:
+        """Return the function applied at `arguments`: its value when they are
+        numbers, as for ``u.subs(x, 0.5)``, and otherwise the function of the
+        new arguments, as for ``u.subs(x, 2*y)``."""
+        arguments = tuple(sp.sympify(a) for a in arguments)
+        if arguments == self.args[:-1]:
+            return self
+        if len(arguments) != len(self.args) - 1:
+            raise ValueError(f"{self.name} takes {len(self.args) - 1} arguments")
+        if all(a.is_number for a in arguments):
+            return self._value_at(arguments)
+        return JAXFunction._from_parts(
+            self.array,
+            self.functionspace,
+            self.name,
+            cast(_ExpansionTag, self.args[-1]),
+            arguments,
+        )
+
+    def __reduce_ex__(self, protocol: Any) -> tuple[Any, ...]:
+        # The tag's link to its JAXFunction does not survive pickling, so pass
+        # the coefficients and space explicitly.
+        return (
+            _restore_jaxfunction,
+            (self.array, self.functionspace, self.name, self.args[-1], self.args[:-1]),
+        )
+
+    def evalf(
+        self,
+        n: int = 15,
+        subs: dict | None = None,
+        maxn: int = 100,
+        chop: bool = False,
+        strict: bool = False,
+        quad: str | None = None,
+        verbose: bool = False,
+    ) -> sp.Expr:
+        """Return the value at the point given by `subs`, or the function
+        itself when no point is given.
+
+        Args:
+            n: Number of significant digits.
+            subs: Values of all the coordinates, e.g. ``{x: 0.5}``.
+            maxn, chop, strict, quad, verbose: As for SymPy's ``evalf``.
+        """
+        if subs is None:
+            return self
+        return cast(sp.Expr, self.subs(subs)).evalf(
+            n, maxn=maxn, chop=chop, strict=strict, quad=quad, verbose=verbose
+        )
+
+    n = evalf
+
+    @property
+    def c_names(self) -> str:
+        # The arguments it is applied at, its own coordinates unless substituted
+        return ", ".join(str(a) for a in self.args[:-1])
+
+    def _sympyrepr(self, printer: Any) -> str:
+        return f"JAXFunction({', '.join(printer._print(a) for a in self.args)})"
+
+    @property
+    def N(self) -> int:
+        """Number of basis functions of the (1D) function space."""
+        return cast(Any, self.functionspace).N
+
+    @property
+    def dim(self) -> int:
+        """Dimension of the function space, the number of coefficients."""
+        return self.functionspace.dim
+
+    @property
+    def num_dofs(self) -> int | tuple[int, ...] | tuple[tuple[int, ...], ...]:
+        """Number of coefficients, per axis for a tensor product space."""
+        return self.functionspace.num_dofs
+
+    @property
+    def dims(self) -> int:
+        """Number of spatial dimensions."""
+        return self.functionspace.dims
+
+    def _value_at(self, coordinates: Sequence[sp.Expr]) -> sp.Expr:
+        """Return the value at a point, as a SymPy number (vector for a vector
+        function)."""
+        V = cast(FunctionSpaceType, self.functionspace)
+        if not V.system._is_cartesian:
+            raise NotImplementedError(
+                f"{self.name} lives in curvilinear coordinates; evaluate it with "
+                "u(points) at computational coordinates instead"
+            )
+        point = jnp.array([[float(c) for c in coordinates]])
+        values = self(point[0, 0] if V.dims == 1 else point)
+        values = jnp.ravel(values)
+        numbers = [
+            sp.Float(float(v)) if not jnp.iscomplexobj(v) else sp.sympify(complex(v))
+            for v in values
+        ]
+        if V.rank == RankTag.VECTOR:
+            return VectorAdd.fromiter(
+                c * b for c, b in zip(numbers, V.system.base_vectors(), strict=True)
+            )
+        return numbers[0]
 
     @overload
     def get_array(self: JAXFunction[_CompositeSpaceT]) -> tuple[Array, ...]: ...
@@ -846,6 +1086,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
             return get_JAXFunction(
                 self.name,
                 array=cast(Array, self.array),
+                jaxfunction=self,
                 global_index=0,
                 rank=RankTag.SCALAR,
                 functionspace=V,
@@ -860,6 +1101,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
                 get_JAXFunction(
                     "".join((self.name, "^{(", str(i), ")}")),
                     array=self.array[i],
+                    jaxfunction=self,
                     global_index=i,
                     rank=RankTag.SCALAR,
                     functionspace=V[i],
@@ -875,13 +1117,95 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
                 "Unranked Composite space not supported for nonlinear expansion."
             )
 
+    def to_orthogonal(self, name: str | None = None) -> JAXFunction:
+        """Return the same function as a JAXFunction in the orthogonal basis.
+
+        The boundary conditions of the space, inhomogeneous ones included, are
+        folded into the coefficients and no longer imposed.
+        """
+        V = cast(FunctionSpaceType, self.functionspace)
+        return JAXFunction(
+            orthogonal_coefficients(V, self.array), V.get_orthogonal(), name=name
+        )
+
+    def to_expansion(self) -> OrthogonalExpansion:
+        """Return the function as an OrthogonalExpansion, for exact arithmetic
+        that changes the number of basis functions (products, ``x * u``).
+
+        The boundary conditions of the space, inhomogeneous ones included, are
+        folded into the coefficients. Only 1D spaces are supported.
+        """
+        from .expansion import OrthogonalExpansion
+
+        return OrthogonalExpansion.from_jaxfunction(self)
+
+    def _linear_combination(
+        self, other: JAXFunction, a: complex = 1, b: complex = 1
+    ) -> JAXFunction | None:
+        """Return ``a*self + b*other`` as a JAXFunction.
+
+        The result lives in the space of the operands when they share one
+        without inhomogeneous boundary conditions, and otherwise in their common
+        orthogonal space.
+
+        Returns:
+            The combination, or None when the operands have no common
+            orthogonal space of the same size.
+        """
+        U = cast(FunctionSpaceType, self.functionspace)
+        V = cast(FunctionSpaceType, other.functionspace)
+        if U is V and not has_boundary_lifting(U):
+            return JAXFunction(_axpby(a, self.array, b, other.array), U)
+        W = U.get_orthogonal()
+        if orthogonal_signature(W) != orthogonal_signature(V.get_orthogonal()):
+            return None
+        return JAXFunction(
+            _axpby(
+                a,
+                orthogonal_coefficients(U, self.array),
+                b,
+                orthogonal_coefficients(V, other.array),
+            ),
+            W,
+        )
+
+    def scale(self, c: complex | Array) -> JAXFunction:
+        """Return ``c*self`` as a JAXFunction.
+
+        A space with inhomogeneous boundary conditions is replaced by its
+        orthogonal space, since scaling also scales the boundary values.
+        """
+        V = cast(FunctionSpaceType, self.functionspace)
+        if not has_boundary_lifting(V):
+            return JAXFunction(jax.tree.map(lambda x: c * x, self.array), V)
+        array = orthogonal_coefficients(V, self.array)
+        return JAXFunction(jax.tree.map(lambda x: c * x, array), V.get_orthogonal())
+
+    # Only `+` and `-` between two different JAXFunctions are computed on the
+    # coefficients. SymPy's own algorithms combine an expression with numbers
+    # and with itself through these operators and rely on `1*u` being `u` and
+    # `u - u` being 0; a new JAXFunction there makes, e.g., pattern matching in
+    # `integrate` run forever.
+    def __add__(self, other: Any) -> Any:
+        if isinstance(other, JAXFunction) and other is not self:
+            result = self._linear_combination(other)
+            if result is not None:
+                return result
+        return super().__add__(other)
+
+    def __sub__(self, other: Any) -> Any:
+        if isinstance(other, JAXFunction) and other is not self:
+            result = self._linear_combination(other, 1, -1)
+            if result is not None:
+                return result
+        return super().__sub__(other)
+
     @overload
     def __matmul__(
         self: JAXFunction[_CompositeSpaceT], a: tuple[Array, ...]
     ) -> tuple[Array, ...]: ...
     @overload
     def __matmul__(self: JAXFunction[_ScalarSpaceT], a: Array) -> Array: ...
-    @jax.jit(static_argnums=0)
     def __matmul__(self, a: Array | tuple[Array, ...]) -> Array | tuple[Array, ...]:
         if isinstance(self.array, tuple):
             assert isinstance(a, tuple) and len(self.array) == len(a)
@@ -895,7 +1219,6 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
     ) -> tuple[Array, ...]: ...
     @overload
     def __rmatmul__(self: JAXFunction[_ScalarSpaceT], a: Array) -> Array: ...
-    @jax.jit(static_argnums=0)
     def __rmatmul__(self, a: Array | tuple[Array, ...]) -> Array | tuple[Array, ...]:
         if isinstance(self.array, tuple):
             assert isinstance(a, tuple) and len(self.array) == len(a)
@@ -903,8 +1226,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
         assert isinstance(a, Array)
         return a @ self.array
 
-    @jax.jit(static_argnums=0)
-    def __call__(self, x: Array) -> Array:
+    def __call__(self, x: float | Array) -> Array:
         """Evaluate the JAXFunction at given points x in the physical domain.
 
         Args:
@@ -915,6 +1237,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
         if isinstance(V, OrthogonalSpace | DirectSum):
             return V.evaluate(x, cast(Array, self.array))
 
+        x = jnp.asarray(x)
         if isinstance(V, TensorProductSpace):
             z = V.evaluate(x, cast(Array, self.array))
         else:
@@ -934,6 +1257,104 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
             N: Optional padding for the number of points in each dimension.
         """
         return self.functionspace.evaluate_mesh(self.array, kind=kind, N=N)  # ty:ignore[invalid-argument-type]
+
+
+def _restore_jaxfunction(
+    array: Array | tuple[Array, ...],
+    V: Any,
+    name: str,
+    tag: _ExpansionTag,
+    arguments: Sequence[sp.Expr],
+) -> JAXFunction:
+    owner = JAXFunction._from_parts(array, V, name, tag)
+    if tuple(arguments) == owner.args[:-1]:
+        return owner
+    return cast(JAXFunction, owner._applied(tuple(arguments)))
+
+
+def has_boundary_lifting(V: FunctionSpaceType) -> bool:
+    """Return True if V, or a component of V, has inhomogeneous boundary
+    conditions (a DirectSum or DirectSumTPS)."""
+    if isinstance(V, CartesianBaseSpace):
+        return any(has_boundary_lifting(space) for space in V.flatten())
+    return isinstance(V, DirectSum | DirectSumTPS)
+
+
+def has_time_dependent_bcs(V: FunctionSpaceType) -> bool:
+    """Return True if V, or a component of V, has boundary values that depend
+    on time."""
+    if isinstance(V, CartesianBaseSpace):
+        return any(has_time_dependent_bcs(space) for space in V.flatten())
+    if isinstance(V, DirectSumTPS):
+        return V.lifting.is_transient
+    if isinstance(V, DirectSum):
+        return V.bcs.has_time(V.system.base_time())
+    return False
+
+
+def _check_time_independent(V: FunctionSpaceType) -> None:
+    if has_time_dependent_bcs(V):
+        raise ValueError(
+            f"{V.name} has time-dependent boundary conditions, so its "
+            "coefficients have no orthogonal counterpart without a time `t`."
+        )
+
+
+def orthogonal_coefficients(
+    V: FunctionSpaceType, c: Array | tuple[Array, ...], t: float | Array | None = None
+) -> Array | tuple[Array, ...]:
+    """Return the coefficients c of V in V's orthogonal basis, with boundary
+    values evaluated at time t.
+
+    Raises:
+        ValueError: If V has time-dependent boundary conditions and t is None.
+    """
+    if t is None:
+        _check_time_independent(V)
+    if isinstance(V, CartesianBaseSpace):
+        return tuple(
+            cast(Array, orthogonal_coefficients(space, c[i], t))
+            for i, space in enumerate(V.flatten())
+        )
+    if isinstance(V, DirectSum | DirectSumTPS):
+        return V.to_orthogonal(cast(Array, c), t)
+    return V.to_orthogonal(cast(Array, c))
+
+
+def orthogonal_signature(V: FunctionSpaceType) -> tuple[Any, ...]:
+    """Return what identifies the orthogonal space V up to its name.
+
+    Two orthogonal spaces with equal signatures have the same basis functions,
+    so coefficients in one are coefficients in the other.
+    """
+    if isinstance(V, CartesianBaseSpace):
+        return (V.system, tuple(orthogonal_signature(s) for s in V.flatten()))
+    if isinstance(V, TensorProductSpace):
+        return (V.system, tuple(orthogonal_signature(s) for s in V.basespaces))
+    parameters = getattr(V, "parameters", {})
+    return (type(V), tuple(parameters.items()), V.domain, V.system, V.N)
+
+
+def _is_number(c: Any) -> bool:
+    if isinstance(c, bool):
+        return False
+    if isinstance(c, numbers.Number):
+        return True
+    if isinstance(c, sp.Basic):
+        return bool(c.is_number)
+    return isinstance(c, Array) and c.ndim == 0
+
+
+def _as_number(c: Any) -> Any:
+    if isinstance(c, sp.Basic):
+        return float(c) if c.is_real else complex(c)
+    return c
+
+
+def _axpby(
+    a: complex, x: Array | tuple[Array, ...], b: complex, y: Array | tuple[Array, ...]
+) -> Array | tuple[Array, ...]:
+    return jax.tree.map(lambda xi, yi: a * xi + b * yi, x, y)
 
 
 def evaluate_jaxfunction_expr_quad(

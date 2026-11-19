@@ -23,6 +23,7 @@ import sympy as sp
 
 from jaxfun.coordinates import R
 from jaxfun.galerkin import (
+    DirectSum,
     Fourier,
     FunctionSpace,
     Legendre,
@@ -546,3 +547,79 @@ def test_a_trange_override_moves_the_initial_state_with_it() -> None:
         progress=False,
     )[0]
     assert jnp.array_equal(started, at_two)
+
+
+def test_a_nonlinear_term_sees_a_moving_wall_in_one_dimension() -> None:
+    """The nonlinear term reads the field with its lifting at the stage time.
+
+    Its JAXFunction node lives on the orthogonal space, and the state is lifted
+    with the stage's `t` before it is evaluated.
+    """
+    R1 = R(1)
+    (x,) = R1.base_scalars()
+    t = R1.base_time()
+    ue = (1 + x) / 2 * (1 + t)
+    V = FunctionSpace(
+        8,
+        Legendre.Legendre,
+        bcs={"left": {"D": 0}, "right": {"D": 1 + t}},
+        name="nlwall",
+        system=R1,
+    )
+    assert isinstance(V, DirectSum)
+    v = TestFunction(V)
+    u = TrialFunction(V, transient=True)
+    f = sp.diff(ue, t) + ue**2
+    integrator = IMEXRungeKutta(
+        v * (u.diff(t) + u**2 - f),
+        tableau=ARK4_3_6L2SA,
+        time=(0.0, 1.0),
+        initial=ue.subs(t, 0),
+        sparse=True,
+    )
+    u_hat = integrator.solve(dt=0.1, steps=10, progress=False)
+    T = integrator.end_time(0.1, 10)
+    xj = V.mesh(kind="uniform", N=10)
+    got = V.evaluate(xj, u_hat, t=T)
+    assert jnp.allclose(got, lambdify((x,), ue.subs(t, T))(xj), atol=1e-5)
+
+
+def test_a_nonlinear_term_sees_a_moving_wall_in_two_dimensions() -> None:
+    """A tensor-product lifting is read at the stage time, not where the space
+    was built (t = 0)."""
+    R2 = R(2)
+    x, y = R2.base_scalars()
+    t = R2.base_time()
+    ue = sp.sin(x + 1) * sp.sin(y + 1) * (1 + t)
+    space = TensorProduct(
+        FunctionSpace(
+            10,
+            Legendre.Legendre,
+            bcs={"left": {"D": 0}, "right": {"D": ue.subs(x, 1)}},
+            name="nlx",
+        ),
+        FunctionSpace(
+            10,
+            Legendre.Legendre,
+            bcs={"left": {"D": 0}, "right": {"D": ue.subs(y, 1)}},
+            name="nly",
+        ),
+        name="nlT",
+    )
+    assert isinstance(space, DirectSumTPS)
+    v = TestFunction(space)
+    u = TrialFunction(space, transient=True)
+    f = sp.diff(ue, t) - Div(Grad(ue)).doit() + ue**2
+    integrator = IMEXRungeKutta(
+        v * (u.diff(t) - Div(Grad(u)) + u**2 - f),
+        tableau=ARK4_3_6L2SA,
+        time=(0.0, 0.5),
+        initial=ue.subs(t, 0),
+        sparse=True,
+    )
+    u_hat = integrator.solve(dt=0.05, steps=10, progress=False)
+    T = integrator.end_time(0.05, 10)
+    got = space.backward(u_hat, t=T)
+    want = lambdify((x, y), ue.subs(t, T))(*space.mesh())
+    # With the lifting frozen at t = 0 the error was about 0.25 at T = 1
+    assert float(jnp.abs(got - want).max()) < 1e-3

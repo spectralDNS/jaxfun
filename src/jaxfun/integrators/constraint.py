@@ -22,7 +22,7 @@ from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import BoundaryForcing, SourceForcing, project
 from jaxfun.la import BaseMatrix
 from jaxfun.sharding import replicate
-from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
+from jaxfun.typing import Array, ScalarPadding, ScalarSpaceType
 from jaxfun.utils import (
     normalize_explicit,
     split_linear_couplings,
@@ -177,9 +177,7 @@ class ConstraintSolver(nnx.Module):
         self._coupling_slots: tuple[int, ...] = nnx.static(_coupling_slots)
         self._couplings: tuple[CoupledOperator, ...] = nnx.data(_coupling_ops)
 
-        self._nonlinear_evaluator: (
-            Callable[[IntegratorState, ScalarPadding], Array] | None
-        ) = None
+        self._nonlinear_evaluator: Callable[..., Array] | None = None
         if self.has_nonlinear:
             if field_order is None:
                 # `solve_field` takes the whole system's coefficient tuple, so
@@ -317,7 +315,7 @@ class ConstraintSolver(nnx.Module):
         total = apply_field_couplings(self._coupling_slots, self._couplings, states, t)
         if self._nonlinear_evaluator is not None:
             pointwise = self.testspace.scalar_product(
-                self._nonlinear_evaluator(states, physical_shape(self.testspace, N))
+                self._nonlinear_evaluator(states, physical_shape(self.testspace, N), t)
             )
             total = pointwise if total is None else total + pointwise
         forcing = self.forcing_at(t)

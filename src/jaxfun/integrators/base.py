@@ -557,9 +557,7 @@ class BaseIntegrator(TimeStepper[Array]):
         self._couplings: tuple[CoupledOperator, ...] = nnx.data(_coupling_ops)
 
         self._nonlinear_jaxfunction: AppliedUndef | None = None
-        self._nonlinear_evaluator: (
-            Callable[[IntegratorState, ScalarPadding], Array] | None
-        ) = None
+        self._nonlinear_evaluator: Callable[..., Array] | None = None
         if self.has_nonlinear:
             self._setup_nonlinear_evaluator(trial)
 
@@ -781,7 +779,9 @@ class BaseIntegrator(TimeStepper[Array]):
         if self.has_nonlinear:
             assert self._nonlinear_evaluator is not None
             M = physical_shape(self.testspace, N)
-            pointwise = self.testspace.scalar_product(self._nonlinear_evaluator(uh, M))
+            pointwise = self.testspace.scalar_product(
+                self._nonlinear_evaluator(uh, M, t)
+            )
             total = pointwise if total is None else total + pointwise
         return self._no_nonlinear(uh) if total is None else total
 

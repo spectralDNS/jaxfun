@@ -256,3 +256,29 @@ def test_ark4_kdv_soliton_matches_etdrk4_reference() -> None:
     )
     rel_error_exact = jnp.linalg.norm(u_ark - u_exact) / jnp.linalg.norm(u_exact)
     assert float(rel_error_exact) < 5e-3
+
+
+def test_imex_rk_2d_source_without_linear_spatial_term() -> None:
+    """A 2D source with no linear spatial term is forcing, not an operator.
+
+    `u_t = f(x, y)` has the exact solution `t f`, which every stage reproduces.
+    """
+    from jaxfun.galerkin import Legendre, TensorProduct
+
+    D = FunctionSpace(6, Legendre.Legendre, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    T = TensorProduct(D, D, name="T")
+    x, y = T.system.base_scalars()
+    t = T.system.base_time()
+    f = (1 - x**2) * (1 - y**2)
+    v = TestFunction(T)
+    u = TrialFunction(T, transient=True)
+    integrator = IMEXRungeKutta(
+        v * (u.diff(t) - f),
+        tableau=ARS222,
+        time=(0.0, 0.2),
+        initial=jnp.zeros(T.num_dofs),
+        sparse=True,
+    )
+    u_hat = integrator.solve(dt=0.1, steps=2, progress=False)
+    want = lambdify((x, y), 0.2 * f)(*T.mesh())
+    assert jnp.allclose(T.backward(u_hat), want, atol=1e-5)

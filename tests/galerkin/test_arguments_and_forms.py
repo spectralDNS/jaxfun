@@ -40,3 +40,38 @@ def test_forms_split_linear_and_bilinear():
 if __name__ == "__main__":
     test_scalar_vector_function_print_and_backward()
     # test_forms_split_linear_and_bilinear()
+
+
+def test_test_and_trial_functions_rebuild():
+    import copy
+
+    import pytest
+    import sympy as sp
+
+    V = Chebyshev.Chebyshev(4)
+    x = V.system.x
+    v = TestFunction(V, name="v")
+    u = TrialFunction(V, name="u")
+    ut = TrialFunction(V, name="w", transient=True)
+    for f in (v, u, ut):
+        assert f.func(*f.args) is f
+        assert copy.copy(f) is f
+        assert f.free_symbols <= {x, V.system.base_time()}
+    # Placeholders for basis functions have no values to substitute
+    with pytest.raises(NotImplementedError, match="basis functions"):
+        u.subs(x, 0.5)
+    with pytest.raises(NotImplementedError, match="basis functions"):
+        (u * v).subs(x, sp.Symbol("y"))
+
+
+def test_dir_lists_the_jaxfun_api():
+    import sympy as sp
+
+    V = Chebyshev.Chebyshev(4)
+    u = TrialFunction(V, transient=True)
+    names = dir(u)
+    assert {"functionspace", "name", "transient", "doit", "diff", "subs"} <= set(names)
+    assert "evalf" not in names and "rewrite" not in names
+    assert "evalf" in dir(JAXFunction(jnp.ones(4), V))
+    # Hidden names still work
+    assert u.rewrite(sp.cos) is u

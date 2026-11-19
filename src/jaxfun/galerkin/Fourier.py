@@ -1,3 +1,5 @@
+from typing import Self
+
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -182,6 +184,21 @@ class Fourier(OrthogonalSpace):
             return out[self.wavenumbers()]
         return out
 
+    def resize_coefficients(self, c: Array, N: int) -> Array:
+        """Return the coefficients `c` padded with zeros, or truncated, at the
+        high wavenumbers to length N (even)."""
+        n = len(c)
+        if n <= N:
+            return jnp.hstack(
+                (c[: n // 2], jnp.zeros(N - n, dtype=c.dtype), c[n // 2 :])
+            )
+        return jnp.hstack((c[: N // 2], c[n - N // 2 :]))
+
+    def product_dim(self, M: int, N: int) -> int:
+        """Return the number of modes that hold exactly the product of two series
+        of M and N (even) modes."""
+        return M + N
+
     @property
     def reference_domain(self) -> Domain:
         """Return canonical reference domain [0, 2π]."""
@@ -324,6 +341,10 @@ class RFourier(Fourier):
     """
 
     is_hermitian_half = True
+
+    def resized(self, N: int) -> Self:
+        """Not available: the stored half spectrum carries padding rows."""
+        raise NotImplementedError("RFourier cannot be resized; use Fourier")
 
     def __init__(
         self,

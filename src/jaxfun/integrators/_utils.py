@@ -21,7 +21,11 @@ from sympy.core.function import AppliedUndef
 
 from jaxfun.coordinates import get_system
 from jaxfun.galerkin import TensorProductSpace, TrialFunction
-from jaxfun.galerkin.arguments import JAXFunction
+from jaxfun.galerkin.arguments import (
+    JAXFunction,
+    has_boundary_lifting,
+    orthogonal_coefficients,
+)
 from jaxfun.galerkin.forms import get_basisfunctions
 from jaxfun.galerkin.inner import BoundaryForcing
 from jaxfun.la import BaseMatrix
@@ -329,13 +333,51 @@ def node_for(
     for field, node in fields:
         if field == trial:
             return node
-    V = cast(ScalarSpaceType, trial.functionspace)
-    return cast(
-        AppliedUndef,
-        JAXFunction(
-            jnp.zeros(coefficient_shape(V)), V, name=f"{trial.name}_jax"
-        ).doit(),
-    )
+    return cast(AppliedUndef, field_node(trial.functionspace, f"{trial.name}_jax"))
+
+
+def field_node(V: Any, name: str) -> sp.Expr:
+    """Return the symbolic node a field in V is evaluated through.
+
+    A field with inhomogeneous boundary conditions gets a node on V's orthogonal
+    space, which, unlike V, does not depend on time when the boundary values do.
+    A state of V becomes that node's coefficients through `lift_state`, which
+    adds the boundary lifting at the state's time. Any other field gets a node
+    on V itself. A vector field gives a vector of scalar nodes, one per
+    component.
+    """
+    if not has_boundary_lifting(V):
+        return JAXFunction(_zeros(V), V, name=name).doit()
+    O = V.get_orthogonal()
+    node = JAXFunction(_zeros(O), O, name=name).doit()
+    if hasattr(node, "components"):
+        components = cast(Any, node).components
+        for b, Vi in zip(V.system.base_vectors(), V.flatten(), strict=True):
+            components[b].lifted_from = Vi
+    else:
+        cast(Any, node).lifted_from = V
+    return node
+
+
+def _zeros(V: Any) -> Any:
+    """Return zero coefficients of V, a tuple of arrays for a vector space."""
+    if isinstance(V.num_dofs, tuple) and isinstance(V.num_dofs[0], tuple):
+        return tuple(jnp.zeros(nd) for nd in V.num_dofs)
+    return jnp.zeros(coefficient_shape(V))
+
+
+def lift_state(node: AppliedUndef, array: Array, t: Array | float | None) -> Array:
+    """Return the state `array` of the field behind `node` as the node's
+    orthogonal coefficients, with the boundary lifting at time `t`.
+
+    Raises:
+        ValueError: If the field's boundary values depend on time and `t` is
+            None.
+    """
+    V = getattr(node, "lifted_from", None)
+    if V is None:
+        return array
+    return cast(Array, orthogonal_coefficients(V, array, t))
 
 
 def transient_trial(equation: sp.Expr) -> TrialFunction | None:

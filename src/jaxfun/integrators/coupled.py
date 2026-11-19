@@ -233,9 +233,7 @@ class CoupledIMEXRungeKutta(IMEXStages, TimeStepper[tuple[Array, ...]]):
             )
 
         self._nonlinear_components: tuple[int, ...] = nnx.static(())
-        self._nonlinear_evaluator: (
-            Callable[[tuple[Array, ...], ScalarPadding], tuple[Array, ...]] | None
-        ) = None
+        self._nonlinear_evaluator: Callable[..., tuple[Array, ...]] | None = None
         if sp.sympify(nonlinear) != 0:
             components, used, evaluator = compile_block_nonlinear_evaluator(
                 nonlinear, fields, test_space, trial_space.flatten()[0]
@@ -292,7 +290,7 @@ class CoupledIMEXRungeKutta(IMEXStages, TimeStepper[tuple[Array, ...]]):
         """Return the explicit terms, one array per test component."""
         out: list[Array | None] = [None] * len(self._test_dofs)
         if self._nonlinear_evaluator is not None:
-            values = self._nonlinear_evaluator(tuple(uh), self.common_padding(N))
+            values = self._nonlinear_evaluator(tuple(uh), self.common_padding(N), t)
             spaces = self.test_space.flatten()
             for c, value in zip(self._nonlinear_components, values, strict=True):
                 out[c] = spaces[c].scalar_product(value)

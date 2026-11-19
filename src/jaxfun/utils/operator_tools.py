@@ -71,9 +71,9 @@ def split_operator_and_forcing(
         return None, form
 
     if isinstance(form, Array):
-        if form.ndim <= 1:
-            return None, form
-        return Matrix(form), None
+        # `inner` returns operators as matrix objects, never as bare arrays, so
+        # an array is a linear form: one axis per dimension of the test space.
+        return None, form
 
     return cast(BaseMatrix, form), None
 

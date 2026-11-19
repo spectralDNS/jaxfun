@@ -20,14 +20,13 @@ from jaxfun.galerkin.arguments import (
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.typing import (
     Array,
-    IntegratorState,
     RankTag,
     ScalarPadding,
     ScalarSpaceType,
 )
 from jaxfun.utils import JAX_FUNCTION_BY_NAME, lambdify, normalize_explicit
 
-from ._utils import component_offset, mesh_axes
+from ._utils import component_offset, field_node, lift_state, mesh_axes
 
 type NodeValueCache = dict[sp.Basic, Array]
 type NodeEvaluator = Callable[[NodeValueCache, ScalarPadding], Array]
@@ -411,7 +410,7 @@ def compile_nonlinear_evaluator(
     expr: sp.Expr,
     functionspace: ScalarSpaceType,
     jaxfunction: AppliedUndef | tuple[AppliedUndef, ...],
-) -> Callable[[Array | tuple[Array, ...], ScalarPadding], Array]:
+) -> Callable[..., Array]:
     """Compile a nonlinear physical-space evaluator for coefficient states.
 
     Args:
@@ -419,7 +418,9 @@ def compile_nonlinear_evaluator(
         functionspace: Space used to evaluate static (purely spatial) factors.
         jaxfunction: The JAXFunction the expression depends on, or a tuple of
             them for a system of coupled equations. The returned evaluator takes
-            a matching tuple of coefficient arrays in the same order.
+            a matching tuple of coefficient arrays in the same order, the
+            padding, and the time `t` the states belong to, at which the
+            boundary lifting of each field (see `field_node`) is added.
     """
     multi = isinstance(jaxfunction, tuple)
     nodes = cast(
@@ -433,10 +434,14 @@ def compile_nonlinear_evaluator(
     )
     compiled = NonlinearCompiler(context).compile(expr)
 
-    def evaluate(uh: Array | tuple[Array, ...], N: ScalarPadding = None) -> Array:
+    def evaluate(
+        uh: Array | tuple[Array, ...],
+        N: ScalarPadding = None,
+        t: Array | float | None = None,
+    ) -> Array:
         arrays = cast(tuple[Array, ...], uh) if multi else (cast(Array, uh),)
         for node, array in zip(nodes, arrays, strict=True):
-            node.array = array
+            node.array = lift_state(cast(AppliedUndef, node), array, t)
         return compiled({}, N)
 
     return evaluate
@@ -449,7 +454,7 @@ def compile_field_evaluator(
     node_for: Callable[[TrialFunction], AppliedUndef],
     functionspace: ScalarSpaceType,
     field_order: tuple[AppliedUndef, ...] | None = None,
-) -> tuple[sp.Expr, AppliedUndef, Callable[[IntegratorState, ScalarPadding], Array]]:
+) -> tuple[sp.Expr, AppliedUndef, Callable[..., Array]]:
     """Substitute every field of a nonlinear term by its node, then compile it.
 
     Shared by the evolution equations and the constraint equations of a system:
@@ -509,7 +514,7 @@ def compile_coupled_nonlinear_evaluator(
     exprs: Sequence[sp.Expr],
     functionspace: ScalarSpaceType,
     jaxfunctions: tuple[AppliedUndef, ...],
-) -> Callable[[tuple[Array, ...], ScalarPadding], tuple[Array, ...]]:
+) -> Callable[..., tuple[Array, ...]]:
     """Compile several nonlinear expressions that share their field evaluations.
 
     Compiling the equations of a system together, through one `NonlinearCompiler`
@@ -526,7 +531,8 @@ def compile_coupled_nonlinear_evaluator(
             evaluated pointwise.
         jaxfunctions: The system's shared JAXFunction nodes, in global field
             order. The returned evaluator takes a matching tuple of coefficient
-            arrays and returns one physical-space array per expression.
+            arrays, the padding and the time `t` the states belong to, and
+            returns one physical-space array per expression.
     """
     context = NonlinearCompileContext(
         spatial_symbols=tuple(functionspace.system.base_scalars()),
@@ -539,9 +545,13 @@ def compile_coupled_nonlinear_evaluator(
     compiled = tuple(compiler.compile(expr) for expr in exprs)
     nodes = cast(tuple[JAXFunction[ScalarSpaceType], ...], jaxfunctions)
 
-    def evaluate(uh: tuple[Array, ...], N: ScalarPadding = None) -> tuple[Array, ...]:
+    def evaluate(
+        uh: tuple[Array, ...],
+        N: ScalarPadding = None,
+        t: Array | float | None = None,
+    ) -> tuple[Array, ...]:
         for node, array in zip(nodes, uh, strict=True):
-            node.array = array
+            node.array = lift_state(cast(AppliedUndef, node), array, t)
         # Fresh per call and shared across the equations within it: reusing a
         # cache across calls would serve values computed from an earlier stage.
         cache: NodeValueCache = {}
@@ -558,7 +568,7 @@ def compile_block_nonlinear_evaluator(
 ) -> tuple[
     tuple[int, ...],
     tuple[int, ...],
-    Callable[[tuple[Array, ...], ScalarPadding], tuple[Array, ...]],
+    Callable[..., tuple[Array, ...]],
 ]:
     """Compile the nonlinear terms of a coupled weak form over a mixed space.
 
@@ -595,23 +605,13 @@ def compile_block_nonlinear_evaluator(
     replacements: dict[sp.Basic, sp.Basic] = {}
     nodes: list[AppliedUndef] = []
     for field in fields:
-        V = field.functionspace
-        if V.rank == RankTag.VECTOR:
-            dofs = cast(tuple[tuple[int, ...], ...], V.num_dofs)
-            zeros = tuple(jnp.zeros(nd) for nd in dofs)
-            vector = JAXFunction(zeros, V, name=f"{field.name}_jax").doit()
-            components = cast(VectorAdd, vector).components
+        node = field_node(field.functionspace, f"{field.name}_jax")
+        if field.functionspace.rank == RankTag.VECTOR:
+            components = cast(VectorAdd, node).components
             nodes.extend(cast(AppliedUndef, components[b]) for b in base_vectors)
-            replacements[field] = vector
         else:
-            nd = V.num_dofs
-            node = JAXFunction(
-                jnp.zeros(nd if isinstance(nd, tuple) else (nd,)),
-                V,
-                name=f"{field.name}_jax",
-            ).doit()
             nodes.append(cast(AppliedUndef, node))
-            replacements[field] = node
+        replacements[field] = node
 
     n_tests = len(test_leaf.flatten())
     weights = tuple(sp.Dummy(f"w{c}") for c in range(n_tests))

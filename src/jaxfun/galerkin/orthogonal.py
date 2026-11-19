@@ -20,7 +20,7 @@ from __future__ import annotations
 import copy
 import operator
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Self, cast, overload
+from typing import TYPE_CHECKING, Any, Self, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -581,6 +581,55 @@ class OrthogonalSpace(BaseSpace):
     def get_orthogonal(self) -> OrthogonalSpace:
         """Return self (orthogonal space is self; overridden in Composite)."""
         return self
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """Return the keyword arguments, besides N, domain and system, that
+        rebuild this basis, e.g. at another N."""
+        return {}
+
+    def resized(self, N: int) -> Self:
+        """Return the same orthogonal basis with N basis functions.
+
+        The domain, coordinate system, name and parameters are kept.
+        """
+        if self.orthogonal is not self:
+            raise TypeError(f"{type(self).__name__} is not an orthogonal space")
+        if N == self.N:
+            return self
+        return type(self)(
+            N,
+            domain=self.domain,
+            system=self.system,
+            name=self.name,
+            fun_str=self.fun_str,
+            **self.parameters,
+        )
+
+    def resize_coefficients(self, c: Array, N: int) -> Array:
+        """Return the coefficients `c` of this basis padded with zeros, or
+        truncated, to length N."""
+        if len(c) <= N:
+            return jnp.pad(c, (0, N - len(c)))
+        return c[:N]
+
+    def product_dim(self, M: int, N: int) -> int:
+        """Return the number of basis functions that hold exactly the product of
+        two series of M and N basis functions."""
+        return M + N - 1
+
+    def product_coeffs(self, a: Array, b: Array) -> Array:
+        """Return the coefficients of the product of the series `a` and `b`.
+
+        Both are series in this basis, of any lengths, and so is the result, of
+        length `self.product_dim(len(a), len(b))`. The product is exact: both
+        series are evaluated on as many quadrature points as the product has
+        basis functions, multiplied and transformed back.
+        """
+        P = self.resized(self.product_dim(len(a), len(b)))
+        ua = P.backward(P.resize_coefficients(a, P.N))
+        ub = P.backward(P.resize_coefficients(b, P.N))
+        return P.forward(ua * ub)
 
     def get_testspace(
         self,

@@ -21,14 +21,13 @@ from flax import nnx
 from sympy.core.function import AppliedUndef
 
 from jaxfun.galerkin import TrialFunction
-from jaxfun.galerkin.arguments import JAXFunction
 from jaxfun.typing import Array, IntegratorState, ScalarPadding, ScalarSpaceType
 from jaxfun.utils import get_time_independent
 
 from ._utils import (
     apply_field_couplings,
-    coefficient_shape,
     constrained_trial,
+    field_node,
     mesh_axes,
     scale_real,
     transient_trial,
@@ -59,16 +58,7 @@ class FieldRegistry:
         self.trials = tuple(trials)
         self.independent = tuple(get_time_independent(u) for u in trials)
         self.nodes = tuple(
-            cast(
-                AppliedUndef,
-                JAXFunction(
-                    jnp.zeros(
-                        coefficient_shape(cast(ScalarSpaceType, u.functionspace))
-                    ),
-                    u.functionspace,
-                    name=f"{u.name}_jax",
-                ).doit(),
-            )
+            cast(AppliedUndef, field_node(u.functionspace, f"{u.name}_jax"))
             for u in trials
         )
         # Pairs rather than a dict: JAX sorts dictionary keys when flattening a
@@ -324,7 +314,7 @@ class SystemIntegrator[IntegratorT: BaseIntegrator](
             results.append(g._no_nonlinear(states) if coupling is None else coupling)
         if self._coupled_nonlinear_evaluator is None:
             return tuple(results)
-        values = self._coupled_nonlinear_evaluator(states, N)
+        values = self._coupled_nonlinear_evaluator(states, N, t)
         for (rep, members), value in zip(self._nonlinear_groups, values, strict=True):
             projected = self.integrators[rep].testspace.scalar_product(value)
             for k, coefficient in members:

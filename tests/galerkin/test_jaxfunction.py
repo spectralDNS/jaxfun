@@ -1,11 +1,14 @@
+import copy
 from typing import cast
 
 import jax.numpy as jnp
 import pytest
 import sympy as sp
 from jax import Array
+from sympy.utilities.iterables import iterable
 
 from jaxfun import Domain
+from jaxfun.coordinates import R
 from jaxfun.galerkin import (
     CartesianProduct,
     Chebyshev,
@@ -373,3 +376,168 @@ def test_jaxfunction_vector_directsum(
     assert jnp.linalg.norm(uj[1] - ((a**2 - xj**2) * (a**2 - yj**2) + 1)) < jnp.sqrt(
         ulp(10)
     )
+
+
+def test_unnamed_jaxfunctions_are_distinct():
+    D = Chebyshev.Chebyshev(4)
+    ua = JAXFunction(jnp.arange(4.0), D)
+    ub = JAXFunction(jnp.ones(4), D)
+    s = (sp.Add(ua, ub, evaluate=False)).doit()
+    assert len(s.args) == 2
+    arrays = {tuple(float(a) for a in arg.array) for arg in s.args}
+    assert arrays == {(0.0, 1.0, 2.0, 3.0), (1.0, 1.0, 1.0, 1.0)}
+
+
+def test_equal_names_do_not_alias():
+    D = Chebyshev.Chebyshev(4)
+    ua = JAXFunction(jnp.arange(4.0), D, name="w")
+    ub = JAXFunction(jnp.ones(4), D, name="w")
+    assert ua.doit() != ub.doit()
+    assert ua.doit() == ua.doit()
+
+
+def test_jaxfunction_linear_algebra_same_space(space: type[OrthogonalSpace]):
+    D = space(4)
+    ua = JAXFunction(jnp.arange(4.0), D)
+    ub = JAXFunction(jnp.ones(4), D)
+    for w, expected in (
+        (ua + ub, ua.get_array() + ub.get_array()),
+        (ua - ub, ua.get_array() - ub.get_array()),
+        (ua.scale(-1), -ua.get_array()),
+        (ua.scale(2), 2 * ua.get_array()),
+    ):
+        assert isinstance(w, JAXFunction)
+        assert w.functionspace is D
+        assert jnp.allclose(cast(Array, w.array), expected)
+
+
+def test_jaxfunction_linear_algebra_to_orthogonal():
+    N = 6
+    family = Chebyshev.Chebyshev
+    D = FunctionSpace(N, family, bcs={"left": {"D": 0}, "right": {"D": 0}})
+    B = FunctionSpace(N, family, bcs={"left": {"N": 0}, "right": {"N": 0}})
+    L = FunctionSpace(N, family, bcs={"left": {"D": 1}, "right": {"D": 2}})
+    ud = JAXFunction(jnp.ones(D.dim), D)
+    un = JAXFunction(jnp.arange(B.dim, dtype=float), B)
+    ul = JAXFunction(jnp.ones(L.dim), L)
+    # All spaces share the quadrature points of the orthogonal space
+    d, n, l = ud.backward(), un.backward(), ul.backward()
+    for w, expected in (
+        (ud + un, d + n),
+        (un - ud, n - d),
+        (ul + ud, l + d),
+        (ul.scale(3), 3 * l),
+    ):
+        assert isinstance(w, JAXFunction)
+        assert isinstance(w.functionspace, family)
+        assert w.functionspace.N == N
+        assert jnp.allclose(w.backward(), expected, atol=ulp(100))
+
+
+def test_jaxfunction_linear_algebra_tensorproduct():
+    D = Legendre.Legendre(4)
+    T = TensorProduct(D, D)
+    w = JAXFunction(jnp.ones((4, 4)), T)
+    w2 = w.scale(3)
+    assert (w + w2).functionspace is T
+    assert jnp.allclose((w - w2).get_array(), -2 * w.get_array())
+
+
+def test_jaxfunction_linear_algebra_vector():
+    D = Legendre.Legendre(4)
+    T = TensorProduct(D, D)
+    V = CartesianProduct(T, T, rank=1)
+    w = JAXFunction((jnp.ones((4, 4)), jnp.zeros((4, 4))), V)
+    s = w + w.scale(2)
+    assert s.functionspace is V
+    assert jnp.allclose(s.array[0], 3.0) and jnp.allclose(s.array[1], 0.0)
+
+
+def test_jaxfunction_nonlinear_stays_symbolic():
+    D = Chebyshev.Chebyshev(4)
+    x = D.system.x
+    ua = JAXFunction(jnp.ones(4), D)
+    ub = JAXFunction(jnp.ones(4), D)
+    assert not isinstance(TestFunction(D) * ua, JAXFunction)
+    assert not isinstance(ua * ub, JAXFunction)
+    assert not isinstance(ua**2, JAXFunction)
+    assert not isinstance(x * ua, JAXFunction)
+    assert not isinstance(ua + 1, JAXFunction)
+    # Numbers and the same JAXFunction keep SymPy's meaning, which SymPy's own
+    # algorithms rely on
+    assert not isinstance(2 * ua, JAXFunction)
+    assert not isinstance(-ua, JAXFunction)
+    assert ua - ua == 0
+    assert ua + ua == 2 * ua
+    # Different bases have no common orthogonal space
+    uc = JAXFunction(jnp.ones(4), Legendre.Legendre(4))
+    assert not isinstance(ua + uc, JAXFunction)
+
+
+def test_jaxfunction_to_orthogonal():
+    D = FunctionSpace(6, Legendre.Legendre, bcs={"left": {"D": 1}, "right": {"D": 2}})
+    u = JAXFunction(jnp.ones(D.dim), D)
+    w = u.to_orthogonal()
+    assert isinstance(w.functionspace, Legendre.Legendre)
+    assert w.functionspace.N == 6
+    assert jnp.allclose(w.backward(), u.backward(), atol=ulp(100))
+
+
+def test_jaxfunction_rejects_time_dependent_bcs():
+    R1 = R(1)
+    t = R1.base_time()
+    D = FunctionSpace(
+        6, Legendre.Legendre, system=R1, bcs={"left": {"D": t}, "right": {"D": 0}}
+    )
+    with pytest.raises(ValueError, match="time-dependent"):
+        JAXFunction(jnp.ones(D.dim), D)
+
+
+def test_jaxfunction_sizes():
+    D = FunctionSpace(6, Legendre.Legendre, bcs={"left": {"D": 1}, "right": {"D": 2}})
+    u = JAXFunction(jnp.ones(D.dim), D)
+    assert (u.N, u.dim, u.num_dofs, u.dims) == (6, 4, 4, 1)
+    T = TensorProduct(Legendre.Legendre(3), Legendre.Legendre(4))
+    w = JAXFunction(jnp.ones((3, 4)), T)
+    assert (w.dim, w.num_dofs, w.dims) == (12, (3, 4), 2)
+
+
+def test_jaxfunction_evaluates_through_sympy():
+    D = Chebyshev.Chebyshev(4)
+    x = D.system.x
+    u = JAXFunction(x**2, D, name="u")
+    value = float(u(0.5))
+    for result in (u.subs(x, 0.5), u.evalf(subs={x: 0.5}), sp.N(u, subs={x: 0.5})):
+        assert isinstance(result, sp.Float)
+        assert abs(float(result) - value) < ulp(10)
+    assert u.n() is u
+    T = TensorProduct(D, D)
+    xs, ys = T.system.base_scalars()
+    w = JAXFunction(xs * ys, T)
+    assert abs(float(w.subs({xs: 0.5, ys: -0.5})) + 0.25) < ulp(100)
+
+
+def test_jaxfunction_rebuilds():
+    D = Chebyshev.Chebyshev(4)
+    x = D.system.x
+    y = sp.Symbol("y")
+    u = JAXFunction(x**2, D, name="u")
+    assert u.func(*u.args) == u
+    assert copy.copy(u) == u
+    assert sp.simplify(u) == u
+    assert u.xreplace({}) is u
+    # Applied at other arguments, like any SymPy function
+    v = u.subs(x, y / 2)
+    assert isinstance(v, JAXFunction) and v.args[0] == y / 2
+    assert abs(float(v.subs(y, 1.0)) - float(u(0.5))) < ulp(10)
+    assert isinstance(sp.integrate(u, x), sp.Integral)
+
+
+def test_scalar_functions_are_not_iterable():
+    D = Chebyshev.Chebyshev(4)
+    u = JAXFunction(jnp.ones(4), D)
+    assert not iterable(u)
+    assert not iterable(TrialFunction(D))
+    T = TensorProduct(D, D)
+    W = CartesianProduct(T, T, rank=1)
+    assert iterable(TrialFunction(W))

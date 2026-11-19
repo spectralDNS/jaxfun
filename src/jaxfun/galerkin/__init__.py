@@ -21,6 +21,7 @@ from .cartesianproductspace import (
     VectorTensorProductSpace as VectorTensorProductSpace,
 )
 from .composite import Composite as Composite, DirectSum as DirectSum
+from .expansion import OrthogonalExpansion as OrthogonalExpansion
 from .functionspace import FunctionSpace as FunctionSpace
 from .inner import inner as inner, inner_items as inner_items, project as project
 from .tensorproductspace import (

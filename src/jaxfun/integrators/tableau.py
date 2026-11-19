@@ -152,9 +152,9 @@ def _imex_ssp2_222() -> IMEXTableau:
             c=(0.0, 1.0),
         ),
         implicit=ButcherTableau(
-            A=((gamma, 0.0), (1.0 - gamma, gamma)),
+            A=((gamma, 0.0), (1.0 - 2.0 * gamma, gamma)),
             b=(0.5, 0.5),
-            c=(gamma, 1.0),
+            c=(gamma, 1.0 - gamma),
         ),
     )
 
@@ -386,8 +386,8 @@ scheme (``is_stiffly_accurate`` is True). Pairs the same 2-stage L-stable
 DIRK used in Section 2.5 of the source paper with a 3-stage explicit
 companion whose weights are chosen (via `delta = 1 - 1/(2*gamma)`) to equal
 its own last row, satisfying the paper's condition (2.3) -- distinct from
-`IMEX_SSP2_222` (Pareschi & Russo), which pairs the same DIRK with a
-different, non-GSA 2-stage explicit table. Coefficients transcribed from
+`IMEX_SSP2_222` (Pareschi & Russo), which uses a different 2-stage DIRK
+and a non-GSA 2-stage explicit table. Coefficients transcribed from
 Ascher, Ruuth & Spiteri, "Implicit-explicit Runge-Kutta methods for
 time-dependent partial differential equations", Appl. Numer. Math. 25
 (1997), Section 2.6, "L-stable, two-stage, second-order DIRK (2,2,2)"."""

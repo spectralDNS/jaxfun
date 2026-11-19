@@ -103,6 +103,7 @@ def _chebyshev_diffusion_error(
     [
         (ARK2_1_3L2SA, 2, 4, 0.4),
         (ARS222, 2, 4, 0.4),
+        (IMEX_SSP2_222, 2, 4, 0.4),
         (ARK3_2_4L2SA, 3, 3, 0.4),
         (ARK4_3_6L2SA, 4, 1, 0.4),
         (ARS443, 3, 2, 0.4),
@@ -111,6 +112,7 @@ def _chebyshev_diffusion_error(
     ids=[
         "ark2_1_3l2sa",
         "ars222",
+        "imex_ssp2_222",
         "ark3_2_4l2sa",
         "ark4_3_6l2sa",
         "ars443",
@@ -124,14 +126,9 @@ def test_imex_rk_empirical_convergence_order(
     error by roughly 2**order, empirically validating both the stage-loop
     machinery and the transcribed tableau coefficients.
 
-    ARK2(1)3L[2]SA/ARS222/ARK3(2)4L[2]SA/ARK4(3)6L[2]SA/ARS443/ARK5(4)8L[2]SA's
-    DIRK companions are themselves full-order SDIRK methods, so this
-    purely-linear (no explicit/nonlinear contribution) problem is a valid
-    standalone check for them specifically. This is *not* generally true for
-    IMEX pairs (e.g. IMEX-SSP2(2,2,2)'s DIRK companion is only 1st order
-    alone -- its 2nd order claim only holds for the joint explicit+implicit
-    problem), so this test is not parametrized over IMEX_SSP2_222; see
-    `test_imex_ssp2_222_kdv_soliton_is_accurate` instead. ARS222/ARS443 are
+    The DIRK companions of all schemes tested here are themselves full-order
+    SDIRK methods, so this purely-linear (no explicit/nonlinear contribution)
+    problem is a valid standalone check for them. ARS222/ARS443 are
     additionally globally stiffly accurate (`tableau.is_stiffly_accurate` is
     True), so this also exercises `step`'s last-stage shortcut path
     (`IMEX_EULER` is the other GSA scheme, already covered by
@@ -155,9 +152,8 @@ def test_imex_rk_empirical_convergence_order(
 
 def test_imex_ssp2_222_kdv_soliton_is_accurate() -> None:
     """Smoke/accuracy check for IMEX-SSP2(2,2,2) on a genuine stiff-linear +
-    nonstiff-nonlinear problem (its DIRK companion alone is only 1st order, so
-    a pure-linear empirical-order check like the ARK3/ARK4 test above is not
-    meaningful for this scheme -- see the note there)."""
+    nonstiff-nonlinear problem, exercising the explicit part that the
+    pure-linear order test above leaves out."""
     N = 64
     L = 20.0
     domain = Domain(-L, L)

@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import sympy as sp
 from jax import Array
 
 from jaxfun import Domain
@@ -67,6 +68,17 @@ def test_mul_x(pspace, domain: Domain | None):
     for p in (x * a, a * x):
         assert p.N == 5
         assert jnp.allclose(p(X), X * a(X), atol=ulp(100))
+    q = (x**2 / 2 - 3 * x + 1) * a
+    assert q.N == 6
+    assert jnp.allclose(q(X), (X**2 / 2 - 3 * X + 1) * a(X), atol=ulp(1000))
+
+
+def test_mul_non_polynomial():
+    a = random_expansion(Legendre.Legendre(3), 0)
+    x = a.space.system.x
+    for expr in (sp.sin(x), 1 / x, sp.Symbol("y") * x):
+        with pytest.raises(TypeError):
+            expr * a
 
 
 def test_add_sub_scale(pspace):
@@ -148,3 +160,59 @@ def test_sizes():
     a = random_expansion(Legendre.Legendre(4), 0)
     p = a * a
     assert (p.N, p.dim, p.num_dofs, p.shape, p.degree) == (7, 7, 7, (7,), 6)
+
+
+def test_trim():
+    C = Chebyshev.Chebyshev(6)
+    u = OrthogonalExpansion(jnp.array([1.0, 0.5, 1e-3, 0.0, ulp(1) / 2, 0.0]), C)
+    assert u.trim().N == 3
+    assert u.trim(tol=1e-2).N == 2
+    assert u.trim(tol=2.0).N == 1
+    # Fourier drops the highest wavenumbers, from the middle of the array
+    F = Fourier.Fourier(8)
+    c = jnp.zeros(8, dtype=complex).at[2].set(1).at[-2].set(1)  # 2 cos(2x)
+    w = OrthogonalExpansion(c, F).trim()
+    assert w.N == 6
+    X = points(F)
+    assert jnp.allclose(w(X), 2 * jnp.cos(2 * X), atol=ulp(100))
+
+
+@pytest.mark.parametrize(
+    "family, kwargs",
+    [
+        (Chebyshev.Chebyshev, {}),
+        (Legendre.Legendre, {"domain": Domain(0, 1)}),
+        (Jacobi.Jacobi, {"alpha": 1, "beta": 2}),
+    ],
+)
+def test_from_expr_class_polynomial(family, kwargs):
+    x = Chebyshev.Chebyshev(2).system.x
+    u = OrthogonalExpansion.from_expr(x**3 - 2 * x, family, **kwargs)
+    assert isinstance(u.space, family) and u.N == 4
+    assert u.space.parameters == family(2, **kwargs).parameters
+    X = points(u.space)
+    assert jnp.allclose(u(X), X**3 - 2 * X, atol=ulp(100))
+
+
+@pytest.mark.parametrize(
+    "family, atol", [(Chebyshev.Chebyshev, ulp(20)), (Legendre.Legendre, ulp(1000))]
+)
+def test_from_expr_class_resolves(family, atol):
+    x = Chebyshev.Chebyshev(2).system.x
+    u = OrthogonalExpansion.from_expr(sp.exp(x) * sp.sin(3 * x), family)
+    assert u.N < 32
+    X = points(u.space)
+    assert jnp.allclose(u(X), jnp.exp(X) * jnp.sin(3 * X), atol=atol, rtol=0)
+
+
+def test_from_expr_class_fourier():
+    F = Fourier.Fourier(2)
+    y = F.system.x
+    u = OrthogonalExpansion.from_expr(sp.sin(2 * y), Fourier.Fourier, system=F.system)
+    assert u.N == 6
+
+
+def test_from_expr_class_unresolved():
+    x = Chebyshev.Chebyshev(2).system.x
+    with pytest.raises(ValueError, match="not resolved"):
+        OrthogonalExpansion.from_expr(sp.Abs(x), Chebyshev.Chebyshev, N_max=32)

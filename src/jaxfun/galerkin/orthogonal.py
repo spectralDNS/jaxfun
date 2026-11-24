@@ -37,6 +37,7 @@ from jaxfun.utils.common import (
     jit_method,
     jit_vmap,
     lambdify,
+    ulp,
 )
 
 if TYPE_CHECKING:
@@ -612,6 +613,20 @@ class OrthogonalSpace(BaseSpace):
         if len(c) <= N:
             return jnp.pad(c, (0, N - len(c)))
         return c[:N]
+
+    def projection_roundoff(self) -> float:
+        """Return the roundoff of `forward`, relative to the largest coefficient.
+
+        Coefficients below this level are noise. The dense quadrature sums of
+        the default transform accumulate roundoff that grows with N.
+        """
+        return float(ulp(10 * self.N))
+
+    def trimmed_dim(self, c: Array, tol: float) -> int:
+        """Return the smallest length, at least 1, that `resize_coefficients`
+        can cut `c` to while dropping only coefficients with |c_k| <= tol."""
+        big = jnp.flatnonzero(jnp.abs(c) > tol)
+        return int(big[-1]) + 1 if big.size else 1
 
     def product_dim(self, M: int, N: int) -> int:
         """Return the number of basis functions that hold exactly the product of

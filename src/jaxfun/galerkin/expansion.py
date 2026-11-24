@@ -11,22 +11,23 @@ product, and so does the product with the coordinate x.
 from __future__ import annotations
 
 import numbers
+from collections.abc import Sequence
 from typing import Any, Self, cast
 
-import jax
 import jax.numpy as jnp
 import sympy as sp
+from flax import nnx
 from jax import Array
 
 from jaxfun.coordinates import BaseScalar
+from jaxfun.utils import ulp
 
 from .arguments import JAXFunction, _as_number, _is_number
 from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
 
 
-@jax.tree_util.register_pytree_node_class
-class OrthogonalExpansion:
+class OrthogonalExpansion(nnx.Pytree):
     r"""A series :math:`u(x) = \sum_{k=0}^{N-1} c_k \psi_k(x)` in an orthogonal basis.
 
     Supports, with exact results:
@@ -36,7 +37,8 @@ class OrthogonalExpansion:
     * ``c * u`` and ``u / c`` for a number c.
     * ``u * w`` of lengths M and N, of length ``M + N - 1`` (``M + N`` for
       Fourier), and ``u**n`` for an integer n >= 0.
-    * ``x * u`` for the coordinate x of the basis, of length ``N + 1``.
+    * ``p * u`` for a polynomial p in the coordinate x of the basis, for
+      example ``x * u`` or ``(x**2 - 1) * u``, of length ``N + deg(p)``.
       Not for Fourier, where x is not a basis function.
     * ``u.deriv(k)``, evaluation ``u(x)`` and conversion to and from a
       JAXFunction.
@@ -70,18 +72,10 @@ class OrthogonalExpansion:
                 "OrthogonalExpansion.from_jaxfunction for a space with boundary "
                 "conditions"
             )
-        self.coef = coef
-        self.space = space if len(coef) == space.N else space.resized(len(coef))
-
-    def tree_flatten(self) -> tuple[tuple[Array], OrthogonalSpace]:
-        return (self.coef,), self.space
-
-    @classmethod
-    def tree_unflatten(cls, space: OrthogonalSpace, children: tuple[Array]) -> Self:
-        obj = object.__new__(cls)
-        obj.coef = children[0]
-        obj.space = space
-        return obj
+        self.coef = nnx.data(coef)
+        self.space = nnx.static(
+            space if len(coef) == space.N else space.resized(len(coef))
+        )
 
     @classmethod
     def from_jaxfunction(cls, u: JAXFunction) -> Self:
@@ -93,11 +87,87 @@ class OrthogonalExpansion:
         return cls(cast(Array, w.array), cast(OrthogonalSpace, w.functionspace))
 
     @classmethod
-    def from_expr(cls, expr: sp.Expr, space: OrthogonalSpace) -> Self:
-        """Return the projection of `expr` onto the orthogonal basis `space`."""
+    def from_expr(
+        cls,
+        expr: sp.Expr,
+        space: OrthogonalSpace | type[OrthogonalSpace],
+        *,
+        tol: float | None = None,
+        N_max: int = 1024,
+        **kwargs: Any,
+    ) -> OrthogonalExpansion:
+        """Return the projection of `expr` onto an orthogonal basis.
+
+        If `space` is a basis, the expansion has its size. If it is a basis
+        class, such as ``Chebyshev.Chebyshev``, the size is chosen to resolve
+        `expr`: degree + 1 for a polynomial in x and a polynomial basis, and
+        otherwise the trimmed projection on the first N = 16, 32, ... whose
+        last quarter of coefficients is below `tol` relative to the largest.
+
+        Args:
+            expr: Expression in the coordinate x.
+            space: Orthogonal basis, or the class of one.
+            tol: Relative tolerance, used with a basis class. Defaults to the
+                roundoff of the projection, see
+                `OrthogonalSpace.projection_roundoff`.
+            N_max: Largest N to try with a basis class.
+            kwargs: Keyword arguments of the basis class besides N, e.g.
+                domain or alpha. The coordinate system defaults to that of
+                the coordinate in `expr`.
+
+        Raises:
+            ValueError: If `expr` is not resolved with N_max basis functions.
+
+        Examples:
+            >>> from jaxfun.galerkin import Chebyshev
+            >>> from jaxfun.galerkin.expansion import OrthogonalExpansion
+            >>> x = Chebyshev.Chebyshev(8).system.x
+            >>> OrthogonalExpansion.from_expr(x**2, Chebyshev.Chebyshev).N
+            3
+        """
         from .inner import project
 
-        return cls(project(expr, space), space)
+        if isinstance(space, OrthogonalSpace):
+            return cls(project(expr, space), space)
+        if "system" not in kwargs:
+            systems = [
+                s._system for s in expr.free_symbols if isinstance(s, BaseScalar)
+            ]
+            if systems:
+                kwargs["system"] = systems[0]
+        if issubclass(space, Jacobi):
+            S = space(2, **kwargs)
+            coeffs = cls._x_polynomial_of(expr, S)
+            if coeffs is not None:
+                S = S.resized(len(coeffs))
+                return cls(project(expr, S), S)
+        n = 16
+        while n <= N_max:
+            S = space(n, **kwargs)
+            u = cls(project(expr, S), S)
+            u = u.trim(S.projection_roundoff() if tol is None else tol)
+            if u.dim <= n - n // 4:
+                return u
+            n *= 2
+        raise ValueError(
+            f"{expr} is not resolved by {N_max} basis functions; increase N_max or tol"
+        )
+
+    def trim(self, tol: float | None = None) -> OrthogonalExpansion:
+        """Return the expansion without the trailing coefficients smaller than
+        `tol` times the largest one.
+
+        For Fourier the highest wavenumbers are dropped. Since the size of the
+        result depends on the coefficient values, `trim` cannot run inside
+        ``jax.jit``.
+
+        Args:
+            tol: Relative tolerance. Defaults to ``ulp(1)``.
+        """
+        if tol is None:
+            tol = float(ulp(1))
+        scale = float(jnp.abs(self.coef).max())
+        return self.resize(self.space.trimmed_dim(self.coef, tol * scale))
 
     @property
     def N(self) -> int:
@@ -136,6 +206,10 @@ class OrthogonalExpansion:
         if N > self.N:
             raise ValueError(f"Cannot truncate {self.N} basis functions to {N}")
         return self.resize(N)
+
+    def __len__(self) -> int:
+        """Dimension of space, the number of coefficients."""
+        return self.dim
 
     def __call__(self, x: float | Array) -> Array:
         """Evaluate the expansion at points x of the physical domain."""
@@ -183,6 +257,33 @@ class OrthogonalExpansion:
         x0 = float(S.map_true_domain(0.0))
         s = float(S.domain_factor)
         return OrthogonalExpansion(x0 * c + S.A() @ c / s, S)
+
+    def mul_poly(self, coeffs: Sequence[complex]) -> OrthogonalExpansion:
+        """Return p(x) * u for the polynomial p(x) = sum_k coeffs[k] x**k, with
+        len(coeffs) - 1 more basis functions."""
+        if len(coeffs) == 0:
+            raise ValueError("The polynomial needs at least one coefficient")
+        # Horner: p u = (...(a_n x + a_{n-1}) x + ...) u
+        result = coeffs[-1] * self
+        for a in reversed(coeffs[:-1]):
+            result = result.mul_x() + a * self
+        return result
+
+    def _x_polynomial(self, expr: sp.Expr) -> list[complex] | None:
+        return self._x_polynomial_of(expr, self.space)
+
+    @staticmethod
+    def _x_polynomial_of(expr: sp.Expr, space: OrthogonalSpace) -> list[complex] | None:
+        # Coefficients (lowest degree first) of expr as a polynomial in the
+        # coordinate x of the basis, or None if it is not one.
+        x = space.system.base_scalars()[0]
+        if not expr.free_symbols <= {x}:
+            return None
+        try:
+            poly = sp.Poly(expr, x)
+        except sp.PolynomialError:
+            return None
+        return [_as_number(a) for a in reversed(poly.all_coeffs())]
 
     def _same_basis(self, space: OrthogonalSpace) -> bool:
         return _family(self.space) == _family(space)
@@ -235,10 +336,9 @@ class OrthogonalExpansion:
     def __mul__(self, other: Any) -> OrthogonalExpansion:
         if _is_number(other):
             return OrthogonalExpansion(_as_number(other) * self.coef, self.space)
-        if isinstance(other, BaseScalar):
-            if other != self.space.system.base_scalars()[0]:
-                return NotImplemented
-            return self.mul_x()
+        if isinstance(other, sp.Expr):
+            coeffs = self._x_polynomial(other)
+            return NotImplemented if coeffs is None else self.mul_poly(coeffs)
         w = self._coerce(other)
         if w is None:
             return NotImplemented

@@ -496,7 +496,7 @@ def test_jaxfunction_rejects_time_dependent_bcs():
 def test_jaxfunction_sizes():
     D = FunctionSpace(6, Legendre.Legendre, bcs={"left": {"D": 1}, "right": {"D": 2}})
     u = JAXFunction(jnp.ones(D.dim), D)
-    assert (u.N, u.dim, u.num_dofs, u.dims) == (6, 4, 4, 1)
+    assert (u.dim, u.num_dofs, u.dims) == (4, 4, 1)
     T = TensorProduct(Legendre.Legendre(3), Legendre.Legendre(4))
     w = JAXFunction(jnp.ones((3, 4)), T)
     assert (w.dim, w.num_dofs, w.dims) == (12, (3, 4), 2)

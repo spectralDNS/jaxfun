@@ -8,7 +8,7 @@ from sympy import Expr, Symbol
 from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.orthogonal import OrthogonalSpace
 from jaxfun.la import DiaMatrix, Matrix, diags
-from jaxfun.utils.common import Domain, cache_static, dst, jit_method, jit_vmap
+from jaxfun.utils.common import Domain, cache_static, dst, jit_method, jit_vmap, ulp
 
 from .Jacobi import Jacobi
 
@@ -200,6 +200,13 @@ class ChebyshevU(Jacobi):
             c = jnp.pad(c, (0, n - len(c)))
         d = dst(c, n=n, type=1)
         return (d / (2 * jnp.sin((jnp.arange(n) + 1) * jnp.pi / (n + 1))))[::-1]
+
+    def projection_roundoff(self) -> float:
+        """Return the roundoff of `forward`, relative to the largest coefficient.
+
+        The fast transform keeps it close to machine precision for any N.
+        """
+        return float(ulp(10))
 
     @jit_method
     def forward(self, u: Array) -> Array:

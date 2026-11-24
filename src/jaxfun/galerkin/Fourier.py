@@ -8,7 +8,7 @@ from jax import Array
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, diags
 from jaxfun.typing import MeshKind
-from jaxfun.utils.common import Domain, cache_static, jit_method, jit_vmap
+from jaxfun.utils.common import Domain, cache_static, jit_method, jit_vmap, ulp
 
 from .orthogonal import OrthogonalSpace
 
@@ -193,6 +193,20 @@ class Fourier(OrthogonalSpace):
                 (c[: n // 2], jnp.zeros(N - n, dtype=c.dtype), c[n // 2 :])
             )
         return jnp.hstack((c[: N // 2], c[n - N // 2 :]))
+
+    def projection_roundoff(self) -> float:
+        """Return the roundoff of `forward`, relative to the largest coefficient.
+
+        The fast transform keeps it close to machine precision for any N.
+        """
+        return float(ulp(10))
+
+    def trimmed_dim(self, c: Array, tol: float) -> int:
+        """Return the smallest even length that `resize_coefficients` can cut
+        `c` to while dropping only modes with |c_k| <= tol."""
+        k = jnp.abs(jnp.fft.fftfreq(len(c), 1 / len(c)))[jnp.abs(c) > tol]
+        kmax = int(k.max()) if k.size else 0
+        return min(len(c), 2 * kmax + 2)
 
     def product_dim(self, M: int, N: int) -> int:
         """Return the number of modes that hold exactly the product of two series

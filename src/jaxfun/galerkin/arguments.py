@@ -988,11 +988,6 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
         return f"JAXFunction({', '.join(printer._print(a) for a in self.args)})"
 
     @property
-    def N(self) -> int:
-        """Number of basis functions of the (1D) function space."""
-        return cast(Any, self.functionspace).N
-
-    @property
     def dim(self) -> int:
         """Dimension of the function space, the number of coefficients."""
         return self.functionspace.dim

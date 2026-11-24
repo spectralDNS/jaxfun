@@ -21,6 +21,7 @@ from jaxfun.utils.common import (
     dct,
     jit_method,
     jit_vmap,
+    ulp,
 )
 
 from .composite import Composite, Stencil, dirichlet
@@ -316,6 +317,13 @@ class Chebyshev(Jacobi):
             out = out.real
         out = out + 0.5 * c[:1]
         return out
+
+    def projection_roundoff(self) -> float:
+        """Return the roundoff of `forward`, relative to the largest coefficient.
+
+        The fast transform keeps it close to machine precision for any N.
+        """
+        return float(ulp(10))
 
     @jit_method
     def forward(self, u: Array) -> Array:

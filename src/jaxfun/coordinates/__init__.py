@@ -18,6 +18,7 @@ from jaxfun.coordinates.symbols import (
     _is_dyadiclike as _is_dyadiclike,
     _is_tensorlike as _is_tensorlike,
     _is_vectorlike as _is_vectorlike,
+    latex_power as latex_power,
     latex_symbol as latex_symbol,
 )
 from jaxfun.coordinates.system import (

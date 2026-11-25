@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 import pytest
+import sympy as sp
 from flax import nnx
 
 from jaxfun.galerkin import Legendre, TensorProduct
@@ -161,3 +162,8 @@ def test_comp_stacks_multiple_flaxfunctions():
     assert y.shape[0] == 5
     assert y.ndim == 2
     assert comp.dim == f1.module.dim + f2.module.dim
+
+
+def test_flaxfunction_latex_of_power():
+    f = FlaxFunction(MLPSpace([2], dims=1, rank=0, name="M"), "u")
+    assert sp.latex(f**2) == r"\left(u(x; M)\right)^{2}"

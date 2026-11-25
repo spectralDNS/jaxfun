@@ -32,6 +32,11 @@
           "file": "curvilinear.html",
           "label": "Curvilinear coordinates",
           "description": "Jaxfun handling of curvilinear coordinates, operators and equations."
+        },
+        {
+          "file": "orthogonalexpansion.html",
+          "label": "Orthogonal expansions",
+          "description": "Exact arithmetic with orthogonal series, and how it differs from the JAXFunction."
         }
       ]
     },

@@ -20,7 +20,7 @@ from sympy.core.function import AppliedUndef
 from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
-from jaxfun.coordinates import BaseScalar, BaseTime, CoordSys
+from jaxfun.coordinates import BaseScalar, BaseTime, CoordSys, latex_power
 from jaxfun.galerkin import (
     CartesianProductSpace,
     CartesianTensorProductSpace,
@@ -1190,13 +1190,13 @@ class FlaxFunction(Function):
         )
         return f"{name}({self.c_names}; {self.module.name})"
 
-    def _latex(self, printer: Any = None) -> str:
+    def _latex(self, printer: Any = None, exp: str | None = None) -> str:
         name = (
             r"\mathbf{ {%s} }" % (self.name,)  # noqa: UP031
             if self.rank == RankTag.VECTOR
             else self.name
         )
-        return f"{name}({self.c_names}; {self.module.name})"
+        return latex_power(f"{name}({self.c_names}; {self.module.name})", exp)
 
     def _pretty(self, printer: Any = None) -> prettyForm:
         return prettyForm(self.__str__())

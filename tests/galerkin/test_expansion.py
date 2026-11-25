@@ -102,6 +102,16 @@ def test_deriv(domain: Domain | None):
     X = points(T)
     assert jnp.allclose(u.deriv()(X), 2 * X, atol=ulp(100))
     assert jnp.allclose(u.deriv(2)(X), 2.0, atol=ulp(1000))
+    assert (u.N, u.deriv().N, u.deriv(2).N, u.deriv(6).N) == (5, 4, 3, 1)
+
+
+def test_deriv_drops_zero_coefficients(pspace):
+    u = random_expansion(pspace(5, None), 8)
+    full = u.space.derivative_coeffs(u.coef, 2)
+    assert u.deriv(2).N == 3
+    assert jnp.array_equal(u.deriv(2).coef, full[:3]) and not full[3:].any()
+    F = Fourier.Fourier(6)
+    assert random_expansion(F, 9).deriv().N == 6
 
 
 def test_fourier_product():
@@ -160,6 +170,11 @@ def test_sizes():
     a = random_expansion(Legendre.Legendre(4), 0)
     p = a * a
     assert (p.N, p.dim, p.num_dofs, p.shape, p.degree) == (7, 7, 7, (7,), 6)
+
+
+def test_str():
+    u = OrthogonalExpansion(jnp.array([1.0, 2.0]), Legendre.Legendre(2))
+    assert str(u) == repr(u) == "OrthogonalExpansion([1. 2.], Legendre)"
 
 
 def test_trim():

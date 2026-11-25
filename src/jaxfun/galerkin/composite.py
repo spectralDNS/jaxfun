@@ -564,7 +564,7 @@ class Composite(OrthogonalSpace):
             orthogonal=self.orthogonal.__class__,
             bcs=self.bcs.get_homogeneous(),
             domain=self.domain,
-            name=self.name + "0",
+            name=self.name + "_0",
             fun_str=self.fun_str,
             system=self.system,
             stencil=self.stencil,

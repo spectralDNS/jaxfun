@@ -30,7 +30,7 @@ from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import Vector, VectorAdd
 
 from jaxfun.basespace import BaseSpace
-from jaxfun.coordinates import BaseScalar, CoordSys, latex_symbol
+from jaxfun.coordinates import BaseScalar, CoordSys, latex_power, latex_symbol
 from jaxfun.galerkin.cartesianproductspace import (
     CartesianBaseSpace,
     CartesianProductSpace,
@@ -153,7 +153,7 @@ def get_BasisFunction(
     def _sympystr(cls, printer: Any) -> str:
         return cls.__str__()
 
-    def _latex(cls, printer: Any = None, exp: float | None = None) -> str:
+    def _latex(cls, printer: Any = None, exp: str | None = None) -> str:
         index = indices[cls.local_index + cls.offset]
         lhs = f"{latex_symbol(cls.name)}_{index}"
         rhs = f"({latex_symbol(cls.args[0].name)})"
@@ -164,7 +164,7 @@ def get_BasisFunction(
             s = lhs + sup + rhs
         else:
             raise NotImplementedError("Rank > 1 basis functions not supported.")
-        return s if exp is None else f"\\left({s}\\right)^{{{exp}}}"
+        return latex_power(s, exp)
 
     b: AppliedUndef = sp.Function(
         name,
@@ -271,7 +271,7 @@ class BaseFunction(Function):
         return self.__str__()
 
     @abstractmethod
-    def _latex(self, printer: Any = None) -> str:
+    def _latex(self, printer: Any = None, exp: str | None = None) -> str:
         pass
 
     def _applied(self, arguments: tuple[sp.Expr, ...]) -> Any:
@@ -347,13 +347,11 @@ class ExpansionFunction[SpaceT: FunctionSpaceType](BaseFunction):
         )
         return f"{name}({self.c_names}; {V.name})"
 
-    def _latex(self, printer: Any = None) -> str:
+    def _latex(self, printer: Any = None, exp: str | None = None) -> str:
         name = self.name
-        if name != self.own_name:
-            assert not isinstance(self.functionspace, DirectSum)
-            if self.functionspace.rank == RankTag.VECTOR:
-                name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
-        return f"{name}({self.c_names}; {self.functionspace.name})"
+        if name != self.own_name and self.functionspace.rank == RankTag.VECTOR:
+            name = r"\mathbf{ {%s} }" % (name,)  # noqa: UP031
+        return latex_power(f"{name}({self.c_names}; {self.functionspace.name})", exp)
 
     def _applied(self, arguments: tuple[sp.Expr, ...]) -> Any:
         """Return the function applied at `arguments`, for SymPy's rebuild.
@@ -706,8 +704,8 @@ class ScalarFunction(_PlaceholderFunction):
     def __str__(self) -> str:
         return f"{self.name}{self.arg_str}"
 
-    def _latex(self, printer: Any = None) -> str:  # prob always want latex here?
-        return f"{latex_symbol(self.name)}{self.arg_str}"
+    def _latex(self, printer: Any = None, exp: str | None = None) -> str:
+        return latex_power(f"{latex_symbol(self.name)}{self.arg_str}", exp)
 
 
 class VectorFunction(_PlaceholderFunction):
@@ -731,8 +729,9 @@ class VectorFunction(_PlaceholderFunction):
             for i, bi in enumerate(self.system.base_vectors())
         )
 
-    def _latex(self, printer: Any = None) -> str:
-        return r"\mathbf{{%s}}" % (latex_symbol(self.name),) + str(self.args[:-1])  # noqa: UP031
+    def _latex(self, printer: Any = None, exp: str | None = None) -> str:
+        s = r"\mathbf{{%s}}" % (latex_symbol(self.name),) + str(self.args[:-1])  # noqa: UP031
+        return latex_power(s, exp)
 
 
 class Jaxc(sp.Dummy):
@@ -856,7 +855,7 @@ def get_JAXFunction(
     def _sympystr(cls, printer: Any) -> str:
         return cls.__str__()
 
-    def _latex(cls, printer: Any = None, exp: float | None = None) -> str:
+    def _latex(cls, printer: Any = None, exp: str | None = None) -> str:
         lhs = f"{latex_symbol(cls.name)}"
         if cls.rank == RankTag.SCALAR:
             rhs = f"({cls.args[0]})" if len(cls.args) == 1 else f"{cls.args}"
@@ -867,7 +866,7 @@ def get_JAXFunction(
             s = lhs + sup + rhs
         else:
             raise NotImplementedError("Rank > 1 basis functions not supported.")
-        return s if exp is None else f"\\left({s}\\right)^{{{exp}}}"
+        return latex_power(s, exp)
 
     b: AppliedUndef = sp.Function(
         name,

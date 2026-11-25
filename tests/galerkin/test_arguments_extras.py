@@ -39,6 +39,19 @@ def test_scalar_vector_function_latex_rank1():
     _ = s._latex(), v._latex()
 
 
+def test_latex_of_powers():
+    V = FunctionSpace(4, Chebyshev.Chebyshev, bcs={"left": {"D": 1}}, name="V")
+    C = Chebyshev.Chebyshev(4)
+    for f in (
+        TestFunction(V),
+        TrialFunction(C),
+        JAXFunction(jnp.ones(3), V, name="u"),
+        ScalarFunction("s", C.system),
+        VectorFunction("w", C.system),
+    ):
+        assert sp.latex(f**2) == rf"\left({sp.latex(f)}\right)^{{2}}"
+
+
 def test_scalar_vector_function_rebuild():
     import copy
     import pickle

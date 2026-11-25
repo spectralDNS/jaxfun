@@ -61,6 +61,15 @@ def latex_symbol(name: str) -> str:
     return sp.latex(sp.Symbol(name))
 
 
+def latex_power(s: str, exp: str | None) -> str:
+    """Return the LaTeX `s` raised to the LaTeX exponent `exp`, or `s` if `exp`
+    is None."""
+    # SymPy's LaTeX printer prints a Pow whose base is a Function by calling
+    # base._latex(printer, exp=<printed exponent>), so every Function subclass
+    # with its own _latex must accept exp.
+    return s if exp is None else f"\\left({s}\\right)^{{{exp}}}"
+
+
 class BaseTime(Symbol):
     """Symbol representing (physical) time for a coordinate system.
 

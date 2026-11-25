@@ -163,7 +163,7 @@ def FunctionSpace(
             **kwb,
             **C.orthogonal.parameters,
         )
-        C.name += "0"
+        C.name += "_0"
         return DirectSum(C, B)
 
     return space(N, domain=domain, system=system, **kw)

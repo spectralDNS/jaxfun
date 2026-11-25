@@ -41,8 +41,8 @@ class OrthogonalExpansion(nnx.Pytree):
     * ``p * u`` for a polynomial p in the coordinate x of the basis, for
       example ``x * u`` or ``(x**2 - 1) * u``, of length ``N + deg(p)``.
       Not for Fourier, where x is not a basis function.
-    * ``u.deriv(k)``, evaluation ``u(x)`` and conversion to and from a
-      JAXFunction.
+    * ``u.deriv(k)``, of length ``N - k`` (``N`` for Fourier).
+    * Evaluation ``u(x)`` and conversion to and from a JAXFunction.
 
     The expansion is a JAX pytree with the coefficients as its only leaf, so it
     can pass through ``jax.jit``, ``jax.grad`` and ``jax.vmap``.
@@ -221,12 +221,17 @@ class OrthogonalExpansion(nnx.Pytree):
         return self.space.evaluate(x, self.coef)
 
     def deriv(self, k: int = 1) -> OrthogonalExpansion:
-        """Return the k'th derivative as an expansion of the same length."""
-        # derivative_coeffs differentiates in the reference coordinate
+        """Return the k'th derivative.
+
+        For a polynomial basis the derivative has ``max(N - k, 1)``
+        coefficients, one less per derivative, and for Fourier it has the
+        length of the expansion.
+        """
         s = float(self.space.domain_factor) ** k
-        return OrthogonalExpansion(
+        u = OrthogonalExpansion(
             s * self.space.derivative_coeffs(self.coef, k), self.space
         )
+        return u.resize(max(self.N - k, 1)) if isinstance(self.space, Jacobi) else u
 
     def to_jaxfunction(self, V: Any, truncate: bool = False) -> JAXFunction:
         """Return the expansion as a JAXFunction of the 1D space V.
@@ -379,6 +384,9 @@ class OrthogonalExpansion(nnx.Pytree):
 
     def __repr__(self) -> str:
         return f"OrthogonalExpansion({self.coef}, {self.space.name})"
+
+    # nnx.Pytree prints its own tree view in __str__
+    __str__ = __repr__
 
 
 def _family(space: OrthogonalSpace) -> tuple[Any, ...]:

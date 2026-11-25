@@ -274,12 +274,16 @@ class BaseFunction(Function):
     def _latex(self, printer: Any = None) -> str:
         pass
 
+    def _applied(self, arguments: tuple[sp.Expr, ...]) -> Any:
+        """Return the function applied at `arguments`, for SymPy's rebuild."""
+        raise NotImplementedError
 
-class _ExpansionTag(sp.Dummy):
-    """The last argument of an ExpansionFunction. It makes each function unique
-    and links back to it, so that SymPy can rebuild it from its args."""
 
-    owner: ExpansionFunction
+class _FunctionTag(sp.Dummy):
+    """The last argument of a BaseFunction. It makes each function unique and
+    links back to it, so that SymPy can rebuild it from its args."""
+
+    owner: BaseFunction
 
     @property
     def free_symbols(self) -> set[sp.Basic]:
@@ -287,7 +291,7 @@ class _ExpansionTag(sp.Dummy):
         return set()
 
 
-def _rebuilt(*given: Any) -> ExpansionFunction | sp.Expr | None:
+def _rebuilt(*given: Any) -> BaseFunction | sp.Expr | None:
     """Return the function SymPy rebuilds from `args` in ``u.func(*u.args)``,
     or None for an ordinary constructor call.
 
@@ -296,7 +300,7 @@ def _rebuilt(*given: Any) -> ExpansionFunction | sp.Expr | None:
     SymPy arg can be.
     """
     args = tuple(a for a in given if a is not None and a is not False)
-    if args and isinstance(args[-1], _ExpansionTag):
+    if args and isinstance(args[-1], _FunctionTag):
         return args[-1].owner._applied(cast(tuple[sp.Expr, ...], args[:-1]))
     return None
 
@@ -367,6 +371,11 @@ class ExpansionFunction[SpaceT: FunctionSpaceType](BaseFunction):
 
     def _eval_simplify(self, **kwargs: Any) -> Self:
         return self
+
+    def __reduce_ex__(self, protocol: Any) -> tuple[Any, ...]:
+        # The tag's link to its owner does not survive pickling, so the function
+        # is rebuilt from its args and attributes rather than its constructor.
+        return (_restore_expansion, (type(self), self.args, dict(vars(self))))
 
     def __dir__(self) -> list[str]:
         names = set(_SYMPY_NAMES)
@@ -455,7 +464,7 @@ class TestFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
         if (rebuilt := _rebuilt(V, name, *rebuild)) is not None:
             return cast(Self, rebuilt)
         coors = V.system
-        tag = _ExpansionTag()
+        tag = _FunctionTag()
         obj: Self = Function.__new__(cls, *coors._cartesian_xyz, tag)
         tag.owner = obj
         obj.argument = ArgumentTag.TEST
@@ -520,7 +529,7 @@ class TrialFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
             return cast(Self, rebuilt)
         coors = V.system
         time_arg = [coors.base_time()] if transient else []
-        tag = _ExpansionTag()
+        tag = _FunctionTag()
         obj: Self = Function.__new__(cls, *coors._cartesian_xyz, *time_arg, tag)
         tag.owner = obj
         obj.functionspace = V
@@ -595,19 +604,96 @@ class TrialFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
         return comp_fun(cast(ComputationalSpaceType, fspace))
 
 
-class ScalarFunction(BaseFunction):
-    """Physical-domain scalar field placeholder u(x, y, ..) with mapping support.
+def _restore_expansion(
+    cls: type[ExpansionFunction], args: tuple[sp.Basic, ...], state: dict[str, Any]
+) -> ExpansionFunction:
+    obj = Function.__new__(cls, *args)
+    if _is_new(obj):
+        obj.__dict__.update(state)
+        cast(_FunctionTag, args[-1]).owner = obj
+    return obj
 
-    Calling .doit() returns the computational-domain representation U(X, Y, ..)
+
+def _is_new(obj: BaseFunction) -> bool:
+    """Return True unless SymPy's cache returned `obj` already built, e.g., to
+    a restore in the process that created it, which must not overwrite it."""
+    return "name" not in vars(obj)
+
+
+class _PlaceholderFunction(BaseFunction):
+    """Physical-domain field placeholder u(x, y, ..) of a coordinate system.
+
+    SymPy rebuilds it from its args through the `_FunctionTag` last among them,
+    as for ExpansionFunction.
     """
 
     system: CoordSys
 
-    def __new__(cls, name: str, system: CoordSys) -> Self:
-        obj: Self = Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
+    def __new__(cls, name: str, system: CoordSys, *rebuild: sp.Expr) -> Self:
+        if (rebuilt := _rebuilt(name, system, *rebuild)) is not None:
+            return cast(Self, rebuilt)
+        return cls._from_parts(name.lower(), system, _FunctionTag())
+
+    @classmethod
+    def _from_parts(
+        cls,
+        name: str,
+        system: CoordSys,
+        tag: _FunctionTag,
+        arguments: Sequence[sp.Expr] | None = None,
+    ) -> Self:
+        """Build the placeholder from its name, system and the tag that makes
+        it unique, applied at `arguments` (by default its own coordinates)."""
+        own = tuple(system._cartesian_xyz)
+        arguments = own if arguments is None else tuple(arguments)
+        obj: Self = Function.__new__(cls, *arguments, tag)
+        if not _is_new(obj):
+            return obj
         obj.system = system
-        obj.name = name.lower()
+        obj.name = name
+        if arguments == own:
+            tag.owner = obj
         return obj
+
+    def _applied(self, arguments: tuple[sp.Expr, ...]) -> Self:
+        """Return the placeholder applied at `arguments`, as for
+        ``u.subs(x, 1)``."""
+        arguments = tuple(sp.sympify(a) for a in arguments)
+        if arguments == self.args[:-1]:
+            return self
+        if len(arguments) != len(self.args) - 1:
+            raise ValueError(f"{self.name} takes {len(self.args) - 1} arguments")
+        tag = cast(_FunctionTag, self.args[-1])
+        return type(self)._from_parts(self.name, self.system, tag, arguments)
+
+    def _eval_simplify(self, **kwargs: Any) -> Self:
+        return self
+
+    def __reduce_ex__(self, protocol: Any) -> tuple[Any, ...]:
+        # The tag's link to its owner does not survive pickling, so pass the
+        # name and system explicitly.
+        return (
+            _restore_placeholder,
+            (type(self), self.name, self.system, self.args[-1], self.args[:-1]),
+        )
+
+
+def _restore_placeholder(
+    cls: type[_PlaceholderFunction],
+    name: str,
+    system: CoordSys,
+    tag: _FunctionTag,
+    arguments: Sequence[sp.Expr],
+) -> _PlaceholderFunction:
+    owner = cls._from_parts(name, system, tag)
+    return owner._applied(tuple(arguments))
+
+
+class ScalarFunction(_PlaceholderFunction):
+    """Physical-domain scalar field placeholder u(x, y, ..) with mapping support.
+
+    Calling .doit() returns the computational-domain representation U(X, Y, ..)
+    """
 
     def doit(self, **hints: Any) -> AppliedUndef:
         """Return function in computational domain"""
@@ -624,20 +710,12 @@ class ScalarFunction(BaseFunction):
         return f"{latex_symbol(self.name)}{self.arg_str}"
 
 
-class VectorFunction(BaseFunction):
+class VectorFunction(_PlaceholderFunction):
     """Physical-domain vector field placeholder v(x, y, ..).
 
     The .doit() method builds a VectorAdd of component scalar Functions
     times basis vectors in the computational domain.
     """
-
-    system: CoordSys
-
-    def __new__(cls, name: str, system: CoordSys) -> Self:
-        obj: Self = Function.__new__(cls, *(list(system._cartesian_xyz) + [sp.Dummy()]))
-        obj.system = system
-        obj.name = name.lower()
-        return obj
 
     def __str__(self) -> str:
         return "\033[1m%s\033[0m" % (self.name,) + str(self.args[:-1])  # noqa: UP031
@@ -899,7 +977,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
                     )
 
         name = name if name is not None else f"jf{next(_jaxfunction_counter)}"
-        return cls._from_parts(array, V, name, _ExpansionTag())
+        return cls._from_parts(array, V, name, _FunctionTag())
 
     @classmethod
     def _from_parts(
@@ -907,7 +985,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
         array: Array | tuple[Array, ...],
         V: SpaceT,
         name: str,
-        tag: _ExpansionTag,
+        tag: _FunctionTag,
         arguments: Sequence[sp.Expr] | None = None,
     ) -> Self:
         """Build the JAXFunction from its coefficients, space, name and the tag
@@ -917,6 +995,8 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
         own = tuple(coors._cartesian_xyz)
         arguments = own if arguments is None else tuple(arguments)
         obj: Self = Function.__new__(cls, *arguments, tag)
+        if not _is_new(obj):
+            return obj
         obj.array = array
         obj.functionspace = V
         obj.argument = ArgumentTag.JAXFUNC
@@ -941,7 +1021,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
             self.array,
             self.functionspace,
             self.name,
-            cast(_ExpansionTag, self.args[-1]),
+            cast(_FunctionTag, self.args[-1]),
             arguments,
         )
 
@@ -1132,6 +1212,8 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction[SpaceT]):
         """
         from .expansion import OrthogonalExpansion
 
+        assert self.functionspace.dims == 1, "Only 1D spaces supported for expansion"
+
         return OrthogonalExpansion.from_jaxfunction(self)
 
     def _linear_combination(
@@ -1258,7 +1340,7 @@ def _restore_jaxfunction(
     array: Array | tuple[Array, ...],
     V: Any,
     name: str,
-    tag: _ExpansionTag,
+    tag: _FunctionTag,
     arguments: Sequence[sp.Expr],
 ) -> JAXFunction:
     owner = JAXFunction._from_parts(array, V, name, tag)

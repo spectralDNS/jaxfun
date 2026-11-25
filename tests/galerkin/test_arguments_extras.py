@@ -8,6 +8,7 @@ from jaxfun.coordinates import get_CoordSys
 from jaxfun.galerkin import (
     CartesianProduct,
     Chebyshev,
+    FunctionSpace,
     Legendre,
     TensorProduct,
     TestFunction,
@@ -36,6 +37,42 @@ def test_scalar_vector_function_latex_rank1():
     s = ScalarFunction("f", C.system)
     v = VectorFunction("g", C.system)
     _ = s._latex(), v._latex()
+
+
+def test_scalar_vector_function_rebuild():
+    import copy
+    import pickle
+
+    r, t = sp.symbols("r theta", real=True, positive=True)
+    C = get_CoordSys("C", sp.Lambda((r, t), (r * sp.cos(t), r * sp.sin(t))))
+    x, y = C._cartesian_xyz
+    u = ScalarFunction("u", C)
+    v = VectorFunction("v", C)
+    for f in (u, v):
+        assert f.func(*f.args) is f
+        assert copy.deepcopy(f) == f
+        assert pickle.loads(pickle.dumps(f)) == f
+    assert u != ScalarFunction("u", C)
+    assert u.free_symbols == {x, y}
+    assert sp.simplify(2 * u / 2) == u
+    w = u.subs(x, 1)
+    assert w.args[:-1] == (1, y)
+    assert w.func(x, y, w.args[-1]) is u
+    assert str(v.subs(y, 0)).endswith("(x, 0)")
+
+
+def test_expansion_function_copy_and_pickle():
+    import copy
+    import pickle
+
+    V = FunctionSpace(5, Chebyshev.Chebyshev, bcs={"left": {"D": 1}})
+    f = JAXFunction(jnp.ones(5), FunctionSpace(5, Chebyshev.Chebyshev))
+    for u in (TestFunction(V), TrialFunction(V, transient=True), f):
+        space = u.functionspace
+        for w in (copy.deepcopy(u), pickle.loads(pickle.dumps(u))):
+            assert w == u and w.func(*w.args) is w
+        # SymPy's cache returns u itself, which a restore must leave alone
+        assert u.functionspace is space
 
 
 def test_trial_test_function_str_repr_symmetry():

@@ -212,6 +212,46 @@ def test_from_expr_class_fourier():
     assert u.N == 6
 
 
+def real_spectrum(n: int, seed: int) -> Array:
+    """Half spectrum of a real field: k = 0 and the Nyquist mode are real."""
+    rng = np.random.default_rng(seed)
+    c = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+    c[[0, -1]] = c[[0, -1]].real
+    return jnp.asarray(c)
+
+
+def test_rfourier_arithmetic():
+    # n_extra=1 stores a padding row, as on two devices; the expansion drops it
+    R = Fourier.RFourier(8, n_extra=1)
+    a = OrthogonalExpansion(jnp.pad(real_spectrum(5, 0), (0, 1)), R)
+    b = OrthogonalExpansion(real_spectrum(4, 1), R.resized(4))
+    assert (a.N, b.N) == (5, 4)
+    X = points(R)
+    assert jnp.allclose((a * b)(X), a(X) * b(X), atol=ulp(1000))
+    assert (a * b).N == 8
+    assert jnp.allclose((a - b)(X), a(X) - b(X), atol=ulp(100))
+    # The Nyquist mode of a becomes an interior mode and back
+    assert jnp.allclose(a.resize(9)(X), a(X), atol=ulp(100))
+    assert jnp.allclose(a.resize(9).resize(5).coef, a.coef, atol=ulp(10))
+    with pytest.raises(NotImplementedError):
+        a.mul_x()
+
+
+def test_rfourier_from_expr_to_jaxfunction():
+    R = Fourier.RFourier(2)
+    y = R.system.x
+    u = OrthogonalExpansion.from_expr(sp.cos(3 * y), Fourier.RFourier, system=R.system)
+    # cos(3y) stays an interior mode, with an empty Nyquist mode above it
+    assert u.N == 5
+    V = FunctionSpace(12, Fourier.RFourier, system=R.system, n_extra=1)
+    w = u.to_jaxfunction(V)
+    assert len(cast(Array, w.array)) == V.N
+    X = points(R)
+    uX = V.evaluate(X, cast(Array, w.array))
+    assert jnp.allclose(uX, jnp.cos(3 * X), atol=ulp(100))
+    assert OrthogonalExpansion.from_jaxfunction(w).dim == V.n_real
+
+
 def test_from_expr_class_unresolved():
     x = Chebyshev.Chebyshev(2).system.x
     with pytest.raises(ValueError, match="not resolved"):

@@ -339,11 +339,14 @@ class RFourier(Fourier):
     used to assemble matrices and to take scalar products, and is not what
     `backward` inverts; `eval_reconstruction` carries the weights instead.
 
-    The Nyquist mode is only well defined at zero. A real field cannot carry a
-    phase there, ``d/dx`` of it is not representable (`derivative_coeffs` zeroes
-    it, as `Fourier` does), and padding it to a finer mesh is ambiguous -- this
-    space splits it evenly, `Fourier` does not split it at all, and the two
-    disagree unless it vanishes. Hold it at zero and everything is exact.
+    The Nyquist coefficient ``k = N/2`` of a real field is real. On the mesh the
+    mode is ``cos(N x / 2)``; an imaginary part would add ``sin(N x / 2)``, which
+    vanishes at every mesh point. Its derivative is that sine, so it cannot be
+    represented, and `derivative_coeffs` zeroes it, as `Fourier` does. The
+    field is ``c cos(N x / 2)`` also between mesh points: in `evaluate`, in a
+    padded `backward` and in `forward` from a finer mesh. `Fourier` instead
+    reads its Nyquist coefficient as ``c exp(-i N x / 2)``, which is not real
+    between mesh points, so the two spaces agree there only when it vanishes.
 
     The odd-looking ``N/2 + 1`` is what the multi-device transform has to split,
     and it is odd exactly when ``N`` is a power of two -- so the FFT-friendly
@@ -355,10 +358,6 @@ class RFourier(Fourier):
     """
 
     is_hermitian_half = True
-
-    def resized(self, N: int) -> Self:
-        """Not available: the stored half spectrum carries padding rows."""
-        raise NotImplementedError("RFourier cannot be resized; use Fourier")
 
     def __init__(
         self,
@@ -473,7 +472,12 @@ class RFourier(Fourier):
         )
         # The padding rows are not wavenumbers -- `irfft` would read them as
         # ones -- so they come off before the transform, not after it.
-        return jnp.fft.irfft(c[: self.n_real], n=n, norm="forward")
+        c = c[: self.n_real]
+        if n > self.num_quad_points:
+            # On the finer mesh the Nyquist mode becomes an interior mode, which
+            # `irfft` counts twice (with its conjugate); c cos(N x / 2) needs half.
+            c = c.at[-1].multiply(0.5)
+        return jnp.fft.irfft(c, n=n, norm="forward")
 
     def _scalar_product_ref(self, u: Array) -> Array:
         """Return <u, E_k> for k >= 0 via forward real FFT, without the measure.
@@ -505,4 +509,64 @@ class RFourier(Fourier):
             "RFourier represents real fields; pass real samples (a complex array "
             "whose imaginary part is zero still has to be taken .real explicitly)"
         )
-        return self._to_stored(jnp.fft.rfft(u, norm="forward"))
+        out = jnp.fft.rfft(u, norm="forward")
+        if len(u) > self.num_quad_points:
+            # c cos(N x / 2) on a finer mesh puts c / 2 at k = N/2 and the same at
+            # its conjugate; the Nyquist coefficient here holds both halves. An
+            # imaginary part is sin(N x / 2), which this mesh cannot represent.
+            out = out.at[self.n_real - 1].set(2 * out[self.n_real - 1].real)
+        return self._to_stored(out)
+
+    def resized(self, N: int) -> Self:
+        """Return the same basis with the N wavenumbers 0, ..., N - 1 and no
+        padding, i.e., ``RFourier(2 * (N - 1), n_extra=0)``."""
+        if N == self.N and self.n_extra == 0:
+            return self
+        assert N >= 2, "RFourier holds at least the wavenumbers 0 and 1"
+        return type(self)(
+            2 * (N - 1),
+            domain=self.domain,
+            system=self.system,
+            name=self.name,
+            fun_str=self.fun_str,
+            n_extra=0,
+        )
+
+    def resize_coefficients(self, c: Array, N: int) -> Array:
+        """Return the series `c` with N wavenumbers, padded with zeros or
+        truncated.
+
+        `c` holds the wavenumbers 0, ..., len(c) - 1, without padding rows, and
+        the last one is its Nyquist mode ``c cos(K x)``. With N equal to
+        ``self.N`` the result has the layout of this space, padding included.
+        The field is kept: a Nyquist coefficient that becomes an interior mode
+        is halved, and an interior mode that becomes the Nyquist mode keeps
+        twice its real part.
+        """
+        n_real = self.n_real if N == self.N else N
+        n = len(c)
+        if n_real > n:
+            c = jnp.pad(c.at[-1].multiply(0.5), (0, n_real - n))
+        elif n_real < n:
+            c = c[:n_real]
+            c = c.at[-1].set(2 * c[-1].real)
+        return jnp.pad(c, (0, N - n_real))
+
+    def trimmed_dim(self, c: Array, tol: float) -> int:
+        """Return the smallest length that `resize_coefficients` can cut `c` to
+        while dropping only modes with |c_k| <= tol.
+
+        The last mode kept above `tol` stays an interior mode, since as the
+        Nyquist mode it would lose its sine part.
+        """
+        big = jnp.flatnonzero(jnp.abs(c) > tol)
+        return min(len(c), int(big[-1]) + 2 if big.size else 2)
+
+    def product_dim(self, M: int, N: int) -> int:
+        """Return the number of wavenumbers that hold exactly the product of two
+        series of M and N wavenumbers.
+
+        The highest product mode comes from the two Nyquist modes alone, a
+        cosine, which the Nyquist mode of the product holds exactly.
+        """
+        return M + N - 1

@@ -135,6 +135,15 @@ def test_truncated_coefficients_evaluate_consistently() -> None:
     assert jnp.abs(R.evaluate(x, cf[:cut]) - expected).max() < ulp(100)
 
 
+def test_nyquist_padding_matches_evaluate() -> None:
+    """A real Nyquist coefficient is c cos(N x / 2) on a finer mesh too."""
+    R = RFourier(8, n_extra=0)
+    c = jnp.zeros(R.N, dtype=complex).at[1].set(0.3 - 0.2j).at[4].set(1.0)
+    x = jnp.linspace(0, 2 * np.pi, 12, endpoint=False)
+    assert jnp.abs(R.backward(c, 12) - R.evaluate(x, c)).max() < ulp(100)
+    assert jnp.abs(R.forward(R.backward(c, 12)) - c).max() < ulp(100)
+
+
 def test_complex_samples_are_rejected() -> None:
     """A complex array is refused rather than silently losing its imaginary part."""
     _, R = pair()

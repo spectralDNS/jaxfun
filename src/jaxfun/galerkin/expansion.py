@@ -23,6 +23,7 @@ from jaxfun.coordinates import BaseScalar
 from jaxfun.utils import ulp
 
 from .arguments import JAXFunction, _as_number, _is_number
+from .Fourier import RFourier
 from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
 
@@ -72,6 +73,9 @@ class OrthogonalExpansion(nnx.Pytree):
                 "OrthogonalExpansion.from_jaxfunction for a space with boundary "
                 "conditions"
             )
+        if isinstance(space, RFourier) and space.n_extra and len(coef) == space.N:
+            # The padding rows only make the axis divide among devices
+            coef, space = coef[: space.n_real], space.resized(space.n_real)
         self.coef = nnx.data(coef)
         self.space = nnx.static(
             space if len(coef) == space.N else space.resized(len(coef))
@@ -145,8 +149,9 @@ class OrthogonalExpansion(nnx.Pytree):
         while n <= N_max:
             S = space(n, **kwargs)
             u = cls(project(expr, S), S)
+            m = u.dim
             u = u.trim(S.projection_roundoff() if tol is None else tol)
-            if u.dim <= n - n // 4:
+            if u.dim <= m - m // 4:
                 return u
             n *= 2
         raise ValueError(
@@ -237,12 +242,13 @@ class OrthogonalExpansion(nnx.Pytree):
         O = V.get_orthogonal()
         if not self._same_basis(O):
             raise TypeError(f"{V.name} does not share the basis of {self.space.name}")
-        if self.N > O.N and not truncate:
+        m = O.n_real if isinstance(O, RFourier) else O.N
+        if self.dim > m and not truncate:
             raise ValueError(
-                f"The expansion has {self.N} basis functions and {V.name} only "
-                f"{O.N}; pass truncate=True to drop the rest"
+                f"The expansion has {self.dim} basis functions and {V.name} only "
+                f"{m}; pass truncate=True to drop the rest"
             )
-        return JAXFunction(V.from_orthogonal(self.resize(O.N).coef), V)
+        return JAXFunction(V.from_orthogonal(O.resize_coefficients(self.coef, O.N)), V)
 
     def mul_x(self) -> OrthogonalExpansion:
         """Return x * u, with one more basis function, from the recurrence

@@ -16,7 +16,7 @@ from jaxfun.la import DiaMatrix
 from jaxfun.operators import Div, Grad
 from jaxfun.utils.common import lambdify, ulp
 
-M = 10
+M = 40
 D = FunctionSpace(M, Fourier, name="D", fun_str="psi", domain=(-2 * sp.pi, 2 * sp.pi))
 v = TestFunction(D)
 u = TrialFunction(D)

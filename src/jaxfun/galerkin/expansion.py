@@ -42,6 +42,7 @@ class OrthogonalExpansion(nnx.Pytree):
       example ``x * u`` or ``(x**2 - 1) * u``, of length ``N + deg(p)``.
       Not for Fourier, where x is not a basis function.
     * ``u.deriv(k)``, of length ``N - k`` (``N`` for Fourier).
+    * ``u.integ(m)``, of length ``N + m``. Not for Fourier.
     * Evaluation ``u(x)`` and conversion to and from a JAXFunction.
 
     The expansion is a JAX pytree with the coefficients as its only leaf, so it
@@ -232,6 +233,52 @@ class OrthogonalExpansion(nnx.Pytree):
             s * self.space.derivative_coeffs(self.coef, k), self.space
         )
         return u.resize(max(self.N - k, 1)) if isinstance(self.space, Jacobi) else u
+
+    def integ(
+        self,
+        m: int = 1,
+        k: complex | Sequence[complex] = (),
+        lbnd: float | None = None,
+    ) -> OrthogonalExpansion:
+        """Return the m'th antiderivative, with m more basis functions.
+
+        Each integration adds a constant, chosen so that the j'th
+        antiderivative equals ``k[j]`` at `lbnd`, or 0 where k has no entry.
+        With the default `lbnd`, ``u.integ()(b)`` is the integral of u over
+        the domain [a, b]. Not for Fourier, where the antiderivative of a
+        constant is not periodic.
+
+        Args:
+            m: Number of integrations.
+            k: Values of the antiderivatives at `lbnd`, a number for m = 1.
+            lbnd: Point of the physical domain where the antiderivatives
+                take the values `k`. Defaults to the lower bound a of the
+                domain.
+        """
+        if not isinstance(self.space, Jacobi):
+            raise NotImplementedError(
+                f"{type(self.space).__name__} has no antiderivative of the "
+                "constant mode"
+            )
+        values = [k] if _is_number(k) else cast(Sequence[complex], k)
+        ks: list[complex] = [_as_number(c) for c in values]
+        if len(ks) > m:
+            raise ValueError(f"{len(ks)} values in k for {m} integrations")
+        ks += [0] * (m - len(ks))
+        a = self.space.domain.lower if lbnd is None else lbnd
+        x = jnp.array([float(a)])
+        u = self
+        for kj in ks:
+            S = cast(Jacobi, u.space.resized(u.N + 1))
+            # Q = B^T dQ, so sum_n c_n Q_n = d(sum_j (B c)_j Q_j), with d the
+            # derivative in the reference coordinate X and dX/dx the
+            # domain factor
+            c = S.B() @ S.resize_coefficients(u.coef, S.N) / float(S.domain_factor)
+            # B leaves the coefficient of the constant Q_0 free
+            q0 = S.evaluate(x, jnp.ones(1, dtype=c.dtype))[0]
+            c = c.at[0].add((kj - S.evaluate(x, c)[0]) / q0)
+            u = OrthogonalExpansion(c, S)
+        return u
 
     def to_jaxfunction(self, V: Any, truncate: bool = False) -> JAXFunction:
         """Return the expansion as a JAXFunction of the 1D space V.

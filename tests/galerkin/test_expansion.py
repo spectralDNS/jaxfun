@@ -114,6 +114,33 @@ def test_deriv_drops_zero_coefficients(pspace):
     assert random_expansion(F, 9).deriv().N == 6
 
 
+def test_integ(pspace, domain: Domain | None):
+    u = random_expansion(pspace(5, domain), 10)
+    a, b = float(u.space.domain.lower), float(u.space.domain.upper)
+    w = u.integ()
+    assert w.N == 6
+    assert jnp.allclose(w.deriv().coef, u.coef, atol=ulp(100))
+    assert jnp.allclose(w(jnp.array([a])), 0.0, atol=ulp(100))
+    w2 = u.integ(2, k=[1.0, 2.0], lbnd=b)
+    assert w2.N == 7
+    assert jnp.allclose(w2.deriv(2).coef, u.coef, atol=ulp(1000))
+    assert jnp.allclose(w2(jnp.array([b])), 2.0, atol=ulp(100))
+    assert jnp.allclose(w2.deriv()(jnp.array([b])), 1.0, atol=ulp(100))
+
+
+def test_integ_numpy_and_definite_integral():
+    c = np.array([1.0, 2.0, 3.0])
+    u = OrthogonalExpansion(jnp.array(c), Chebyshev.Chebyshev(3))
+    w = u.integ(2, k=[1.0, -1.0], lbnd=0.5)
+    ref = np.polynomial.chebyshev.chebint(c, m=2, k=[1.0, -1.0], lbnd=0.5)
+    assert np.allclose(w.coef, ref, atol=ulp(100))
+    x = Legendre.Legendre(2, domain=Domain(0, 2)).system.x
+    p = OrthogonalExpansion.from_expr(x**2, Legendre.Legendre, domain=Domain(0, 2))
+    assert jnp.allclose(p.integ()(jnp.array([2.0])), 8 / 3, atol=ulp(100))
+    with pytest.raises(NotImplementedError):
+        random_expansion(Fourier.Fourier(4), 0).integ()
+
+
 def test_fourier_product():
     F = Fourier.Fourier(6)
     a = random_expansion(F, 5)
@@ -153,6 +180,10 @@ def test_pytree():
     assert jnp.allclose(f(a), a(X) ** 2, atol=ulp(1000))
     g = jax.grad(lambda c: (OrthogonalExpansion(c, a.space) ** 2)(X).sum())(a.coef)
     assert g.shape == (4,)
+    # x * a and integ build recurrence matrices while tracing
+    x = a.space.system.x
+    assert jnp.allclose(jax.jit(lambda p: (x * p)(X))(a), X * a(X), atol=ulp(100))
+    assert jnp.allclose(jax.jit(lambda p: p.integ().coef)(a), a.integ().coef)
 
 
 def test_jaxfunction_to_expansion():

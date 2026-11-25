@@ -583,7 +583,7 @@ class Jacobi(OrthogonalSpace):
     def B(self, N: int | None = None) -> DiaMatrix:
         """Return recursion matrix B for normalized Jacobi polynomials.
 
-        The recursion is ∂ Q = B^T Q where Q_n = g_n P_n^{(α,β)}.
+        The recursion is Q = B^T ∂Q where Q_n = g_n P_n^{(α,β)}.
 
         Args:
             N: Number of modes.
@@ -612,17 +612,22 @@ class Jacobi(OrthogonalSpace):
     ) -> DiaMatrix:
         N = self.num_quad_points if N is None else N
         sub, main, sup = _tridiagonal_functions(self, mat)
-        d: list[Array | complex] = [
-            sub(jnp.arange(1, N)),
-            main(jnp.arange(0, N)),
-            sup(jnp.arange(0, N - 1)),
-        ]
-        if bool(jnp.all(jnp.atleast_1d(d[1]) == 0)):
-            d = [d[0], d[2]]
-        diagonals: list[Array] = [jnp.atleast_1d(di) for di in d]
-        return diags(
-            diagonals, offsets=(-1, 0, 1) if len(d) == 3 else (-1, 1), shape=(N, N)
-        )
+        # The diagonals depend only on N and the parameters, so they are
+        # constants also when called under jax.jit
+        with jax.ensure_compile_time_eval():
+            d: list[Array | complex] = [
+                sub(jnp.arange(1, N)),
+                main(jnp.arange(0, N)),
+                sup(jnp.arange(0, N - 1)),
+            ]
+            if bool(jnp.all(jnp.atleast_1d(d[1]) == 0)):
+                d = [d[0], d[2]]
+            diagonals: list[Array] = [jnp.atleast_1d(di) for di in d]
+            return diags(
+                diagonals,
+                offsets=(-1, 0, 1) if len(d) == 3 else (-1, 1),
+                shape=(N, N),
+            )
 
     def _matrices(
         self, i: int, trial: tuple[OrthogonalSpace, int], q: int = 0

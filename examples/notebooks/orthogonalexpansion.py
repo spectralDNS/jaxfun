@@ -128,6 +128,23 @@ def _(a, b, np, x):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    Integration raises the length by one. The antiderivative $\int_{\ell}^{x} a(s)\,ds + k$ is computed with the recurrence $Q_n = \sum_j B_{jn} \partial Q_j$ of the basis, where $B$ is tridiagonal, and the coefficient of the constant $Q_0$ is chosen so that the antiderivative equals `k` at the point `lbnd` $=\ell$. By default `k` is 0 and `lbnd` is the lower bound of the domain, so `a.integ()(1)` is the integral of $a$ over $[-1, 1]$. Below we integrate $a^2$ this way. Note that `numpy` uses `lbnd=0` by default:
+    """)
+    return
+
+
+@app.cell
+def _(a, np):
+    print("integ(a)", a.integ(lbnd=0).coef)
+    print("numpy   ", np.polynomial.chebyshev.chebint([1, 2, 3]))
+    print("Integral of a**2 over [-1, 1]:", (a**2).integ()(1.0), " exact:", 136 / 15)
+    print("integ(a)' - a:", (a.integ().deriv() - a).coef)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ## Expansions from expressions
 
     `OrthogonalExpansion.from_expr` projects a SymPy expression onto a basis. Given a function space, the expansion has the size of that space. Given the *class* of a basis, like `Chebyshev.Chebyshev`, the size is chosen to resolve the expression. A polynomial gets exactly its degree + 1 coefficients, and other functions are projected onto 16, 32, 64, ... basis functions until the trailing coefficients are at roundoff level. These are then trimmed away. Keyword arguments, like `domain` or `alpha`, go to the basis class:
